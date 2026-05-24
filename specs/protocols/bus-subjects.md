@@ -93,7 +93,7 @@ Per-agent JWTs encode subject allowlists. Default agent caps:
 - Publish: `agents.<own_uuid>.*`, `user_input.requests.<own_uuid>`, `user_input.responses.*`
 - Subscribe: `agents.<own_uuid>.inbox`, anything declared by capability
 
-Operator: connects via the Unix socket listener; no JWT and no subject ACL — full publish/subscribe authority is implicit from socket access (see `architecture.md` §10b). NATS-level ACLs apply only to agents on the TCP listener.
+Operator: connects via the operator NATS user defined in `~/.config/sextant/operator.creds` (Unix file perms = trust boundary; see `architecture.md` §10b and `specs/components/nats.md`). The operator user has full publish/subscribe authority on every subject. NATS-level ACLs apply only to per-agent JWT users.
 
 Cross-agent send_message is implemented via the MCP tool which validates capability before publishing — agents don't get raw publish access to other agents' subjects.
 

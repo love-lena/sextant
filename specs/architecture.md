@@ -165,7 +165,7 @@ Container mounts at spawn (resolved from the template's `mounts` field — see �
 
 Container env vars (always set):
 - `SEXTANT_AGENT_UUID`, `SEXTANT_AGENT_NAME`, `SEXTANT_HOST_ID`
-- `SEXTANT_NATS_URL` — TCP listener URL (the Unix socket is not reachable from inside containers)
+- `SEXTANT_NATS_URL` — TCP listener URL the sidecar reaches via `host.docker.internal` (NATS Server has no Unix-socket transport; see `specs/components/nats.md` §"Config")
 - `SEXTANT_JWT` — per-incarnation token signed by the M5 CA
 - `SEXTANT_MCP_URL` — Streamable HTTP endpoint (typically `http://host.docker.internal:5172/mcp`)
 - `SEXTANT_SESSION_ID` (optional) — present if the SDK should `--resume`
@@ -438,7 +438,7 @@ This is needed even with one human operator. It's how §9c stops being theater.
 
 Single-operator on a personal dev machine. Local Unix file permissions are a real security boundary. No operator JWTs, no logins, no token rotation — just file perms on the socket and the secrets directory.
 
-- Operator credential = Unix user owns `~/.config/sextant/` and the NATS/sextant unix sockets
+- Operator credential = Unix user owns `~/.config/sextant/` (specifically `operator.creds` for NATS — see `specs/components/nats.md`) and the sextantd control socket (`~/.local/share/sextant/sextantd.sock`). NATS itself has no Unix-socket transport, so the NATS-side boundary is the `0600`-perm creds file.
 - TUI/CLI: any process running as the Unix user has full operator authority
 - Audit trail still records actor (`lena` hardcoded today) for forensic completeness and forward-compat
 - Multi-user is a v2-or-when-needed concern — adding operator-JWT layer later does not require redesigning anything else
