@@ -41,10 +41,10 @@ Branches are created from `main`. Long-lived feature branches are discouraged; p
 
 ## Merging
 
-Merges into `main` are serialized via the `merge.lock` NATS KV key (TTL 5 min). Only one merge at a time prevents conflicts from cascading.
+Merges into `main` are serialized via the `locks.merge` NATS KV key (bucket `locks`, key `merge`, TTL 5 min). Only one merge at a time prevents conflicts from cascading.
 
 Merge flow (via the `worktree_merge` MCP tool):
-1. Acquire `merge.lock` (or wait)
+1. Acquire `locks.merge` (or wait)
 2. Fast-forward `main` to the merge base, then attempt fast-forward merge
 3. If conflicts: release lock, return conflict report → becomes a user-input request (§4a)
 4. If clean: merge, push (or just commit, depending on deployment), release lock

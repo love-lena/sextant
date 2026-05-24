@@ -151,11 +151,33 @@ Open sub-decisions this triggers (see follow-on questions below).
 
 **Sidecar bundling (follow-on Q E from §1)**: bundled into the base image. No extraction-on-first-run.
 
+**Sandbox config — DECIDED minimum for initial**:
+
+Container mounts at spawn (resolved from the template's `mounts` field — see §11b):
+
+| Mount class | Container path | Source | Mode |
+|---|---|---|---|
+| `worktree` | `/workspace` | agent's git worktree on host | rw |
+| `secrets` | `/run/sextant/secrets/` | per-template subset of `~/.config/sextant/secrets/` | ro |
+| (built-in) | `/home/agent/.claude` | per-agent named volume | rw |
+| (built-in) | `/home/agent/.{cargo,npm,cache,local/share}` | per-agent named volumes | rw |
+| (built-in) | `/home/agent/.gitconfig`, `~/.config/gh` | per-agent or host-bind (per template) | per-template |
+
+Container env vars (always set):
+- `SEXTANT_AGENT_UUID`, `SEXTANT_AGENT_NAME`, `SEXTANT_HOST_ID`
+- `SEXTANT_NATS_URL` — TCP listener URL (the Unix socket is not reachable from inside containers)
+- `SEXTANT_JWT` — per-incarnation token signed by the M5 CA
+- `SEXTANT_MCP_URL` — Streamable HTTP endpoint (typically `http://host.docker.internal:5172/mcp`)
+- `SEXTANT_SESSION_ID` (optional) — present if the SDK should `--resume`
+
+Networking:
+- macOS host: use **OrbStack with host-networking enabled** for containers. The container reaches the host's NATS TCP listener at `host.docker.internal:4222` and the MCP server at `host.docker.internal:5172`.
+- Egress: **open by default** for initial. Per-agent egress restrictions are a future feature; codex flagged this as a security risk and we accept the tradeoff for the single-operator phase. Document as a v2 hardening pillar.
+
 **Open sub-decisions**:
 - **Custom per-agent images**: do we support agent definitions that declare extra system packages, building a derived image at definition time? Lean: yes for initial, but ship without it and add when first needed.
 - **Image build & distribution**: ship the image build script (operator builds locally), or pull from a registry (and which registry — ghcr.io? docker hub?). Lean: ship the build script for initial; registry distribution later.
-- **`.claude` volume seeding**: when a per-agent `.claude` volume is created, what's it seeded with? Empty (agent starts fresh)? Snapshot from host's `~/.claude`? Per-template defaults?
-- **macOS-specific networking**: containers on macOS need either host networking (finicky on Docker Desktop, works on OrbStack) or port forwarding to reach the host's NATS. Settle on one approach.
+- **`.claude` volume seeding**: when a per-agent `.claude` volume is created, what's it seeded with? Empty (agent starts fresh)? Snapshot from host's `~/.claude`? Per-template defaults? Lean: empty by default; template can declare `.claude` seeding source.
 
 ## 4. Inter-agent communication
 
@@ -357,7 +379,7 @@ Three plugin categories, each needs its own design.
 ### Open sub-decisions
 
 - **CLI output formats**: human-readable default + `--json` for scripting on every command? Lean yes.
-- **Shared rendering library scope** (`sextant-tui` / `@sextant/tui`): how opinionated? Lean small — just enough to make common patterns easy (agent list component, conversation view component, status bar). Exotic UIs use ratatui/ink directly.
+- **Shared rendering library scope** (`sextant-tui` / `@sextant/tui`): how opinionated? Lean small — just enough to make common patterns easy (agent list component, conversation view component, status bar). Exotic UIs use Bubble Tea (Go) or Ink (TS) directly per `conventions/tui-conventions.md`.
 - **TUI skill scope**: one big skill (`sextant-ui-author.md`) or several focused skills (TUI / CLI / event-consumer / RPC-caller)? Lean: a few focused skills, easier for agents to load just what they need.
 - **Agent-extensible visualizations**: design pattern is "viz specs in NATS KV, agents publish specs, UIs interpret per their rendering capabilities." Defer detailed spec vocabulary to initial-late or v2 — the bus+RPC model already gives UIs full data access.
 - **Plugin sandboxing**: do third-party UI plugins run with full operator caps? In initial single-operator land, yes (trust). v2 multi-user adds operator-JWT-with-restricted-caps for untrusted plugins.
@@ -451,7 +473,7 @@ Each agent gets its own git worktree as its workspace mount; agents work on inde
 
 **Cache sharing**: shared volumes for module/build caches (`~/go/pkg/mod`, `~/.cache/go-build`) — per-worktree-class, not per-agent.
 
-**Merge serialization**: single merge into main at a time via NATS KV lock `merge.lock` with TTL. Conflicts surface as user-input requests (§4a).
+**Merge serialization**: single merge into main at a time via NATS KV lock `locks.merge` (bucket `locks`, key `merge`, TTL 5 min). Conflicts surface as user-input requests (§4a).
 
 **MCP tools** (§9c control category):
 - `worktree_create(name, base_branch)` → path
@@ -569,7 +591,7 @@ Once the switchover happens, sextant agents iterate on sextant itself in paralle
 - RPCs: every RPC declares supported `proto_version` range; out-of-range → structured error
 - Sidecars and sextantd within N minor versions interop
 
-**Concurrent deploy protection**: NATS KV `deploy.lock` with TTL prevents two agents attempting `self_update` simultaneously.
+**Concurrent deploy protection**: NATS KV `locks.deploy` (bucket `locks`, key `deploy`, TTL 10 min) prevents two agents attempting `self_update` simultaneously.
 
 **Test gate**: `self_update` requires passing tests before staging. No test pass → no stage → no swap. Test results go in the audit log.
 

@@ -67,13 +67,34 @@ CREATE TABLE audit (
 ORDER BY (ts, actor, agent_uuid);
 ```
 
-### `telemetry_traces` — OTel spans
+### `telemetry_traces`, `telemetry_metrics`, `telemetry_logs` — OTel-shaped
 
-Match OTel data model: trace_id, span_id, parent_span_id, name, kind, start_ts, end_ts, status, attributes (JSON), events (JSON), links (JSON).
+Adopt the [OpenTelemetry ClickHouse exporter schema](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/exporter/clickhouseexporter) for the three telemetry tables — it is well-tested, documented, and lets us drop OTLP data in via that exporter later without schema migration.
 
-### `telemetry_metrics`, `telemetry_logs` — OTel-shaped
+`telemetry_traces` (matches OTel span data model):
 
-Following OTel data model conventions.
+```sql
+CREATE TABLE telemetry_traces (
+    Timestamp DateTime64(9),
+    TraceId String,
+    SpanId String,
+    ParentSpanId String,
+    TraceState String,
+    SpanName LowCardinality(String),
+    SpanKind LowCardinality(String),
+    ServiceName LowCardinality(String),
+    ResourceAttributes Map(LowCardinality(String), String),
+    SpanAttributes Map(LowCardinality(String), String),
+    Duration Int64,
+    StatusCode LowCardinality(String),
+    StatusMessage String,
+    Events Nested(Timestamp DateTime64(9), Name LowCardinality(String), Attributes Map(LowCardinality(String), String)),
+    Links Nested(TraceId String, SpanId String, TraceState String, Attributes Map(LowCardinality(String), String))
+) ENGINE = MergeTree()
+ORDER BY (ServiceName, SpanName, toUnixTimestamp(Timestamp));
+```
+
+`telemetry_metrics` and `telemetry_logs`: follow the same exporter schemas. Migration files in `pkg/clickhouseboot/migrations/` carry the full DDL.
 
 ### `agent_definitions_history` — every mutation
 
