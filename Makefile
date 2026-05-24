@@ -17,7 +17,8 @@ TS_DIR := clients/typescript
 CMDS := sextant sextantd sextant-shipper sextant-natsboot sextant-clickhouseboot sextant-client-demo
 
 .PHONY: all fmt lint lint-go lint-nilaway lint-ts test test-go test-ts build clean tidy install-tools \
-        ts-install ts-codegen ts-lint ts-test ts-build
+        ts-install ts-codegen ts-lint ts-test ts-build \
+        sidecar-image sidecar-image-test
 
 all: lint test
 
@@ -91,3 +92,25 @@ install-tools:
 
 clean:
 	rm -rf $(BIN_DIR)
+
+# ---------------------------------------------------------------------------
+# Sidecar container image. Requires a working `docker` (OrbStack on macOS).
+# Intentionally NOT wired into `make test`: the image build pulls multi-MB
+# tarballs and won't work on CI runners without Docker, so it stays opt-in.
+# CI exercises this via the dedicated `sidecar-image` GitHub Actions job.
+# Plan: plans/bootstrap.md#M9
+# Spec: specs/components/sidecar-image.md
+# ---------------------------------------------------------------------------
+
+# sidecar-image — build sextant-sidecar:<git-sha> and sextant-sidecar:latest.
+# Stages clients/typescript/dist into the build context via `ts-build` so the
+# image's npm install can resolve the local @sextant/client file dep.
+sidecar-image: ts-build
+	docker build -f images/sidecar/Dockerfile \
+		-t sextant-sidecar:$$(git rev-parse HEAD) \
+		-t sextant-sidecar:latest \
+		.
+
+# sidecar-image-test — full M9 acceptance smoke. See images/sidecar/test.sh.
+sidecar-image-test:
+	bash images/sidecar/test.sh
