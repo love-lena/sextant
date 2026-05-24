@@ -100,19 +100,27 @@ export class Client {
   }
 
   /**
-   * Build the client + open NATS. Internal entry point — public API
-   * is `connect()` and `connectWithConfig()`.
+   * Build the merged ConnectionOptions for a given Config + caller
+   * overrides. Exported (not async, no side effects) so tests can
+   * assert that the spec-pinned reconnect knobs land in the final
+   * shape that nats.connect receives.
    */
-  static async _dial(config: ClientConfig, opts?: ConnectOptions): Promise<Client> {
+  static buildNATSOptions(config: ClientConfig, opts?: ConnectOptions): ConnectionOptions {
     const baseOpts: ConnectionOptions = {
       servers: config.nats.url,
       name: "sextant-client-ts",
       timeout: config.client.connectTimeoutMs,
       // Reconnect knobs pinned by specs/components/client-libraries.md
-      // §"Shared concerns" — same as pkg/client/client.go.
+      // §"Shared concerns" — same as pkg/client/client.go's
+      // nats.ReconnectJitter(100ms, 500ms). nats.js splits the jitter
+      // into non-TLS and TLS bounds; map the spec's lower bound to the
+      // non-TLS knob and the upper bound to the TLS knob, matching the
+      // semantics of the Go ReconnectJitter(min, max) call which
+      // selects the bound based on the connection's TLS state.
       maxReconnectAttempts: -1,
       reconnectTimeWait: 500,
-      reconnectJitter: 400,
+      reconnectJitter: 100,
+      reconnectJitterTLS: 500,
     };
     if (config.operator.password) {
       baseOpts.user = config.operator.user;
@@ -125,7 +133,15 @@ export class Client {
         "client: operator.credsPath is not yet supported by the TS client; use operator.password (parity with pkg/client M4)",
       );
     }
-    const merged: ConnectionOptions = { ...baseOpts, ...(opts?.natsOptions ?? {}) };
+    return { ...baseOpts, ...(opts?.natsOptions ?? {}) };
+  }
+
+  /**
+   * Build the client + open NATS. Internal entry point — public API
+   * is `connect()` and `connectWithConfig()`.
+   */
+  static async _dial(config: ClientConfig, opts?: ConnectOptions): Promise<Client> {
+    const merged = Client.buildNATSOptions(config, opts);
     const nc = await natsConnect(merged);
     const js = nc.jetstream();
     const jsm = await nc.jetstreamManager();
