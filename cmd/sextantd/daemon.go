@@ -63,6 +63,10 @@ type daemon struct {
 	// after stopRPC. Held under mu like the subprocess handles.
 	rpcRT *rpcRuntime
 
+	// mcpRT is the live MCP server runtime. Set after startMCP; cleared
+	// in doShutdown.
+	mcpRT *mcpRuntime
+
 	shutdownOnce sync.Once
 	shutdownErr  error
 }
@@ -208,12 +212,37 @@ func (d *daemon) Start(ctx context.Context) error {
 	go d.drainEvents("nats", natsSup.Events())
 	go d.drainEvents("clickhouse", chSup.Events())
 
-	// 8. Bring the RPC server up after the subprocess supervisors are
-	// in place — startRPC needs a live NATS + ClickHouse to bind to.
+	// 8. Bring the MCP server up before RPC: spec lists MCP at step 7,
+	// RPC at step 8. MCP needs a live NATS + ClickHouse so we sequence
+	// it after the supervisors are running.
+	mcpRT, err := d.startMCP(ctx)
+	if err != nil {
+		if d.supCancel != nil {
+			d.supCancel()
+		}
+		d.closeSocket()
+		_ = sextantd.RemoveRuntimeInfo(d.cfg.Paths.RuntimeFile)
+		_ = d.stopClickHouseNow(ctx)
+		_ = d.stopNATSNow(ctx)
+		return fmt.Errorf("start mcp: %w", err)
+	}
+	d.mu.Lock()
+	d.mcpRT = mcpRT
+	d.mu.Unlock()
+	// Re-write runtime.json now that the MCP server is up — the spec's
+	// downstream consumers (sidecars, doctor) read it to discover the
+	// auto-picked HTTP port and the stdio socket path.
+	if err := d.writeRuntimeInfo(natsSrv, chSrv); err != nil {
+		log.Printf("sextantd: refresh runtime.json after mcp: %v", err)
+	}
+
+	// 9. Bring the RPC server up. Same NATS/ClickHouse precondition.
 	rpcRT, err := d.startRPC(ctx)
 	if err != nil {
-		// Roll back: cancel the supervisors and tear NATS/ClickHouse
-		// back down so Start's contract (clean state on failure) holds.
+		// Roll back: tear MCP down, cancel the supervisors and tear
+		// NATS/ClickHouse back down so Start's contract (clean state on
+		// failure) holds.
+		_ = mcpRT.stop(ctx)
 		if d.supCancel != nil {
 			d.supCancel()
 		}
@@ -227,8 +256,8 @@ func (d *daemon) Start(ctx context.Context) error {
 	d.rpcRT = rpcRT
 	d.mu.Unlock()
 
-	log.Printf("sextantd: ready (nats=%s clickhouse=%s control=%s rpc=sextant.rpc.*)",
-		natsSrv.Address(), chSrv.TCPAddress(), d.cfg.Daemon.ControlSocket)
+	log.Printf("sextantd: ready (nats=%s clickhouse=%s control=%s rpc=sextant.rpc.* mcp=%s)",
+		natsSrv.Address(), chSrv.TCPAddress(), d.cfg.Daemon.ControlSocket, mcpRT.server.HTTPURL())
 	return nil
 }
 
@@ -261,14 +290,23 @@ func (d *daemon) doShutdown() error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	// Tear the RPC server down first — it holds open connections to
-	// NATS and ClickHouse, so it must drain before we kill the
-	// subprocesses underneath it.
+	// Tear the RPC and MCP servers down first — both hold open
+	// connections to NATS and ClickHouse, so they must drain before we
+	// kill the subprocesses underneath them. MCP first because it has
+	// its own listeners (HTTP + Unix socket) that must close before any
+	// long-lived sidecar session can pin a goroutine on a NATS publish.
 	var errs []error
 	d.mu.Lock()
+	mcpRT := d.mcpRT
+	d.mcpRT = nil
 	rpcRT := d.rpcRT
 	d.rpcRT = nil
 	d.mu.Unlock()
+	if mcpRT != nil {
+		if err := mcpRT.stop(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("mcp stop: %w", err))
+		}
+	}
 	if rpcRT != nil {
 		if err := rpcRT.stopRPC(); err != nil {
 			errs = append(errs, fmt.Errorf("rpc stop: %w", err))
@@ -532,6 +570,12 @@ func (d *daemon) writeRuntimeInfo(natsSrv *natsboot.Server, chSrv *clickhouseboo
 		ControlSocket:  d.cfg.Daemon.ControlSocket,
 		Version:        version.Version,
 	}
+	d.mu.Lock()
+	if d.mcpRT != nil && d.mcpRT.server != nil {
+		rt.MCPHTTPAddr = d.mcpRT.server.HTTPAddr()
+		rt.MCPStdioSocket = d.mcpRT.server.StdioSocketPath()
+	}
+	d.mu.Unlock()
 	return sextantd.WriteRuntimeInfo(d.cfg.Paths.RuntimeFile, rt)
 }
 
