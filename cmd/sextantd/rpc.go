@@ -1,0 +1,160 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/love-lena/sextant-initial/pkg/rpc"
+	"github.com/love-lena/sextant-initial/pkg/rpc/handlers"
+	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+)
+
+// rpcRuntime owns the live state for the sextantd-side RPC server:
+// the operator NATS connection, the ClickHouse driver.Conn, the
+// rpc.Server itself, and the cancel function the daemon uses to wind
+// it down at shutdown.
+//
+// The daemon holds at most one rpcRuntime at a time — the daemon's
+// rpc field. It is created in startRPC and torn down in stopRPC.
+type rpcRuntime struct {
+	server *rpc.Server
+	nc     *nats.Conn
+	chConn driver.Conn
+
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+// startRPC connects to the operator NATS, opens a ClickHouse driver
+// connection for query_history, registers the four initial verbs, and
+// kicks off the dispatcher in a background goroutine. Returns the
+// runtime handle; the daemon stops it from doShutdown.
+//
+// Failure semantics: any error here unwinds partial state (NATS
+// connection, CH conn) before returning. The daemon treats a startRPC
+// error as fatal — the RPC surface is one of the daemon's load-bearing
+// services and degraded mode is out of scope for M7.
+//
+//nolint:contextcheck // see runCtx comment below — dispatcher lifetime is intentionally detached from Start's ctx.
+func (d *daemon) startRPC(ctx context.Context) (*rpcRuntime, error) {
+	natsSrv := d.currentNATS()
+	if natsSrv == nil {
+		return nil, fmt.Errorf("rpc: no live NATS server")
+	}
+	chSrv := d.currentClickHouse()
+	if chSrv == nil {
+		return nil, fmt.Errorf("rpc: no live ClickHouse server")
+	}
+
+	nc, err := natsSrv.Connect()
+	if err != nil {
+		return nil, fmt.Errorf("rpc: operator nats connect: %w", err)
+	}
+
+	js, err := jetstream.New(nc)
+	if err != nil {
+		nc.Close()
+		return nil, fmt.Errorf("rpc: jetstream context: %w", err)
+	}
+	kv, err := js.KeyValue(ctx, handlers.AgentDefinitionsBucket)
+	if err != nil {
+		nc.Close()
+		return nil, fmt.Errorf("rpc: open kv %s: %w", handlers.AgentDefinitionsBucket, err)
+	}
+
+	chConn, err := chSrv.Open(ctx)
+	if err != nil {
+		nc.Close()
+		return nil, fmt.Errorf("rpc: open clickhouse: %w", err)
+	}
+
+	srv, err := rpc.New(nc, rpc.Config{
+		From: sextantproto.Address{
+			Kind: sextantproto.AddressDaemon,
+			ID:   fmt.Sprintf("daemon-%d", d.startedAt.UnixNano()),
+		},
+	})
+	if err != nil {
+		_ = chConn.Close()
+		nc.Close()
+		return nil, fmt.Errorf("rpc: build server: %w", err)
+	}
+
+	if err := registerInitialVerbs(srv, kv, chConn); err != nil {
+		_ = chConn.Close()
+		nc.Close()
+		return nil, fmt.Errorf("rpc: register handlers: %w", err)
+	}
+
+	// Detached lifetime: the dispatcher must outlive Start's ctx,
+	// which is canceled as soon as Start returns successfully. We tie
+	// runCtx to stopRPC instead so daemon shutdown is the only thing
+	// that ends the dispatcher.
+	runCtx, cancel := context.WithCancel(context.Background()) //nolint:contextcheck // see comment above
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := srv.Run(runCtx); err != nil {
+			log.Printf("sextantd: rpc.Server.Run: %v", err)
+		}
+	}()
+
+	return &rpcRuntime{
+		server: srv,
+		nc:     nc,
+		chConn: chConn,
+		cancel: cancel,
+		done:   done,
+	}, nil
+}
+
+func registerInitialVerbs(srv *rpc.Server, kv handlers.AgentKV, chConn handlers.QueryHistoryDB) error {
+	if err := srv.Register(rpc.VerbListAgents, handlers.NewListAgents(kv)); err != nil {
+		return err
+	}
+	if err := srv.Register(rpc.VerbGetAgentStatus, handlers.NewGetAgentStatus(kv)); err != nil {
+		return err
+	}
+	if err := srv.Register(rpc.VerbReadFile, handlers.NewReadFile()); err != nil {
+		return err
+	}
+	if err := srv.Register(rpc.VerbQueryHistory, handlers.NewQueryHistory(chConn)); err != nil {
+		return err
+	}
+	return nil
+}
+
+// stopRPC tears the RPC runtime down in reverse order: cancel the
+// dispatcher context, Close the server (drains in-flight handlers),
+// close the operator NATS conn, close the ClickHouse driver. Idempotent.
+func (r *rpcRuntime) stopRPC() error {
+	if r == nil {
+		return nil
+	}
+	if r.cancel != nil {
+		r.cancel()
+	}
+	var firstErr error
+	if r.server != nil {
+		if err := r.server.Close(); err != nil {
+			firstErr = err
+		}
+	}
+	if r.done != nil {
+		<-r.done
+	}
+	if r.chConn != nil {
+		if err := r.chConn.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if r.nc != nil {
+		r.nc.Close()
+	}
+	return firstErr
+}
