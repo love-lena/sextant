@@ -8,44 +8,75 @@ Package: `github.com/love-lena/sextant-initial/pkg/client`
 
 ### API surface
 
+`Envelope` is `github.com/love-lena/sextant-initial/pkg/sextantproto.Envelope`. `KVUpdate`, `QueryFilter`, and the option types live in `pkg/client`.
+
 ```go
 // Connect loads ~/.config/sextant/client.toml and dials the configured NATS.
-func Connect(ctx context.Context, opts ...Option) (*Client, error)
+// ConnectWithConfig takes an already-parsed Config instead.
+func Connect(ctx context.Context, configPath string, opts ...Option) (*Client, error)
+func ConnectWithConfig(ctx context.Context, cfg Config, opts ...Option) (*Client, error)
+
+// Close releases the underlying NATS connection. Idempotent.
+func (c *Client) Close() error
 
 // Message wraps a received envelope with JetStream metadata.
 type Message struct {
-    Envelope    Envelope
+    Envelope    sextantproto.Envelope
     Subject     string
     StreamSeq   uint64    // JetStream stream sequence (use for resume)
     ConsumerSeq uint64    // JetStream consumer sequence
     Timestamp   time.Time // JetStream-reported receive ts
-    // Ack acknowledges the message to JetStream.
+    // Ack acknowledges the message to JetStream. Safe to call once.
     Ack func() error
 }
 
-// Subscribe to a subject pattern.
+// Subscribe to a subject pattern. Default delivery is "new" — messages
+// published after Subscribe returns. Override with SubscribeOption.
 func (c *Client) Subscribe(ctx context.Context, subject string, opts ...SubscribeOption) (<-chan Message, error)
 
-// SubscribeFromSeq does gap-fill replay from a stream sequence then transitions to live.
+// SubscribeFromSeq does gap-fill replay from a stream sequence then
+// transitions to live. Equivalent to Subscribe(subject, WithStartSeq(fromSeq)).
 func (c *Client) SubscribeFromSeq(ctx context.Context, subject string, fromSeq uint64) (<-chan Message, error)
 
-// Publish an envelope.
-func (c *Client) Publish(ctx context.Context, subject string, env Envelope) error
+// Publish an envelope. (M7.)
+func (c *Client) Publish(ctx context.Context, subject string, env sextantproto.Envelope) error
 
-// RPC calls a sextant verb with typed request/reply.
+// RPC calls a sextant verb with typed request/reply. (M7.)
 func (c *Client) RPC(ctx context.Context, verb string, req any, resp any, opts ...RPCOption) error
 
-// Query past events from ClickHouse via the query_history RPC.
-func (c *Client) Query(ctx context.Context, filter QueryFilter) ([]Envelope, error)
+// Query past events from ClickHouse via the query_history RPC. (M7.)
+// In M4 this returns a sentinel ErrNotImplementedYet referencing the M7
+// milestone — it must NOT silently return an empty slice.
+func (c *Client) Query(ctx context.Context, filter QueryFilter) ([]sextantproto.Envelope, error)
 
-// WatchKV subscribes to changes on a KV key.
+// WatchKV subscribes to changes on a KV key. The channel emits one
+// KVUpdate per change; on the initial subscription, current values are
+// emitted before live updates begin.
 func (c *Client) WatchKV(ctx context.Context, bucket, key string) (<-chan KVUpdate, error)
 
-// GetKV reads current value once.
+// GetKV reads current value once. Returns ErrKVKeyNotFound when the key
+// is absent (not a nil byte slice with nil error).
 func (c *Client) GetKV(ctx context.Context, bucket, key string) ([]byte, error)
 
-// PutKV writes a value.
+// PutKV writes a value. (M7.)
 func (c *Client) PutKV(ctx context.Context, bucket, key string, value []byte) error
+
+// KVUpdate describes one change to a KV key.
+type KVUpdate struct {
+    Bucket    string
+    Key       string
+    Value     []byte    // empty on Delete / Purge
+    Revision  uint64
+    Op        KVOp      // Put | Delete | Purge
+    Timestamp time.Time
+}
+
+type KVOp string
+const (
+    KVOpPut    KVOp = "put"
+    KVOpDelete KVOp = "delete"
+    KVOpPurge  KVOp = "purge"
+)
 ```
 
 ### Options (functional options pattern)
@@ -57,9 +88,45 @@ WithCapability(cap string)      // future: present JWT with cap
 WithTracer(t Tracer)            // OTel integration
 ```
 
+### Config file
+
+The library reads `~/.config/sextant/client.toml`. Schema (TOML):
+
+```toml
+# Mandatory.
+[nats]
+url = "nats://127.0.0.1:4222"   # full NATS URL; loopback for initial.
+
+# Operator credentials. Exactly one of password / creds_path must be set.
+# `creds_path` is the production path; `password` is convenient for tests
+# and ad-hoc development. Both forms hit the loopback TCP listener; the
+# Unix-file-perm boundary applies to whichever file holds the secret.
+[operator]
+user        = "operator"
+password    = ""                              # inline (mode-0600 file required if used)
+creds_path  = "~/.config/sextant/operator.creds"   # NATS creds file written by `sextant init`
+
+# Optional. Defaults filled by LoadConfig.
+[client]
+connect_timeout = "10s"      # cap on initial dial
+request_timeout = "30s"      # default for RPC / Query
+log_level       = "info"     # trace | debug | info | warn | error
+```
+
+`LoadConfig(path string) (Config, error)` parses this file. `~/` is expanded
+against `os.UserHomeDir()`. Missing optional fields take the defaults above.
+
+Until M5 writes `operator.creds`, the M4 library treats inline `password`
+as the supported configuration; `creds_path` is accepted but the M4 NATS
+binding is currently password-based (per `specs/components/nats.md` §"Config").
+
 ### Auth
 
-Initial: the library loads `~/.config/sextant/operator.creds` (NATS user/password file written by `sextant init`; mode `0600`) and connects to the loopback TCP listener. Unix file perms on the creds file are the trust boundary, since NATS Server has no native Unix-socket transport. See `specs/components/nats.md` §"Config".
+Initial: the library connects to the loopback TCP listener as the operator
+user. The trust boundary is Unix file perms on whichever file carries the
+secret (`client.toml` if `password` is inline, or `operator.creds` once M5
+ships and `creds_path` is in use). NATS Server has no native Unix-socket
+transport — see `specs/components/nats.md` §"Config".
 
 When 10b multi-user lands: library reads operator JWT from config and presents it on connect.
 
@@ -101,10 +168,17 @@ Generated from JSON Schemas (produced by M1) via `json-schema-to-typescript`. Bu
 
 ## Shared concerns
 
-- **Reconnection**: built-in with exponential backoff; loss of connection emits an event on a special control channel; client subscriptions auto-resume from the `StreamSeq` of the last-acked `Message`.
+- **Reconnection**: built-in with exponential backoff; loss of connection emits an event on a special control channel; client subscriptions auto-resume from the `StreamSeq` of the last-acked `Message`. Initial knobs (Go): `nats.MaxReconnects(-1)`, `nats.ReconnectWait(500ms)`, `nats.ReconnectJitter(100ms, 500ms)`. Subscribe uses a JetStream ordered consumer so reset/resume is handled by the server.
 - **Timeouts**: every RPC has a default timeout (10s); override via option
 - **Idempotency**: every RPC carries a client-generated idempotency key (UUID); server dedupes within a bounded window (60s)
 - **Type validation**: every received envelope's payload is type-checked against its declared kind; type mismatch → returned as an error to the caller, not silently coerced
+
+## Milestone scoping (Go)
+
+| Milestone | Methods landed | Notes |
+|---|---|---|
+| M4 | `Connect`, `ConnectWithConfig`, `Close`, `Subscribe`, `SubscribeFromSeq`, `WatchKV`, `GetKV`, `LoadConfig` | Read path only. `Query` is exported but returns `ErrNotImplementedYet` referencing M7. `Publish`, `RPC`, `PutKV` are not exported yet. |
+| M7 | `Publish`, `RPC`, `PutKV`; `Query` switches to real ClickHouse RPC | Write path + RPC. `query_history` RPC is the first real verb that backs `Query`. |
 
 ## Open
 
