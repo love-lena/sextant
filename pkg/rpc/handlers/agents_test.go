@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/love-lena/sextant-initial/pkg/rpc"
 	"github.com/love-lena/sextant-initial/pkg/rpc/handlers"
 	"github.com/love-lena/sextant-initial/pkg/sextantproto"
 )
@@ -92,7 +91,7 @@ func TestListAgentsEmptyBucketReturnsEmptySlice(t *testing.T) {
 	kv := &fakeKV{entries: map[string][]byte{}}
 	h := handlers.NewListAgents(kv)
 	cap := &captureEmit{}
-	req := makeReq(t, rpc.ListAgentsRequest{})
+	req := makeReq(t, sextantproto.ListAgentsRequest{})
 	if err := h(context.Background(), req, cap.emit()); err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -102,7 +101,7 @@ func TestListAgentsEmptyBucketReturnsEmptySlice(t *testing.T) {
 	if cap.resp.Error != nil {
 		t.Fatalf("Error = %v, want nil", cap.resp.Error)
 	}
-	var resp rpc.ListAgentsResponse
+	var resp sextantproto.ListAgentsResponse
 	if err := json.Unmarshal(cap.resp.Result, &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -129,14 +128,14 @@ func TestListAgentsReturnsRegisteredAgents(t *testing.T) {
 	kv := &fakeKV{entries: map[string][]byte{id.String(): raw}}
 	h := handlers.NewListAgents(kv)
 	cap := &captureEmit{}
-	req := makeReq(t, rpc.ListAgentsRequest{})
+	req := makeReq(t, sextantproto.ListAgentsRequest{})
 	if err := h(context.Background(), req, cap.emit()); err != nil {
 		t.Fatalf("handler: %v", err)
 	}
 	if cap.resp.Error != nil {
 		t.Fatalf("Error = %v, want nil", cap.resp.Error)
 	}
-	var resp rpc.ListAgentsResponse
+	var resp sextantproto.ListAgentsResponse
 	if err := json.Unmarshal(cap.resp.Result, &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -153,7 +152,7 @@ func TestGetAgentStatusUnknownReturnsAgentNotFound(t *testing.T) {
 	kv := &fakeKV{entries: map[string][]byte{}}
 	h := handlers.NewGetAgentStatus(kv)
 	cap := &captureEmit{}
-	req := makeReq(t, rpc.GetAgentStatusRequest{AgentID: uuid.New()})
+	req := makeReq(t, sextantproto.GetAgentStatusRequest{AgentID: uuid.New()})
 	if err := h(context.Background(), req, cap.emit()); err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -178,14 +177,14 @@ func TestGetAgentStatusKnownReturnsStatus(t *testing.T) {
 	kv := &fakeKV{entries: map[string][]byte{id.String(): raw}}
 	h := handlers.NewGetAgentStatus(kv)
 	cap := &captureEmit{}
-	req := makeReq(t, rpc.GetAgentStatusRequest{AgentID: id})
+	req := makeReq(t, sextantproto.GetAgentStatusRequest{AgentID: id})
 	if err := h(context.Background(), req, cap.emit()); err != nil {
 		t.Fatalf("handler: %v", err)
 	}
 	if cap.resp.Error != nil {
 		t.Fatalf("Error = %v", cap.resp.Error)
 	}
-	var resp rpc.GetAgentStatusResponse
+	var resp sextantproto.GetAgentStatusResponse
 	if err := json.Unmarshal(cap.resp.Result, &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -198,7 +197,7 @@ func TestGetAgentStatusRejectsZeroUUID(t *testing.T) {
 	kv := &fakeKV{entries: map[string][]byte{}}
 	h := handlers.NewGetAgentStatus(kv)
 	cap := &captureEmit{}
-	req := makeReq(t, rpc.GetAgentStatusRequest{AgentID: uuid.Nil})
+	req := makeReq(t, sextantproto.GetAgentStatusRequest{AgentID: uuid.Nil})
 	if err := h(context.Background(), req, cap.emit()); err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -210,7 +209,7 @@ func TestGetAgentStatusRejectsZeroUUID(t *testing.T) {
 func TestReadFileStubReturnsNotImplemented(t *testing.T) {
 	h := handlers.NewReadFile()
 	cap := &captureEmit{}
-	req := makeReq(t, rpc.ReadFileRequest{AgentID: uuid.New(), Path: "/etc/hosts"})
+	req := makeReq(t, sextantproto.ReadFileRequest{AgentID: uuid.New(), Path: "/etc/hosts"})
 	if err := h(context.Background(), req, cap.emit()); err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -226,7 +225,7 @@ func TestListAgentsKVErrorSurfaces(t *testing.T) {
 	kv := &fakeKV{listErr: errors.New("clickhouse exploded")}
 	h := handlers.NewListAgents(kv)
 	cap := &captureEmit{}
-	req := makeReq(t, rpc.ListAgentsRequest{})
+	req := makeReq(t, sextantproto.ListAgentsRequest{})
 	if err := h(context.Background(), req, cap.emit()); err != nil {
 		t.Fatalf("handler: %v", err)
 	}

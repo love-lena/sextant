@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/love-lena/sextant-initial/pkg/sextantproto/query-history-response",
+  "$ref": "#/$defs/QueryHistoryResponse",
+  "$defs": {
+    "Address": {
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "kind",
+        "id"
+      ]
+    },
+    "Envelope": {
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "ts": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "proto_version": {
+          "type": "string"
+        },
+        "from": {
+          "$ref": "#/$defs/Address"
+        },
+        "to": {
+          "$ref": "#/$defs/Address"
+        },
+        "trace_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "span_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "parent_span_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "reply_to": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "payload": true
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "id",
+        "ts",
+        "proto_version",
+        "from",
+        "trace_id",
+        "span_id",
+        "kind",
+        "payload"
+      ]
+    },
+    "QueryHistoryResponse": {
+      "properties": {
+        "events": {
+          "items": {
+            "$ref": "#/$defs/Envelope"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "events"
+      ]
+    },
+    "Timestamp": {
+      "properties": {},
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "UUID": {
+      "items": {
+        "type": "integer"
+      },
+      "type": "array",
+      "maxItems": 16,
+      "minItems": 16
+    }
+  }
+}

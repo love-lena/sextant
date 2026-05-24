@@ -62,6 +62,15 @@ func main() {
 		{"span", &sextantproto.Span{}},
 		{"metric", &sextantproto.Metric{}},
 		{"log_record", &sextantproto.LogRecord{}},
+		// RPC verb payloads — consumed by the TypeScript client codegen.
+		{"list_agents_request", &sextantproto.ListAgentsRequest{}},
+		{"list_agents_response", &sextantproto.ListAgentsResponse{}},
+		{"get_agent_status_request", &sextantproto.GetAgentStatusRequest{}},
+		{"get_agent_status_response", &sextantproto.GetAgentStatusResponse{}},
+		{"read_file_request", &sextantproto.ReadFileRequest{}},
+		{"read_file_response", &sextantproto.ReadFileResponse{}},
+		{"query_history_request", &sextantproto.QueryHistoryRequest{}},
+		{"query_history_response", &sextantproto.QueryHistoryResponse{}},
 	}
 
 	for _, e := range entries {

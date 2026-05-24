@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/love-lena/sextant-initial/pkg/sextantproto/get-agent-status-request",
+  "$ref": "#/$defs/GetAgentStatusRequest",
+  "$defs": {
+    "GetAgentStatusRequest": {
+      "properties": {
+        "agent_id": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "agent_id"
+      ]
+    },
+    "UUID": {
+      "items": {
+        "type": "integer"
+      },
+      "type": "array",
+      "maxItems": 16,
+      "minItems": 16
+    }
+  }
+}

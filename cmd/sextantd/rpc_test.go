@@ -11,6 +11,7 @@ import (
 	"github.com/love-lena/sextant-initial/pkg/client"
 	"github.com/love-lena/sextant-initial/pkg/rpc"
 	"github.com/love-lena/sextant-initial/pkg/sextantd"
+	"github.com/love-lena/sextant-initial/pkg/sextantproto"
 )
 
 // rpcClient builds a pkg/client.Client against the running daemon's
@@ -56,8 +57,8 @@ func TestDaemonListAgentsReturnsEmpty(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	var resp rpc.ListAgentsResponse
-	if err := cli.RPC(ctx, rpc.VerbListAgents, rpc.ListAgentsRequest{}, &resp); err != nil {
+	var resp sextantproto.ListAgentsResponse
+	if err := cli.RPC(ctx, rpc.VerbListAgents, sextantproto.ListAgentsRequest{}, &resp); err != nil {
 		t.Fatalf("list_agents RPC: %v\n--- daemon log ---\n%s", err, h.tail(t))
 	}
 	if resp.Agents == nil {
@@ -78,7 +79,7 @@ func TestDaemonGetAgentStatusUnknown404(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	err := cli.RPC(ctx, rpc.VerbGetAgentStatus,
-		rpc.GetAgentStatusRequest{AgentID: uuid.New()},
+		sextantproto.GetAgentStatusRequest{AgentID: uuid.New()},
 		nil,
 	)
 	if err == nil {
@@ -125,7 +126,7 @@ func TestDaemonReadFileReturnsNotImplemented(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	err := cli.RPC(ctx, rpc.VerbReadFile,
-		rpc.ReadFileRequest{AgentID: uuid.New(), Path: "/etc/hosts"},
+		sextantproto.ReadFileRequest{AgentID: uuid.New(), Path: "/etc/hosts"},
 		nil,
 	)
 	if err == nil {

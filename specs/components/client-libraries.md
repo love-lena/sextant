@@ -166,6 +166,17 @@ class Client {
 
 Generated from JSON Schemas (produced by M1) via `json-schema-to-typescript`. Build step in CI checks types are up to date.
 
+Verb payload structs (`ListAgentsRequest`, `ListAgentsResponse`,
+`GetAgentStatusRequest`, `GetAgentStatusResponse`, `ReadFileRequest`,
+`ReadFileResponse`, `QueryHistoryRequest`, `QueryHistoryResponse`, plus
+their nested filter / time-range / summary types) live in
+`pkg/sextantproto/rpcverbs.go`. The Go RPC dispatch metadata (verb name
+constants, `CapFor`) stays in `pkg/rpc/types.go`. JSON Schemas for the
+verb payloads are emitted under `pkg/sextantproto/schemas/` by
+`go generate` and consumed by both the Go handlers and the
+`@sextant/client` TypeScript codegen — single source of truth for the
+wire shape.
+
 ## Shared concerns
 
 - **Reconnection**: built-in with exponential backoff; loss of connection emits an event on a special control channel; client subscriptions auto-resume from the `StreamSeq` of the last-acked `Message`. Initial knobs (Go): `nats.MaxReconnects(-1)`, `nats.ReconnectWait(500ms)`, `nats.ReconnectJitter(100ms, 500ms)`. Subscribe uses a JetStream ordered consumer so reset/resume is handled by the server.
