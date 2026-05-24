@@ -84,3 +84,46 @@ jobs:
       - name: npm test
         working-directory: clients/typescript
         run: npm test
+
+  sidecar-image:
+    name: sidecar image build + smoke
+    runs-on: ubuntu-24.04
+    # The Docker build pulls Go + Node + apt packages and can take a few
+    # minutes; that's the trade for catching image regressions on every
+    # PR. Plan: plans/bootstrap.md#M9.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: clients/typescript/package-lock.json
+
+      - name: build @sextant/client (dist/ is COPYed into the image)
+        working-directory: clients/typescript
+        run: |
+          npm ci
+          npm run codegen
+          npm run build
+
+      - name: docker build sextant-sidecar:test
+        run: docker build -f images/sidecar/Dockerfile -t sextant-sidecar:test .
+
+      - name: smoke — required tools present
+        run: |
+          docker run --rm sextant-sidecar:test /bin/bash -c '
+            set -e
+            for t in node npm git gh jq yq rg fzf curl wget make gcc python3 go vim; do
+              command -v "$t" >/dev/null || { echo "missing: $t" >&2; exit 1; }
+            done
+            echo OK
+          '
+
+      - name: smoke — sidecar entrypoint built
+        run: |
+          docker run --rm sextant-sidecar:test /bin/bash -c '
+            set -e
+            ls /opt/sextant/sidecar/dist/index.js
+            node /opt/sextant/sidecar/dist/index.js --version
+          '
