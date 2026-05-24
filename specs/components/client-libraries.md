@@ -59,7 +59,7 @@ WithTracer(t Tracer)            // OTel integration
 
 ### Auth
 
-Initial: just connects via Unix socket; file perms gate access. The library reads the local NATS socket path from config; no token presented.
+Initial: the library loads `~/.config/sextant/operator.creds` (NATS user/password file written by `sextant init`; mode `0600`) and connects to the loopback TCP listener. Unix file perms on the creds file are the trust boundary, since NATS Server has no native Unix-socket transport. See `specs/components/nats.md` §"Config".
 
 When 10b multi-user lands: library reads operator JWT from config and presents it on connect.
 
