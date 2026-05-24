@@ -389,3 +389,128 @@ func TestSpilloverDropOldest(t *testing.T) {
 		}
 	}
 }
+
+// TestSpilloverSizeBytesShrinksAfterDrain pins down the reviewer-flagged
+// behavior: SizeBytes must reflect *logical* buffered bytes, not the
+// BoltDB file's high-water mark. Without this, degraded_mode spirals
+// once tripped and fail-closed restarts re-trip on a near-empty buffer.
+//
+// We Put a batch, observe a nonzero SizeBytes, Delete every row, and
+// assert SizeBytes returns to zero. Then DropOldest is verified to
+// decrement the same way.
+func TestSpilloverSizeBytesShrinksAfterDrain(t *testing.T) {
+	dir := t.TempDir()
+	buf, err := openSpillover(filepath.Join(dir, "buf"))
+	if err != nil {
+		t.Fatalf("openSpillover: %v", err)
+	}
+	defer func() { _ = buf.Close() }()
+
+	if got := buf.SizeBytes(); got != 0 {
+		t.Fatalf("fresh buffer SizeBytes = %d, want 0", got)
+	}
+
+	rows := make([]Row, 8)
+	for i := range rows {
+		rows[i] = Row{
+			Table:      TableEvents,
+			EnvelopeID: uuid.New(),
+			EnvelopeTs: time.Now().UTC(),
+			Event: &EventRow{
+				ID:      rows[i].EnvelopeID,
+				Subject: fmt.Sprintf("agents.x.frames#%d", i),
+				Kind:    "agent_frame",
+			},
+		}
+	}
+	written, err := buf.Put(rows)
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if written <= 0 {
+		t.Fatalf("Put returned %d bytes, want > 0", written)
+	}
+	postPut := buf.SizeBytes()
+	if postPut != written {
+		t.Errorf("SizeBytes after Put = %d, want %d (matches written total)", postPut, written)
+	}
+
+	// Drain every row, then SizeBytes must return to zero. This is the
+	// scenario where on-disk file size would lie: BoltDB never shrinks
+	// the underlying file even after every key is deleted.
+	keys, _, err := buf.PeekBatch(TableEvents, 100)
+	if err != nil {
+		t.Fatalf("PeekBatch: %v", err)
+	}
+	if err := buf.Delete(TableEvents, keys); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if got := buf.SizeBytes(); got != 0 {
+		t.Errorf("SizeBytes after drain = %d, want 0 (BoltDB file may still be large on disk, but logical bytes must be zero)", got)
+	}
+
+	// DropOldest path: Put again, drop a subset, assert SizeBytes
+	// decreases by exactly the value-length sum of the dropped rows.
+	if _, err := buf.Put(rows); err != nil {
+		t.Fatalf("Put #2: %v", err)
+	}
+	before := buf.SizeBytes()
+	if before <= 0 {
+		t.Fatalf("SizeBytes before drop = %d, want > 0", before)
+	}
+	dropped, err := buf.DropOldest(3)
+	if err != nil {
+		t.Fatalf("DropOldest: %v", err)
+	}
+	if dropped != 3 {
+		t.Fatalf("dropped = %d, want 3", dropped)
+	}
+	after := buf.SizeBytes()
+	if after >= before {
+		t.Errorf("SizeBytes after DropOldest = %d, want < %d", after, before)
+	}
+	if after <= 0 {
+		t.Errorf("SizeBytes after partial drop = %d, want > 0 (5 rows still buffered)", after)
+	}
+}
+
+// TestSpilloverSizeBytesRebuiltOnReopen verifies that closing the
+// spillover and reopening it against the same directory recovers the
+// logical-bytes counter from disk — necessary so a process restart
+// does not lose its accounting of unsent work.
+func TestSpilloverSizeBytesRebuiltOnReopen(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "buf")
+	buf, err := openSpillover(dir)
+	if err != nil {
+		t.Fatalf("openSpillover: %v", err)
+	}
+
+	rows := []Row{{
+		Table: TableEvents,
+		Event: &EventRow{Subject: "agents.x.frames#a", Kind: "agent_frame"},
+	}, {
+		Table: TableEvents,
+		Event: &EventRow{Subject: "agents.x.frames#b", Kind: "agent_frame"},
+	}}
+	written, err := buf.Put(rows)
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if buf.SizeBytes() != written {
+		t.Fatalf("SizeBytes pre-close = %d, want %d", buf.SizeBytes(), written)
+	}
+	if err := buf.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Reopen and assert the counter was rebuilt from the on-disk data.
+	buf2, err := openSpillover(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = buf2.Close() }()
+
+	if got := buf2.SizeBytes(); got != written {
+		t.Errorf("reopened SizeBytes = %d, want %d (rebuild scan should have summed bucket values)", got, written)
+	}
+}
