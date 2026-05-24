@@ -55,8 +55,10 @@ func (c *Client) GetKV(ctx context.Context, bucket, key string) ([]byte, error) 
 }
 
 // WatchKV subscribes to changes on the named key in bucket and returns a
-// channel of updates. The channel closes when ctx is canceled or the
-// Client is closed.
+// channel of updates. The channel closes when ctx is canceled OR when
+// Client.Close is called — registering the watcher with the Client
+// guarantees no goroutine leaks even if the caller passed a
+// long-lived ctx like context.Background().
 //
 // On subscription, the current value of the key (if any) is delivered
 // first, followed by live updates. Initial-state delivery matches
@@ -78,14 +80,20 @@ func (c *Client) WatchKV(ctx context.Context, bucket, key string) (<-chan KVUpda
 		return nil, fmt.Errorf("client: watch kv %q/%q: %w", bucket, key, err)
 	}
 
+	// Tie ctx cancellation and Client.Close into the same cancel
+	// signal so the loop exits in both cases.
+	watchCtx, cancelWatch := context.WithCancel(ctx)
+	reg := c.register(func() { cancelWatch() })
+
 	out := make(chan KVUpdate, 16)
 	go func() {
 		defer close(out)
 		defer func() { _ = watcher.Stop() }()
+		defer c.deregister(reg)
 		updates := watcher.Updates()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-watchCtx.Done():
 				return
 			case entry, ok := <-updates:
 				if !ok {
@@ -104,7 +112,7 @@ func (c *Client) WatchKV(ctx context.Context, bucket, key string) (<-chan KVUpda
 					Op:        translateKVOp(entry.Operation()),
 					Timestamp: entry.Created(),
 				}:
-				case <-ctx.Done():
+				case <-watchCtx.Done():
 					return
 				}
 			}

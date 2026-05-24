@@ -88,9 +88,13 @@ func run() error {
 				return nil
 			}
 			count++
-			payloadPreview := truncate(string(m.Envelope.Payload), 80)
-			fmt.Printf("seq=%d subject=%s id=%s kind=%s payload=%s\n",
-				m.StreamSeq, m.Subject, m.Envelope.ID, m.Envelope.Kind, payloadPreview)
+			if m.Err != nil {
+				fmt.Fprintf(os.Stderr, "seq=%d subject=%s decode error: %v\n", m.StreamSeq, m.Subject, m.Err)
+			} else {
+				payloadPreview := truncate(string(m.Envelope.Payload), 80)
+				fmt.Printf("seq=%d subject=%s id=%s kind=%s payload=%s\n",
+					m.StreamSeq, m.Subject, m.Envelope.ID, m.Envelope.Kind, payloadPreview)
+			}
 			if err := m.Ack(); err != nil {
 				fmt.Fprintf(os.Stderr, "ack error: %v\n", err)
 			}
