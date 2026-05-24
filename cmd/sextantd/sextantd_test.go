@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
+
 	"github.com/love-lena/sextant-initial/pkg/sextantd"
 )
 
@@ -253,16 +255,23 @@ func TestDaemonStartStopRoundtrip(t *testing.T) {
 }
 
 // TestDaemonRestartsNATSAfterKill is the restart-on-failure acceptance
-// test. We bring the daemon up, locate the NATS subprocess PID via
-// runtime.json, SIGKILL it externally, and assert:
+// test. We bring the daemon up, set up an operator NATS subscription
+// using the same reconnect knobs pkg/client uses, SIGKILL the NATS
+// subprocess externally, and assert:
 //
 //   - the supervisor restarts NATS within the configured backoff window
 //   - runtime.json reflects the new PID
-//   - an operator NATS client can connect + publish/subscribe after the
-//     restart (the listener is fully ready, not just bound)
+//   - the operator's nats.Conn auto-reconnects across the restart (the
+//     same connection + subscription handles keep working — no manual
+//     reconnect, no resubscribe)
+//   - a message published *after* the restart is delivered through the
+//     same subscription that was set up *before* the kill
 //   - the daemon does not exit on its own
 //
-// This is the M5 "restart on failure" deliverable end-to-end.
+// The subscription survival is the load-bearing check: the spec at
+// specs/components/sextantd.md §"Supervision details" claims operator
+// NATS clients reconnect cleanly across a restart, and this test is
+// what proves that claim.
 func TestDaemonRestartsNATSAfterKill(t *testing.T) {
 	h := startDaemonHarness(t)
 	cfg := h.cfg
@@ -277,9 +286,64 @@ func TestDaemonRestartsNATSAfterKill(t *testing.T) {
 	}
 	originalNATSAddr := rt.NATSAddr
 
-	// Sanity: NATS is reachable before the kill.
-	if err := dialNATS(originalNATSAddr); err != nil {
-		t.Fatalf("nats unreachable pre-kill: %v\n--- daemon log ---\n%s", err, h.tail(t))
+	// Connect as the operator with the same reconnect knobs pkg/client
+	// uses (specs/components/client-libraries.md §"Shared concerns").
+	// We use a raw nats.Connect rather than pkg/client because the
+	// claim under test lives at the nats.Conn layer; pkg/client
+	// inherits this behavior without adding to it.
+	creds, err := sextantd.ReadOperatorCreds(cfg.NATS.OperatorCreds)
+	if err != nil {
+		t.Fatalf("ReadOperatorCreds: %v", err)
+	}
+	reconnectCh := make(chan string, 4)
+	disconnectCh := make(chan struct{}, 4)
+	nc, err := nats.Connect(
+		"nats://"+originalNATSAddr,
+		nats.UserInfo(creds.User, creds.Password),
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(100*time.Millisecond),
+		nats.ReconnectJitter(50*time.Millisecond, 100*time.Millisecond),
+		nats.Timeout(2*time.Second),
+		nats.ReconnectHandler(func(c *nats.Conn) {
+			select {
+			case reconnectCh <- c.ConnectedUrl():
+			default:
+			}
+		}),
+		nats.DisconnectErrHandler(func(_ *nats.Conn, _ error) {
+			select {
+			case disconnectCh <- struct{}{}:
+			default:
+			}
+		}),
+	)
+	if err != nil {
+		t.Fatalf("operator nats connect: %v\n--- daemon log ---\n%s", err, h.tail(t))
+	}
+	defer nc.Close()
+
+	const subject = "sextant.test.restart-roundtrip"
+	msgCh := make(chan *nats.Msg, 4)
+	sub, err := nc.ChanSubscribe(subject, msgCh)
+	if err != nil {
+		t.Fatalf("subscribe pre-kill: %v", err)
+	}
+	defer func() { _ = sub.Unsubscribe() }()
+	if err := nc.Flush(); err != nil {
+		t.Fatalf("flush pre-kill: %v", err)
+	}
+
+	// Sanity: pre-kill publish + receive.
+	if err := nc.Publish(subject, []byte("pre-kill")); err != nil {
+		t.Fatalf("publish pre-kill: %v", err)
+	}
+	select {
+	case m := <-msgCh:
+		if string(m.Data) != "pre-kill" {
+			t.Fatalf("pre-kill msg = %q, want %q", m.Data, "pre-kill")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("pre-kill message not received")
 	}
 
 	// Kill the NATS subprocess externally with SIGKILL (no graceful
@@ -293,12 +357,9 @@ func TestDaemonRestartsNATSAfterKill(t *testing.T) {
 	}
 	t.Logf("killed nats pid=%d", originalNATSPID)
 
-	// Wait for the supervisor to restart NATS. The signals we look for:
-	//   - runtime.json gets a new NATSPID
-	//   - the new pid is reachable as a NATS listener
-	//
-	// With tightened backoff (100ms initial, 1s cap) plus nats-server's
-	// own startup latency (~1s), recovery should land well under 15s.
+	// Wait for the supervisor to restart NATS. With tightened backoff
+	// (100ms initial / 1s cap) + nats-server's startup latency, recovery
+	// lands well under 15s.
 	newPID, newAddr, err := waitForNATSRestart(
 		cfg.Paths.RuntimeFile,
 		originalNATSPID,
@@ -313,15 +374,47 @@ func TestDaemonRestartsNATSAfterKill(t *testing.T) {
 		t.Errorf("NATSPID did not change after kill (still %d)", newPID)
 	}
 
-	// The new listener must accept a real client connection. We don't
-	// require it to be on the same port as before — what we require is
-	// that the supervisor restored a working NATS, and runtime.json
-	// points at it.
-	if err := dialNATS(newAddr); err != nil {
-		t.Fatalf("nats unreachable post-restart at %s: %v", newAddr, err)
+	// Wait for the operator's nats.Conn to observe the reconnect. With
+	// frozen ports the new listener is at originalNATSAddr; nats.go's
+	// reconnect loop reconnects to the same URL.
+	select {
+	case url := <-reconnectCh:
+		t.Logf("operator nats.Conn reconnected to %s", url)
+	case <-time.After(15 * time.Second):
+		t.Fatalf("operator nats.Conn never reported reconnect\n--- daemon log ---\n%s", h.tail(t))
 	}
 
-	// Daemon should still be running (not exited).
+	// We must have observed at least one disconnect along the way.
+	select {
+	case <-disconnectCh:
+	default:
+		t.Error("operator nats.Conn did not report any disconnect")
+	}
+
+	// The original subscription handle must still be valid. Publish
+	// post-restart through the same nats.Conn and assert the message
+	// lands on the same msgCh. This is the round-trip the spec claims
+	// works.
+	pubErr := publishWithRetry(nc, subject, []byte("post-restart"), 5*time.Second)
+	if pubErr != nil {
+		t.Fatalf("publish post-restart: %v", pubErr)
+	}
+	select {
+	case m := <-msgCh:
+		if string(m.Data) != "post-restart" {
+			t.Fatalf("post-restart msg = %q, want %q", m.Data, "post-restart")
+		}
+		t.Logf("round-trip via reconnected subscription: %q", m.Data)
+	case <-time.After(5 * time.Second):
+		t.Fatalf("post-restart message not received on reconnected subscription\n--- daemon log ---\n%s", h.tail(t))
+	}
+
+	if !sub.IsValid() {
+		t.Error("subscription handle invalid after reconnect")
+	}
+	_ = newAddr // newAddr is logged above; the round-trip via nc proves connectivity.
+
+	// Daemon should still be running.
 	if h.cmd.ProcessState != nil && h.cmd.ProcessState.Exited() {
 		t.Fatalf("daemon exited unexpectedly after nats restart: %v", h.cmd.ProcessState)
 	}
@@ -338,6 +431,33 @@ func TestDaemonRestartsNATSAfterKill(t *testing.T) {
 		_ = h.cmd.Process.Kill()
 		t.Fatalf("daemon did not exit after restart-and-SIGINT\n--- daemon log ---\n%s", h.tail(t))
 	}
+}
+
+// publishWithRetry covers the brief window during which the new
+// listener is bound but the operator's nats.Conn has not yet rebound
+// its publisher state. nats.go queues publishes during reconnect, but
+// in some failure modes the publish call itself can return a transient
+// error; we retry with backoff up to the supplied total timeout.
+func publishWithRetry(nc *nats.Conn, subject string, data []byte, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		if err := nc.Publish(subject, data); err != nil {
+			lastErr = err
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		if err := nc.FlushTimeout(2 * time.Second); err != nil {
+			lastErr = err
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		return nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("publishWithRetry: timed out")
+	}
+	return lastErr
 }
 
 // waitForNATSRestart polls runtime.json until NATSPID differs from
