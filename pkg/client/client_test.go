@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -239,31 +238,10 @@ func TestSubscribeFromSeqResumes(t *testing.T) {
 	}
 }
 
-// TestQueryReturnsNotImplementedYet pins the spec invariant: Query must
-// fail fast with the M7 sentinel so callers don't think empty == "no
-// history".
-func TestQueryReturnsNotImplementedYet(t *testing.T) {
-	srv := bootedServer(t)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	cli := clientFromServer(ctx, t, srv)
-
-	got, err := cli.Query(ctx, client.QueryFilter{})
-	if err == nil {
-		t.Fatal("Query must return an error in M4")
-	}
-	if got != nil {
-		t.Fatalf("Query result = %v, want nil", got)
-	}
-	if !errors.Is(err, client.ErrNotImplementedYet) {
-		t.Fatalf("Query error = %v, want ErrNotImplementedYet", err)
-	}
-	if !strings.Contains(err.Error(), "M7") {
-		t.Fatalf("Query error %q must reference M7", err.Error())
-	}
-}
+// Query's "fail fast, never silently return an empty slice" invariant
+// is enforced by the RPC layer — see TestRPCTimeoutOnNoResponder in
+// rpc_test.go. The M4-era TestQueryReturnsNotImplementedYet was
+// retired in M7 when Query started routing through the real RPC.
 
 // TestWatchKVDeliversInitialAndUpdates verifies the read-only KV path:
 // existing values are surfaced first, then live updates.
