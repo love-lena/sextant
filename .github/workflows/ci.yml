@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   go:
-    name: lint + test
+    name: lint + test (Go)
     runs-on: ubuntu-24.04
     env:
       GOTOOLCHAIN: local
@@ -37,5 +37,50 @@ jobs:
       - name: install nilaway
         run: go install go.uber.org/nilaway/cmd/nilaway@latest
 
-      - name: make lint test
-        run: make lint test
+      - name: make lint-go lint-nilaway test-go
+        run: make lint-go lint-nilaway test-go
+
+  ts:
+    name: lint + test (TypeScript)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: clients/typescript/package-lock.json
+
+      - name: install nats-server
+        run: |
+          NATS_VERSION=2.14.1
+          curl -fsSL "https://github.com/nats-io/nats-server/releases/download/v${NATS_VERSION}/nats-server-v${NATS_VERSION}-linux-amd64.tar.gz" \
+            | tar -xz -C /tmp
+          sudo mv "/tmp/nats-server-v${NATS_VERSION}-linux-amd64/nats-server" /usr/local/bin/nats-server
+          nats-server --version
+
+      - name: npm ci
+        working-directory: clients/typescript
+        run: npm ci
+
+      - name: npm run codegen (verify in sync)
+        working-directory: clients/typescript
+        run: |
+          npm run codegen
+          if ! git diff --exit-code src/types.generated.ts; then
+            echo "::error::src/types.generated.ts is out of sync with pkg/sextantproto/schemas/; re-run 'cd clients/typescript && npm run codegen' and commit"
+            exit 1
+          fi
+
+      - name: npm run lint
+        working-directory: clients/typescript
+        run: npm run lint
+
+      - name: npm run build
+        working-directory: clients/typescript
+        run: npm run build
+
+      - name: npm test
+        working-directory: clients/typescript
+        run: npm test

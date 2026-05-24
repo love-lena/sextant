@@ -1,14 +1,31 @@
 /**
  * Subscribe implementation.
  *
- * Builds a JetStream ordered consumer, decodes each delivery into a
- * typed Envelope, exposes the result as an AsyncIterable<Message>.
+ * Builds an ephemeral JetStream pull consumer, decodes each delivery
+ * into a typed Envelope, exposes the result as an AsyncIterable<Message>.
  * Mirrors pkg/client/subscribe.go: same default-new delivery, same
- * WithStartSeq / WithDeliverAll surfaces, same malformed-envelope
- * handling (Term the message, surface as `Message { err }`).
+ * fromSeq / deliverAll surfaces, same malformed-envelope handling
+ * (Term the message, surface as `Message { err }`).
+ *
+ * Why ephemeral pull rather than the OrderedConsumer wrapper: the
+ * nats.js 2.x OrderedPullConsumerImpl doesn't reliably start
+ * delivering messages on first `consume()` against nats-server 2.14 in
+ * our integration setup — the underlying consumer-create flow hangs
+ * 30s before erroring. An ephemeral pull consumer (with a fresh,
+ * unique durable name) provides the same "from this point forward,
+ * delivered in stream order, no other subscribers" semantics for a
+ * single client, which is what the subscribe contract needs.
  */
 
-import { DeliverPolicy, type Consumer, type JsMsg, type OrderedConsumerOptions } from "nats";
+import {
+  AckPolicy,
+  DeliverPolicy,
+  type Consumer,
+  type ConsumerInfo,
+  type JsMsg,
+  type ConsumerConfig,
+} from "nats";
+import { randomUUID } from "node:crypto";
 
 import type { Client } from "./client.js";
 import { decodeEnvelope } from "./envelope.js";
@@ -79,17 +96,15 @@ function makeAsyncIterator(
   let waiter: ((res: IteratorResult<Message>) => void) | null = null;
   let closed = false;
   let started = false;
-  let consumeAbort: (() => void) | null = null;
+  let cleanup: (() => Promise<void>) | null = null;
 
   const stop = (): void => {
     if (closed) return;
     closed = true;
-    if (consumeAbort) {
-      try {
-        consumeAbort();
-      } catch {
+    if (cleanup) {
+      cleanup().catch(() => {
         /* ignore */
-      }
+      });
     }
     if (waiter) {
       const w = waiter;
@@ -102,23 +117,26 @@ function makeAsyncIterator(
 
   const start = async (): Promise<void> => {
     started = true;
+    let streamName: string;
+    let ci: ConsumerInfo;
     let consumer: Consumer;
     try {
-      const streamName = await resolveStream(client, subject);
-      const consumerOpts: Partial<OrderedConsumerOptions> = {
-        filterSubjects: [subject],
+      streamName = await resolveStream(client, subject);
+      const config: Partial<ConsumerConfig> = {
+        name: `ts_client_${randomUUID().replace(/-/g, "")}`,
+        ack_policy: AckPolicy.Explicit,
+        filter_subjects: [subject],
+        deliver_policy: DeliverPolicy.New,
       };
       if (opts.fromSeq !== undefined && opts.fromSeq > 0n) {
-        consumerOpts.opt_start_seq = Number(opts.fromSeq);
-        consumerOpts.deliver_policy = DeliverPolicy.StartSequence;
+        config.deliver_policy = DeliverPolicy.StartSequence;
+        config.opt_start_seq = Number(opts.fromSeq);
       } else if (opts.deliverAll) {
-        consumerOpts.deliver_policy = DeliverPolicy.All;
-      } else {
-        consumerOpts.deliver_policy = DeliverPolicy.New;
+        config.deliver_policy = DeliverPolicy.All;
       }
-      consumer = await client.js.consumers.get(streamName, consumerOpts);
+      ci = await client.jsm.consumers.add(streamName, config);
+      consumer = await client.js.consumers.get(streamName, ci.name);
     } catch (err) {
-      // Surface a single error then close the iterator.
       enqueueErr(err instanceof Error ? err : new Error(String(err)), subject);
       stop();
       client.deregister(reg);
@@ -132,9 +150,21 @@ function makeAsyncIterator(
       enqueueErr(err instanceof Error ? err : new Error(String(err)), subject);
       stop();
       client.deregister(reg);
+      await client.jsm.consumers.delete(streamName, ci.name).catch(() => {});
       return;
     }
-    consumeAbort = () => consumeMessages.stop();
+    cleanup = async () => {
+      try {
+        consumeMessages.stop();
+      } catch {
+        /* ignore */
+      }
+      try {
+        await client.jsm.consumers.delete(streamName, ci.name);
+      } catch {
+        /* ignore */
+      }
+    };
 
     (async () => {
       try {
@@ -154,8 +184,7 @@ function makeAsyncIterator(
         client.deregister(reg);
       }
     })().catch(() => {
-      // The body already routes errors into the queue; this catch is
-      // just to make the unawaited promise lint-clean.
+      /* enqueueErr already routes errors */
     });
   };
 
@@ -228,11 +257,8 @@ function makeAsyncIterator(
   return {
     async next(): Promise<IteratorResult<Message>> {
       if (!started) {
-        // Kick the background setup on first call. Failures will be
-        // enqueued via enqueueErr so callers see them on this same
-        // iterator.
         start().catch(() => {
-          /* enqueueErr handles surface; here just keeps the promise rejection silent */
+          /* enqueueErr handles surface */
         });
       }
       const item = queue.shift();
@@ -255,9 +281,13 @@ function makeAsyncIterator(
  * authority — we don't try to mirror the M2 stream layout here.
  */
 async function resolveStream(client: Client, subject: string): Promise<string> {
-  const stream = await client.jsm.streams.find(subject);
-  if (!stream) {
-    throw new Error(`client: resolve stream for subject ${JSON.stringify(subject)}: not found`);
+  try {
+    return await client.jsm.streams.find(subject);
+  } catch (err) {
+    throw new Error(
+      `client: resolve stream for subject ${JSON.stringify(subject)}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
   }
-  return stream;
 }
