@@ -150,6 +150,7 @@ Errors are always returned as `rpc_response` envelopes with `error` set and `_te
 - Server caches `(verb, idempotency_key) → response_envelope` for 60s.
 - Repeat requests within that window return the cached response without re-executing.
 - After the 60s window the cache entry expires and the same key would re-execute.
+- The server enforces a max-entries cap on the cache (default 10000) to bound memory under a bursty client. Eviction is by expiry order — expired entries go first, then the entry with the soonest expiry. A re-Store of an existing key extends its lifetime without counting against the cap. Clients should accept that a sufficiently-old replay against a server under heavy load may re-execute even inside the 60s window.
 
 ### Audit
 
