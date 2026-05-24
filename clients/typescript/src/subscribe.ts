@@ -135,7 +135,25 @@ function makeAsyncIterator(
         config.deliver_policy = DeliverPolicy.All;
       }
       ci = await client.jsm.consumers.add(streamName, config);
-      consumer = await client.js.consumers.get(streamName, ci.name);
+      // Install a delete-on-close shim immediately. If stop() fires
+      // between here and the full cleanup below, the consumer still
+      // gets torn down. If stop() already fired during the await of
+      // consumers.add, run the cleanup synchronously now and bail.
+      const ciName = ci.name;
+      const deleteConsumer = async (): Promise<void> => {
+        try {
+          await client.jsm.consumers.delete(streamName, ciName);
+        } catch {
+          /* ignore */
+        }
+      };
+      cleanup = deleteConsumer;
+      if (closed) {
+        await deleteConsumer();
+        client.deregister(reg);
+        return;
+      }
+      consumer = await client.js.consumers.get(streamName, ciName);
     } catch (err) {
       enqueueErr(err instanceof Error ? err : new Error(String(err)), subject);
       stop();
@@ -165,6 +183,16 @@ function makeAsyncIterator(
         /* ignore */
       }
     };
+    if (closed) {
+      // stop() fired while consume() was resolving. Run the full
+      // cleanup we just installed (stop the consume + delete the
+      // consumer) and exit without yielding any messages.
+      const c = cleanup;
+      cleanup = null;
+      await c();
+      client.deregister(reg);
+      return;
+    }
 
     (async () => {
       try {
