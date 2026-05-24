@@ -131,7 +131,13 @@ func doInit(_ context.Context, w io.Writer, opts initOptions) error {
 		return err
 	}
 
-	// 8. Templates dir + default.toml.
+	// 8. shipper.toml.
+	shipperTomlPath := filepath.Join(opts.ConfigDir, "shipper.toml")
+	if err := stepShipperConfig(w, shipperTomlPath, opts.ConfigDir, opts.DataDir, opts.Force); err != nil {
+		return err
+	}
+
+	// 9. Templates dir + default.toml.
 	if err := ensureDir(w, "templates-dir", cfg.Paths.TemplatesDir, 0o700); err != nil {
 		return err
 	}
@@ -302,6 +308,64 @@ connect_timeout = "10s"
 request_timeout = "30s"
 log_level       = "info"
 `, credsPath)
+}
+
+// stepShipperConfig writes shipper.toml — config consumed by
+// `sextant-shipper`. Empty NATS / ClickHouse addresses default to
+// the live values from runtime.json at start time; the file is
+// hand-written so comments survive a TOML round-trip.
+func stepShipperConfig(w io.Writer, path, configDir, dataDir string, force bool) error {
+	if !force && fileExists(path) {
+		println(w, "-> shipper.toml: existing")
+		return nil
+	}
+	body := buildShipperToml(configDir, dataDir)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		return fmt.Errorf("shipper.toml: write %s: %w", path, err)
+	}
+	println(w, "-> shipper.toml: written")
+	return nil
+}
+
+// buildShipperToml renders a fresh shipper.toml. Schema mirrors
+// specs/components/shipper.md §"Config file".
+func buildShipperToml(configDir, dataDir string) string {
+	operatorCreds := filepath.Join(configDir, "operator.creds")
+	clickhousePass := filepath.Join(configDir, "clickhouse.password")
+	bufferDir := filepath.Join(dataDir, "shipper-buffer")
+	return fmt.Sprintf(`# sextant shipper.toml — written by `+"`sextant init`"+`.
+# See specs/components/shipper.md §"Config file".
+
+[nats]
+# Leave url empty to read from runtime.json (recommended; the daemon
+# picks an OS-allocated port on first boot).
+url            = ""
+operator_creds = %q
+
+[clickhouse]
+# Leave addr empty to read from runtime.json.
+addr           = ""
+database       = "sextant"
+user           = "sextant"
+password_file  = %q
+
+[buffer]
+dir            = %q
+hard_cap_bytes = 10737418240  # 10 GiB
+
+[batch]
+max_events     = 1000
+flush_interval = "100ms"
+ack_wait       = "30s"
+
+[shipper]
+# "" = fail closed on hard cap (default). "drop_oldest" = drop oldest
+# entries and emit audit.shipper_drop per drop.
+degraded_mode    = ""
+metrics_interval = "5s"
+service_name     = "sextant-shipper"
+host_id          = ""  # empty = os.Hostname()
+`, operatorCreds, clickhousePass, bufferDir)
 }
 
 // stepDefaultTemplate writes templates/default.toml with the exact
