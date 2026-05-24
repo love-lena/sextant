@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"text/template"
 	"time"
@@ -27,6 +28,12 @@ type Server struct {
 	cmd     *exec.Cmd
 	cfgPath string
 	logFile *os.File
+
+	// waitDone closes after the subprocess exits; waitErr holds the
+	// cached exit error. Single Wait goroutine owns cmd.Wait().
+	waitDone chan struct{}
+	mu       sync.Mutex
+	waitErr  error
 }
 
 // Start writes a clickhouse-server config XML to cfg.DataDir, exec's
@@ -83,7 +90,21 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("clickhouseboot: start clickhouse-server: %w", err)
 	}
 
-	s := &Server{cfg: cfg, cmd: cmd, cfgPath: cfgPath, logFile: logFile}
+	s := &Server{
+		cfg:      cfg,
+		cmd:      cmd,
+		cfgPath:  cfgPath,
+		logFile:  logFile,
+		waitDone: make(chan struct{}),
+	}
+	// Single owner of cmd.Wait().
+	go func() {
+		err := cmd.Wait()
+		s.mu.Lock()
+		s.waitErr = err
+		s.mu.Unlock()
+		close(s.waitDone)
+	}()
 	if err := s.waitReady(ctx); err != nil {
 		// Detach cleanup from caller ctx.
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
@@ -162,45 +183,90 @@ func (s *Server) OpenDB() *sql.DB {
 }
 
 // Stop signals the subprocess to exit gracefully via SIGTERM, then
-// SIGKILL after cfg.ShutdownTimeout.
+// SIGKILL after cfg.ShutdownTimeout. If the subprocess has already
+// exited (e.g. observed via Done), Stop returns the cached status.
 func (s *Server) Stop(ctx context.Context) error {
 	if s.cmd == nil || s.cmd.Process == nil {
 		return nil
 	}
+	// Fast path: subprocess already exited.
+	select {
+	case <-s.waitDone:
+		s.closeLog()
+		return classifyExit(s.cachedWaitErr())
+	default:
+	}
+
 	if err := s.cmd.Process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		return fmt.Errorf("clickhouseboot: SIGTERM: %w", err)
 	}
-	done := make(chan error, 1)
-	go func() { done <- s.cmd.Wait() }()
 
 	timeout := s.cfg.ShutdownTimeout
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
 	select {
-	case waitErr := <-done:
-		s.cmd = nil
+	case <-s.waitDone:
 		s.closeLog()
-		if waitErr != nil {
-			var exitErr *exec.ExitError
-			if !errors.As(waitErr, &exitErr) {
-				return fmt.Errorf("clickhouseboot: wait: %w", waitErr)
-			}
-		}
-		return nil
+		return classifyExit(s.cachedWaitErr())
 	case <-time.After(timeout):
 		_ = s.cmd.Process.Kill()
-		<-done
-		s.cmd = nil
+		<-s.waitDone
 		s.closeLog()
 		return fmt.Errorf("clickhouseboot: did not stop within %s; sent SIGKILL", timeout)
 	case <-ctx.Done():
 		_ = s.cmd.Process.Kill()
-		<-done
-		s.cmd = nil
+		<-s.waitDone
 		s.closeLog()
 		return ctx.Err()
 	}
+}
+
+// Done returns a channel that closes when the underlying
+// clickhouse-server subprocess exits. After observing Done, callers can
+// inspect ExitErr.
+func (s *Server) Done() <-chan struct{} {
+	return s.waitDone
+}
+
+// PID returns the subprocess PID, or 0 if the subprocess is not started.
+func (s *Server) PID() int {
+	if s.cmd == nil || s.cmd.Process == nil {
+		return 0
+	}
+	return s.cmd.Process.Pid
+}
+
+// ExitErr returns the error from cmd.Wait(). Only meaningful after Done
+// has closed; returns nil if the subprocess is still running.
+func (s *Server) ExitErr() error {
+	select {
+	case <-s.waitDone:
+		return s.cachedWaitErr()
+	default:
+		return nil
+	}
+}
+
+func (s *Server) cachedWaitErr() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.waitErr
+}
+
+// classifyExit folds expected signal-induced exits into nil. ClickHouse
+// returns non-zero on SIGTERM/SIGKILL/SIGINT; treat any *exec.ExitError
+// as "subprocess exited because we said so" — natsboot uses the same
+// policy. Non-ExitError errors propagate.
+func classifyExit(err error) error {
+	if err == nil {
+		return nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return nil
+	}
+	return fmt.Errorf("clickhouseboot: wait: %w", err)
 }
 
 func (s *Server) closeLog() {
@@ -218,9 +284,13 @@ func (s *Server) waitReady(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return fmt.Errorf("clickhouseboot: ctx canceled waiting for ready: %w", ctx.Err())
 		}
-		if s.cmd.ProcessState != nil && s.cmd.ProcessState.Exited() {
-			return fmt.Errorf("clickhouseboot: clickhouse-server exited during startup: code %d",
-				s.cmd.ProcessState.ExitCode())
+		// Bail early if the subprocess has already died. Observe
+		// waitDone (owned by the single Wait goroutine) instead of
+		// poking at cmd.ProcessState to avoid racing the Wait writer.
+		select {
+		case <-s.waitDone:
+			return fmt.Errorf("clickhouseboot: clickhouse-server exited during startup: %w", s.cachedWaitErr())
+		default:
 		}
 		probeCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
 		conn, err := s.Open(probeCtx)
