@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -306,7 +307,11 @@ func (s *Server) handle(runCtx context.Context, msg *nats.Msg) {
 
 	if err := s.cfg.CapChecker.Check(req, requiredCap); err != nil {
 		_ = s.audit.PreDispatch(runCtx, req, verb, requiredCap, false)
-		s.replyErrorTo(reply, req, sextantproto.ErrCodeCapabilityDenied, err.Error(), verb)
+		// Surface the cap name in Details so M10 operator tooling can
+		// render "missing capability X" without parsing the message.
+		s.replyErrorToWithDetails(reply, req, sextantproto.ErrCodeCapabilityDenied,
+			err.Error(), verb,
+			map[string]any{"capability_required": requiredCap})
 		_ = s.audit.PostDispatch(runCtx, req, verb, "error", 0, sextantproto.ErrCodeCapabilityDenied)
 		return
 	}
@@ -355,19 +360,31 @@ func (s *Server) handle(runCtx context.Context, msg *nats.Msg) {
 		}
 	}
 
-	handlerErr := h(ctx, req, emit)
+	panicked, handlerErr := s.runHandler(ctx, h, req, emit, verb)
 	emitMu.Lock()
 	sent := terminalSent
 	emitMu.Unlock()
 
 	// Handler returned without emitting a terminal response — we must
-	// supply one. A non-nil handler error becomes the reply; a clean
-	// exit without a reply is a handler bug; we reply with internal so
-	// the caller doesn't hang.
+	// supply one. A non-nil handler error (or a panic) becomes the
+	// reply; a clean exit without a reply is a handler bug; we reply
+	// with internal so the caller doesn't hang.
 	if !sent {
 		code := sextantproto.ErrCodeInternal
 		msgText := "handler exited without sending a terminal reply"
-		if handlerErr != nil {
+		var details map[string]any
+		switch {
+		case panicked != nil:
+			// Panic: surface as ErrCodeInternal with a description of
+			// the panic in Details so the caller (and the audit row)
+			// have something to grep for.
+			code = sextantproto.ErrCodeInternal
+			msgText = fmt.Sprintf("handler panic: %v", panicked)
+			details = map[string]any{
+				"panic": fmt.Sprintf("%v", panicked),
+				"verb":  verb,
+			}
+		case handlerErr != nil:
 			if errors.Is(handlerErr, context.DeadlineExceeded) {
 				code = sextantproto.ErrCodeTimeout
 				msgText = "handler timed out"
@@ -375,7 +392,7 @@ func (s *Server) handle(runCtx context.Context, msg *nats.Msg) {
 				msgText = handlerErr.Error()
 			}
 		}
-		s.replyErrorTo(reply, req, code, msgText, verb)
+		s.replyErrorToWithDetails(reply, req, code, msgText, verb, details)
 		emitMu.Lock()
 		terminalCode = code
 		emitMu.Unlock()
@@ -394,12 +411,46 @@ func (s *Server) handle(runCtx context.Context, msg *nats.Msg) {
 	}
 }
 
+// runHandler invokes h under a recovery so a handler panic becomes a
+// structured terminal reply rather than killing the daemon. Returns
+// the recovered panic value (nil if the handler exited normally) and
+// the handler's error (if any). The dispatch loop in handle uses both
+// signals to choose the right terminal RPCError code.
+//
+// The wg.Done() that pairs with the dispatch goroutine's wg.Add(1) is
+// still in the outer goroutine — Close()'s drain waits on it regardless
+// of whether the handler panicked.
+func (s *Server) runHandler(ctx context.Context, h Handler, req sextantproto.Envelope, emit func(sextantproto.RPCResponse), verb string) (panicked any, handlerErr error) {
+	defer func() {
+		if r := recover(); r != nil {
+			panicked = r
+			s.logger.Printf("rpc: handler panic in verb %q: %v\n%s",
+				verb, r, debug.Stack())
+		}
+	}()
+	handlerErr = h(ctx, req, emit)
+	return nil, handlerErr
+}
+
 // replyErrorTo publishes a terminal RPC error reply on the supplied
 // subject. Also caches the reply under the request's idempotency key so
 // retries collapse onto the same error.
 func (s *Server) replyErrorTo(reply string, req sextantproto.Envelope, code, message, verb string) {
+	s.replyErrorToWithDetails(reply, req, code, message, verb, nil)
+}
+
+// replyErrorToWithDetails is replyErrorTo with the RPCError.Details
+// field populated. Used by paths that want to surface structured
+// metadata alongside the error (e.g. capability_required on a
+// capability_denied error so M10 operator tooling can render
+// "missing capability X" without parsing the message string).
+func (s *Server) replyErrorToWithDetails(reply string, req sextantproto.Envelope, code, message, verb string, details map[string]any) {
+	rerr := &sextantproto.RPCError{Code: code, Message: message}
+	if len(details) > 0 {
+		rerr.Details = details
+	}
 	resp := sextantproto.RPCResponse{
-		Error:    &sextantproto.RPCError{Code: code, Message: message},
+		Error:    rerr,
 		Terminal: true,
 	}
 	envBytes, err := buildResponseBytes(s.cfg.From, req, resp)
