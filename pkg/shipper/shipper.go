@@ -735,16 +735,6 @@ func (s *Shipper) String() string {
 		s.cfg.NATS.URL, s.cfg.ClickHouse.Addr, s.cfg.Buffer.Dir, s.cfg.HostID())
 }
 
-// LoadOperatorCreds is a tiny convenience for the cmd package. Keeps
-// the import surface of cmd/sextant-shipper tight.
-func LoadOperatorCreds(path string) (string, string, error) {
-	c, err := sextantd.ReadOperatorCreds(path)
-	if err != nil {
-		return "", "", err
-	}
-	return c.User, c.Password, nil
-}
-
 // ConfigFromFile loads + merges runtime addrs in one call. Used by the
 // cmd binary. Keeps signal-handling code in main.go small.
 func ConfigFromFile(path, runtimePath string) (Config, error) {
