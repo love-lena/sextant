@@ -59,6 +59,10 @@ type daemon struct {
 	supDone     chan struct{}
 	supDoneOnce sync.Once
 
+	// rpcRT is the live RPC server runtime. Set after startRPC; cleared
+	// after stopRPC. Held under mu like the subprocess handles.
+	rpcRT *rpcRuntime
+
 	shutdownOnce sync.Once
 	shutdownErr  error
 }
@@ -204,7 +208,26 @@ func (d *daemon) Start(ctx context.Context) error {
 	go d.drainEvents("nats", natsSup.Events())
 	go d.drainEvents("clickhouse", chSup.Events())
 
-	log.Printf("sextantd: ready (nats=%s clickhouse=%s control=%s)",
+	// 8. Bring the RPC server up after the subprocess supervisors are
+	// in place — startRPC needs a live NATS + ClickHouse to bind to.
+	rpcRT, err := d.startRPC(ctx)
+	if err != nil {
+		// Roll back: cancel the supervisors and tear NATS/ClickHouse
+		// back down so Start's contract (clean state on failure) holds.
+		if d.supCancel != nil {
+			d.supCancel()
+		}
+		d.closeSocket()
+		_ = sextantd.RemoveRuntimeInfo(d.cfg.Paths.RuntimeFile)
+		_ = d.stopClickHouseNow(ctx)
+		_ = d.stopNATSNow(ctx)
+		return fmt.Errorf("start rpc: %w", err)
+	}
+	d.mu.Lock()
+	d.rpcRT = rpcRT
+	d.mu.Unlock()
+
+	log.Printf("sextantd: ready (nats=%s clickhouse=%s control=%s rpc=sextant.rpc.*)",
 		natsSrv.Address(), chSrv.TCPAddress(), d.cfg.Daemon.ControlSocket)
 	return nil
 }
@@ -238,8 +261,21 @@ func (d *daemon) doShutdown() error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	// Tell the supervisors to stop, then cancel their root context.
+	// Tear the RPC server down first — it holds open connections to
+	// NATS and ClickHouse, so it must drain before we kill the
+	// subprocesses underneath it.
 	var errs []error
+	d.mu.Lock()
+	rpcRT := d.rpcRT
+	d.rpcRT = nil
+	d.mu.Unlock()
+	if rpcRT != nil {
+		if err := rpcRT.stopRPC(); err != nil {
+			errs = append(errs, fmt.Errorf("rpc stop: %w", err))
+		}
+	}
+
+	// Tell the supervisors to stop, then cancel their root context.
 	if d.chSup != nil {
 		if err := d.chSup.Stop(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("clickhouse stop: %w", err))
