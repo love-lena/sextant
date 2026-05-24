@@ -57,7 +57,8 @@ Specs that say "TBD", "open", "lean: X", "default: X" are inputs to refine, **no
 5. **Tests** demonstrating each acceptance criterion. Run `make lint test` until clean.
 6. **Self-review checkpoint** — re-read the milestone block, diff your branch against each acceptance criterion, write down (in your head, no need to commit) what proves each one. If anything is unproven, fix before merging.
 7. **Merge** to main per the workflow doc.
-8. **Move to the next milestone** without pausing. Do not write a "milestone N complete!" status message — your commits and tests are the status.
+8. **Push to origin** (`git push`). The remote at `github.com/love-lena/sextant-initial` is already configured; main tracks origin/main. **Never `git push --force`** under any condition (per `conventions/git-workflow.md`). If a normal `git push` fails (auth, network, non-fast-forward), halt and write the failure to `plans/blockers.md` — push failures are operator-domain.
+9. **Move to the next milestone** without pausing. Do not write a "milestone N complete!" status message — your commits and tests are the status.
 
 ## Toolchain — verify before M0
 
