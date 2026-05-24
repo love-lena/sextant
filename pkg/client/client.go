@@ -14,12 +14,53 @@ import (
 // one; Close releases the underlying NATS connection. A Client is safe
 // for concurrent use; the underlying *nats.Conn handles multiplexing.
 type Client struct {
-	cfg Config
-	nc  *nats.Conn
-	js  jetstream.JetStream
+	cfg    Config
+	nc     *nats.Conn
+	js     jetstream.JetStream
+	doneCh chan struct{} // closed exactly once by Close
 
-	mu     sync.Mutex
-	closed bool
+	mu       sync.Mutex
+	closed   bool
+	stoppers []*stopRegistration // active Subscribe / WatchKV cleanups
+}
+
+// stopRegistration is one active background worker — a Subscribe loop
+// or a WatchKV watcher — registered on the Client. Close iterates and
+// calls Stop on every registration so callers don't have to cancel
+// every Subscribe ctx individually.
+type stopRegistration struct {
+	once sync.Once
+	stop func()
+}
+
+// register adds a cleanup function to the Client's tracked workers and
+// returns the registration handle the worker can use to deregister on
+// natural exit. Callers MUST invoke handle.run() once the worker has
+// fully torn itself down so it doesn't keep showing up in Close.
+func (c *Client) register(stop func()) *stopRegistration {
+	reg := &stopRegistration{stop: stop}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.stoppers = append(c.stoppers, reg)
+	return reg
+}
+
+// run invokes the registration's stop function at most once.
+func (r *stopRegistration) run() {
+	r.once.Do(r.stop)
+}
+
+// deregister drops reg from the Client's tracked-worker list. Safe to
+// call multiple times; the second call is a no-op.
+func (c *Client) deregister(reg *stopRegistration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i, s := range c.stoppers {
+		if s == reg {
+			c.stoppers = append(c.stoppers[:i], c.stoppers[i+1:]...)
+			return
+		}
+	}
 }
 
 // Option configures a Client at construction time. Reserved for future
@@ -102,14 +143,15 @@ func ConnectWithConfig(ctx context.Context, cfg Config, opts ...Option) (*Client
 	}
 
 	c := &Client{
-		cfg: normalized,
-		nc:  nc,
-		js:  js,
+		cfg:    normalized,
+		nc:     nc,
+		js:     js,
+		doneCh: make(chan struct{}),
 	}
 
 	// Bind connection lifecycle to ctx: if ctx cancels before Close, we
-	// close the underlying conn. This matches the "first arg is ctx"
-	// rule for things that own background work.
+	// close the underlying conn. The goroutine also exits when Close
+	// runs first (via doneCh) so it does not outlive the Client.
 	if ctx != nil {
 		go c.watchCtx(ctx)
 	}
@@ -117,14 +159,33 @@ func ConnectWithConfig(ctx context.Context, cfg Config, opts ...Option) (*Client
 	return c, nil
 }
 
-// Close releases the underlying NATS connection. Idempotent.
+// Close releases the underlying NATS connection and stops every active
+// Subscribe loop and WatchKV watcher created against this Client.
+// Idempotent: a second call is a no-op.
+//
+// Subscribe / WatchKV channels close cleanly even if the caller passed
+// a long-lived context (e.g. context.Background()). After Close returns,
+// every previously-returned channel is closed.
 func (c *Client) Close() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.closed {
+		c.mu.Unlock()
 		return nil
 	}
 	c.closed = true
+	// Snapshot the registrations under the lock, then drop it so the
+	// stop functions can take the lock themselves (deregister) without
+	// deadlocking.
+	regs := c.stoppers
+	c.stoppers = nil
+	c.mu.Unlock()
+
+	for _, r := range regs {
+		r.run()
+	}
+	if c.doneCh != nil {
+		close(c.doneCh)
+	}
 	if c.nc != nil {
 		c.nc.Close()
 	}
@@ -149,7 +210,14 @@ func (c *Client) isClosed() bool {
 	return c.closed
 }
 
+// watchCtx tears the Client down when the caller's ctx is canceled, OR
+// exits silently if Close has already fired (signaled via doneCh). This
+// ensures the goroutine never outlives the Client even when ctx is
+// never canceled.
 func (c *Client) watchCtx(ctx context.Context) {
-	<-ctx.Done()
-	_ = c.Close()
+	select {
+	case <-ctx.Done():
+		_ = c.Close()
+	case <-c.doneCh:
+	}
 }

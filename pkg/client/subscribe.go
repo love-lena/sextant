@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -15,8 +16,25 @@ import (
 // need to resume after a disconnect. Subject is the concrete subject the
 // envelope landed on (the wildcard subscription's bound subject).
 //
-// Ack acks the message to JetStream. It is safe to call Ack at most
-// once; subsequent calls return nil.
+// On a payload-decode or envelope-validation failure, Subscribe delivers
+// a Message with Err set, Subject and StreamSeq populated from the raw
+// JetStream message (so callers can correlate / resume), and Envelope
+// left zero. Callers must check Err before reading Envelope:
+//
+//	for m := range ch {
+//	    if m.Err != nil {
+//	        log.Printf("bad envelope on %s seq=%d: %v", m.Subject, m.StreamSeq, m.Err)
+//	        continue
+//	    }
+//	    handle(m.Envelope)
+//	}
+//
+// JetStream redelivery is short-circuited server-side (the message is
+// Term'd before Err is surfaced), so a single malformed envelope is
+// reported exactly once.
+//
+// Ack acks the message to JetStream. Safe to call multiple times: the
+// underlying ack fires exactly once, and subsequent calls return nil.
 type Message struct {
 	Envelope    sextantproto.Envelope
 	Subject     string
@@ -24,6 +42,10 @@ type Message struct {
 	ConsumerSeq uint64
 	Timestamp   time.Time
 	Ack         func() error
+	// Err is non-nil when the JetStream message could not be decoded
+	// into a valid sextantproto.Envelope. When Err is set, Envelope is
+	// the zero value and Ack is a no-op.
+	Err error
 }
 
 // SubscribeOption configures a Subscribe call. Use the With* helpers.
@@ -105,37 +127,70 @@ func (c *Client) Subscribe(ctx context.Context, subject string, opts ...Subscrib
 		return nil, fmt.Errorf("client: ordered consumer on %q: %w", subject, err)
 	}
 
+	// subCtx fans the cancellation tree out so either a caller-driven
+	// ctx cancel OR a Client.Close hits the same path.
+	subCtx, cancelSub := context.WithCancel(ctx)
 	out := make(chan Message, 64)
 	consumeCtx, err := consumer.Consume(func(m jetstream.Msg) {
-		msg, err := toMessage(m)
-		if err != nil {
-			// Spec requires type-checked payloads. M4's contract:
-			// terminate redelivery on malformed envelopes so the
-			// consumer doesn't spin on garbage. Callers needing
-			// payload errors should use a raw NATS subscription.
+		msg, decodeErr := toMessage(m)
+		if decodeErr != nil {
+			// Per specs/components/client-libraries.md §"Shared
+			// concerns" the spec requires we surface type-validation
+			// failures as errors to the caller, not silently coerce
+			// or drop. Term the underlying message first so
+			// JetStream doesn't redeliver garbage, then emit a
+			// Message with Err set so the caller learns about it.
+			subj, seq := messageCoordinates(m)
 			_ = m.Term()
+			select {
+			case out <- Message{Subject: subj, StreamSeq: seq, Err: decodeErr, Ack: noopAck}:
+			case <-subCtx.Done():
+			}
 			return
 		}
 		select {
 		case out <- msg:
-		case <-ctx.Done():
+		case <-subCtx.Done():
 		}
 	})
 	if err != nil {
+		cancelSub()
 		return nil, fmt.Errorf("client: consume on %q: %w", subject, err)
 	}
 
+	// Register a stopper on the Client so Close() can tear this
+	// Subscribe down even when the caller passed a long-lived ctx.
+	reg := c.register(func() { cancelSub() })
+
 	go func() {
-		<-ctx.Done()
+		<-subCtx.Done()
 		consumeCtx.Stop()
 		// Wait for the Consume loop to fully drain before closing
 		// out, otherwise a late-firing handler could write to a
 		// closed channel.
 		<-consumeCtx.Closed()
 		close(out)
+		c.deregister(reg)
 	}()
 
 	return out, nil
+}
+
+// noopAck is the Ack closure attached to error Messages — there is no
+// underlying delivery to ack (Term has already fired server-side).
+func noopAck() error { return nil }
+
+// messageCoordinates pulls the subject + stream seq off a JetStream
+// message, returning zero-valued fallbacks if Metadata is unavailable.
+// Used to populate the resume cursor on error Messages without erroring
+// the whole stream when Metadata itself is the failure.
+func messageCoordinates(m jetstream.Msg) (string, uint64) {
+	subject := m.Subject()
+	md, err := m.Metadata()
+	if err != nil || md == nil {
+		return subject, 0
+	}
+	return subject, md.Sequence.Stream
 }
 
 // SubscribeFromSeq is sugar for Subscribe(ctx, subject, WithStartSeq(fromSeq)).
@@ -174,6 +229,18 @@ func toMessage(m jetstream.Msg) (Message, error) {
 		StreamSeq:   md.Sequence.Stream,
 		ConsumerSeq: md.Sequence.Consumer,
 		Timestamp:   md.Timestamp,
-		Ack:         m.Ack,
+		Ack:         onceAck(m),
 	}, nil
+}
+
+// onceAck wraps m.Ack so it fires exactly once. The first call returns
+// whatever JetStream returns; subsequent calls return nil. Lets callers
+// stash and replay Messages without having to track ack-state externally.
+func onceAck(m jetstream.Msg) func() error {
+	var once sync.Once
+	var ackErr error
+	return func() error {
+		once.Do(func() { ackErr = m.Ack() })
+		return ackErr
+	}
 }
