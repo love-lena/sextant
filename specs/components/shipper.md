@@ -2,7 +2,7 @@
 
 ## Role
 
-Subscribe to NATS subjects, write to ClickHouse. At-least-once delivery with dedup on ClickHouse primary key.
+Subscribe to NATS subjects, write to ClickHouse. At-least-once delivery; ClickHouse tables use `ReplacingMergeTree` so re-deliveries of the same `id` collapse on background merge (or via `FINAL` queries). See `specs/components/clickhouse.md`.
 
 Lives as either a separate process (`cmd/sextant-shipper/`) or a goroutine inside sextantd. **Lean: separate process** for failure isolation — a shipper crash shouldn't take down sextantd.
 
@@ -24,20 +24,23 @@ Mapping defined as code in `pkg/shipper/mapping.go`. Each NATS subject pattern h
 
 ## Delivery semantics
 
-At-least-once with primary-key dedup. JetStream consumer groups give us:
+At-least-once. JetStream consumer groups give us:
 - Resumable position (last-acked sequence number)
 - Re-delivery on failure
 - Multi-consumer parallelism if needed
 
-ClickHouse dedup via primary key on `id` (UUID per event). Re-inserts are no-ops.
+**Ack ordering**: shipper acks JetStream **only after** the message has been durably written to ClickHouse, or persisted to the BoltDB buffer with a pending-write entry. JetStream is the durable source of truth until ack; BoltDB is finite spillover for ClickHouse-down windows.
+
+ClickHouse dedup via `ReplacingMergeTree(ts)` on `(id)`. Re-inserts with the same `id` collapse on background merge or via `FINAL` on read. Not instant — pipelines that read fresh data should tolerate transient duplicates or use `FINAL` (with the perf cost). Acceptable for initial scale.
 
 ## Backpressure handling
 
 When ClickHouse is unreachable or slow:
-- Local buffer at `~/.local/share/sextant/shipper-buffer/` using BoltDB or similar embedded KV
-- Buffer drains as ClickHouse recovers
-- Buffer-depth metric published periodically
-- Hard cap on buffer size (10GB default); over cap → oldest events dropped with an audit event
+- Local buffer at `~/.local/share/sextant/shipper-buffer/` using BoltDB. Acts as finite spillover; JetStream remains the durable source of truth.
+- Buffer drains as ClickHouse recovers; drained entries are then acked on JetStream.
+- Buffer-depth metric published periodically.
+- Hard cap on buffer size (10GB default). **On hitting the cap: fail closed** — shipper stops pulling from JetStream and emits a critical `audit.shipper_backpressure` event. JetStream's own per-stream max-bytes becomes the limiting factor. Operator intervention is required (drain via recovery, extend buffer, or enable degraded mode).
+- **No silent oldest-event drop.** If the operator wants drop-oldest behavior, it must be explicitly enabled via `shipper.degraded_mode = "drop_oldest"` in config — off by default. Degraded mode emits an audit event per drop.
 
 ## Metrics
 

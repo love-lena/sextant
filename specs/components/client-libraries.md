@@ -12,11 +12,22 @@ Package: `github.com/love-lena/sextant-initial/pkg/client`
 // Connect loads ~/.config/sextant/client.toml and dials the configured NATS.
 func Connect(ctx context.Context, opts ...Option) (*Client, error)
 
-// Subscribe to a subject pattern.
-func (c *Client) Subscribe(ctx context.Context, subject string, opts ...SubscribeOption) (<-chan Envelope, error)
+// Message wraps a received envelope with JetStream metadata.
+type Message struct {
+    Envelope    Envelope
+    Subject     string
+    StreamSeq   uint64    // JetStream stream sequence (use for resume)
+    ConsumerSeq uint64    // JetStream consumer sequence
+    Timestamp   time.Time // JetStream-reported receive ts
+    // Ack acknowledges the message to JetStream.
+    Ack func() error
+}
 
-// SubscribeFromSeq does gap-fill replay from a sequence then transitions to live.
-func (c *Client) SubscribeFromSeq(ctx context.Context, subject string, fromSeq uint64) (<-chan Envelope, error)
+// Subscribe to a subject pattern.
+func (c *Client) Subscribe(ctx context.Context, subject string, opts ...SubscribeOption) (<-chan Message, error)
+
+// SubscribeFromSeq does gap-fill replay from a stream sequence then transitions to live.
+func (c *Client) SubscribeFromSeq(ctx context.Context, subject string, fromSeq uint64) (<-chan Message, error)
 
 // Publish an envelope.
 func (c *Client) Publish(ctx context.Context, subject string, env Envelope) error
@@ -63,9 +74,18 @@ Package: `@sextant/client` (npm)
 ```typescript
 async function connect(opts?: ConnectOptions): Promise<Client>;
 
+interface Message {
+    envelope: Envelope;
+    subject: string;
+    streamSeq: bigint;     // JetStream stream sequence (use for resume)
+    consumerSeq: bigint;   // JetStream consumer sequence
+    timestamp: Date;
+    ack(): Promise<void>;
+}
+
 class Client {
-    subscribe(subject: string, opts?: SubscribeOptions): AsyncIterable<Envelope>;
-    subscribeFromSeq(subject: string, fromSeq: bigint): AsyncIterable<Envelope>;
+    subscribe(subject: string, opts?: SubscribeOptions): AsyncIterable<Message>;
+    subscribeFromSeq(subject: string, fromSeq: bigint): AsyncIterable<Message>;
     publish(subject: string, env: Envelope): Promise<void>;
     rpc<Req, Resp>(verb: string, req: Req, opts?: RPCOptions): Promise<Resp>;
     query(filter: QueryFilter): Promise<Envelope[]>;
@@ -81,7 +101,7 @@ Generated from JSON Schemas (produced by M1) via `json-schema-to-typescript`. Bu
 
 ## Shared concerns
 
-- **Reconnection**: built-in with exponential backoff; loss of connection emits an event on a special control channel; client subscriptions auto-resume from the last seen seq
+- **Reconnection**: built-in with exponential backoff; loss of connection emits an event on a special control channel; client subscriptions auto-resume from the `StreamSeq` of the last-acked `Message`.
 - **Timeouts**: every RPC has a default timeout (10s); override via option
 - **Idempotency**: every RPC carries a client-generated idempotency key (UUID); server dedupes within a bounded window (60s)
 - **Type validation**: every received envelope's payload is type-checked against its declared kind; type mismatch → returned as an error to the caller, not silently coerced
