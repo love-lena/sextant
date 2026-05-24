@@ -10,12 +10,25 @@
 
 FROM debian:bookworm-slim
 
-# Pin Go to the latest stable. Override with `--build-arg GO_VERSION=...`
-# when bumping. See specs/components/sidecar-image.md §"Version pins".
+# Every externally-fetched component is pinned to an exact version.
+# Override with `--build-arg <NAME>=...` when bumping; commit the spec
+# update under §"Version pins" in the same change. See
+# specs/components/sidecar-image.md §"Version pins" for the bump
+# procedure and the source used to resolve each pin.
 ARG GO_VERSION=1.26.3
 # Pin Node major (the NodeSource setup script installs the latest minor
-# in the requested major line).
+# in the requested major line — major+minor lock is the API-stability
+# boundary that matters).
 ARG NODE_MAJOR=22
+# yq release tag (without the leading "v"; the URL adds it back).
+# Source: `gh api repos/mikefarah/yq/releases/latest`.
+ARG YQ_VERSION=4.53.2
+# Claude Code Agent SDK (programmatic). Source: `npm view
+# @anthropic-ai/claude-agent-sdk version`.
+ARG CLAUDE_AGENT_SDK_VERSION=0.3.150
+# Claude Code CLI (interactive). Source: `npm view
+# @anthropic-ai/claude-code version`.
+ARG CLAUDE_CODE_VERSION=2.1.150
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
@@ -57,7 +70,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends httpie \
  && rm -rf /var/lib/apt/lists/*
 
 # yq isn't in Debian Bookworm; install from the upstream GitHub release.
-# Multi-arch via `dpkg --print-architecture` (amd64 / arm64).
+# Multi-arch via `dpkg --print-architecture` (amd64 / arm64). Exact tag
+# from ARG so cache-cold rebuilds match — no releases/latest/download.
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
@@ -65,7 +79,7 @@ RUN set -eux; \
       arm64) yq_arch=arm64 ;; \
       *) echo "unsupported arch: $arch" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${yq_arch}" \
+    curl -fsSL "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_${yq_arch}" \
         -o /usr/local/bin/yq; \
     chmod 0755 /usr/local/bin/yq; \
     yq --version
@@ -116,12 +130,13 @@ ENV PATH=/usr/local/go/bin:/home/agent/go/bin:$PATH \
 
 # ---------------------------------------------------------------------------
 # Globally-installed npm packages: the Claude Code Agent SDK (programmatic
-# use) and the Claude Code CLI (interactive use). Both live on the public
-# registry.
+# use) and the Claude Code CLI (interactive use). Both pinned to exact
+# versions via ARG — no @latest. Bumping = ARG change + spec update in the
+# same commit.
 # ---------------------------------------------------------------------------
 RUN npm install -g --omit=dev \
-        @anthropic-ai/claude-agent-sdk@latest \
-        @anthropic-ai/claude-code@latest \
+        "@anthropic-ai/claude-agent-sdk@${CLAUDE_AGENT_SDK_VERSION}" \
+        "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
  && npm cache clean --force
 
 # ---------------------------------------------------------------------------
