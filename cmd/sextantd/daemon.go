@@ -36,7 +36,6 @@ type daemon struct {
 
 	natsBaseCfg natsboot.Config
 	chBaseCfg   clickhouseboot.Config
-	chMigrated  bool // migrations applied once per daemon process lifetime
 
 	// Current subprocess handles. Replaced on each supervisor restart.
 	mu  sync.Mutex
@@ -331,17 +330,17 @@ func (d *daemon) startClickHouseOnce(ctx context.Context) (*clickhouseboot.Serve
 	return srv, nil
 }
 
+// applyMigrations runs the bookkeeping-tracked ClickHouse migrations.
+// Safe to call repeatedly: clickhouseboot.Apply is idempotent on the
+// SHA-tracked migration table. We re-apply on every restart so any
+// schema drift between binary and data dir surfaces immediately.
 func (d *daemon) applyMigrations(ctx context.Context, chSrv *clickhouseboot.Server) error {
 	conn, err := chSrv.Open(ctx)
 	if err != nil {
 		return fmt.Errorf("open: %w", err)
 	}
 	defer conn.Close() //nolint:errcheck // best-effort close
-	if err := clickhouseboot.Apply(ctx, conn); err != nil {
-		return err
-	}
-	d.chMigrated = true
-	return nil
+	return clickhouseboot.Apply(ctx, conn)
 }
 
 func (d *daemon) bootstrapNATS(ctx context.Context, srv *natsboot.Server) error {
