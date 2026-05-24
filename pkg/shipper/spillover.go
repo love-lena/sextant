@@ -19,13 +19,25 @@ import (
 // FIFO. The Row's JSON-decoded form is re-built lazily; the bucket
 // stores the gob-encoded Row struct itself.
 type spillover struct {
-	db      *bolt.DB
-	path    string
-	dirSize atomic.Int64 // best-effort size estimate refreshed by SizeBytes
+	db   *bolt.DB
+	path string
+	// logicalBytes is the sum of value lengths currently stored in the
+	// per-Table buckets. We track this in memory because BoltDB never
+	// shrinks its file on Delete — `os.Stat(buffer.db).Size()` would
+	// stay at the high-water mark after a successful drain, causing
+	// `degraded_mode = "drop_oldest"` to spiral (one drop frees zero
+	// "bytes" so the next batch trips the cap too) and causing a fail-
+	// closed restart to re-trip on the first transient ClickHouse
+	// error. logicalBytes is incremented on Put, decremented on
+	// Delete and DropOldest, and rebuilt on openSpillover by scanning
+	// every bucket once.
+	logicalBytes atomic.Int64
 }
 
 // openSpillover opens (or creates) the BoltDB at dir/buffer.db. Creates
-// the per-Table buckets. The buffer dir is created with mode 0o750.
+// the per-Table buckets and rebuilds logicalBytes from a single
+// read-only scan of the buckets so a previous process's writes survive
+// restart accounting.
 func openSpillover(dir string) (*spillover, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("shipper: spillover dir is empty")
@@ -50,7 +62,10 @@ func openSpillover(dir string) (*spillover, error) {
 		return nil, fmt.Errorf("shipper: init buckets: %w", err)
 	}
 	s := &spillover{db: db, path: path}
-	_ = s.refreshSize()
+	if err := s.rebuildLogicalBytes(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -65,27 +80,45 @@ func (s *spillover) Close() error {
 // Path returns the on-disk file path.
 func (s *spillover) Path() string { return s.path }
 
-// SizeBytes returns the spillover file's current on-disk size.
+// SizeBytes returns the logical size of buffered data — the sum of
+// value lengths currently stored in the per-Table buckets. This is
+// NOT the on-disk file size: BoltDB never shrinks its file on Delete,
+// so the file size is a high-water mark that does not reflect drain
+// progress. The hard-cap and metrics path both want the live logical
+// number; that's what we return here.
 func (s *spillover) SizeBytes() int64 {
-	_ = s.refreshSize()
-	return s.dirSize.Load()
+	return s.logicalBytes.Load()
 }
 
-// refreshSize re-reads the BoltDB file size from disk and updates the
-// cached value. Best-effort: a stat error is silently ignored and the
-// previous value remains.
-func (s *spillover) refreshSize() error {
-	st, err := os.Stat(s.path)
+// rebuildLogicalBytes walks every bucket and recomputes logicalBytes
+// from scratch. Called once on open so a previous process's writes
+// (which we still need to drain) contribute to the cap accounting.
+func (s *spillover) rebuildLogicalBytes() error {
+	var total int64
+	err := s.db.View(func(tx *bolt.Tx) error {
+		for _, tbl := range AllTables() {
+			b := tx.Bucket(bucketName(tbl))
+			if b == nil {
+				continue
+			}
+			c := b.Cursor()
+			for k, v := c.First(); k != nil; k, v = c.Next() {
+				total += int64(len(v))
+			}
+		}
+		return nil
+	})
 	if err != nil {
-		return err
+		return fmt.Errorf("shipper: spillover rebuild logical bytes: %w", err)
 	}
-	s.dirSize.Store(st.Size())
+	s.logicalBytes.Store(total)
 	return nil
 }
 
 // Put appends the supplied rows to their respective per-Table buckets
 // in a single Bolt transaction. Returns the number of bytes written
-// (post-encoding, summed across all rows).
+// (post-encoding, summed across all rows) and adds that figure to the
+// logical-bytes counter.
 //
 // Rows of mixed tables in one Put are allowed; callers normally pass
 // one Table per call, but tests exercise the multi-table form to verify
@@ -120,7 +153,7 @@ func (s *spillover) Put(rows []Row) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("shipper: spillover put: %w", err)
 	}
-	_ = s.refreshSize()
+	s.logicalBytes.Add(written)
 	return written, nil
 }
 
@@ -160,17 +193,23 @@ func (s *spillover) PeekBatch(table Table, max int) ([][]byte, []Row, error) {
 }
 
 // Delete removes the supplied keys from bucketName(table). Used by the
-// drain loop after a successful ClickHouse insert.
+// drain loop after a successful ClickHouse insert. Reads each value's
+// length inside the same transaction before deletion so we can credit
+// the logical-bytes counter accurately.
 func (s *spillover) Delete(table Table, keys [][]byte) error {
 	if len(keys) == 0 {
 		return nil
 	}
+	var freed int64
 	err := s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketName(table))
 		if b == nil {
 			return fmt.Errorf("missing bucket for table %s", table)
 		}
 		for _, k := range keys {
+			if v := b.Get(k); v != nil {
+				freed += int64(len(v))
+			}
 			if err := b.Delete(k); err != nil {
 				return fmt.Errorf("delete %x: %w", k, err)
 			}
@@ -180,7 +219,9 @@ func (s *spillover) Delete(table Table, keys [][]byte) error {
 	if err != nil {
 		return fmt.Errorf("shipper: spillover delete %s: %w", table, err)
 	}
-	_ = s.refreshSize()
+	if freed > 0 {
+		s.logicalBytes.Add(-freed)
+	}
 	return nil
 }
 
@@ -206,12 +247,14 @@ func (s *spillover) CountAll() (map[Table]int, error) {
 
 // DropOldest removes up to count rows from the oldest entries across
 // every bucket, returning the count actually dropped. Used by
-// degraded_mode = "drop_oldest" to free space.
+// degraded_mode = "drop_oldest" to free space. Updates the logical-
+// bytes counter with the freed value lengths.
 func (s *spillover) DropOldest(count int) (int, error) {
 	if count <= 0 {
 		return 0, nil
 	}
 	dropped := 0
+	var freed int64
 	err := s.db.Update(func(tx *bolt.Tx) error {
 		for _, tbl := range AllTables() {
 			if dropped >= count {
@@ -222,7 +265,8 @@ func (s *spillover) DropOldest(count int) (int, error) {
 				continue
 			}
 			c := b.Cursor()
-			for k, _ := c.First(); k != nil && dropped < count; k, _ = c.Next() {
+			for k, v := c.First(); k != nil && dropped < count; k, v = c.Next() {
+				freed += int64(len(v))
 				if err := b.Delete(k); err != nil {
 					return err
 				}
@@ -234,7 +278,9 @@ func (s *spillover) DropOldest(count int) (int, error) {
 	if err != nil {
 		return dropped, fmt.Errorf("shipper: drop_oldest: %w", err)
 	}
-	_ = s.refreshSize()
+	if freed > 0 {
+		s.logicalBytes.Add(-freed)
+	}
 	return dropped, nil
 }
 
