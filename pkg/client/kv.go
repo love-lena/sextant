@@ -28,6 +28,27 @@ type KVUpdate struct {
 	Timestamp time.Time
 }
 
+// PutKV stores value at key in bucket. Creates the entry if missing or
+// overwrites the existing value. The KV bucket must already exist —
+// natsboot.Bootstrap is the sole bucket creator; PutKV does NOT create
+// buckets on demand because that would hide schema errors.
+func (c *Client) PutKV(ctx context.Context, bucket, key string, value []byte) error {
+	if c.isClosed() {
+		return ErrClosed
+	}
+	if bucket == "" || key == "" {
+		return fmt.Errorf("client: PutKV requires bucket and key")
+	}
+	kv, err := c.js.KeyValue(ctx, bucket)
+	if err != nil {
+		return fmt.Errorf("client: open kv bucket %q: %w", bucket, err)
+	}
+	if _, err := kv.Put(ctx, key, value); err != nil {
+		return fmt.Errorf("client: put kv %q/%q: %w", bucket, key, err)
+	}
+	return nil
+}
+
 // GetKV reads the current value of key from bucket. Returns ErrKVKeyNotFound
 // when the key is absent.
 func (c *Client) GetKV(ctx context.Context, bucket, key string) ([]byte, error) {
