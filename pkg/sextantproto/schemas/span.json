@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/love-lena/sextant-initial/pkg/sextantproto/span",
+  "$ref": "#/$defs/Span",
+  "$defs": {
+    "Span": {
+      "properties": {
+        "timestamp_ns": {
+          "type": "integer"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "parent_span_id": {
+          "type": "string"
+        },
+        "trace_state": {
+          "type": "string"
+        },
+        "span_name": {
+          "type": "string"
+        },
+        "span_kind": {
+          "type": "string"
+        },
+        "service_name": {
+          "type": "string"
+        },
+        "resource_attributes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "span_attributes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "duration_ns": {
+          "type": "integer"
+        },
+        "status_code": {
+          "type": "string"
+        },
+        "status_message": {
+          "type": "string"
+        },
+        "events": {
+          "items": {
+            "$ref": "#/$defs/SpanEvent"
+          },
+          "type": "array"
+        },
+        "links": {
+          "items": {
+            "$ref": "#/$defs/SpanLink"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "timestamp_ns",
+        "trace_id",
+        "span_id",
+        "span_name",
+        "span_kind",
+        "service_name",
+        "duration_ns",
+        "status_code"
+      ]
+    },
+    "SpanEvent": {
+      "properties": {
+        "timestamp_ns": {
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "attributes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "timestamp_ns",
+        "name"
+      ]
+    },
+    "SpanLink": {
+      "properties": {
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "trace_state": {
+          "type": "string"
+        },
+        "attributes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "trace_id",
+        "span_id"
+      ]
+    }
+  }
+}

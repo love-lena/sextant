@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/love-lena/sextant-initial/pkg/sextantproto/rpc-request",
+  "$ref": "#/$defs/RPCRequest",
+  "$defs": {
+    "RPCRequest": {
+      "properties": {
+        "verb": {
+          "type": "string"
+        },
+        "args": true
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "verb",
+        "args"
+      ]
+    }
+  }
+}

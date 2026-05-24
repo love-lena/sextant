@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/love-lena/sextant-initial/pkg/sextantproto/agent-incarnation",
+  "$ref": "#/$defs/AgentIncarnation",
+  "$defs": {
+    "AgentIncarnation": {
+      "properties": {
+        "incarnation_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "agent_uuid": {
+          "$ref": "#/$defs/UUID"
+        },
+        "started_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "ended_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "host_id": {
+          "type": "string"
+        },
+        "container_id": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": "integer"
+        },
+        "jwt_key_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "incarnation_id",
+        "agent_uuid",
+        "started_at",
+        "host_id",
+        "state"
+      ]
+    },
+    "Timestamp": {
+      "properties": {},
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "UUID": {
+      "items": {
+        "type": "integer"
+      },
+      "type": "array",
+      "maxItems": 16,
+      "minItems": 16
+    }
+  }
+}
