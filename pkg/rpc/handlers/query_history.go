@@ -26,7 +26,7 @@ type QueryHistoryDB interface {
 // unbounded query is a single SELECT with just a LIMIT.
 func NewQueryHistory(db QueryHistoryDB) rpc.Handler {
 	return func(ctx context.Context, req sextantproto.Envelope, emit func(sextantproto.RPCResponse)) error {
-		var args rpc.QueryHistoryRequest
+		var args sextantproto.QueryHistoryRequest
 		if len(req.Payload) > 0 {
 			if err := json.Unmarshal(req.Payload, &args); err != nil {
 				return emitErr(emit, sextantproto.ErrCodeBadRequest,
@@ -54,13 +54,13 @@ func NewQueryHistory(db QueryHistoryDB) rpc.Handler {
 			return emitErr(emit, sextantproto.ErrCodeInternal,
 				fmt.Sprintf("clickhouse rows.Err: %v", err))
 		}
-		return emitOK(emit, rpc.QueryHistoryResponse{Events: envs})
+		return emitOK(emit, sextantproto.QueryHistoryResponse{Events: envs})
 	}
 }
 
 // buildQuery composes the parameterised SELECT. Columns mirror
 // pkg/clickhouseboot/migrations/001-events.sql.
-func buildQuery(args rpc.QueryHistoryRequest) (string, []any) {
+func buildQuery(args sextantproto.QueryHistoryRequest) (string, []any) {
 	cols := []string{
 		"id", "ts", "subject",
 		"from_kind", "from_id", "to_kind", "to_id",

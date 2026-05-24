@@ -34,6 +34,15 @@ func TestSchemasOnDisk(t *testing.T) {
 		"span.json":                        false,
 		"metric.json":                      false,
 		"log_record.json":                  false,
+		// RPC verb payloads (consumed by the TypeScript client).
+		"list_agents_request.json":       false,
+		"list_agents_response.json":      false,
+		"get_agent_status_request.json":  false,
+		"get_agent_status_response.json": false,
+		"read_file_request.json":         false,
+		"read_file_response.json":        false,
+		"query_history_request.json":     false,
+		"query_history_response.json":    false,
 	}
 	for _, e := range entries {
 		if e.IsDir() {

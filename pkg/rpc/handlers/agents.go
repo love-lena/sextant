@@ -35,7 +35,7 @@ type AgentKV interface {
 // holds.
 func NewListAgents(kv AgentKV) rpc.Handler {
 	return func(ctx context.Context, req sextantproto.Envelope, emit func(sextantproto.RPCResponse)) error {
-		var args rpc.ListAgentsRequest
+		var args sextantproto.ListAgentsRequest
 		if len(req.Payload) > 0 {
 			if err := json.Unmarshal(req.Payload, &args); err != nil {
 				return emitErr(emit, sextantproto.ErrCodeBadRequest,
@@ -48,14 +48,14 @@ func NewListAgents(kv AgentKV) rpc.Handler {
 			// "no keys" depending on the jetstream version; we treat
 			// both as success-with-empty.
 			if errors.Is(err, jetstream.ErrKeyNotFound) || errors.Is(err, jetstream.ErrNoKeysFound) {
-				return emitOK(emit, rpc.ListAgentsResponse{Agents: []rpc.AgentSummary{}})
+				return emitOK(emit, sextantproto.ListAgentsResponse{Agents: []sextantproto.AgentSummary{}})
 			}
 			return emitErr(emit, sextantproto.ErrCodeInternal,
 				fmt.Sprintf("list agent_definitions keys: %v", err))
 		}
 		defer func() { _ = lister.Stop() }()
 
-		summaries := make([]rpc.AgentSummary, 0)
+		summaries := make([]sextantproto.AgentSummary, 0)
 		for key := range lister.Keys() {
 			entry, err := kv.Get(ctx, key)
 			if err != nil {
@@ -74,7 +74,7 @@ func NewListAgents(kv AgentKV) rpc.Handler {
 			if args.Filter != nil && args.Filter.Lifecycle != "" && string(def.Lifecycle) != args.Filter.Lifecycle {
 				continue
 			}
-			summaries = append(summaries, rpc.AgentSummary{
+			summaries = append(summaries, sextantproto.AgentSummary{
 				UUID:      def.UUID,
 				Name:      def.Name,
 				Type:      def.Type,
@@ -84,7 +84,7 @@ func NewListAgents(kv AgentKV) rpc.Handler {
 				UpdatedAt: def.UpdatedAt.Time,
 			})
 		}
-		return emitOK(emit, rpc.ListAgentsResponse{Agents: summaries})
+		return emitOK(emit, sextantproto.ListAgentsResponse{Agents: summaries})
 	}
 }
 
@@ -93,7 +93,7 @@ func NewListAgents(kv AgentKV) rpc.Handler {
 // "agent_not_found" — M7 acceptance asserts this is the 404 path.
 func NewGetAgentStatus(kv AgentKV) rpc.Handler {
 	return func(ctx context.Context, req sextantproto.Envelope, emit func(sextantproto.RPCResponse)) error {
-		var args rpc.GetAgentStatusRequest
+		var args sextantproto.GetAgentStatusRequest
 		if err := json.Unmarshal(req.Payload, &args); err != nil {
 			return emitErr(emit, sextantproto.ErrCodeBadRequest,
 				fmt.Sprintf("decode get_agent_status payload: %v", err))
@@ -115,8 +115,8 @@ func NewGetAgentStatus(kv AgentKV) rpc.Handler {
 			return emitErr(emit, sextantproto.ErrCodeInternal,
 				fmt.Sprintf("decode agent_definitions/%s: %v", args.AgentID, err))
 		}
-		return emitOK(emit, rpc.GetAgentStatusResponse{
-			Status: rpc.AgentStatus{
+		return emitOK(emit, sextantproto.GetAgentStatusResponse{
+			Status: sextantproto.AgentStatus{
 				UUID:      def.UUID,
 				Name:      def.Name,
 				Lifecycle: string(def.Lifecycle),

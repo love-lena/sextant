@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/love-lena/sextant-initial/pkg/sextantproto/list-agents-request",
+  "$ref": "#/$defs/ListAgentsRequest",
+  "$defs": {
+    "ListAgentsFilter": {
+      "properties": {
+        "lifecycle": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ListAgentsRequest": {
+      "properties": {
+        "filter": {
+          "$ref": "#/$defs/ListAgentsFilter"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    }
+  }
+}

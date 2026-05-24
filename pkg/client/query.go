@@ -36,11 +36,11 @@ func (c *Client) Query(ctx context.Context, filter QueryFilter) ([]sextantproto.
 	if c.isClosed() {
 		return nil, ErrClosed
 	}
-	req := rpc.QueryHistoryRequest{
-		Filter: rpc.QueryHistoryFilter{
+	req := sextantproto.QueryHistoryRequest{
+		Filter: sextantproto.QueryHistoryFilter{
 			Subject: filter.Subject,
 		},
-		TimeRange: rpc.TimeRange{
+		TimeRange: sextantproto.TimeRange{
 			Since: filter.From.UTC(),
 			Until: filter.To.UTC(),
 		},
@@ -50,7 +50,7 @@ func (c *Client) Query(ctx context.Context, filter QueryFilter) ([]sextantproto.
 		req.Filter.Kind = string(filter.Kinds[0])
 	}
 
-	var resp rpc.QueryHistoryResponse
+	var resp sextantproto.QueryHistoryResponse
 	if err := c.RPC(ctx, rpc.VerbQueryHistory, req, &resp); err != nil {
 		return nil, fmt.Errorf("client.Query: %w", err)
 	}
