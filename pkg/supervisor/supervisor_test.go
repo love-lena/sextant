@@ -279,3 +279,100 @@ func TestResetAfterClearsBackoff(t *testing.T) {
 		t.Errorf("wait[2] = %s, want reset to 10ms", waits[2])
 	}
 }
+
+// TestStopDuringRestartGracefullyStopsNewProc closes the race window
+// where Stop arrives between Start() returning a new Process and the
+// supervisor installing it as current. Pre-fix, the freshly-started
+// process was left running and only died on ctx-cancel SIGKILL — bad
+// for any unit that needs a graceful Stop (e.g. JetStream flush). The
+// fix is the atomic stopped-check inside installCurrent; this test
+// drives the exact window.
+func TestStopDuringRestartGracefullyStopsNewProc(t *testing.T) {
+	// startGate releases the unit's Start function after Stop has been
+	// observed. release closes once we want the goroutine to proceed.
+	startGate := make(chan struct{})
+	stopCalled := make(chan struct{})
+
+	u := Unit{
+		Name: "test",
+		Policy: Policy{
+			InitialBackoff:  1 * time.Millisecond,
+			MaxBackoff:      1 * time.Millisecond,
+			QuarantineAfter: 100,
+			ResetAfter:      time.Hour,
+		},
+		Start: func(_ context.Context) (Process, error) {
+			// Block until the test signals "Stop has been called".
+			<-startGate
+			p := &fakeProc{waitCh: make(chan error, 1)}
+			p.stop = func(_ context.Context) error {
+				select {
+				case <-stopCalled:
+				default:
+					close(stopCalled)
+				}
+				p.waitCh <- nil
+				close(p.waitCh)
+				return nil
+			}
+			return p, nil
+		},
+	}
+	s, err := New(u)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	runErr := make(chan error, 1)
+	go func() { runErr <- s.Run(context.Background()) }()
+	go func() {
+		for range s.Events() {
+		}
+	}()
+
+	// Wait until Start is parked on startGate — the supervisor is now
+	// inside Start, between the entry check and the (would-be)
+	// setCurrent. This is the race window we're testing.
+	time.Sleep(50 * time.Millisecond)
+
+	// Call Stop. Pre-fix: Stop sees current==nil and returns; the
+	// freshly-built proc starts and blocks on Wait() forever.
+	// Post-fix: Stop sets stopped=true; installCurrent observes it and
+	// hands the new proc to the caller, which Stops it.
+	stopReturned := make(chan error, 1)
+	go func() { stopReturned <- s.Stop(context.Background()) }()
+
+	// Release Start so it returns a fresh Process.
+	close(startGate)
+
+	// The unit's Stop must be called within a bounded time.
+	select {
+	case <-stopCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("unit Stop was never called — race window still open")
+	}
+
+	// And the supervisor's Run must return cleanly (no quarantine).
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("Run returned %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after stop-during-restart")
+	}
+
+	// Stop() itself returned.
+	select {
+	case err := <-stopReturned:
+		if err != nil {
+			t.Errorf("Stop returned %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not return")
+	}
+
+	if s.Quarantined() {
+		t.Error("Quarantined should be false on stop-during-restart")
+	}
+}

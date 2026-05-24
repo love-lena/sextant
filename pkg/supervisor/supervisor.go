@@ -183,7 +183,21 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			continue
 		}
 
-		s.setCurrent(proc)
+		// Race window: Stop() may have observed current==nil while
+		// Start() was running, set stopped=true, and returned. Without
+		// this guard the freshly-started subprocess would only die when
+		// the supervisor's ctx is canceled — by then exec.CommandContext
+		// uses SIGKILL, skipping the unit's graceful Stop path. Doing
+		// the set-or-stop under one lock closes the window.
+		if !s.installCurrent(proc) {
+			s.emit(Event{Name: s.unit.Name, Kind: EventStopped, At: s.unit.now()})
+			// Best-effort graceful stop of the just-started unit. We
+			// still ignore the returned error here: Run's contract is
+			// "return nil on clean stop" and the caller already learned
+			// the supervisor was asked to stop.
+			_ = proc.Stop(ctx)
+			return nil
+		}
 		s.emit(Event{Name: s.unit.Name, Kind: EventStarted, At: startedAt})
 
 		waitErr := proc.Wait()
@@ -248,6 +262,20 @@ func (s *Supervisor) setCurrent(p Process) {
 	s.mu.Lock()
 	s.current = p
 	s.mu.Unlock()
+}
+
+// installCurrent atomically stores proc as the current process unless
+// Stop has already been observed. Returns true if proc was installed;
+// false means Stop fired during Start() and the caller is responsible
+// for tearing proc down gracefully.
+func (s *Supervisor) installCurrent(p Process) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return false
+	}
+	s.current = p
+	return true
 }
 
 func (s *Supervisor) markQuarantined() {
