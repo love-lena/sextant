@@ -63,6 +63,11 @@ type Shipper struct {
 	errorsTotal          atomic.Int64
 	lagNanosLast         atomic.Int64
 
+	// lastBufDelFailureNanos throttles audit.shipper_buffer_delete_failure
+	// emission so a persistent failure (disk full, corruption) does not
+	// flood the bus. See noteBufferDeleteFailure.
+	lastBufDelFailureNanos atomic.Int64
+
 	// shutdownCause records why Run exited (backpressure vs context).
 	shutdownCause atomic.Pointer[error]
 }
@@ -498,10 +503,45 @@ func (s *Shipper) writeBatch(ctx context.Context, table Table, batch []pendingMs
 	}
 	if len(bufKeys) > 0 {
 		if err := s.buf.Delete(table, bufKeys); err != nil {
+			// A persistent Delete failure (disk full, corruption) would
+			// cause re-inserts of the same rows forever — those rows are
+			// still in the BoltDB bucket, so drainOne picks them up on
+			// the next tick. Surface the failure: bump errorsTotal so
+			// the metric is visible and emit a throttled audit envelope
+			// so the operator gets a signal without a flood when an
+			// entire 1000-row batch fails to delete at once.
 			log.Printf("shipper: drain delete %s: %v", table, err)
+			s.errorsTotal.Add(1)
+			s.noteBufferDeleteFailure(table, len(bufKeys), err)
 		}
 	}
 	return nil
+}
+
+// bufferDeleteFailureThrottle is the minimum interval between
+// audit.shipper_buffer_delete_failure envelopes. Set conservatively so
+// a sustained failure produces ~1 envelope/5s rather than one per
+// failed batch.
+const bufferDeleteFailureThrottle = 5 * time.Second
+
+// noteBufferDeleteFailure emits at most one
+// audit.shipper_buffer_delete_failure envelope per
+// bufferDeleteFailureThrottle window. The envelope carries the failing
+// table, the row count that could not be deleted, and the underlying
+// error string so an operator can drill into the cause.
+func (s *Shipper) noteBufferDeleteFailure(table Table, rowCount int, cause error) {
+	nowNanos := time.Now().UTC().UnixNano()
+	prev := s.lastBufDelFailureNanos.Load()
+	if prev != 0 && nowNanos-prev < int64(bufferDeleteFailureThrottle) {
+		return
+	}
+	if !s.lastBufDelFailureNanos.CompareAndSwap(prev, nowNanos) {
+		// Another goroutine just emitted; let theirs win.
+		return
+	}
+	detail := fmt.Sprintf("table=%s rows=%d cause=%v", table, rowCount, cause)
+	s.emitAuditEnvelope("audit.shipper_buffer_delete_failure",
+		"shipper.buffer_delete_failure", "buffer_delete", detail)
 }
 
 // drainLoop walks each spillover bucket every second and feeds rows back
