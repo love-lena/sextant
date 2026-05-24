@@ -33,3 +33,7 @@ Thumbs.db
 nats-data/
 clickhouse-data/
 shipper-buffer/
+
+# Node / TypeScript (clients/typescript/, etc.)
+node_modules/
+*.tsbuildinfo
