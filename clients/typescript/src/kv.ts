@@ -14,15 +14,23 @@ import { KVKeyNotFoundError } from "./errors.js";
 /** Operation that produced a KV update. */
 export type KVOp = "put" | "delete" | "purge";
 
-/** One observed change on a KV key. Mirrors pkg/client.KVUpdate. */
+/**
+ * One observed change on a KV key. Mirrors pkg/client.KVUpdate.
+ *
+ * `err` is set when the underlying NATS watcher emits a failure — in
+ * that case the other fields are zero-valued sentinels (empty bucket,
+ * empty key, revision 0). Callers should check `err` before reading.
+ */
 export interface KVUpdate {
   bucket: string;
   key: string;
-  /** Empty on delete / purge. */
+  /** Empty on delete / purge / err. */
   value: Uint8Array;
   revision: bigint;
   op: KVOp;
   timestamp: Date;
+  /** Non-undefined when the watcher itself errored. */
+  err?: Error;
 }
 
 /**
@@ -73,6 +81,10 @@ export async function getKV(
  * Subscribe to changes on `key` in `bucket`. The iterator yields one
  * KVUpdate per change. On subscription, the current value (if any) is
  * delivered first.
+ *
+ * Watcher failures (bucket disappears, connection drops, etc.) arrive
+ * as an `err`-bearing KVUpdate followed by the iterator closing.
+ * Callers should check `update.err` before reading `value` / `op`.
  */
 export function watchKV(client: Client, bucket: string, key: string): AsyncIterable<KVUpdate> {
   client.ensureOpen();
@@ -168,20 +180,19 @@ function makeWatcher(
   };
 
   const enqueueErr = (err: unknown): void => {
-    // Mirror subscribe: surface errors by closing the iterator after
-    // making the failure available via a sentinel update. For KV we
-    // don't have an err field on KVUpdate — propagate via the next
-    // iteration as a thrown error.
-    queue.push({ ...errSentinel, _err: err } as KVUpdate & { _err: unknown });
-  };
-
-  const errSentinel: KVUpdate = {
-    bucket,
-    key,
-    value: new Uint8Array(),
-    revision: 0n,
-    op: "put",
-    timestamp: new Date(0),
+    // Surface watcher errors as a real KVUpdate carrying `err`. Mirrors
+    // subscribe.ts's Message.err shape; callers check `update.err`
+    // before reading the value/op fields.
+    const e = err instanceof Error ? err : new Error(String(err));
+    enqueueUpdate({
+      bucket,
+      key,
+      value: new Uint8Array(),
+      revision: 0n,
+      op: "put",
+      timestamp: new Date(),
+      err: e,
+    });
   };
 
   return {
@@ -192,13 +203,7 @@ function makeWatcher(
         });
       }
       const item = queue.shift();
-      if (item !== undefined) {
-        const maybeErr = (item as KVUpdate & { _err?: unknown })._err;
-        if (maybeErr) {
-          throw maybeErr instanceof Error ? maybeErr : new Error(String(maybeErr));
-        }
-        return { value: item, done: false };
-      }
+      if (item !== undefined) return { value: item, done: false };
       if (closed) return { value: undefined, done: true };
       return new Promise<IteratorResult<KVUpdate>>((resolve) => {
         waiter = resolve;
