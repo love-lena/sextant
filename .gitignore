@@ -1,0 +1,35 @@
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.prof
+
+# Build
+/bin/
+/dist/
+/build/
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Sextant
+/var/sextant/
+*.log
+
+# Local data (in case anyone runs locally from repo root)
+nats-data/
+clickhouse-data/
+shipper-buffer/
