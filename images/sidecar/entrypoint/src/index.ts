@@ -1,0 +1,313 @@
+/**
+ * @sextant/sidecar — runtime entrypoint that boots inside every per-agent
+ * container.
+ *
+ * Plan: plans/bootstrap.md#M9
+ * Spec: specs/components/sidecar-image.md §"Sidecar entrypoint"
+ *
+ * M9 scope (the scaffolding milestone for the container surface):
+ *
+ *   - Read the env-var contract sextantd will set at spawn time.
+ *   - Connect to NATS (over the operator password path; the JWT path
+ *     lands at M11 when the TS client gains credsAuthenticator support
+ *     and sextantd starts issuing per-agent JWTs).
+ *   - Publish `lifecycle.started` to `agents.<uuid>.lifecycle`.
+ *   - Heartbeat every 5s to `agents.<uuid>.heartbeat`.
+ *   - On SIGTERM/SIGINT: publish `lifecycle.ended`, close client, exit 0.
+ *
+ * Out of M9 scope (lands in M10/M11):
+ *
+ *   - MCP server connection (M10 ships the server; M11 wires the sidecar).
+ *   - Claude Code Agent SDK driver loop (M11).
+ *   - JWT-authenticated NATS connection (M11).
+ *
+ * The entrypoint is deliberately conservative about which env vars are
+ * required so the M9 smoke test (`docker run --rm sextant-sidecar:latest
+ * /bin/bash`) doesn't need them at all — only the long-running mode
+ * (`sextant-sidecar run`) does.
+ */
+
+import { randomUUID } from "node:crypto";
+
+import {
+  ADDRESS_AGENT,
+  connectWithConfig,
+  KIND_HEARTBEAT,
+  KIND_LIFECYCLE,
+  newEnvelope,
+  type Client,
+  type ClientConfig,
+} from "@sextant/client";
+
+/**
+ * Env vars consumed by the sidecar. The set sextantd promises to provide
+ * at spawn time per `specs/components/sidecar-image.md` §"Env vars".
+ */
+interface SidecarEnv {
+  agentUuid: string;
+  agentName: string;
+  hostId: string;
+  natsUrl: string;
+  /** M11+: per-incarnation JWT issued by sextantd. M9 logs and ignores. */
+  jwt: string | undefined;
+  /** M9 fallback for the password path (M11 drops this). */
+  operatorUser: string | undefined;
+  operatorPassword: string | undefined;
+  /** Optional — Claude SDK `--resume` (M11). */
+  sessionId: string | undefined;
+  /** Optional — MCP server URL (wired M11). */
+  mcpUrl: string | undefined;
+}
+
+/** Spec: §"Env vars". `SEXTANT_*` namespace, set by sextantd at spawn. */
+function readEnv(): SidecarEnv {
+  const required = (name: string): string => {
+    const v = process.env[name];
+    if (!v) {
+      throw new Error(
+        `sidecar: env var ${name} is required (set by sextantd at spawn time)`,
+      );
+    }
+    return v;
+  };
+  return {
+    agentUuid: required("SEXTANT_AGENT_UUID"),
+    agentName: required("SEXTANT_AGENT_NAME"),
+    hostId: required("SEXTANT_HOST_ID"),
+    natsUrl: required("SEXTANT_NATS_URL"),
+    jwt: process.env["SEXTANT_JWT"] || undefined,
+    operatorUser: process.env["SEXTANT_OPERATOR_USER"] || undefined,
+    operatorPassword: process.env["SEXTANT_OPERATOR_PASSWORD"] || undefined,
+    sessionId: process.env["SEXTANT_SESSION_ID"] || undefined,
+    mcpUrl: process.env["SEXTANT_MCP_URL"] || undefined,
+  };
+}
+
+/**
+ * Resolve NATS auth from env. M11 lands the JWT path; until then the
+ * sidecar accepts an operator-style password pair as a stop-gap so the
+ * full image+entrypoint surface is exercisable end-to-end before agent
+ * identity exists.
+ */
+function buildConfig(env: SidecarEnv): ClientConfig {
+  if (env.operatorPassword) {
+    return {
+      nats: { url: env.natsUrl },
+      operator: {
+        user: env.operatorUser ?? "operator",
+        password: env.operatorPassword,
+      },
+      client: {
+        connectTimeoutMs: 10_000,
+        requestTimeoutMs: 30_000,
+        logLevel: "info",
+      },
+    };
+  }
+  if (env.jwt) {
+    throw new Error(
+      "sidecar: SEXTANT_JWT is set but JWT auth is not yet wired in the TS client (lands in M11). " +
+        "For M9 set SEXTANT_OPERATOR_USER + SEXTANT_OPERATOR_PASSWORD to exercise the entrypoint via the operator path.",
+    );
+  }
+  throw new Error(
+    "sidecar: no NATS credentials provided. M9 expects SEXTANT_OPERATOR_USER + SEXTANT_OPERATOR_PASSWORD; " +
+      "M11 will accept SEXTANT_JWT instead.",
+  );
+}
+
+/** Log shim — single namespace prefix so journal/output is easy to grep. */
+function log(level: "info" | "warn" | "error", msg: string, extra?: Record<string, unknown>): void {
+  const line = {
+    ts: new Date().toISOString(),
+    level,
+    component: "sextant-sidecar",
+    msg,
+    ...(extra ?? {}),
+  };
+  const stream = level === "error" ? process.stderr : process.stdout;
+  stream.write(`${JSON.stringify(line)}\n`);
+}
+
+/**
+ * Publish a lifecycle envelope. Builds a fresh envelope every call so
+ * each transition has its own trace/span IDs (the M11 SDK driver will
+ * make these children of the SDK session span).
+ */
+async function publishLifecycle(
+  client: Client,
+  env: SidecarEnv,
+  incarnationId: string,
+  transition: "started" | "ended",
+  reason?: string,
+): Promise<void> {
+  const payload = {
+    incarnation_id: incarnationId,
+    agent_uuid: env.agentUuid,
+    transition,
+    state: transition === "started" ? "running" : "ended",
+    ...(reason ? { reason } : {}),
+  };
+  const envelope = newEnvelope(
+    KIND_LIFECYCLE,
+    { kind: ADDRESS_AGENT, id: env.agentUuid, host: env.hostId },
+    payload,
+  );
+  await client.publish(`agents.${env.agentUuid}.lifecycle`, envelope);
+}
+
+async function publishHeartbeat(
+  client: Client,
+  env: SidecarEnv,
+  incarnationId: string,
+  startedAt: number,
+): Promise<void> {
+  const payload = {
+    agent_uuid: env.agentUuid,
+    incarnation_id: incarnationId,
+    host_id: env.hostId,
+    uptime_seconds: Math.floor((Date.now() - startedAt) / 1000),
+  };
+  const envelope = newEnvelope(
+    KIND_HEARTBEAT,
+    { kind: ADDRESS_AGENT, id: env.agentUuid, host: env.hostId },
+    payload,
+  );
+  await client.publish(`agents.${env.agentUuid}.heartbeat`, envelope);
+}
+
+/** Heartbeat interval. Spec says "every N seconds"; pin at 5s for M9. */
+const HEARTBEAT_INTERVAL_MS = 5_000;
+
+/**
+ * Long-running mode. Connects, publishes `lifecycle.started`, loops on a
+ * 5-second heartbeat, and tears down cleanly on SIGTERM/SIGINT.
+ */
+async function run(): Promise<void> {
+  const env = readEnv();
+  if (env.jwt && !env.operatorPassword) {
+    log(
+      "warn",
+      "SEXTANT_JWT set but JWT auth lands in M11; need SEXTANT_OPERATOR_USER + SEXTANT_OPERATOR_PASSWORD for M9",
+    );
+  }
+  if (env.mcpUrl) {
+    log("info", "SEXTANT_MCP_URL set; MCP wiring lands in M11", { mcpUrl: env.mcpUrl });
+  }
+
+  const config = buildConfig(env);
+  const incarnationId = randomUUID();
+  const startedAt = Date.now();
+
+  log("info", "sidecar starting", {
+    agentUuid: env.agentUuid,
+    agentName: env.agentName,
+    hostId: env.hostId,
+    incarnationId,
+    natsUrl: env.natsUrl,
+  });
+
+  const client = await connectWithConfig(config);
+  log("info", "nats connected");
+
+  await publishLifecycle(client, env, incarnationId, "started");
+  log("info", "lifecycle.started published");
+
+  // Heartbeat loop. setInterval keeps the event loop alive on its own —
+  // we hold a separate `running` flag so the shutdown path stops issuing
+  // new heartbeats before the final flush.
+  let running = true;
+  const tick = async (): Promise<void> => {
+    if (!running) return;
+    try {
+      await publishHeartbeat(client, env, incarnationId, startedAt);
+    } catch (err) {
+      log("error", "heartbeat publish failed", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+  const heartbeat = setInterval(() => {
+    void tick();
+  }, HEARTBEAT_INTERVAL_MS);
+
+  const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
+    if (!running) return;
+    running = false;
+    clearInterval(heartbeat);
+    log("info", "shutdown received", { signal });
+    try {
+      await publishLifecycle(client, env, incarnationId, "ended", `signal:${signal}`);
+      log("info", "lifecycle.ended published");
+    } catch (err) {
+      log("error", "lifecycle.ended publish failed", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+    try {
+      await client.close();
+    } catch (err) {
+      log("error", "client close failed", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+    process.exit(0);
+  };
+
+  process.on("SIGTERM", (sig) => {
+    void shutdown(sig);
+  });
+  process.on("SIGINT", (sig) => {
+    void shutdown(sig);
+  });
+}
+
+/**
+ * CLI surface. Mostly `run` for production; `--help` and `--version`
+ * for local introspection.
+ */
+async function main(): Promise<void> {
+  const argv = process.argv.slice(2);
+  const cmd = argv[0] ?? "run";
+  switch (cmd) {
+    case "run":
+      await run();
+      return;
+    case "--help":
+    case "-h":
+    case "help":
+      process.stdout.write(
+        [
+          "sextant-sidecar — runtime that boots inside the per-agent container.",
+          "",
+          "Usage: sextant-sidecar [run|help|version]",
+          "",
+          "Modes:",
+          "  run      Connect to NATS, publish lifecycle.started, heartbeat until SIGTERM (default).",
+          "  help     Print this message.",
+          "  version  Print the sidecar version.",
+          "",
+          "Required env vars (run mode):",
+          "  SEXTANT_AGENT_UUID, SEXTANT_AGENT_NAME, SEXTANT_HOST_ID, SEXTANT_NATS_URL",
+          "  Plus SEXTANT_OPERATOR_USER + SEXTANT_OPERATOR_PASSWORD (M9; M11 swaps in SEXTANT_JWT).",
+          "",
+        ].join("\n"),
+      );
+      return;
+    case "--version":
+    case "version":
+      process.stdout.write("sextant-sidecar 0.1.0 (M9 scaffold)\n");
+      return;
+    default:
+      process.stderr.write(`sextant-sidecar: unknown command ${JSON.stringify(cmd)}\n`);
+      process.exit(2);
+  }
+}
+
+main().catch((err: unknown) => {
+  log("error", "sidecar fatal", {
+    err: err instanceof Error ? err.message : String(err),
+    stack: err instanceof Error ? err.stack : undefined,
+  });
+  process.exit(1);
+});
