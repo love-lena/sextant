@@ -1,0 +1,39 @@
+# Sextant sidecar image build context filter.
+#
+# The build context is the repo root (so the Dockerfile can COPY from
+# both `clients/typescript/` and `images/sidecar/entrypoint/`). This
+# file trims everything else — every Go cache, every node_modules, every
+# unrelated dir — so `docker build` doesn't ship the whole repo to the
+# daemon.
+#
+# Pattern syntax: docker-style globs. `!` re-includes a previously
+# excluded path. We start by excluding everything and re-include only
+# what the Dockerfile actually COPYs.
+
+# Default: drop everything.
+*
+
+# Re-include the two trees the Dockerfile needs.
+!clients/typescript
+!images/sidecar/entrypoint
+
+# Drop the heavy/transient subdirs inside those trees so they don't
+# bloat the build context (npm installs run inside the image; tests
+# aren't needed in the image; pre-built dist/ for @sextant/client IS
+# needed and is produced by `make ts-build` before `make sidecar-image`
+# runs `docker build`).
+clients/typescript/node_modules
+clients/typescript/test
+clients/typescript/coverage
+clients/typescript/*.tsbuildinfo
+images/sidecar/entrypoint/node_modules
+images/sidecar/entrypoint/dist
+images/sidecar/entrypoint/*.tsbuildinfo
+
+# Always exclude version control and editor noise even from the
+# re-included trees.
+**/.git
+**/.DS_Store
+**/.idea
+**/.vscode
+**/*.swp
