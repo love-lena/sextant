@@ -12,12 +12,18 @@ import (
 // (and any other tool that needs to find the live daemon's listeners).
 // Minimal schema in M5; promoted to a typed-package consumer as more
 // readers appear.
+//
+// NATSPID and ClickHousePID are the subprocess PIDs as observed at the
+// most recent (re)start. Used by tests to drive restart-on-failure
+// behavior and by operators who want to inspect a specific subprocess.
 type RuntimeInfo struct {
 	PID            int       `json:"pid"`
 	StartedAt      time.Time `json:"started_at"`
 	NATSAddr       string    `json:"nats_addr"`
+	NATSPID        int       `json:"nats_pid,omitempty"`
 	ClickHouseTCP  string    `json:"clickhouse_tcp"`
 	ClickHouseHTTP string    `json:"clickhouse_http"`
+	ClickHousePID  int       `json:"clickhouse_pid,omitempty"`
 	ControlSocket  string    `json:"control_socket"`
 	Version        string    `json:"version"`
 }

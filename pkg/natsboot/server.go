@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -26,6 +27,16 @@ type Server struct {
 	cmd     *exec.Cmd
 	cfgPath string
 	logFile *os.File
+
+	// waitCh receives exactly one value: the error returned by
+	// cmd.Wait(). Closed after the value is delivered. Drained by
+	// whichever call observes the exit first (Stop or Done consumers).
+	waitCh chan error
+	// waitErr caches the exit error so multiple Done/Stop callers see
+	// the same result. Protected by mu.
+	waitErr  error
+	waitDone chan struct{}
+	mu       sync.Mutex
 }
 
 // Start writes a NATS config file derived from cfg, starts nats-server
@@ -74,11 +85,23 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 	}
 
 	s := &Server{
-		cfg:     cfg,
-		cmd:     cmd,
-		cfgPath: cfgPath,
-		logFile: logFile,
+		cfg:      cfg,
+		cmd:      cmd,
+		cfgPath:  cfgPath,
+		logFile:  logFile,
+		waitCh:   make(chan error, 1),
+		waitDone: make(chan struct{}),
 	}
+	// Single owner of cmd.Wait(). Result delivered via waitCh; consumers
+	// (Stop, Done) observe via waitDone closure + waitErr field.
+	go func() {
+		err := cmd.Wait()
+		s.mu.Lock()
+		s.waitErr = err
+		s.mu.Unlock()
+		s.waitCh <- err
+		close(s.waitDone)
+	}()
 
 	if err := s.waitReady(ctx); err != nil {
 		// Use a detached cleanup context so the original ctx being
@@ -141,10 +164,19 @@ func (s *Server) Connect(opts ...nats.Option) (*nats.Conn, error) {
 
 // Stop signals the subprocess to exit, waits up to ShutdownTimeout, then
 // SIGKILLs if it has not stopped. Closes the log file. Safe to call more
-// than once.
+// than once. If the subprocess has already exited (e.g. observed via
+// Done), Stop returns the cached exit status without re-signalling.
 func (s *Server) Stop(ctx context.Context) error {
 	if s.cmd == nil || s.cmd.Process == nil {
 		return nil
+	}
+
+	// Fast path: subprocess already exited (observed elsewhere).
+	select {
+	case <-s.waitDone:
+		s.closeLog()
+		return classifyExit(s.cachedWaitErr())
+	default:
 	}
 
 	// SIGINT for graceful shutdown — NATS server flushes JetStream
@@ -153,40 +185,77 @@ func (s *Server) Stop(ctx context.Context) error {
 		return fmt.Errorf("natsboot: SIGINT: %w", err)
 	}
 
-	done := make(chan error, 1)
-	go func() { done <- s.cmd.Wait() }()
-
 	timeout := s.cfg.ShutdownTimeout
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
 
 	select {
-	case waitErr := <-done:
-		s.cmd = nil
+	case <-s.waitDone:
 		s.closeLog()
-		// nats-server returns 0 on SIGINT. Non-zero exit codes that
-		// look like signal-induced shutdowns are also OK.
-		if waitErr != nil {
-			var exitErr *exec.ExitError
-			if !errors.As(waitErr, &exitErr) {
-				return fmt.Errorf("natsboot: wait nats-server: %w", waitErr)
-			}
-		}
-		return nil
+		return classifyExit(s.cachedWaitErr())
 	case <-time.After(timeout):
 		_ = s.cmd.Process.Kill()
-		<-done
-		s.cmd = nil
+		<-s.waitDone
 		s.closeLog()
 		return fmt.Errorf("natsboot: nats-server did not stop within %s; sent SIGKILL", timeout)
 	case <-ctx.Done():
 		_ = s.cmd.Process.Kill()
-		<-done
-		s.cmd = nil
+		<-s.waitDone
 		s.closeLog()
 		return ctx.Err()
 	}
+}
+
+// Done returns a channel that closes when the underlying nats-server
+// subprocess exits (for any reason: graceful Stop, crash, external
+// kill). Use ExitErr after Done is observed to inspect the cause.
+func (s *Server) Done() <-chan struct{} {
+	return s.waitDone
+}
+
+// PID returns the underlying nats-server subprocess PID. Returns 0 if
+// the subprocess has not been started. Exported so the supervising
+// daemon can record the pid in observability/audit and so tests can
+// signal the subprocess directly to exercise restart behavior.
+func (s *Server) PID() int {
+	if s.cmd == nil || s.cmd.Process == nil {
+		return 0
+	}
+	return s.cmd.Process.Pid
+}
+
+// ExitErr returns the error from cmd.Wait(). Only meaningful after
+// Done has fired; returns nil if the subprocess is still running.
+func (s *Server) ExitErr() error {
+	select {
+	case <-s.waitDone:
+		return s.cachedWaitErr()
+	default:
+		return nil
+	}
+}
+
+func (s *Server) cachedWaitErr() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.waitErr
+}
+
+// classifyExit folds expected exit conditions (signal-induced exit
+// codes from nats-server) into nil.
+func classifyExit(err error) error {
+	if err == nil {
+		return nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		// nats-server returns 0 on SIGINT and a non-zero code on
+		// SIGTERM / SIGKILL. Either is "subprocess exited because we
+		// said so" from natsboot's perspective.
+		return nil
+	}
+	return fmt.Errorf("natsboot: wait nats-server: %w", err)
 }
 
 func (s *Server) closeLog() {
@@ -205,9 +274,14 @@ func (s *Server) waitReady(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return fmt.Errorf("natsboot: context canceled while waiting for ready: %w", ctx.Err())
 		}
-		// Bail early if the subprocess has already died.
-		if s.cmd.ProcessState != nil && s.cmd.ProcessState.Exited() {
-			return fmt.Errorf("natsboot: nats-server exited during startup: code %d", s.cmd.ProcessState.ExitCode())
+		// Bail early if the subprocess has already died — observe
+		// waitDone (closed by the single Wait goroutine) rather than
+		// poking at cmd.ProcessState, which would race against the
+		// cmd.Wait() writer.
+		select {
+		case <-s.waitDone:
+			return fmt.Errorf("natsboot: nats-server exited during startup: %w", s.cachedWaitErr())
+		default:
 		}
 		nc, err := nats.Connect(s.Address(),
 			nats.UserInfo(s.cfg.OperatorUser, s.cfg.OperatorPassword),
