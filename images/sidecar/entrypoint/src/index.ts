@@ -180,6 +180,40 @@ async function publishHeartbeat(
 const HEARTBEAT_INTERVAL_MS = 5_000;
 
 /**
+ * Bound on how long shutdown will wait for an in-flight heartbeat tick
+ * to settle before closing the NATS client. Heartbeat publishes go
+ * through `nc.flush()` (see clients/typescript/src/publish.ts), so the
+ * worst case is one round-trip; 2s leaves headroom without making
+ * SIGTERM feel sluggish.
+ */
+const SHUTDOWN_TICK_WAIT_MS = 2_000;
+
+/**
+ * Race `promise` against a timer. If the timer wins, returns `false`
+ * and the promise keeps running in the background (its rejection — if
+ * any — is swallowed). If the promise wins, returns `true`. Used in
+ * shutdown to bound how long we'll wait for an in-flight heartbeat to
+ * settle before tearing down the NATS client.
+ */
+async function awaitOrTimeout(promise: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), ms);
+  });
+  // Swallow promise rejection in the background path so an unhandled
+  // rejection doesn't fire after shutdown returns.
+  const guarded = promise.then(
+    () => true,
+    () => true,
+  );
+  try {
+    return await Promise.race([guarded, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
  * Long-running mode. Connects, publishes `lifecycle.started`, loops on a
  * 5-second heartbeat, and tears down cleanly on SIGTERM/SIGINT.
  */
@@ -213,10 +247,17 @@ async function run(): Promise<void> {
   await publishLifecycle(client, env, incarnationId, "started");
   log("info", "lifecycle.started published");
 
-  // Heartbeat loop. setInterval keeps the event loop alive on its own —
-  // we hold a separate `running` flag so the shutdown path stops issuing
-  // new heartbeats before the final flush.
+  // Heartbeat loop. setInterval keeps the event loop alive on its own.
+  //
+  // Shutdown ordering matters: clearInterval stops *future* ticks, but
+  // a tick that setInterval already dispatched may be mid-`publish`
+  // (awaiting flush) when SIGTERM arrives. If we closed the client
+  // before that publish settled, the heartbeat would throw
+  // ClientClosedError or silently drop. So we track the in-flight tick
+  // promise and await it (bounded by SHUTDOWN_TICK_WAIT_MS) before
+  // closing.
   let running = true;
+  let currentTick: Promise<void> = Promise.resolve();
   const tick = async (): Promise<void> => {
     if (!running) return;
     try {
@@ -228,14 +269,29 @@ async function run(): Promise<void> {
     }
   };
   const heartbeat = setInterval(() => {
-    void tick();
+    currentTick = tick();
   }, HEARTBEAT_INTERVAL_MS);
 
+  // Shutdown sequence (order is load-bearing):
+  //   1. Flip `running` so any newly-fired ticks no-op.
+  //   2. clearInterval — no more ticks will be dispatched.
+  //   3. await currentTick (bounded) — the last in-flight publish.
+  //   4. publish lifecycle.ended.
+  //   5. client.close() — only now is it safe.
+  // Re-entrance guard via `running` means a second SIGTERM is a no-op.
   const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
     if (!running) return;
     running = false;
     clearInterval(heartbeat);
     log("info", "shutdown received", { signal });
+
+    const settled = await awaitOrTimeout(currentTick, SHUTDOWN_TICK_WAIT_MS);
+    if (!settled) {
+      log("warn", "heartbeat tick did not settle within shutdown budget", {
+        budgetMs: SHUTDOWN_TICK_WAIT_MS,
+      });
+    }
+
     try {
       await publishLifecycle(client, env, incarnationId, "ended", `signal:${signal}`);
       log("info", "lifecycle.ended published");
