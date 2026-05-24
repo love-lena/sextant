@@ -253,16 +253,15 @@ func (s *Shipper) runInner(ctx context.Context) error {
 	<-runCtx.Done()
 
 	// Stop all consumers — no more new messages enter the pendings.
+	// jetstream.ConsumeContext.Stop is asynchronous; in-flight
+	// callbacks observe runCtx via handleConsumed's select and NAK
+	// rather than block on a closed channel.
 	for _, c := range s.consumers {
 		c.Stop()
 	}
 
-	// Close per-table pending channels so the flushers know to drain
-	// what's in flight, push the rest into spillover, and exit.
-	for _, ch := range s.pendingBuckets {
-		close(ch)
-	}
-
+	// Flushers exit when they see ctx.Done() — they drain their
+	// pending channel non-blockingly and one-shot before returning.
 	wg.Wait()
 
 	if errp := s.shutdownCause.Load(); errp != nil && *errp != nil {
@@ -396,12 +395,7 @@ func (s *Shipper) flushLoop(ctx context.Context, table Table, cancelAll context.
 
 	for {
 		select {
-		case msg, ok := <-pending:
-			if !ok {
-				// Channel closed — final flush.
-				flush()
-				return
-			}
+		case msg := <-pending:
 			batch = append(batch, msg)
 			if len(batch) >= maxBatch {
 				flush()
@@ -410,14 +404,13 @@ func (s *Shipper) flushLoop(ctx context.Context, table Table, cancelAll context.
 			flush()
 		case <-ctx.Done():
 			// Drain whatever is queued, but bounded so we eventually
-			// exit.
+			// exit. Non-blocking reads only — the pending channel is
+			// never closed because handleConsumed and drainOne both
+			// may still be sending until their own ctx.Done check
+			// returns.
 			for drained := 0; drained < maxBatch; drained++ {
 				select {
-				case msg, ok := <-pending:
-					if !ok {
-						flush()
-						return
-					}
+				case msg := <-pending:
 					batch = append(batch, msg)
 				default:
 					flush()
@@ -538,10 +531,17 @@ func (s *Shipper) drainOne(ctx context.Context, tbl Table) {
 		s.errorsTotal.Add(1)
 		return
 	}
+	// Defensive: PeekBatch returns parallel slices, but skip if the
+	// pairs got out of sync (would only happen if the buffer was
+	// concurrently mutated, which it shouldn't be).
+	if len(keys) != len(rows) {
+		log.Printf("shipper: drain %s len mismatch keys=%d rows=%d", tbl, len(keys), len(rows))
+		return
+	}
 	pending := s.pendingBuckets[tbl]
-	for i, r := range rows {
+	for i := range rows {
 		select {
-		case pending <- pendingMsg{row: r, fromBuffer: true, bufferKey: keys[i]}:
+		case pending <- pendingMsg{row: rows[i], fromBuffer: true, bufferKey: keys[i]}:
 		case <-ctx.Done():
 			return
 		}
