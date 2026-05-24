@@ -34,7 +34,8 @@ The **switchover** at M15 is the headline milestone. Before it: classic CC drive
 **Goal**: working Go workspace with linting, formatting, CI gates.
 
 **Deliverables**:
-- `go.mod` at repo root, module path `github.com/love-lena/sextant-initial`
+- **Go toolchain**: Go 1.26+ (latest stable as of M0 implementation). Do not assume the locally-installed version is current — Lena's machine has an older Go installed that **must not be used**. Install Go 1.26+ via `brew install go` (macOS — verify Homebrew has 1.26 with `brew info go`; if not, use the official installer at https://go.dev/dl/) and confirm with `go version` before starting M0.
+- `go.mod` at repo root, module path `github.com/love-lena/sextant-initial`, with `go 1.26` directive.
 - Repo layout (normative — every later milestone references these paths):
   - `cmd/sextant/` — operator CLI binary (M5 ships `init` + `doctor`; M11/M12 ship remaining verbs)
   - `cmd/sextantd/` — daemon binary
@@ -187,7 +188,7 @@ The **switchover** at M15 is the headline milestone. Before it: classic CC drive
 **Deliverables**:
 - `Client.Publish(subject, event)` with optional reply-to
 - `Client.RPC(verb, args, opts)` → typed reply, idempotency key support, timeout
-- RPC server side in sextantd: dispatch table, capability checks (stub until §10a JWT lands), audit logging
+- RPC server side in sextantd: dispatch table, capability checks (JWT verification arrives in M10; M7 operator-path requests run unauthenticated over the Unix socket per `architecture.md` §10b), audit logging on every request and response per `specs/protocols/rpc-catalog.md` "Wire semantics"
 - Initial RPC verbs implemented: `get_agent_status`, `list_agents`, `read_file` (stub), `query_history`
 
 **Spec references**: [`specs/protocols/rpc-catalog.md`](../specs/protocols/rpc-catalog.md)
@@ -233,30 +234,30 @@ The **switchover** at M15 is the headline milestone. Before it: classic CC drive
 **Goal**: sextant exposes its tool catalog (§9c) via MCP, sidecar connects, agents can call sextant-specific tools.
 
 **Deliverables**:
-- `pkg/mcpserver/` implementing the MCP server protocol
+- `pkg/mcpserver/` implementing the MCP server protocol over the transports pinned in `architecture.md` §9c "MCP transport" (stdio over Unix socket for local clients; Streamable HTTP at `/mcp` for sidecars).
 - Tool catalog: communication (`send_message`, `broadcast`), introspection (`list_agents`, `agent_status`, `query_audit`), control (`spawn_agent`, `kill_agent`, `prompt_agent`), system (`emit_event`, `get_metric`)
-- Per-call capability check (stub until JWTs land; allows-everything-for-now)
+- **Real JWT verification on every tool call from sidecars.** Sidecar presents JWT in the `Authorization: Bearer <token>` header; MCP server verifies signature against the CA from M5, extracts capability list, rejects calls outside the allowlist with a structured error. Local-client (stdio) callers bypass JWT — they inherit operator authority via Unix socket. This is what makes capability descoping non-theater (per `architecture.md` §10a).
 - Sidecar (M9) extended to connect to MCP server and route tool calls through
 
 **Spec references**: [`specs/components/sextantd.md`](../specs/components/sextantd.md) (MCP section), `architecture.md` §9c
 
-**Acceptance**: a sidecar can call `send_message` and the message lands on the destination agent's inbox subject.
+**Acceptance**: a sidecar can call `send_message` and the message lands on the destination agent's inbox subject. **A sidecar with a JWT missing the `send_message` capability is rejected with a clear `capability_denied` error.**
 
 ---
 
 ### M11 — Spawn flow E2E
 
-**Goal**: operator → `sextant spawn <name>` → container running → agent on NATS → first frame published.
+**Goal**: operator → `sextant agents spawn <name>` → container running → agent on NATS → first frame published.
 
 **Deliverables**:
-- `sextant spawn` CLI verb: takes name, template, host pin
+- `sextant agents spawn` CLI verb: takes name, template, host pin
 - Sextantd:
   - Looks up template, builds container spec
   - Calls Docker SDK to start container with the right mounts, env, network
   - Registers the agent in NATS KV
-  - Issues per-agent JWT (still stubbed)
-- Sidecar inside container: connects to NATS, publishes `agents.<uuid>.lifecycle/started`
-- `sextant list` shows the new agent
+  - Issues per-agent JWT signed by the M5 CA, with the capability allowlist from the template (`permissions` field). JWT is real and verified by NATS (TCP listener) and MCP (per §I, per M10).
+- Sidecar inside container: connects to NATS via TCP listener with the JWT, publishes `agents.<uuid>.lifecycle/started`
+- `sextant agents list` shows the new agent
 
 **Spec references**: [`specs/cli/commands.md`](../specs/cli/commands.md), [`specs/architecture.md`](../specs/architecture.md) §11b (Templates)
 

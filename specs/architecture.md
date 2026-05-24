@@ -382,13 +382,18 @@ Three plugin categories, each needs its own design.
 - **Capability descoping**: a spawned agent's permission set is a *subset* of the spawner's. Agents cannot grant themselves or their children capabilities they don't have.
 - No hardcoded special roles — "lead" is just a configuration today; initial will have many agent types as Lena experiments. Capability sets are declarative per agent type, not baked into the codebase.
 
+**MCP transport — DECIDED**:
+- MCP server runs **in-process** inside sextantd.
+- **Local clients** (CLI, TUI) connect via Unix socket using MCP's stdio framing.
+- **Sidecars** (inside containers) connect via **Streamable HTTP** at `http://<host>:<port>/mcp`. The host port is configured by `sextantd.toml` (default 5172). Sidecars reach it via `host.docker.internal` on OrbStack/Docker Desktop or `host.containers.internal` on Podman. The exact host is injected via the `SEXTANT_MCP_URL` env var at spawn time.
+- **Identity propagation**: sidecars present their per-incarnation JWT (M5+) in the `Authorization: Bearer <token>` header on every MCP request. MCP server verifies signature against the sextant CA, extracts capability list, and authorizes per tool call.
+- Initial does not implement MCP-over-NATS. If cross-host MCP becomes useful later, it is additive — current transports remain.
+
 **Open sub-questions** (track here, don't resolve now):
 - **Blocking vs async semantics**: which tools are fire-and-forget (`send_message`), which are query-and-return (`list_agents`), which block (`prompt_agent_and_wait_for_response`, `wait_for_agent_to_finish`). Deadlock policy — timeouts only, or active deadlock detection?
-- **Identity propagation**: how does the MCP server know which agent is calling each tool? Connection-time token / mTLS cert / NATS account binding — TBD, couples to §10.
-- **MCP server location**: in-process inside sextantd (Go, tight integration with internal state) vs out-of-process supervised sidecar. Lean: in-process.
 - **Tool versioning**: do tools get versioned (`sextant_send_message_v1`)? What happens to running agents when a tool signature changes?
 - **Exact tool catalog**: the four categories above are scope; the specific tool list per category needs filling in during initial implementation.
-- **Capability descoping mechanism**: how is "subset of spawner's caps" enforced — explicit list at spawn time, or implicit "inherit minus declared drops"?
+- **Capability descoping mechanism**: how is "subset of spawner's caps" enforced — explicit list at spawn time, or implicit "inherit minus declared drops"? Lean: explicit list at spawn time (operator/spawner declares the subset; sextantd validates).
 
 ## 10. Auth & authz — DECIDED (split into 10a + 10b)
 
@@ -421,7 +426,7 @@ Single-operator on a personal dev machine. Local Unix file permissions are a rea
 - Multi-user activation criteria — what triggers the v2 multi-user push (first teammate? open-sourcing? specific feature ask?)
 - Cross-host signing chain for §7 — shared root key vs per-host peer trust
 - Secret rotation policy — manual today, automation later
-- Operator action audit — even with file-perm-only auth, every operator action (`sextant kill`, `sextant spawn`, etc.) is recorded with `actor=lena` on the bus
+- Operator action audit — even with file-perm-only auth, every operator action (`sextant agents kill`, `sextant agents spawn`, etc.) is recorded with `actor=lena` on the bus
 
 ## 11. Parallel iteration via git worktrees — DECIDED
 

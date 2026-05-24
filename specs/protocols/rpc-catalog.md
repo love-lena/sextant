@@ -93,8 +93,97 @@ Default capability sets per agent type (declared in templates):
 
 Capability descoping (§9c): spawned agent's caps are a subset of spawner's caps. Spawner declares the requested subset; sextantd validates and issues the child JWT accordingly.
 
+## Wire semantics
+
+This section is normative for the M7 RPC server and every client implementation.
+
+### Request envelope
+
+- Subject: `sextant.rpc.<verb>`
+- Envelope `kind`: `rpc_request`
+- Required fields: `id`, `ts`, `from`, `idempotency_key`, `reply_to`, `kind`, `payload`
+- `reply_to` is a caller-provisioned ephemeral subject. Caller subscribes to it before publishing the request.
+- `payload` is the verb-specific request shape (see catalog tables above).
+
+### Response envelope
+
+- Subject: the `reply_to` from the request
+- Envelope `kind`: `rpc_response`
+- `payload` shape:
+  ```go
+  type RPCResponse struct {
+      Result   json.RawMessage `json:"result,omitempty"`  // verb-specific reply shape; absent on error
+      Error    *RPCError       `json:"error,omitempty"`   // structured error; absent on success
+      Terminal bool            `json:"_terminal"`         // true on the final response envelope
+  }
+  ```
+- Single-reply RPCs return exactly one response envelope with `_terminal: true`.
+- Streaming RPCs publish multiple response envelopes on the same `reply_to`; all but the last have `_terminal: false`; the last has `_terminal: true` (and may carry a final summary in `result`).
+
+### Errors
+
+```go
+type RPCError struct {
+    Code    string         `json:"code"`              // stable identifier, e.g. "agent_not_found", "capability_denied", "timeout"
+    Message string         `json:"message"`           // human-readable
+    Details map[string]any `json:"details,omitempty"` // verb-specific structured detail
+}
+```
+
+Errors are always returned as `rpc_response` envelopes with `error` set and `_terminal: true`. Never by failing to reply — a missing reply is a protocol violation, not an error.
+
+### Timeouts
+
+- Default request timeout: 10s on the client side.
+- Override via `WithTimeout` client option (Go) or `RPCOptions.timeoutMs` (TS).
+- On timeout, the client unsubscribes from `reply_to` and returns a synthetic `RPCError{Code: "timeout"}`. The server may still publish a late response; it lands in nothing.
+
+### Cancellation (streaming)
+
+- Caller cancels by unsubscribing from `reply_to`.
+- Server detects the no-subscribers state via NATS' `no_responders` / `no_subscribers` signal (or by checking subscriber count before each publish) and stops emitting.
+- Servers must not assume the stream completes; partial streams are normal.
+
+### Idempotency
+
+- Every request carries `idempotency_key` (UUID, caller-generated).
+- Server caches `(verb, idempotency_key) → response_envelope` for 60s.
+- Repeat requests within that window return the cached response without re-executing.
+- After the 60s window the cache entry expires and the same key would re-execute.
+
+### Audit
+
+- Before dispatch, server emits one `audit.rpc` envelope: `{verb, from, idempotency_key, capability_required, allowed: bool}`.
+- After completion (success, error, or timeout), server emits one `audit.rpc_result`: `{idempotency_key, terminal_reason: "success" | "error" | "stream_canceled", duration_ms, error_code?}`.
+- Both audit envelopes share the same `trace_id` as the original request for cross-reference.
+
+### Server dispatch (Go sketch)
+
+```go
+type Handler func(ctx context.Context, req Envelope, emit func(RPCResponse)) error
+
+type Server struct {
+    handlers map[string]Handler  // verb → handler
+    // ...
+}
+
+func (s *Server) dispatch(ctx context.Context, msg Message) {
+    req := msg.Envelope
+    verb := strings.TrimPrefix(req.Subject, "sextant.rpc.")
+    h, ok := s.handlers[verb]
+    if !ok {
+        s.replyError(req, "unknown_verb", fmt.Sprintf("no handler for %q", verb))
+        return
+    }
+    if err := s.checkCap(req, verb); err != nil {
+        s.replyError(req, "capability_denied", err.Error())
+        return
+    }
+    // ... idempotency check, audit, run handler with emit callback, audit again
+}
+```
+
 ## Open
 
 - Per-verb detailed schemas (request/response struct fields) — keep here until they grow large enough to warrant own files
-- Streaming response semantics — ephemeral subject is the lean; final detail TBD during M7 implementation
 - Capability grant/revoke at runtime — out of scope for initial; JWTs are immutable per incarnation

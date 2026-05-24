@@ -42,9 +42,9 @@ Intentionally omitted:
 Located at `/opt/sextant/sidecar/`. Started by the container's `CMD`.
 
 Responsibilities:
-1. Read agent UUID, NATS URL, JWT, session_id from env vars
-2. Connect to NATS via `@sextant/client`
-3. Connect to MCP server (sextantd's MCP endpoint over NATS)
+1. Read agent UUID, NATS URL, JWT, session_id, MCP URL from env vars
+2. Connect to NATS via `@sextant/client` (TCP listener with JWT)
+3. Connect to MCP server over Streamable HTTP at `SEXTANT_MCP_URL` (default `http://host.docker.internal:5172/mcp`); present the JWT as `Authorization: Bearer <SEXTANT_JWT>` on every request. See `specs/architecture.md` §9c "MCP transport".
 4. Start Claude Code SDK with the session_id (`--resume` if provided) and the MCP server URL
 5. Capture SDK events → publish as bus frames
 6. Subscribe to `agents.<uuid>.inbox` → forward prompts/commands to SDK

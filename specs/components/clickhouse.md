@@ -45,9 +45,11 @@ CREATE TABLE events (
     kind String,
     payload JSON,
     INDEX idx_subject subject TYPE bloom_filter GRANULARITY 4
-) ENGINE = MergeTree()
-ORDER BY (subject, ts, id);
+) ENGINE = ReplacingMergeTree(ts)
+ORDER BY (id);
 ```
+
+`ReplacingMergeTree(ts)` keeps the row with the highest `ts` per `ORDER BY` key on background merge. Re-inserts of the same `id` from shipper redelivery collapse over time. Queries that require strict dedup must use `FINAL` (slow) or `argMax(..., ts)` aggregation. For initial scale we accept the eventual-consistency tradeoff. Subject filtering is handled by the bloom filter index, not ORDER BY.
 
 ### `audit` — auth-relevant actions
 

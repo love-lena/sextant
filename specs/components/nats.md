@@ -33,11 +33,13 @@ Streams at bootstrap (M2 milestone). Each one with appropriate subject pattern, 
 | `agent_frames` | `agents.*.frames` | 7 days | TBD |
 | `agent_lifecycle` | `agents.*.lifecycle` | 30 days | TBD |
 | `audit` | `audit.*` | 365 days | TBD |
-| `telemetry_traces` | `telemetry.traces.*` | 7 days | TBD |
-| `telemetry_metrics` | `telemetry.metrics.*` | 30 days | TBD |
-| `telemetry_logs` | `telemetry.logs.*` | 7 days | TBD |
-| `user_input` | `user_input.*` | 30 days | TBD |
-| `control_rpc` | `sextant.rpc.*` | 1 day | TBD |
+| `telemetry_traces` | `telemetry.traces.>` | 7 days | TBD |
+| `telemetry_metrics` | `telemetry.metrics.>` | 30 days | TBD |
+| `telemetry_logs` | `telemetry.logs.>` | 7 days | TBD |
+| `user_input` | `user_input.>` | 30 days | TBD |
+| `control_rpc` | `sextant.rpc.>` | 1 day | TBD |
+
+Wildcard rules: `*` matches exactly one token; `>` matches one or more. Multi-token subjects (e.g. `telemetry.metrics.shipper.lag_seconds`) require `>` on the listening pattern, else messages are silently dropped from the stream.
 
 Retention numbers are starting points; tune based on disk usage.
 
