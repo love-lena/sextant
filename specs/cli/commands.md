@@ -34,7 +34,7 @@ First-run setup. Idempotent — re-running detects existing state and skips.
 - Writes `~/.config/sextant/client.toml` with NATS connection path
 - Creates data dirs: `~/.local/share/sextant/{nats,clickhouse,shipper-buffer,test}`
 - Pulls or builds `sextant-sidecar:latest` image
-- Creates initial templates at `~/.config/sextant/templates/`
+- Creates initial templates at `~/.config/sextant/templates/`; format defined in `specs/architecture.md` §11b (Templates). Default template `default.toml` ships with init.
 - Starts sextantd and waits for ready
 
 ### `sextant agents <verb>`

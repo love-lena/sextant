@@ -4,7 +4,7 @@ Two libraries, mirroring each other in API. Both built from the same JSON Schema
 
 ## `sextant-client-go` (Go)
 
-Package: `github.com/<org>/sextant-initial/pkg/client`
+Package: `github.com/love-lena/sextant-initial/pkg/client`
 
 ### API surface
 

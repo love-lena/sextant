@@ -34,11 +34,26 @@ The **switchover** at M15 is the headline milestone. Before it: classic CC drive
 **Goal**: working Go workspace with linting, formatting, CI gates.
 
 **Deliverables**:
-- `go.mod` at repo root
-- Go workspace structure (TBD: monorepo with `cmd/`, `pkg/`, etc. — see `specs/components/sextantd.md`)
-- `.golangci.yml` with strict config (`govet`, `staticcheck`, `errcheck`, `gosec`, `revive`, `gocritic`, `nilaway`, `gofumpt`)
-- `Makefile` or `taskfile.yml` with `lint`, `test`, `build`, `fmt`
-- CI config that runs lint + test on every commit and blocks merge if either fails
+- `go.mod` at repo root, module path `github.com/love-lena/sextant-initial`
+- Repo layout (normative — every later milestone references these paths):
+  - `cmd/sextant/` — operator CLI binary (M5 ships `init` + `doctor`; M11/M12 ship remaining verbs)
+  - `cmd/sextantd/` — daemon binary
+  - `cmd/sextant-shipper/` — shipper binary (M6)
+  - `cmd/sextant-sidecar/` — sidecar entrypoint (M9; Go-side parts may land earlier)
+  - `cmd/sextant-tui-agents/` — first TUI (M13)
+  - `pkg/sextantproto/` — shared envelope/event types (M1)
+  - `pkg/natsboot/` — NATS bootstrap (M2)
+  - `pkg/clickhouseboot/` — ClickHouse bootstrap (M3)
+  - `pkg/client/` — Go client library (M4)
+  - `pkg/authjwt/` — JWT issuance helpers (M5)
+  - `pkg/shipper/` — shipper logic (M6)
+  - `pkg/rpc/` — RPC dispatch + handlers (M7)
+  - `pkg/mcpserver/` — MCP server (M10)
+  - `pkg/worktree/` — worktree management (M14)
+  - Additional `pkg/` subpackages as milestones require, each placed under the relevant binary's logical scope.
+- `.golangci.yml` with strict config (`govet`, `staticcheck`, `errcheck`, `gosec`, `revive`, `gocritic`, `nilaway`, `gofumpt`, `goimports`, `unused`, `ineffassign`, `errorlint`, `bodyclose`, `contextcheck`, `copyloopvar`)
+- `Makefile` with `lint`, `test`, `build`, `fmt` targets (and `sidecar-image` added in M9). Prefer plain `make` over `taskfile.yml`.
+- CI config at `.github/workflows/ci.yml` running `make lint test` on every push; failure blocks merge.
 - `.editorconfig`, `.gitignore` for Go projects
 
 **Spec references**: [`conventions/STYLE.md`](../conventions/STYLE.md)
@@ -72,18 +87,19 @@ The **switchover** at M15 is the headline milestone. Before it: classic CC drive
 **Goal**: deterministic NATS setup that sextantd spawns and manages.
 
 **Deliverables**:
-- Helper package (`pkg/natsboot/` or similar) that:
-  - Generates a NATS config file from sextant config
+- Helper package `pkg/natsboot/` that:
+  - Generates a NATS config file with the two listeners specified in `specs/components/nats.md` (Unix socket: no auth; TCP localhost: JWT required, signed by the sextant CA).
   - Starts `nats-server -js` as a subprocess
   - Waits for ready, returns connection details
   - Creates all required JetStream streams (one per subject hierarchy) with appropriate retention
   - Creates all required NATS KV stores
+- **CA dependency**: M2 does not require the sextant CA. The TCP listener is configured to verify JWTs against a CA public-key file path, but the file is allowed to be empty/missing at this stage — agent-side connections are not yet exercised. M5 populates the CA; M11 issues the first agent JWT.
 - A standalone `cmd/sextant-natsboot/` for testing
-- Test that exercises full bootstrap → connect → publish → consume → teardown
+- Test that exercises full bootstrap → connect → publish → consume → teardown over the Unix socket listener
 
 **Spec references**: [`specs/components/nats.md`](../specs/components/nats.md), [`specs/protocols/bus-subjects.md`](../specs/protocols/bus-subjects.md)
 
-**Acceptance**: NATS comes up, all streams/KV exist, can roundtrip a message.
+**Acceptance**: NATS comes up, all streams/KV exist, can roundtrip a message over the Unix socket listener.
 
 ---
 
@@ -130,17 +146,20 @@ The **switchover** at M15 is the headline milestone. Before it: classic CC drive
 **Goal**: sextantd as a daemon that owns the CA, supervises NATS + ClickHouse, exposes a control RPC surface.
 
 **Deliverables**:
-- `cmd/sextantd/` with:
-  - `sextant init` subcommand: generates CA keypair, writes config files, creates data dirs
-  - Main daemon mode: starts NATS, starts ClickHouse, listens on a control socket
+- `cmd/sextant/` binary (operator CLI) with at minimum:
+  - `sextant init` subcommand: generates CA keypair at `~/.config/sextant/ca.{key,pub}`, writes `sextantd.toml` + `client.toml`, creates data dirs, seeds default templates (see `specs/architecture.md` "Templates"). Idempotent re-runs.
+  - `sextant doctor` subcommand: health diagnostics (NATS up, ClickHouse up, config valid, CA present). Used by M5's smoke test and downstream milestones.
+  - (Other verbs deferred to M12; the binary exists here to host `init` and `doctor`.)
+- `cmd/sextantd/` (daemon) with:
+  - Main daemon mode: starts NATS, starts ClickHouse, listens on a control socket at `~/.local/share/sextant/sextantd.sock`
   - Component health monitoring + restart on failure
   - Signal handling: SIGTERM (graceful shutdown), SIGUSR2 (self-update execv handoff — stub for M16)
-- Per-agent JWT issuance helpers (`pkg/authjwt/`)
-- Operator capability discovery: just trust Unix file perms in initial
+- Per-agent JWT issuance helpers (`pkg/authjwt/`). Issuance flow plumbed but no agent consumes it until M11.
+- Operator authority: Unix file perms on `~/.config/sextant/` and `~/.local/share/sextant/nats/nats.sock`. No operator JWT.
 
-**Spec references**: [`specs/components/sextantd.md`](../specs/components/sextantd.md)
+**Spec references**: [`specs/components/sextantd.md`](../specs/components/sextantd.md), [`specs/cli/commands.md`](../specs/cli/commands.md)
 
-**Acceptance**: `sextant init` then `sextantd` starts cleanly with NATS + ClickHouse running and healthy.
+**Acceptance**: `sextant init && sextantd` starts cleanly with NATS + ClickHouse running and healthy; `sextant doctor` reports green.
 
 ---
 
@@ -239,9 +258,9 @@ The **switchover** at M15 is the headline milestone. Before it: classic CC drive
 - Sidecar inside container: connects to NATS, publishes `agents.<uuid>.lifecycle/started`
 - `sextant list` shows the new agent
 
-**Spec references**: [`specs/cli/commands.md`](../specs/cli/commands.md)
+**Spec references**: [`specs/cli/commands.md`](../specs/cli/commands.md), [`specs/architecture.md`](../specs/architecture.md) §11b (Templates)
 
-**Acceptance**: `sextant spawn assistant --template default` works end-to-end; agent appears in `sextant list`; first lifecycle frame on NATS.
+**Acceptance**: `sextant agents spawn assistant --template default` works end-to-end; agent appears in `sextant agents list`; first lifecycle frame on NATS.
 
 ---
 
