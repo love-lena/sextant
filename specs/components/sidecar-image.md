@@ -24,14 +24,21 @@ Debian Bookworm slim. Rationale: stable, well-supported, has all the packages we
 
 | Category | Tools |
 |---|---|
-| **Sextant runtime** | Node 20+ LTS, `@sextant/client`, sidecar entrypoint |
+| **Sextant runtime** | Node 22 LTS (current "Jod" line), `@sextant/client`, `@anthropic-ai/claude-agent-sdk`, sidecar entrypoint |
 | **VCS** | git, gh |
 | **Search/text** | ripgrep, fzf, jq, yq |
 | **HTTP** | curl, wget, httpie |
 | **Build tools** | make, gcc, pkg-config (for native deps) |
-| **Languages** | Go (latest stable), Node + npm, Python 3 + pip |
+| **Languages** | Go 1.26+ (latest stable, downloaded as the official tarball at image build time), Node 22 + npm, Python 3 + pip |
 | **Editors** | vim (for the rare case an agent wants to invoke it interactively) |
 | **OS basics** | bash, coreutils, less, procps, sudo (no password — agent owns the container) |
+
+### Version pins — M9 refinements
+
+- **Node 22 LTS** (active LTS as of M9; spec previously said "Node 20+ LTS"). Installed via the NodeSource apt repo, pinning the major (`nodejs_22.x`).
+- **Go**: downloaded directly from `https://go.dev/dl/` at image build time using the URL pattern `https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz`, extracted to `/usr/local/go`. `GO_VERSION` is a build arg (default pinned in the Dockerfile to the current stable release; bump as Go cuts releases). The `arch` is resolved from `dpkg --print-architecture` so the image builds on both `amd64` and `arm64` (OrbStack on Apple Silicon).
+- **Claude Code Agent SDK**: installed as a global npm package (`@anthropic-ai/claude-agent-sdk`) plus the Claude Code CLI (`@anthropic-ai/claude-code`) so the sidecar can either drive the SDK programmatically or shell out to `claude` interactively. Both available on the public npm registry as of M9.
+- **`@sextant/client` source**: not yet published to npm. The Dockerfile resolves it via a local file dependency (`"@sextant/client": "file:./client-ts"`) where `./client-ts` is a tarball-equivalent copy of `clients/typescript/` (with `node_modules/` excluded) staged into the build context by the Dockerfile via `COPY clients/typescript /opt/sextant/client-ts`. When `@sextant/client` is published, switch to the registry version and drop the COPY.
 
 Intentionally omitted:
 - Rust — sextant is Go; agents working on sextant don't need rustup
@@ -51,6 +58,15 @@ Responsibilities:
 7. Publish heartbeat to `agents.<uuid>.heartbeat` every N seconds
 8. On SDK exit: publish `lifecycle.session_ended` event with reason; container exits
 
+### M9 scope (scaffold only)
+
+M9 ships the image and a *scaffolded* entrypoint that satisfies the image-build acceptance and proves the env-var contract. The full responsibility set above lands progressively:
+
+- **JWT-authenticated NATS connection** lands at M11 (M8's TS client only supports password auth; the JWT/credsPath path is explicitly NotYetSupported). For M9, if `SEXTANT_OPERATOR_USER`/`SEXTANT_OPERATOR_PASSWORD` are set, the entrypoint dials NATS via password auth; if only `SEXTANT_JWT` is set, it logs the M11 gap and stays in a no-NATS heartbeat loop.
+- **MCP connection** is not opened by the M9 entrypoint (M10 ships the MCP server; M11 wires the sidecar to it).
+- **Claude Code SDK invocation** lands at M11. M9 ships a `lifecycle.started` publish + 5-second heartbeat publish loop and a clean `lifecycle.ended` on SIGTERM. That is sufficient to prove the image+entrypoint integration; the SDK loop is bolted on without changing the surrounding contract.
+- The M9 entrypoint exits with a clear error if neither operator credentials nor a JWT env var are present, listing what M11 will add.
+
 ## Volume mounts (set by sextantd at spawn)
 
 | Container path | Source | Mode |
@@ -66,10 +82,11 @@ Responsibilities:
 - `SEXTANT_AGENT_UUID`
 - `SEXTANT_AGENT_NAME`
 - `SEXTANT_NATS_URL`
-- `SEXTANT_JWT`
+- `SEXTANT_JWT` (M11+; for M9 the entrypoint accepts but does not yet use it — see "M9 scope" above)
 - `SEXTANT_SESSION_ID` (optional; if set, sidecar starts SDK with `--resume`)
-- `SEXTANT_MCP_URL`
+- `SEXTANT_MCP_URL` (M11+ — sidecar wires MCP)
 - `SEXTANT_HOST_ID`
+- `SEXTANT_OPERATOR_USER`, `SEXTANT_OPERATOR_PASSWORD` (M9-only: lets test runs/the M9 smoke connect over the operator password path while M11's JWT path is still under construction; not set by sextantd at spawn from M11 onwards)
 
 Plus any per-agent credentials declared in the agent definition.
 
