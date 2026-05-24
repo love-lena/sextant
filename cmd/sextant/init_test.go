@@ -9,6 +9,7 @@ import (
 
 	"github.com/love-lena/sextant-initial/pkg/authjwt"
 	"github.com/love-lena/sextant-initial/pkg/sextantd"
+	"github.com/love-lena/sextant-initial/pkg/shipper"
 )
 
 func tempInitOpts(t *testing.T) initOptions {
@@ -37,6 +38,7 @@ func TestInitCreatesEveryArtifact(t *testing.T) {
 		{filepath.Join(opts.ConfigDir, "ca.pub"), 0o644, isFile},
 		{filepath.Join(opts.ConfigDir, "sextantd.toml"), 0o600, isFile},
 		{filepath.Join(opts.ConfigDir, "client.toml"), 0o600, isFile},
+		{filepath.Join(opts.ConfigDir, "shipper.toml"), 0o600, isFile},
 		{filepath.Join(opts.ConfigDir, "operator.creds"), 0o600, isFile},
 		{filepath.Join(opts.ConfigDir, "clickhouse.password"), 0o600, isFile},
 		{filepath.Join(opts.ConfigDir, "templates"), 0o700, isDir},
@@ -81,6 +83,18 @@ func TestInitCreatesEveryArtifact(t *testing.T) {
 	if creds.User != "operator" || len(creds.Password) < 32 {
 		t.Errorf("operator.creds wrong: %+v", creds)
 	}
+	// shipper.toml must load and resolve cleanly.
+	shipperCfg, err := shipper.LoadConfig(filepath.Join(opts.ConfigDir, "shipper.toml"))
+	if err != nil {
+		t.Errorf("shipper.toml load: %v", err)
+	}
+	if shipperCfg.Buffer.HardCapBytes != shipper.DefaultHardCapBytes {
+		t.Errorf("shipper.toml: HardCapBytes = %d, want default %d", shipperCfg.Buffer.HardCapBytes, shipper.DefaultHardCapBytes)
+	}
+	if shipperCfg.NATS.OperatorCreds == "" {
+		t.Errorf("shipper.toml: operator_creds is empty")
+	}
+
 	// Default template carries the spec-mandated permission_ceiling line.
 	body, err := os.ReadFile(filepath.Join(opts.ConfigDir, "templates", "default.toml"))
 	if err != nil {
