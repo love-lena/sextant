@@ -25,7 +25,14 @@ type RuntimeInfo struct {
 	ClickHouseHTTP string    `json:"clickhouse_http"`
 	ClickHousePID  int       `json:"clickhouse_pid,omitempty"`
 	ControlSocket  string    `json:"control_socket"`
-	Version        string    `json:"version"`
+	// MCPHTTPAddr is the bound host:port of the agent-facing Streamable
+	// HTTP MCP listener. Captured at daemon start so callers (sidecars,
+	// tests) can discover the auto-picked port when http_port=0.
+	MCPHTTPAddr string `json:"mcp_http_addr,omitempty"`
+	// MCPStdioSocket is the absolute path of the operator-facing MCP
+	// Unix socket. Same purpose as MCPHTTPAddr for the stdio transport.
+	MCPStdioSocket string `json:"mcp_stdio_socket,omitempty"`
+	Version        string `json:"version"`
 }
 
 // WriteRuntimeInfo persists info to path with mode 0600. The parent dir

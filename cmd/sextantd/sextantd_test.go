@@ -151,6 +151,9 @@ func startDaemonHarness(t *testing.T) *daemonHarness {
 	// the daemon picks it up.
 	cfg.Daemon.RestartBackoffInitial = sextantd.Duration(100 * time.Millisecond)
 	cfg.Daemon.RestartBackoffMax = sextantd.Duration(1 * time.Second)
+	// Override the MCP HTTP port to 0 (kernel-picked) so back-to-back
+	// daemon tests don't collide on the default 5172.
+	cfg.MCP.HTTPPort = 0
 	if err := sextantd.SaveConfig(cfgPath, cfg); err != nil {
 		t.Fatalf("SaveConfig (tightened): %v", err)
 	}

@@ -19,6 +19,7 @@ type Config struct {
 	CA         CAConfig         `toml:"ca"`
 	NATS       NATSConfig       `toml:"nats"`
 	ClickHouse ClickHouseConfig `toml:"clickhouse"`
+	MCP        MCPConfig        `toml:"mcp"`
 	Paths      PathsConfig      `toml:"paths"`
 }
 
@@ -56,6 +57,16 @@ type ClickHouseConfig struct {
 	User         string `toml:"user"`
 	PasswordFile string `toml:"password_file"`
 	LogFile      string `toml:"log_file"`
+}
+
+// MCPConfig governs the in-process MCP server (M10). HTTPHost+HTTPPort
+// bind the agent-facing Streamable HTTP listener; StdioSocket is the
+// operator-facing Unix socket. Both surfaces are spec'd in
+// specs/components/sextantd.md §"MCP server".
+type MCPConfig struct {
+	HTTPHost    string `toml:"http_host"`
+	HTTPPort    int    `toml:"http_port"`
+	StdioSocket string `toml:"stdio_socket"`
 }
 
 // PathsConfig holds the rest of the path layout.
@@ -125,6 +136,11 @@ func DefaultConfig(configDir, dataDir string) Config {
 			Database:     "sextant",
 			User:         "sextant",
 			PasswordFile: filepath.Join(configDir, "clickhouse.password"),
+		},
+		MCP: MCPConfig{
+			HTTPHost:    "127.0.0.1",
+			HTTPPort:    5172,
+			StdioSocket: filepath.Join(dataDir, "sextantd-mcp.sock"),
 		},
 		Paths: PathsConfig{
 			TemplatesDir: filepath.Join(configDir, "templates"),
@@ -213,12 +229,20 @@ func (c Config) Resolve() (Config, error) {
 	if out.ClickHouse.User == "" {
 		out.ClickHouse.User = "sextant"
 	}
+	if out.MCP.HTTPHost == "" {
+		out.MCP.HTTPHost = "127.0.0.1"
+	}
+	// HTTPPort: 0 = kernel-picked (used by tests). The spec default 5172
+	// is applied at DefaultConfig time, not here, so a test that
+	// explicitly serializes `http_port = 0` doesn't get silently
+	// reverted to 5172 on Load.
 
 	pathFields := []*string{
 		&out.Daemon.ControlSocket,
 		&out.CA.KeyPath, &out.CA.PubPath,
 		&out.NATS.DataDir, &out.NATS.OperatorCreds, &out.NATS.LogFile,
 		&out.ClickHouse.DataDir, &out.ClickHouse.PasswordFile, &out.ClickHouse.LogFile,
+		&out.MCP.StdioSocket,
 		&out.Paths.TemplatesDir, &out.Paths.ClientConfig, &out.Paths.RuntimeFile,
 		&out.Paths.ConfigDir, &out.Paths.DataDir,
 	}
@@ -257,6 +281,9 @@ func (c Config) Resolve() (Config, error) {
 	}
 	if out.Paths.RuntimeFile == "" {
 		return Config{}, fmt.Errorf("sextantd: paths.runtime_file is required")
+	}
+	if out.MCP.StdioSocket == "" {
+		return Config{}, fmt.Errorf("sextantd: mcp.stdio_socket is required")
 	}
 	return out, nil
 }
