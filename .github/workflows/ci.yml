@@ -91,6 +91,11 @@ jobs:
     # The Docker build pulls Go + Node + apt packages and can take a few
     # minutes; that's the trade for catching image regressions on every
     # PR. Plan: plans/bootstrap.md#M9.
+    #
+    # Single source of truth for what "the smoke passed" means lives in
+    # images/sidecar/test.sh (also invoked locally via `make
+    # sidecar-image-test`). CI just calls that — no inline shell that
+    # could drift when the tool list changes.
     steps:
       - uses: actions/checkout@v4
 
@@ -100,30 +105,5 @@ jobs:
           cache: npm
           cache-dependency-path: clients/typescript/package-lock.json
 
-      - name: build @sextant/client (dist/ is COPYed into the image)
-        working-directory: clients/typescript
-        run: |
-          npm ci
-          npm run codegen
-          npm run build
-
-      - name: docker build sextant-sidecar:test
-        run: docker build -f images/sidecar/Dockerfile -t sextant-sidecar:test .
-
-      - name: smoke — required tools present
-        run: |
-          docker run --rm sextant-sidecar:test /bin/bash -c '
-            set -e
-            for t in node npm git gh jq yq rg fzf curl wget make gcc python3 go vim; do
-              command -v "$t" >/dev/null || { echo "missing: $t" >&2; exit 1; }
-            done
-            echo OK
-          '
-
-      - name: smoke — sidecar entrypoint built
-        run: |
-          docker run --rm sextant-sidecar:test /bin/bash -c '
-            set -e
-            ls /opt/sextant/sidecar/dist/index.js
-            node /opt/sextant/sidecar/dist/index.js --version
-          '
+      - name: make sidecar-image-test (build + acceptance smoke)
+        run: make sidecar-image-test
