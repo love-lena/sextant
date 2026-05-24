@@ -118,7 +118,6 @@ Open sub-decisions this triggers (see follow-on questions below).
 
 **Open sub-questions** (track, don't resolve now):
 - **Hot-reload field matrix**: which fields are safe to hot-reload (tool allowlist, runtime params?), which require restart (system prompt / charter — session-baked), which require fork.
-- **Template storage**: NATS KV separate keyspace? filesystem? both?
 - **Template fan-out mechanics**: name pattern (`dev-{n}`)? auto UUIDs? inherit + override semantics?
 - **Fork semantics**: does fork inherit parent's session_id (branch the conversation) or start fresh? Probably configurable, default fresh.
 - **Name release timing**: when does an archived agent's name become available — immediately, after a grace period, manual unlock?
@@ -461,6 +460,50 @@ Each agent gets its own git worktree as its workspace mount; agents work on inde
 - **CI per worktree**: agents run tests in their container before declaring done; results in audit log
 - **Pruning policy**: idle > 14 days → archive; > 30 days → delete? Configurable
 - **Multi-host worktrees**: agents in the same task stay on the same host (worktrees are host-local filesystems)
+
+## 11b. Templates — DECIDED
+
+An agent template is the spawning recipe for an agent class. Templates are the source for `sextant agents spawn <name> --template <T>` (M11).
+
+**Storage**: TOML files at `~/.config/sextant/templates/<name>.toml`. On `sextant init` (M5), the file contents are loaded into NATS KV bucket `templates` (keyed by template name). Operators add or change templates by dropping/editing files there; a future `sextant templates reload` verb (post-initial) re-syncs into KV. For initial, re-running `sextant init` is the reload path (idempotent).
+
+**Schema** (initial — extend cautiously, additive only):
+
+```toml
+name = "default"                       # template name (also the file stem)
+description = "..."
+image = "sextant-sidecar:latest"       # container image
+permissions = [                        # cap allowlist (subset of operator's caps)
+  "read.agents", "read.history",
+  "control.prompt", "control.worktree",
+]
+env = { KEY = "value" }                # env vars injected into the container
+mounts = ["worktree"]                  # named mount classes (worktree | secrets | ...)
+initial_prompt = ""                    # optional first prompt on spawn
+model = "claude-opus-4-7[1m]"          # model id passed to Claude SDK
+permission_ceiling = "auto"            # max permission mode (locked to "auto")
+```
+
+**Default template**: `default.toml` ships with `sextant init`. Contents:
+
+```toml
+name = "default"
+description = "Minimal spawnable agent — assistant-style, broad reads, restricted writes."
+image = "sextant-sidecar:latest"
+permissions = ["read.agents", "read.history", "control.prompt"]
+mounts = ["worktree"]
+model = "claude-opus-4-7[1m]"
+permission_ceiling = "auto"
+```
+
+**Mount classes**: declared names that sextantd resolves to actual container mounts at spawn time. Initial classes:
+- `worktree` → the agent's git worktree → `/workspace`
+- `secrets` → the per-template subset of `~/.config/sextant/secrets/` → read-only mount
+
+**Open sub-decisions** (defer):
+- Template versioning — do we track template hashes per incarnation for forensics? Lean yes via `agent_definitions_history` table.
+- Operator-only fields — should any template field be operator-edit-only? Lean: whole file is operator-only since it sits in `~/.config/sextant/`.
+- Cross-template inheritance — `extends = "default"`? Not in initial; copy fields into each file.
 
 ## 12. Bootstrap & self-improvement — DECIDED (two phases)
 

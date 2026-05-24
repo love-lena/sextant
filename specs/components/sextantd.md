@@ -33,18 +33,24 @@ pkg/
 └── theme/                   # shared theme tokens for TUIs
 ```
 
-## Subcommands
+## Binaries in this scope
 
-- `sextant init` — first-run setup: generates CA keypair, writes config, creates data dirs, bootstraps NATS + ClickHouse
+There are two binaries: `sextant` (operator CLI) and `sextantd` (daemon). Both live in this repo at `cmd/sextant/` and `cmd/sextantd/` respectively. `init` and `doctor` are subcommands of `sextant`, not `sextantd`.
+
+## sextantd subcommands
+
 - `sextantd` (no args) — main daemon mode: runs the supervisor loop until SIGTERM
 - `sextantd --test-mode --test-id=<uuid>` — test mode: runs in a namespaced config dir, listens on isolated ports (M17)
 
-The `sextant` CLI (M11/M12) is a separate binary at `cmd/sextant/`.
+## sextant CLI relationship
+
+- `cmd/sextant/` ships in M5 with `init` and `doctor` so M5 acceptance (`sextant init && sextantd`) works.
+- Additional verbs (`agents`, `conversation`, `pending`, ...) land across M11 and M12.
 
 ## Startup sequence
 
 1. Load config from `~/.config/sextant/sextantd.toml`
-2. Verify CA keypair exists; refuse to start if not (operator must run `sextant init` first)
+2. Verify CA keypair exists; refuse to start if not (operator must run `sextant init` first — the `sextant` binary is the one that creates the CA)
 3. Start NATS subprocess; wait for ready
 4. Start ClickHouse subprocess; wait for ready; apply migrations
 5. Start shipper subprocess; wait for ready

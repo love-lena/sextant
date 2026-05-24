@@ -94,7 +94,7 @@ linters:
     - copyloopvar
 linters-settings:
   nilaway:
-    include-pkgs: "github.com/.../sextant-initial/..."
+    include-pkgs: "github.com/love-lena/sextant-initial/..."
 ```
 
 CI runs `make lint test` on every commit. Failure blocks merge.
