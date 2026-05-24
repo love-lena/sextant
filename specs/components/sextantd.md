@@ -170,9 +170,19 @@ password = "<32-byte URL-safe random>"
 
 ## Supervision details
 
+Each managed subprocess (NATS, ClickHouse, M6's shipper) runs under its own `pkg/supervisor.Supervisor`. On unexpected exit the supervisor restarts the subprocess with backoff; the daemon never silently sits on a dead unit.
+
 Backoff schedule: `restart_backoff_initial` (default 1s), doubling per consecutive failure, capped at `restart_backoff_max` (default 5min). Counter resets when a subprocess stays up for at least `restart_backoff_max` continuous seconds.
 
-Quarantine: after `restart_quarantine_after` consecutive restart failures (default 5), the supervisor stops auto-restarting that subprocess and emits an `audit.sextantd` envelope with action `subprocess_quarantined` and result `error`. Operator must SIGHUP or restart sextantd to clear quarantine.
+Quarantine: after `restart_quarantine_after` consecutive restart failures (default 5), the supervisor stops auto-restarting that subprocess and returns an error from `Supervisor.Run`. The daemon then logs `<unit> QUARANTINED ...`, signals its own done channel, and exits non-zero so an outer process supervisor (systemd, launchd, or the operator's shell) can take over. An `audit.sextantd` envelope with action `subprocess_quarantined` and result `error` lands once M7's audit-publishing path is wired; M5 logs to stderr only.
+
+**Port stability across restarts**: ports allocated dynamically by the kernel (port 0 in the config) are captured on first boot and reused on every subsequent restart, so reconnecting clients keep the same endpoint and `runtime.json` does not lie. `runtime.json` is re-written after each restart to refresh the subprocess PIDs.
+
+**Bootstrap idempotency on restart**:
+- NATS: JetStream rehydrates streams + KV from the on-disk data dir. The daemon re-runs `natsboot.Bootstrap` (CreateOrUpdate semantics) after each restart so any schema drift surfaces immediately.
+- ClickHouse: data files survive restart. The daemon re-runs `clickhouseboot.Apply` (idempotent on SHA-tracked migrations) for the same reason.
+
+**Operator NATS reconnection**: `pkg/client` is configured with `MaxReconnects(-1)` and bounded `ReconnectWait` + jitter, so a NATS subprocess restart looks like a connection blip to the daemon's own NATS clients. Connectivity returns once the listener is re-bound; in-flight subscriptions auto-resume from their last-acked `StreamSeq`.
 
 ## Open
 
