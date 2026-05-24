@@ -567,10 +567,66 @@ func TestCapDenyRoutesThroughCapability(t *testing.T) {
 	if rerr.Code != sextantproto.ErrCodeCapabilityDenied {
 		t.Fatalf("Code = %q, want %q", rerr.Code, sextantproto.ErrCodeCapabilityDenied)
 	}
+	// Details["capability_required"] must carry the cap name so M10
+	// operator tooling can render "missing capability X" without
+	// parsing the message string.
+	if got := rerr.Details["capability_required"]; got == nil {
+		t.Fatalf("Details.capability_required missing; Details = %+v", rerr.Details)
+	}
 }
 
 type denyAll struct{}
 
 func (denyAll) Check(_ sextantproto.Envelope, cap string) error {
 	return fmt.Errorf("denied: %s", cap)
+}
+
+// TestServerRecoversFromHandlerPanic pins the spec-required behavior:
+// a panicking handler must not crash the daemon, and the caller must
+// receive a terminal RPCError{Code: ErrCodeInternal} so it isn't left
+// waiting for a reply that never comes (the wire-semantics rule
+// "missing reply is a protocol violation").
+func TestServerRecoversFromHandlerPanic(t *testing.T) {
+	srv := bootedServer(t)
+	nc := operatorConn(t, srv)
+	s, _ := newServerOnConn(t, nc)
+	if err := s.Register("boom", func(_ context.Context, _ sextantproto.Envelope, _ func(sextantproto.RPCResponse)) error {
+		panic("synthetic handler crash")
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	cli := clientOn(t, srv)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err := cli.RPC(ctx, "boom", nil, nil, client.WithTimeout(3*time.Second))
+	if err == nil {
+		t.Fatal("RPC must return an error when the server-side handler panics")
+	}
+	if errors.Is(err, client.ErrRPCTimeout) {
+		t.Fatalf("expected structured RPCError, got client-side ErrRPCTimeout — server crashed instead of recovering")
+	}
+	var rerr *client.RPCError
+	if !errors.As(err, &rerr) {
+		t.Fatalf("err = %v, want *client.RPCError", err)
+	}
+	if rerr.Code != sextantproto.ErrCodeInternal {
+		t.Fatalf("Code = %q, want %q", rerr.Code, sextantproto.ErrCodeInternal)
+	}
+	if rerr.Details["panic"] == nil {
+		t.Fatalf("Details.panic missing; Details = %+v", rerr.Details)
+	}
+
+	// The server must still be alive — issue a second RPC against a
+	// freshly-registered healthy handler to confirm the daemon didn't
+	// crash.
+	if err := s.Register("ok2", func(_ context.Context, _ sextantproto.Envelope, emit func(sextantproto.RPCResponse)) error {
+		emit(sextantproto.RPCResponse{Result: []byte(`{"ok":true}`), Terminal: true})
+		return nil
+	}); err != nil {
+		t.Fatalf("Register ok2: %v", err)
+	}
+	if err := cli.RPC(ctx, "ok2", nil, nil); err != nil {
+		t.Fatalf("RPC after panic: server did not survive (%v)", err)
+	}
 }
