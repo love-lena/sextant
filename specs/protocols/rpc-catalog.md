@@ -183,7 +183,120 @@ func (s *Server) dispatch(ctx context.Context, msg Message) {
 }
 ```
 
+## Verb payloads — M7 initial set
+
+These are the request/response payload shapes for the four verbs implemented in M7. JSON tags shown match the wire form. Times are RFC 3339 strings; UUIDs are lowercase canonical strings (matching `sextantproto`'s wire format).
+
+### `list_agents`
+
+Request:
+```go
+type ListAgentsRequest struct {
+    Filter *ListAgentsFilter `json:"filter,omitempty"` // optional; reserved for future filtering
+}
+
+type ListAgentsFilter struct {
+    Lifecycle string `json:"lifecycle,omitempty"` // "defined" | "running" | "paused" | "archived"
+}
+```
+
+Response:
+```go
+type ListAgentsResponse struct {
+    Agents []AgentSummary `json:"agents"` // always present; empty slice when none match
+}
+
+type AgentSummary struct {
+    UUID      uuid.UUID `json:"uuid"`
+    Name      string    `json:"name"`
+    Type      string    `json:"type,omitempty"`
+    Template  string    `json:"template,omitempty"`
+    Lifecycle string    `json:"lifecycle"`
+    Version   uint64    `json:"version"`
+    UpdatedAt time.Time `json:"updated_at"`
+}
+```
+
+### `get_agent_status`
+
+Request:
+```go
+type GetAgentStatusRequest struct {
+    AgentID uuid.UUID `json:"agent_id"`
+}
+```
+
+Response:
+```go
+type GetAgentStatusResponse struct {
+    Status AgentStatus `json:"status"`
+}
+
+type AgentStatus struct {
+    UUID      uuid.UUID `json:"uuid"`
+    Name      string    `json:"name"`
+    Lifecycle string    `json:"lifecycle"`
+    Version   uint64    `json:"version"`
+    UpdatedAt time.Time `json:"updated_at"`
+}
+```
+
+Error: `RPCError{Code: "agent_not_found"}` when no `agent_definitions.<uuid>` KV entry exists.
+
+### `read_file`
+
+Request:
+```go
+type ReadFileRequest struct {
+    AgentID uuid.UUID `json:"agent_id"`
+    Path    string    `json:"path"`
+}
+```
+
+Response:
+```go
+type ReadFileResponse struct {
+    Content     []byte `json:"content"`      // base64 on the wire (json.RawMessage of bytes)
+    ContentType string `json:"content_type"` // sniffed MIME
+}
+```
+
+M7 status: STUB. The M7 handler always returns `RPCError{Code: "not_implemented"}` with the message "read_file ships in M11+ when container management lands". The verb is registered so unknown-verb path doesn't fire, but the body is intentionally not implemented.
+
+### `query_history`
+
+Request:
+```go
+type QueryHistoryRequest struct {
+    Filter    QueryHistoryFilter `json:"filter"`
+    TimeRange TimeRange          `json:"time_range"`
+    Limit     int                `json:"limit,omitempty"` // 0 → server default (1000); capped at server max (10000)
+}
+
+type QueryHistoryFilter struct {
+    Subject   string    `json:"subject,omitempty"`    // optional exact match on subject column
+    FromID    string    `json:"from_id,omitempty"`    // optional exact match on the from.id column
+    AgentUUID uuid.UUID `json:"agent_uuid,omitempty"` // optional; matches from.id when from.kind = "agent"
+    Kind      string    `json:"kind,omitempty"`       // optional envelope kind filter
+}
+
+type TimeRange struct {
+    Since time.Time `json:"since,omitempty"` // zero = unbounded
+    Until time.Time `json:"until,omitempty"` // zero = unbounded (i.e. now)
+}
+```
+
+Response:
+```go
+type QueryHistoryResponse struct {
+    Events []sextantproto.Envelope `json:"events"` // always present; empty slice when none match
+}
+```
+
+The handler queries the ClickHouse `events` table; rows are reconstructed into `Envelope` values (Subject is dropped — it is not an envelope field). Wildcard matching on `subject` is intentionally NOT supported in M7 — the filter is exact match; wildcard support lands when a real consumer needs it.
+
 ## Open
 
-- Per-verb detailed schemas (request/response struct fields) — keep here until they grow large enough to warrant own files
+- Per-verb detailed schemas (request/response struct fields) — keep here until they grow large enough to warrant own files. The four M7 verbs are pinned in the section above.
 - Capability grant/revoke at runtime — out of scope for initial; JWTs are immutable per incarnation
+- Wildcard subject filtering in `query_history` — deferred; M7 ships exact-match only
