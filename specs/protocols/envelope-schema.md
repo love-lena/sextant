@@ -15,9 +15,12 @@ type Envelope struct {
     From         Address   `json:"from"`            // who emitted
     To           *Address  `json:"to,omitempty"`    // optional target; absent for broadcast events
 
-    // Tracing
-    TraceID      *uuid.UUID `json:"trace_id,omitempty"`
-    SpanID       *uuid.UUID `json:"span_id,omitempty"`
+    // Tracing — TraceID and SpanID are REQUIRED on every envelope.
+    // For root events (no causally-prior envelope), set TraceID = ID
+    // and SpanID = a fresh UUID. ParentSpanID is optional and absent
+    // on root spans.
+    TraceID      uuid.UUID  `json:"trace_id"`
+    SpanID       uuid.UUID  `json:"span_id"`
     ParentSpanID *uuid.UUID `json:"parent_span_id,omitempty"`
 
     // Idempotency (for RPC)

@@ -302,7 +302,7 @@ The **switchover** at M15 is the headline milestone. Before it: classic CC drive
 **Deliverables**:
 - MCP tools: `worktree_create`, `worktree_destroy`, `worktree_list`, `worktree_merge`, `worktree_diff`
 - Worktree registry in NATS KV
-- Merge serialization via `merge.lock` KV key
+- Merge serialization via `locks.merge` KV key (bucket `locks`)
 - Container spawn config wires worktree path as the `/workspace` mount
 
 **Spec references**: `architecture.md` §11, [`conventions/git-workflow.md`](../conventions/git-workflow.md)
@@ -337,7 +337,7 @@ The **switchover** at M15 is the headline milestone. Before it: classic CC drive
 - execv-style handoff for sextantd swap (~1s downtime; NATS + ClickHouse keep running)
 - Watchdog process (separate from sextantd) verifies health for 60s, rollbacks on failure
 - Test gate: `self_update` requires passing tests before staging
-- Deploy lock via `deploy.lock` NATS KV key
+- Deploy lock via `locks.deploy` NATS KV key (bucket `locks`)
 
 **Spec references**: `architecture.md` §12
 

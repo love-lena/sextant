@@ -52,9 +52,10 @@ Retention numbers are starting points; tune based on disk usage.
 | `viz_specs` | visualization specs | post-M17 feature |
 | `ui_state` | inter-UI coordination | per-operator-scoped keys |
 | `worktrees` | worktree registry | metadata per worktree |
-| `merge_lock` | merge serialization | TTL 5 min |
-| `deploy_lock` | self-update serialization | TTL 10 min |
+| `locks` | mutual-exclusion locks | keys: `merge` (TTL 5 min), `deploy` (TTL 10 min); add more as needed |
 | `test_envs` | test environment registry | TTL per env |
+
+**Lock conventions**: all mutex-style locks live in the single `locks` bucket. Lock keys are short verbs (`merge`, `deploy`, ...). Holders write their UUID/host as the value; expired TTL = lock auto-released. References elsewhere (`architecture.md` §11, §12; `conventions/git-workflow.md`) use the form `locks.<key>` (e.g. `locks.merge`).
 
 ## Subjects (publish/subscribe)
 
