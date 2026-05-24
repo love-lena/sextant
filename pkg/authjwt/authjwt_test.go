@@ -22,7 +22,7 @@ func writeCA(t *testing.T, dir string) (privPath, pubPath string) {
 	if err := os.WriteFile(privPath, privPEM, 0o600); err != nil {
 		t.Fatalf("write priv: %v", err)
 	}
-	if err := os.WriteFile(pubPath, pubPEM, 0o644); err != nil {
+	if err := os.WriteFile(pubPath, pubPEM, 0o644); err != nil { //nolint:gosec // ca.pub is world-readable by design
 		t.Fatalf("write pub: %v", err)
 	}
 	return privPath, pubPath
@@ -180,7 +180,7 @@ func TestVerifyRejectsForeignSignature(t *testing.T) {
 	if err := os.WriteFile(privBPath, privBPEM, 0o600); err != nil {
 		t.Fatalf("write privB: %v", err)
 	}
-	if err := os.WriteFile(pubBPath, pubBPEM, 0o644); err != nil {
+	if err := os.WriteFile(pubBPath, pubBPEM, 0o644); err != nil { //nolint:gosec // ca.pub is world-readable by design
 		t.Fatalf("write pubB: %v", err)
 	}
 	caB, err := LoadCA(privBPath, pubBPath)
