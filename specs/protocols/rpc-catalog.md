@@ -86,12 +86,29 @@ Capabilities are hierarchical strings; granting `read.>` grants all `read.*` cap
 
 Default capability sets per agent type (declared in templates):
 
-- **dev**: `read.agents`, `read.history`, `read.debug`, `read.worktrees`, `control.prompt` (limited), `control.worktree`
-- **lead**: dev caps + `control.spawn`, `control.kill`, `control.restart`, `control.prompt`
+- **dev**: `read.agents`, `read.history`, `read.debug`, `read.worktrees`, `control.prompt` (limited), `control.worktree`, `send_message`
+- **lead**: dev caps + `control.spawn`, `control.kill`, `control.restart`, `control.prompt`, `broadcast`
 - **ops**: lead caps + `control.exec`, `control.self_update`, `test.provision`
 - **operator** (the human via TUI/CLI): all capabilities
 
 Capability descoping (§9c): spawned agent's caps are a subset of spawner's caps. Spawner declares the requested subset; sextantd validates and issues the child JWT accordingly.
+
+### MCP tool capabilities (M10+)
+
+The MCP server (`specs/components/sextantd.md` §"MCP server") exposes a separate tool catalog with its own capability strings. The mapping below is normative; tools whose semantics overlap an existing RPC verb reuse that verb's cap.
+
+| Tool | Capability |
+|---|---|
+| `send_message` | `send_message` |
+| `broadcast` | `broadcast` |
+| `list_agents` | `read.agents` |
+| `agent_status` | `read.agents` |
+| `query_audit` | `read.history` |
+| `spawn_agent` | `control.spawn` |
+| `kill_agent` | `control.kill` |
+| `prompt_agent` | `control.prompt` |
+| `emit_event` | `emit_event` |
+| `get_metric` | `read.metrics` |
 
 ## Wire semantics
 

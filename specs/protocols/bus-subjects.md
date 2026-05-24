@@ -32,9 +32,21 @@ Per-agent subjects.
 - `audit.kill` — agent killed
 - `audit.restart` — agent restarted
 - `audit.definition_change` — agent definition mutated
-- `audit.tool_call` — MCP tool invoked
+- `audit.tool_call` — MCP tool invoked (one envelope per call, success or error)
 - `audit.deploy` — self_update events
 - `audit.access` — operator action (CLI/TUI)
+
+`audit.tool_call` envelope payload (M10+): the standard `AuditPayload` struct (see `pkg/sextantproto/payloads.go`) with:
+- `actor` — agent UUID string for agent callers, literal `"operator"` for stdio (operator) callers
+- `agent_uuid` — set when the caller is an agent
+- `action` — `"tool_call.<tool_name>"`
+- `capability_required` — the capability the tool declares; empty for the operator path
+- `result` — `"allowed"` on success, `"denied"` on capability_denied, `"error"` on any other terminal failure
+- `details.tool` — the tool name
+- `details.caller_kind` — `"agent"` or `"operator"`
+- `details.caller_id` — the caller's identity (agent UUID or `"operator"`)
+- `details.duration_ms` — wall-clock duration of the handler in milliseconds
+- `details.error_code` — present when result != allowed; the tool error code (e.g. `"capability_denied"`, `"not_implemented"`)
 
 ### `telemetry.*`
 
