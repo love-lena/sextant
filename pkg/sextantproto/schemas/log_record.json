@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/love-lena/sextant-initial/pkg/sextantproto/log-record",
+  "$ref": "#/$defs/LogRecord",
+  "$defs": {
+    "LogRecord": {
+      "properties": {
+        "timestamp_ns": {
+          "type": "integer"
+        },
+        "observed_timestamp_ns": {
+          "type": "integer"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "severity_text": {
+          "type": "string"
+        },
+        "severity_number": {
+          "type": "integer"
+        },
+        "service_name": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "resource_attributes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "log_attributes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "timestamp_ns",
+        "service_name",
+        "body"
+      ]
+    }
+  }
+}

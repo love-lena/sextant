@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/love-lena/sextant-initial/pkg/sextantproto/agent-definition",
+  "$ref": "#/$defs/AgentDefinition",
+  "$defs": {
+    "AgentDefinition": {
+      "properties": {
+        "uuid": {
+          "$ref": "#/$defs/UUID"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "template": {
+          "type": "string"
+        },
+        "runtime": {
+          "$ref": "#/$defs/RuntimeConfig"
+        },
+        "sandbox": {
+          "$ref": "#/$defs/SandboxConfig"
+        },
+        "tools": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "host_pin": {
+          "type": "string"
+        },
+        "lifecycle": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer"
+        },
+        "created_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "escalate_to": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "uuid",
+        "name",
+        "type",
+        "runtime",
+        "sandbox",
+        "lifecycle",
+        "version",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "ResourceLimits": {
+      "properties": {
+        "cpu_shares": {
+          "type": "integer"
+        },
+        "memory_mib": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "RuntimeConfig": {
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "permission_mode": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "initial_prompt": {
+          "type": "string"
+        },
+        "permission_ceiling": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "model"
+      ]
+    },
+    "SandboxConfig": {
+      "properties": {
+        "image": {
+          "type": "string"
+        },
+        "mounts": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "credentials": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "resource_limits": {
+          "$ref": "#/$defs/ResourceLimits"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "image"
+      ]
+    },
+    "Timestamp": {
+      "properties": {},
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "UUID": {
+      "items": {
+        "type": "integer"
+      },
+      "type": "array",
+      "maxItems": 16,
+      "minItems": 16
+    }
+  }
+}

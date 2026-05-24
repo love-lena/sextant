@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/love-lena/sextant-initial/pkg/sextantproto/metric",
+  "$ref": "#/$defs/Metric",
+  "$defs": {
+    "Metric": {
+      "properties": {
+        "timestamp_ns": {
+          "type": "integer"
+        },
+        "metric_name": {
+          "type": "string"
+        },
+        "metric_description": {
+          "type": "string"
+        },
+        "metric_unit": {
+          "type": "string"
+        },
+        "metric_type": {
+          "type": "string"
+        },
+        "service_name": {
+          "type": "string"
+        },
+        "resource_attributes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "attributes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "value": {
+          "type": "number"
+        },
+        "count": {
+          "type": "integer"
+        },
+        "sum": {
+          "type": "number"
+        },
+        "bucket_counts": {
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "explicit_bounds": {
+          "items": {
+            "type": "number"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "timestamp_ns",
+        "metric_name",
+        "metric_type",
+        "service_name",
+        "value"
+      ]
+    }
+  }
+}
