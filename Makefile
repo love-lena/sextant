@@ -12,7 +12,7 @@ PKGS := ./...
 BIN_DIR := bin
 
 # Binaries built by `make build`. New cmd/<name> dirs land here as milestones add them.
-CMDS := sextant-natsboot
+CMDS := sextant-natsboot sextant-clickhouseboot
 
 .PHONY: all fmt lint lint-go lint-nilaway test build clean tidy install-tools
 
