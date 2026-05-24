@@ -32,9 +32,6 @@ type QueryFilter struct {
 
 // Query reads past envelopes from ClickHouse via the query_history RPC.
 // Returns an empty slice (not nil) when no events match.
-//
-// In M4 this method returned ErrNotImplementedYet; M7 swaps in the real
-// RPC. Callers that previously relied on the sentinel must update.
 func (c *Client) Query(ctx context.Context, filter QueryFilter) ([]sextantproto.Envelope, error) {
 	if c.isClosed() {
 		return nil, ErrClosed
