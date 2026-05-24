@@ -102,6 +102,35 @@ describe("publish + subscribe", () => {
     await it_.return?.();
   }, 30_000);
 
+  it("deletes the JetStream consumer when an iterator is closed before any message", async () => {
+    // Race regression: if the caller breaks the iterator before
+    // start() finishes provisioning the consumer, the consumer must
+    // still be torn down. We assert this by counting consumers on the
+    // stream before/after the iterator's brief life.
+    const agentUUID = randomUUID();
+    const subject = `agents.${agentUUID}.frames`;
+    const streamName = await client.jsm.streams.find(subject);
+
+    const count = async (): Promise<number> => {
+      let n = 0;
+      for await (const _ of client.jsm.consumers.list(streamName)) n++;
+      return n;
+    };
+
+    const beforeCount = await count();
+
+    const iter = client.subscribe(subject);
+    const it_ = iter[Symbol.asyncIterator]();
+    // Close immediately — start() may or may not have provisioned yet.
+    await it_.return?.();
+
+    // Allow the cleanup to run.
+    await new Promise((r) => setTimeout(r, 200));
+
+    const afterCount = await count();
+    expect(afterCount).toBe(beforeCount);
+  }, 30_000);
+
   it("surfaces malformed envelopes via Message.err", async () => {
     const agentUUID = randomUUID();
     const subject = `agents.${agentUUID}.lifecycle`;
