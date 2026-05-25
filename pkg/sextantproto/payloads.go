@@ -56,6 +56,12 @@ const (
 	LifecycleArchivedEvent  LifecycleEvent = "archived"
 	LifecycleRestartedEvent LifecycleEvent = "restarted"
 	LifecycleCrashedEvent   LifecycleEvent = "crashed"
+	// LifecycleTurnEnded is published by the sidecar's SDK driver loop
+	// when one turn (one prompt → one assistant response, including any
+	// tool-use round-trips) completes. Reason="error" distinguishes a
+	// failed turn from a clean one. See
+	// specs/components/sidecar-image.md §"Sidecar entrypoint".
+	LifecycleTurnEnded LifecycleEvent = "turn_ended"
 )
 
 // AuditPayload records an auth-relevant action. Mirrors the ClickHouse
