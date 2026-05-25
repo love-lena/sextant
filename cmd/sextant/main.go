@@ -51,6 +51,8 @@ func run(ctx context.Context, args []string) error {
 		return runAgents(ctx, rest)
 	case "conversation":
 		return runConversation(ctx, rest)
+	case "ask":
+		return runAsk(ctx, rest)
 	case "pending":
 		return runPending(ctx, rest)
 	case "files":
@@ -87,6 +89,7 @@ Subcommands:
   doctor        Health diagnostics for sextantd, NATS, ClickHouse, config.
   agents        Agent operations (list|show|spawn|kill|restart|prompt).
   conversation  Stream agent frames in human-readable form.
+  ask           Send one prompt + wait for the turn to finish.
   pending       List/answer/defer/escalate user-input requests.
   files         Read/list/tail files in an agent's container.
   exec          Run a command in an agent's container.
