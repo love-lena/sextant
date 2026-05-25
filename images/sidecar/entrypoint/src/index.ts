@@ -2,35 +2,37 @@
  * @sextant/sidecar — runtime entrypoint that boots inside every per-agent
  * container.
  *
- * Plan: plans/bootstrap.md#M10 (extended from M9 scaffolding).
+ * Plan: plans/bootstrap.md#M11 (extends the M9/M10 entrypoint).
  * Spec: specs/components/sidecar-image.md §"Sidecar entrypoint",
  *       specs/components/sextantd.md §"MCP server".
  *
- * Combined M9+M10 scope:
+ * M11 scope:
  *
- *   - Read the env-var contract sextantd sets at spawn time.
- *   - Connect to NATS (operator password path today; JWT lands at M11).
- *   - Publish `lifecycle.started`, heartbeat every 5s, drain cleanly on
- *     SIGTERM/SIGINT.
- *   - **M10**: connect to sextantd's MCP server over Streamable HTTP at
- *     `SEXTANT_MCP_URL`, presenting `Authorization: Bearer ${SEXTANT_JWT}`
- *     on every request. Call `tools/list` once on startup to confirm the
- *     server is reachable and log the tool catalog the agent can call.
+ *   - Read the env-var contract sextantd sets at spawn time:
+ *     SEXTANT_AGENT_UUID, SEXTANT_AGENT_NAME, SEXTANT_HOST_ID,
+ *     SEXTANT_INCARNATION_ID, SEXTANT_NATS_URL,
+ *     SEXTANT_NATS_USER + SEXTANT_NATS_PASSWORD (M11 stop-gap; see
+ *     specs/components/nats.md §"Agent path"), SEXTANT_JWT (used for
+ *     MCP only), SEXTANT_MCP_URL.
+ *   - Connect to NATS using the operator user/password sextantd
+ *     forwards (Option B per the M11 NATS-auth decision).
+ *   - Publish `lifecycle.started` with incarnation_id from env so the
+ *     KV record sextantd wrote and the bus envelope reference the same
+ *     incarnation.
+ *   - Heartbeat every 5s.
+ *   - Subscribe to `agents.<uuid>.inbox` and log every prompt
+ *     received. The Claude SDK driver loop that *acts* on prompts
+ *     lands post-Phase-1.
+ *   - Connect to the sextantd MCP server over Streamable HTTP with
+ *     `Authorization: Bearer ${SEXTANT_JWT}`. Best-effort.
+ *   - Drain cleanly on SIGTERM/SIGINT: stop the inbox subscription,
+ *     publish `lifecycle.ended`, close NATS + MCP.
  *
- * Out of M10 scope (lands in M11):
- *
- *   - Claude Code Agent SDK driver loop that *invokes* the MCP tools.
- *   - JWT-authenticated NATS connection.
- *
- * The entrypoint stays conservative about required env vars so the
- * smoke test (`docker run --rm sextant-sidecar:latest /bin/bash`)
- * doesn't need them at all — only the long-running mode
- * (`sextant-sidecar run`) does. The MCP connection is best-effort: a
- * missing `SEXTANT_JWT` or `SEXTANT_MCP_URL` logs a warning and skips
- * the connection rather than failing the sidecar.
+ * The M9 SEXTANT_OPERATOR_USER/PASSWORD stop-gap is dropped in M11.
+ * The MCP connection is best-effort: a missing `SEXTANT_JWT` or
+ * `SEXTANT_MCP_URL` logs a warning and skips the connection rather
+ * than failing the sidecar.
  */
-
-import { randomUUID } from "node:crypto";
 
 import { Client as MCPClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -53,15 +55,15 @@ interface SidecarEnv {
   agentUuid: string;
   agentName: string;
   hostId: string;
+  incarnationId: string;
   natsUrl: string;
-  /** M11+: per-incarnation JWT issued by sextantd. M9 logs and ignores. */
+  natsUser: string;
+  natsPassword: string;
+  /** Per-incarnation JWT issued by sextantd. Consumed by MCP only in M11. */
   jwt: string | undefined;
-  /** M9 fallback for the password path (M11 drops this). */
-  operatorUser: string | undefined;
-  operatorPassword: string | undefined;
-  /** Optional — Claude SDK `--resume` (M11). */
+  /** Optional — Claude SDK `--resume` (post-Phase-1). */
   sessionId: string | undefined;
-  /** Optional — MCP server URL (wired M11). */
+  /** Optional — MCP server URL. */
   mcpUrl: string | undefined;
 }
 
@@ -80,40 +82,35 @@ function readEnv(): SidecarEnv {
     agentUuid: required("SEXTANT_AGENT_UUID"),
     agentName: required("SEXTANT_AGENT_NAME"),
     hostId: required("SEXTANT_HOST_ID"),
+    incarnationId: required("SEXTANT_INCARNATION_ID"),
     natsUrl: required("SEXTANT_NATS_URL"),
+    natsUser: required("SEXTANT_NATS_USER"),
+    natsPassword: required("SEXTANT_NATS_PASSWORD"),
     jwt: process.env["SEXTANT_JWT"] || undefined,
-    operatorUser: process.env["SEXTANT_OPERATOR_USER"] || undefined,
-    operatorPassword: process.env["SEXTANT_OPERATOR_PASSWORD"] || undefined,
     sessionId: process.env["SEXTANT_SESSION_ID"] || undefined,
     mcpUrl: process.env["SEXTANT_MCP_URL"] || undefined,
   };
 }
 
 /**
- * Resolve NATS auth from env. M11 lands the JWT path; until then the
- * sidecar accepts an operator-style password pair as a stop-gap so the
- * full image+entrypoint surface is exercisable end-to-end before agent
- * identity exists.
+ * Build the NATS client config from env. M11 hand-off is per
+ * specs/components/nats.md §"Agent path (M11 — stop-gap)": sidecars
+ * use the operator user/password sextantd forwards. The JWT (env.jwt)
+ * gates MCP only — NATS-side JWT auth is deferred.
  */
 function buildConfig(env: SidecarEnv): ClientConfig {
-  if (env.operatorPassword) {
-    return {
-      nats: { url: env.natsUrl },
-      operator: {
-        user: env.operatorUser ?? "operator",
-        password: env.operatorPassword,
-      },
-      client: {
-        connectTimeoutMs: 10_000,
-        requestTimeoutMs: 30_000,
-        logLevel: "info",
-      },
-    };
-  }
-  throw new Error(
-    "sidecar: no NATS credentials provided. M9/M10 expect SEXTANT_OPERATOR_USER + SEXTANT_OPERATOR_PASSWORD; " +
-      "M11 will accept SEXTANT_JWT for the NATS conn too. The MCP path uses SEXTANT_JWT directly today.",
-  );
+  return {
+    nats: { url: env.natsUrl },
+    operator: {
+      user: env.natsUser,
+      password: env.natsPassword,
+    },
+    client: {
+      connectTimeoutMs: 10_000,
+      requestTimeoutMs: 30_000,
+      logLevel: "info",
+    },
+  };
 }
 
 /** Log shim — single namespace prefix so journal/output is easy to grep. */
@@ -264,6 +261,51 @@ async function connectMCP(env: SidecarEnv): Promise<MCPClient | null> {
 const HEARTBEAT_INTERVAL_MS = 5_000;
 
 /**
+ * Subscribe to the agent's inbox and log every prompt received. Runs
+ * in the background for the lifetime of the sidecar; iterator
+ * termination is driven by client.close() (the async iterator finishes
+ * when the underlying NATS subscription is closed).
+ *
+ * Failure to read off the iterator is logged but does not abort the
+ * sidecar — the heartbeat path is the contract that keeps sextantd
+ * happy.
+ */
+function startInboxLoop(client: Client, subject: string): void {
+  void (async (): Promise<void> => {
+    try {
+      for await (const msg of client.subscribe(subject)) {
+        if (msg.err) {
+          log("warn", "inbox: bad envelope", {
+            subject: msg.subject,
+            err: msg.err.message,
+          });
+          await msg.ack();
+          continue;
+        }
+        // The envelope is a sextant Envelope wrapping the prompt
+        // payload. Log the payload kind + size; the full body would
+        // bloat the log line.
+        const env = msg.envelope;
+        log("info", "inbox: prompt received", {
+          subject: msg.subject,
+          fromKind: env?.from.kind,
+          fromId: env?.from.id,
+          streamSeq: String(msg.streamSeq),
+          payloadSize: env ? JSON.stringify(env.payload).length : 0,
+        });
+        await msg.ack();
+      }
+    } catch (err) {
+      // ClientClosedError on shutdown — expected.
+      const message = err instanceof Error ? err.message : String(err);
+      if (!message.toLowerCase().includes("closed")) {
+        log("error", "inbox loop failed", { err: message });
+      }
+    }
+  })();
+}
+
+/**
  * Bound on how long shutdown will wait for an in-flight heartbeat tick
  * to settle before closing the NATS client. Heartbeat publishes go
  * through `nc.flush()` (see clients/typescript/src/publish.ts), so the
@@ -299,19 +341,14 @@ async function awaitOrTimeout(promise: Promise<unknown>, ms: number): Promise<bo
 
 /**
  * Long-running mode. Connects, publishes `lifecycle.started`, loops on a
- * 5-second heartbeat, and tears down cleanly on SIGTERM/SIGINT.
+ * 5-second heartbeat, subscribes to the inbox subject for prompts, and
+ * tears down cleanly on SIGTERM/SIGINT.
  */
 async function run(): Promise<void> {
   const env = readEnv();
-  if (env.jwt && !env.operatorPassword) {
-    log(
-      "warn",
-      "SEXTANT_JWT set but NATS JWT auth lands in M11; need SEXTANT_OPERATOR_USER + SEXTANT_OPERATOR_PASSWORD for the NATS conn",
-    );
-  }
 
   const config = buildConfig(env);
-  const incarnationId = randomUUID();
+  const incarnationId = env.incarnationId;
   const startedAt = Date.now();
 
   log("info", "sidecar starting", {
@@ -326,12 +363,19 @@ async function run(): Promise<void> {
   const client = await connectWithConfig(config);
   log("info", "nats connected");
 
-  // M10: open the MCP client connection. Failure here logs but does
+  // M11: open the MCP client connection. Failure here logs but does
   // not abort the sidecar — heartbeats/lifecycle remain the contract.
   const mcpClient = await connectMCP(env);
 
   await publishLifecycle(client, env, incarnationId, "started");
   log("info", "lifecycle.started published");
+
+  // Subscribe to the inbox so a prompt_agent call lands somewhere
+  // observable. The Claude SDK driver loop that *acts* on prompts is
+  // post-Phase-1; M11 logs them and ack's so the JetStream consumer
+  // doesn't redeliver.
+  const inboxSubject = `agents.${env.agentUuid}.inbox`;
+  startInboxLoop(client, inboxSubject);
 
   // Heartbeat loop. setInterval keeps the event loop alive on its own.
   //
@@ -439,15 +483,19 @@ async function main(): Promise<void> {
           "  version  Print the sidecar version.",
           "",
           "Required env vars (run mode):",
-          "  SEXTANT_AGENT_UUID, SEXTANT_AGENT_NAME, SEXTANT_HOST_ID, SEXTANT_NATS_URL",
-          "  Plus SEXTANT_OPERATOR_USER + SEXTANT_OPERATOR_PASSWORD (M9; M11 swaps in SEXTANT_JWT).",
+          "  SEXTANT_AGENT_UUID, SEXTANT_AGENT_NAME, SEXTANT_HOST_ID,",
+          "  SEXTANT_INCARNATION_ID, SEXTANT_NATS_URL,",
+          "  SEXTANT_NATS_USER + SEXTANT_NATS_PASSWORD (M11 stop-gap; agents",
+          "  share the operator NATS creds per specs/components/nats.md).",
+          "  SEXTANT_JWT is required for the MCP path; SEXTANT_MCP_URL points",
+          "  at the sextantd MCP HTTP endpoint.",
           "",
         ].join("\n"),
       );
       return;
     case "--version":
     case "version":
-      process.stdout.write("sextant-sidecar 0.1.0 (M9 scaffold)\n");
+      process.stdout.write("sextant-sidecar 0.1.0 (M11)\n");
       return;
     default:
       process.stderr.write(`sextant-sidecar: unknown command ${JSON.stringify(cmd)}\n`);
