@@ -695,7 +695,7 @@ func (s *Server) handleQueryAudit(ctx context.Context, _ Caller, in QueryAuditAr
 }
 
 func (s *Server) handleNotImplemented(_ context.Context, _ Caller, _ any) (any, error) {
-	return nil, fmtErrf("not_implemented", "tool ships in M11 when spawn flow lands")
+	return nil, fmtErrf(sextantproto.ErrCodeNotImplemented, "tool ships in M11 when spawn flow lands")
 }
 
 // runRPCAsTool runs an rpc.Handler synchronously and unmarshals its

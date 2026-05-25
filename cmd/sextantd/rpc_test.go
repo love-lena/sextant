@@ -136,7 +136,7 @@ func TestDaemonReadFileReturnsNotImplemented(t *testing.T) {
 	if !errors.As(err, &rerr) {
 		t.Fatalf("err = %v, want *client.RPCError", err)
 	}
-	if rerr.Code != "not_implemented" {
-		t.Fatalf("Code = %q, want not_implemented", rerr.Code)
+	if rerr.Code != sextantproto.ErrCodeNotImplemented {
+		t.Fatalf("Code = %q, want %q", rerr.Code, sextantproto.ErrCodeNotImplemented)
 	}
 }

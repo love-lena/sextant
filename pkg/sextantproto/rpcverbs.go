@@ -75,7 +75,8 @@ type ReadFileRequest struct {
 }
 
 // ReadFileResponse is the read_file reply payload. M7 never returns
-// this — the handler always errors with "not_implemented" until M11.
+// this — the handler always errors with ErrCodeNotImplemented until
+// M11.
 type ReadFileResponse struct {
 	Content     []byte `json:"content"`
 	ContentType string `json:"content_type"`

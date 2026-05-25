@@ -132,7 +132,7 @@ func NewGetAgentStatus(kv AgentKV) rpc.Handler {
 // scope.
 func NewReadFile() rpc.Handler {
 	return func(_ context.Context, _ sextantproto.Envelope, emit func(sextantproto.RPCResponse)) error {
-		return emitErr(emit, "not_implemented",
+		return emitErr(emit, sextantproto.ErrCodeNotImplemented,
 			"read_file ships in M11+ when container management lands")
 	}
 }

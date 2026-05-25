@@ -216,8 +216,8 @@ func TestReadFileStubReturnsNotImplemented(t *testing.T) {
 	if cap.resp.Error == nil {
 		t.Fatal("Error must be set")
 	}
-	if cap.resp.Error.Code != "not_implemented" {
-		t.Fatalf("Code = %q, want not_implemented", cap.resp.Error.Code)
+	if cap.resp.Error.Code != sextantproto.ErrCodeNotImplemented {
+		t.Fatalf("Code = %q, want %q", cap.resp.Error.Code, sextantproto.ErrCodeNotImplemented)
 	}
 }
 
