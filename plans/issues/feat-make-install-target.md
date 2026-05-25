@@ -43,7 +43,17 @@ Document in the README install section. `PREFIX` is overridable for system-wide 
 2. `which sextant && which sextantd && which sextant-shipper && which sextant-tui-agents` all resolve
 3. `make uninstall` removes them; `which sextant` returns `not found`
 
+## Postscript — Gatekeeper avoidance
+
+The real reason `install -m 0755` is the right tool (vs. `cp`) is that `cp` on
+macOS stamps `com.apple.provenance` onto the destination, and Gatekeeper
+SIGKILLs cp'd Go binaries on invocation (exit 137, silent). `/usr/bin/install`
+writes a clean file with no provenance xattr, so the installed binary runs
+without Gatekeeper interference. Documented in
+[[docs-install-via-make-install-not-cp]].
+
 ## Related
 
 - [[feat-doctor-stale-binary-detection]] (related — stale-binary detection mitigates the "forgot to reinstall" footgun)
+- [[docs-install-via-make-install-not-cp]] (related — documents the Gatekeeper-avoidance rationale this target relies on)
 - README install section needs update
