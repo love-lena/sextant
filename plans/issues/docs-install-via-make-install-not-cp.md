@@ -1,8 +1,9 @@
 ---
 title: Document `make install` as the installation method; warn against plain `cp`
-status: open
+status: fixed
 priority: P3
 created_at: 2026-05-25T14:53-07:00
+fixed_in: ee54920
 labels: [docs, install, ergonomics, macos]
 discovered_in: post-overnight rebuild + reinstall surprise
 ---
