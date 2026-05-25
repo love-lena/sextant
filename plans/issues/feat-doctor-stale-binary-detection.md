@@ -1,10 +1,25 @@
 ---
 title: `sextant doctor` should detect installed-binary-older-than-HEAD
-status: open
+status: resolved
 priority: P3
 created_at: 2026-05-24T23:18-07:00
+resolved_at: 2026-05-25T00:00-07:00
 labels: [feature, doctor, build, ergonomics]
 discovered_in: post-wire-up validation (installed binary was stale from before commits)
+resolution: |
+  Bundled with [[bug-worktree-merge-leaves-operator-checkout-stale]] as
+  paired operator-checkout-drift detection.
+
+  Added `pkg/version.GitSHA` as a var the Makefile patches via
+  `-ldflags "-X .../pkg/version.GitSHA=$(GIT_SHA)"`. `sextant doctor`'s
+  new `binary-version` check compares the embedded SHA against
+  `git rev-parse HEAD` in `cfg.Worktree.RepoRoot` and warns when the
+  installed SHA is an older ancestor of HEAD ("N commits behind") or
+  diverges entirely ("not in ancestry"). The check is warn-only — an
+  operator may deliberately run a stale binary — and silently skips when
+  no SHA was embedded or no `repo_root` is configured. Covered by
+  `TestDoctorFlagsStaleBinary` and friends in
+  `cmd/sextant/doctor_test.go`.
 ---
 
 ## Summary
