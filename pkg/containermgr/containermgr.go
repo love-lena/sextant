@@ -16,6 +16,7 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 )
@@ -120,10 +121,23 @@ func (m *Manager) Close() error {
 	return m.cli.Close()
 }
 
-// MountSpec is a single host-path → container-path bind mount.
+// MountSpec is a single mount attached to a container. Two flavors:
+//
+//   - Bind mount: HostPath set → that host path is bind-mounted at
+//     ContainerPath. ReadOnly toggles ro/rw.
+//   - Named volume: VolumeName set (and HostPath empty) → the named
+//     Docker volume is mounted at ContainerPath. ReadOnly toggles ro/rw.
+//
+// VolumeName is mutually exclusive with HostPath; setting both is a
+// caller error and Run will treat HostPath as the source of truth
+// (named volumes were introduced after bind mounts).
 type MountSpec struct {
 	HostPath      string
 	ContainerPath string
+	// VolumeName, when non-empty and HostPath is empty, mounts a Docker
+	// named volume at ContainerPath. See claude_seed copy-on-spawn flow
+	// in pkg/rpc/handlers/spawn.go for the motivating use case.
+	VolumeName string
 	// ReadOnly = true mounts ro. Defaults to false (rw).
 	ReadOnly bool
 }
@@ -229,6 +243,17 @@ func (m *Manager) Run(ctx context.Context, spec ContainerSpec) (*Container, erro
 
 	hostMounts := make([]mount.Mount, 0, len(spec.Mounts))
 	for _, ms := range spec.Mounts {
+		if ms.HostPath == "" && ms.VolumeName != "" {
+			// Named-volume mount. Docker resolves the volume by name; the
+			// volume must exist (callers create it via EnsureVolume).
+			hostMounts = append(hostMounts, mount.Mount{
+				Type:     mount.TypeVolume,
+				Source:   ms.VolumeName,
+				Target:   ms.ContainerPath,
+				ReadOnly: ms.ReadOnly,
+			})
+			continue
+		}
 		hostMounts = append(hostMounts, mount.Mount{
 			Type:     mount.TypeBind,
 			Source:   ms.HostPath,
@@ -523,6 +548,176 @@ func (m *Manager) Logs(ctx context.Context, id string, tail int) (string, error)
 		return "", fmt.Errorf("containermgr: read logs %s: %w", id, err)
 	}
 	return string(raw), nil
+}
+
+// EnsureVolume creates a Docker named volume with the given name if it
+// doesn't already exist, returning true when the volume was newly
+// created (caller is expected to populate it) and false when it was
+// already present.
+//
+// The labels are stamped onto the volume so operators can find sextant-
+// owned volumes via `docker volume ls -f label=...`. Existing volumes
+// are not relabeled — they keep whatever labels they were created with.
+//
+// Used by the claude_seed copy-on-spawn flow in spawn.go: a missing
+// volume signals "first spawn, populate from host seed dir"; an
+// existing volume signals "resume the previously-populated copy."
+func (m *Manager) EnsureVolume(ctx context.Context, name string, labels map[string]string) (created bool, err error) {
+	if m == nil {
+		return false, fmt.Errorf("%w: nil manager", ErrDaemonUnavailable)
+	}
+	if strings.TrimSpace(name) == "" {
+		return false, fmt.Errorf("containermgr: EnsureVolume requires a name")
+	}
+	// Inspect first; if found we return false. VolumeInspect returns a
+	// "no such volume" error when the volume is missing.
+	if _, err := m.cli.VolumeInspect(ctx, name); err == nil {
+		return false, nil
+	} else if !isNotFound(err) && !isVolumeNotFound(err) {
+		return false, fmt.Errorf("%w: inspect volume %s: %w", ErrDaemonUnavailable, name, err)
+	}
+	_, err = m.cli.VolumeCreate(ctx, volume.CreateOptions{
+		Name:   name,
+		Driver: "local",
+		Labels: labels,
+	})
+	if err != nil {
+		return false, fmt.Errorf("%w: create volume %s: %w", ErrDaemonUnavailable, name, err)
+	}
+	return true, nil
+}
+
+// RemoveVolume deletes a Docker named volume. Idempotent: a "no such
+// volume" reply is treated as success. force=true asks Docker to delete
+// the volume even if it's referenced by stopped containers.
+func (m *Manager) RemoveVolume(ctx context.Context, name string, force bool) error {
+	if m == nil {
+		return fmt.Errorf("%w: nil manager", ErrDaemonUnavailable)
+	}
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("containermgr: RemoveVolume requires a name")
+	}
+	if err := m.cli.VolumeRemove(ctx, name, force); err != nil {
+		if isNotFound(err) || isVolumeNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("%w: remove volume %s: %w", ErrDaemonUnavailable, name, err)
+	}
+	return nil
+}
+
+// VolumeExists returns true if the named volume is present on the
+// daemon. Used by tests and by the copy-on-spawn idempotency check.
+func (m *Manager) VolumeExists(ctx context.Context, name string) (bool, error) {
+	if m == nil {
+		return false, fmt.Errorf("%w: nil manager", ErrDaemonUnavailable)
+	}
+	if _, err := m.cli.VolumeInspect(ctx, name); err == nil {
+		return true, nil
+	} else if isNotFound(err) || isVolumeNotFound(err) {
+		return false, nil
+	} else {
+		return false, fmt.Errorf("%w: inspect volume %s: %w", ErrDaemonUnavailable, name, err)
+	}
+}
+
+// PopulateVolumeFromHostDir copies the contents of hostSrc into the
+// named volume by running a one-shot container that mounts both and
+// invokes the supplied populate command. image is the image to use for
+// the one-shot (the sidecar image is a safe choice — it's already
+// pulled). The container is auto-removed on exit.
+//
+// The default command (when cmd is nil) is `sh -c "cp -a /src/. /dst/"`,
+// which copies every entry (including dotfiles) from /src into /dst.
+// Callers that need a different copy semantic supply cmd.
+//
+// Returns an error if the one-shot exits non-zero so a partial copy
+// surfaces as a spawn failure rather than a silently broken volume.
+func (m *Manager) PopulateVolumeFromHostDir(ctx context.Context, volumeName, hostSrc, image string, cmd []string) error {
+	if m == nil {
+		return fmt.Errorf("%w: nil manager", ErrDaemonUnavailable)
+	}
+	if strings.TrimSpace(volumeName) == "" {
+		return fmt.Errorf("containermgr: PopulateVolumeFromHostDir requires a volume name")
+	}
+	if strings.TrimSpace(hostSrc) == "" {
+		return fmt.Errorf("containermgr: PopulateVolumeFromHostDir requires a host source path")
+	}
+	if strings.TrimSpace(image) == "" {
+		return fmt.Errorf("containermgr: PopulateVolumeFromHostDir requires an image")
+	}
+	if len(cmd) == 0 {
+		// `cp -a /src/. /dst/` copies every entry from /src (including
+		// hidden files) into /dst without recreating the /src dir
+		// itself. The trailing `chown 1000:1000 /dst` re-owns the volume
+		// to the sidecar image's `agent` user (uid 1000) so the spawned
+		// agent container — which runs as uid 1000 — can write its
+		// session journal into /home/agent/.claude/projects. Without the
+		// chown the volume is root-owned (Docker named-volume default)
+		// and the agent's writes fail with EPERM, reproducing the exact
+		// symptom the bug-claude-seed-readonly-breaks-session-persistence
+		// fix aims to eliminate.
+		//
+		// `set -e` so any of the three steps failing exits non-zero and
+		// surfaces here.
+		cmd = []string{"sh", "-c", "set -e; cp -a /src/. /dst/ && chown -R 1000:1000 /dst"}
+	}
+	// User=0:0 (root) so the populate one-shot can write to a fresh
+	// named volume (default owner: root) AND set the final ownership to
+	// the sidecar's `agent` user. The image's runtime USER directive is
+	// ignored for this one-shot.
+	cfg := &container.Config{
+		Image:      image,
+		Cmd:        cmd,
+		Entrypoint: []string{}, // explicitly override the image's ENTRYPOINT (sidecar.sh) so plain cp -a runs
+		User:       "0:0",
+	}
+	hostCfg := &container.HostConfig{
+		AutoRemove: false, // we want to inspect exit code; explicit remove below
+		Mounts: []mount.Mount{
+			{Type: mount.TypeBind, Source: hostSrc, Target: "/src", ReadOnly: true},
+			{Type: mount.TypeVolume, Source: volumeName, Target: "/dst"},
+		},
+	}
+	created, err := m.cli.ContainerCreate(ctx, cfg, hostCfg, &network.NetworkingConfig{}, nil, "")
+	if err != nil {
+		return fmt.Errorf("%w: create populate container: %w", ErrDaemonUnavailable, err)
+	}
+	// Always remove the populate container, even on error paths.
+	defer func() {
+		_ = m.cli.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true}) //nolint:contextcheck // best-effort cleanup
+	}()
+	if err := m.cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+		return fmt.Errorf("%w: start populate container: %w", ErrDaemonUnavailable, err)
+	}
+	statusCh, errCh := m.cli.ContainerWait(ctx, created.ID, container.WaitConditionNotRunning)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			return fmt.Errorf("%w: wait populate container: %w", ErrDaemonUnavailable, err)
+		}
+	case status := <-statusCh:
+		if status.StatusCode != 0 {
+			// Capture logs so the operator sees the cp error inline.
+			logs, _ := m.Logs(ctx, created.ID, 50) //nolint:contextcheck // best-effort logs
+			return fmt.Errorf("containermgr: populate volume %s exited with code %d: %s",
+				volumeName, status.StatusCode, logs)
+		}
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return nil
+}
+
+// isVolumeNotFound matches the Docker SDK's "no such volume" error
+// shape. VolumeRemove uses a different sentinel from container ops, so
+// we string-match both common forms the server returns.
+func isVolumeNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "No such volume") || strings.Contains(s, "no such volume")
 }
 
 // isNotFound returns true for the Docker SDK's "no such container"

@@ -101,6 +101,11 @@ type SpawnDeps struct {
 	Incarnations handlers.AgentMutableKV
 	Templates    templates.KV
 	Containers   handlers.ContainerRunner
+	// Volumes manages per-agent Docker named volumes (currently used
+	// for the claude_seed copy-on-spawn flow). May be nil in tests; in
+	// production this is the same *containermgr.Manager that Containers
+	// points at.
+	Volumes      handlers.VolumeManager
 	CA           *authjwt.CA
 	History      handlers.HistoryWriter
 	WorkspaceDir string
@@ -927,6 +932,7 @@ func (s *Server) handleSpawnAgent(ctx context.Context, _ Caller, in SpawnAgentAr
 		Incarnations:  deps.Incarnations,
 		Templates:     deps.Templates,
 		Containers:    deps.Containers,
+		Volumes:       deps.Volumes,
 		CA:            deps.CA,
 		History:       deps.History,
 		WorkspaceRoot: deps.WorkspaceDir,
@@ -987,6 +993,7 @@ func (s *Server) handleArchiveAgent(ctx context.Context, _ Caller, in ArchiveAge
 		Definitions:  deps.Definitions,
 		Incarnations: deps.Incarnations,
 		Containers:   deps.Containers,
+		Volumes:      deps.Volumes,
 	}), env)
 }
 

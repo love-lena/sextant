@@ -15,6 +15,7 @@ import (
 	"github.com/love-lena/sextant-initial/pkg/containermgr"
 	"github.com/love-lena/sextant-initial/pkg/rpc"
 	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+	"github.com/love-lena/sextant-initial/pkg/templates"
 )
 
 // RestartDeps bundles the deps NewRestartAgent needs. It is a strict
@@ -26,6 +27,16 @@ type RestartDeps struct {
 	Definitions   AgentMutableKV
 	Incarnations  AgentMutableKV
 	Containers    ContainerRunner
+	// Volumes lets restart re-attach (and, on first spawn after a
+	// claude_seed change, populate) the per-agent claude_seed volume.
+	// May be nil in tests that don't exercise the seed flow.
+	Volumes      VolumeManager
+	// Templates is required when seed mode is "copy-on-spawn" so the
+	// restart path can re-resolve claude_seed / claude_seed_mode and
+	// re-attach the named volume. May be nil; restart will then fall
+	// back to the legacy "no seed mount" behavior, which is fine for
+	// agents that don't use claude_seed.
+	Templates     templates.KV
 	CA            *authjwt.CA
 	WorkspaceRoot string
 	HostID        string
@@ -183,12 +194,33 @@ func NewRestartAgent(deps RestartDeps) rpc.Handler {
 		if deps.TestRunLabel != "" {
 			labels[LabelTestRun] = deps.TestRunLabel
 		}
+		mounts := []containermgr.MountSpec{{HostPath: workspace, ContainerPath: WorkspaceMountPath}}
+		// Re-apply the claude_seed mount on restart. For copy-on-spawn
+		// mode this re-attaches the per-agent named volume — populated
+		// on the first spawn, idempotent here — so the SDK's session
+		// journal under /home/agent/.claude/projects survives the
+		// restart. Without this, --preserve-session would silently fail
+		// because the new container can't read the journal the SDK
+		// recorded in the previous incarnation's volume. See
+		// plans/issues/bug-claude-seed-readonly-breaks-session-persistence.md.
+		if deps.Templates != nil && def.Template != "" {
+			tpl, err := templates.LoadFromKV(ctx, deps.Templates, def.Template)
+			if err == nil && tpl.ClaudeSeed != "" {
+				seedPath, expErr := templates.ExpandClaudeSeed(tpl.ClaudeSeed)
+				if expErr == nil {
+					seedMount, _, sErr := buildClaudeSeedMount(ctx, SpawnDeps{Volumes: deps.Volumes}, tpl.ResolveClaudeSeedMode(), seedPath, def.UUID, def.Sandbox.Image)
+					if sErr == nil {
+						mounts = append(mounts, seedMount)
+					}
+				}
+			}
+		}
 		spec := containermgr.ContainerSpec{
 			Name:       containerName(def.Name, newIncID),
 			Image:      def.Sandbox.Image,
 			Cmd:        []string{"/opt/sextant/sidecar/entrypoint.sh"},
 			Env:        envVars,
-			Mounts:     []containermgr.MountSpec{{HostPath: workspace, ContainerPath: WorkspaceMountPath}},
+			Mounts:     mounts,
 			Labels:     labels,
 			AutoRemove: true,
 		}

@@ -107,6 +107,101 @@ claude_seed = "` + seedDir + `"
 	}
 }
 
+// TestResolveClaudeSeedModeDefaults pins the
+// bug-claude-seed-readonly-breaks-session-persistence fix: a template
+// that sets claude_seed without claude_seed_mode must resolve to
+// "copy-on-spawn" so the SDK can write its session journal. The
+// previous behavior (readonly bind) is preserved as an explicit opt-in.
+func TestResolveClaudeSeedModeDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tpl  Template
+		want string
+	}{
+		{
+			name: "empty seed → empty mode",
+			tpl:  Template{},
+			want: "",
+		},
+		{
+			name: "seed set, mode unset → copy-on-spawn",
+			tpl:  Template{ClaudeSeed: "/some/path"},
+			want: ClaudeSeedModeCopyOnSpawn,
+		},
+		{
+			name: "seed set, mode copy-on-spawn → copy-on-spawn",
+			tpl:  Template{ClaudeSeed: "/some/path", ClaudeSeedMode: ClaudeSeedModeCopyOnSpawn},
+			want: ClaudeSeedModeCopyOnSpawn,
+		},
+		{
+			name: "seed set, mode readonly-bind → readonly-bind",
+			tpl:  Template{ClaudeSeed: "/some/path", ClaudeSeedMode: ClaudeSeedModeReadonly},
+			want: ClaudeSeedModeReadonly,
+		},
+		{
+			name: "empty seed but mode set → empty (mode is meaningless)",
+			tpl:  Template{ClaudeSeedMode: ClaudeSeedModeReadonly},
+			want: "",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.tpl.ResolveClaudeSeedMode(); got != tc.want {
+				t.Errorf("ResolveClaudeSeedMode() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTemplateValidationRejectsUnknownClaudeSeedMode confirms invalid
+// claude_seed_mode values fail validation at load time so an operator
+// typo surfaces loudly instead of falling through to the default.
+func TestTemplateValidationRejectsUnknownClaudeSeedMode(t *testing.T) {
+	seedDir := t.TempDir()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad-mode.toml")
+	body := `name = "bad-mode"
+image = "sextant-sidecar:latest"
+permissions = ["read.agents"]
+claude_seed = "` + seedDir + `"
+claude_seed_mode = "garbage-not-a-mode"
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := LoadFromFile(path)
+	if err == nil {
+		t.Fatal("expected validation error for unknown claude_seed_mode")
+	}
+	if !strings.Contains(err.Error(), "claude_seed_mode") {
+		t.Errorf("err = %v, want substring \"claude_seed_mode\"", err)
+	}
+}
+
+// TestTemplateValidationAcceptsReadonlyBindMode confirms the legacy
+// "readonly-bind" mode is still accepted (it's the opt-in for agents
+// that genuinely don't need the SDK to persist state).
+func TestTemplateValidationAcceptsReadonlyBindMode(t *testing.T) {
+	seedDir := t.TempDir()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ro.toml")
+	body := `name = "ro"
+image = "sextant-sidecar:latest"
+permissions = ["read.agents"]
+claude_seed = "` + seedDir + `"
+claude_seed_mode = "readonly-bind"
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	tpl, err := LoadFromFile(path)
+	if err != nil {
+		t.Fatalf("LoadFromFile: %v", err)
+	}
+	if got := tpl.ResolveClaudeSeedMode(); got != ClaudeSeedModeReadonly {
+		t.Errorf("ResolveClaudeSeedMode() = %q, want %q", got, ClaudeSeedModeReadonly)
+	}
+}
+
 func TestLoadFromFileMissingPermissionsFails(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad.toml")

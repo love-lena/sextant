@@ -403,6 +403,61 @@ func TestArchiveAllDead(t *testing.T) {
 	}
 }
 
+// TestArchiveAgentRemovesClaudeSeedVolume pins the cleanup step from
+// the bug-claude-seed-readonly-breaks-session-persistence fix: when an
+// agent is archived (the operator's "permanently delete" signal), the
+// per-agent copy-on-spawn volume must be removed so it doesn't
+// accumulate on the host. Best-effort — the archive succeeds even if
+// the remove fails — but the call must be issued.
+func TestArchiveAgentRemovesClaudeSeedVolume(t *testing.T) {
+	deps, defs, incs, runner, _ := buildDeps(t)
+	vols := newFakeVolumeManager()
+	deps.Volumes = vols
+	spawnH := handlers.NewSpawnAgent(deps)
+	archiveH := handlers.NewArchiveAgent(handlers.ArchiveDeps{
+		Definitions:  defs,
+		Incarnations: incs,
+		Containers:   runner,
+		Volumes:      vols,
+	})
+
+	spawnCap := &captureEmit{}
+	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+		Name: "alpha", Template: "default",
+	}), spawnCap.emit()); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	var spawnResp sextantproto.SpawnAgentResponse
+	if err := json.Unmarshal(spawnCap.resp.Result, &spawnResp); err != nil {
+		t.Fatalf("decode spawn: %v", err)
+	}
+
+	archCap := &captureEmit{}
+	if err := archiveH(context.Background(), makeReq(t, sextantproto.ArchiveAgentRequest{
+		AgentID: spawnResp.AgentID,
+	}), archCap.emit()); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	if archCap.resp.Error != nil {
+		t.Fatalf("archive error: %+v", archCap.resp.Error)
+	}
+
+	wantVol := handlers.ClaudeSeedVolumeName(spawnResp.AgentID)
+	vols.mu.Lock()
+	removed := append([]string(nil), vols.removed...)
+	vols.mu.Unlock()
+	var found bool
+	for _, name := range removed {
+		if name == wantVol {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("archive did not remove volume %q; removed = %v", wantVol, removed)
+	}
+}
+
 // TestArchiveAgentUnknownReturnsNotFound proves the 404 path.
 func TestArchiveAgentUnknownReturnsNotFound(t *testing.T) {
 	_, defs, incs, runner, _ := buildDeps(t)
