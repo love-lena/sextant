@@ -1,8 +1,9 @@
 ---
 title: lifecycle.turn_ended envelope not visible in `sextant conversation`
-status: open
+status: resolved
 priority: P3
 created_at: 2026-05-24T23:18-07:00
+resolved_at: 2026-05-25T10:05-07:00
 labels: [bug, sdk-wireup, conversation-render]
 discovered_in: post-wire-up smoke
 ---
@@ -43,3 +44,39 @@ Two-step diagnostic:
 
 - Wire-up commit `cadef51 spec+proto: enumerate SDK driver wire-up and add turn_ended lifecycle`
 - Sidecar driver commit `d95b570 sidecar: drive Claude Agent SDK on inbox prompts`
+
+## Resolution
+
+Diagnostic finding: the sidecar SDK driver **was** correctly publishing
+`lifecycle.turn_ended` envelopes on `agents.<uuid>.lifecycle` after
+every turn (see `images/sidecar/entrypoint/src/index.ts::newSDKDriver`
+around the `await publishLifecycle(..., "turn_ended", turnReason)`
+call). The bug was entirely on the consumer side:
+`cmd/sextant/conversation.go` only subscribed to
+`agents.<uuid>.lifecycle` when `--tail` was passed, and even then it
+exited on `LifecycleEnded` without rendering any other transition.
+`turn_ended` was therefore silently dropped on the floor in every
+operator session.
+
+Fix:
+
+- `cmd/sextant/conversation.go`: always subscribe to
+  `agents.<uuid>.lifecycle`; render every lifecycle envelope (text mode
+  prints `[ts] [lifecycle] transition=<x> [reason="…"]`, JSON mode
+  emits the raw envelope as NDJSON). `--tail` still controls whether
+  the stream exits on `LifecycleEnded`.
+- `images/sidecar/entrypoint/src/lifecycle.ts`: extracted the
+  `publishLifecycle` helper out of `index.ts` so its envelope contract
+  is testable without dragging in the SDK + MCP imports and the
+  module's top-level `main()` call.
+
+Tests:
+
+- `cmd/sextant/conversation_test.go::TestStreamConversationRendersLifecycleTurnEnded`
+  feeds a `LifecycleTurnEnded` envelope through the renderer and
+  asserts the `transition=turn_ended` line lands on the writer.
+- `cmd/sextant/conversation_test.go::TestStreamConversationLifecycleJSONEmitsEnvelope`
+  proves the `--json` path emits lifecycle envelopes as NDJSON.
+- `images/sidecar/entrypoint/test/lifecycle.test.ts` exercises the
+  publisher directly against a stub `Client` and pins the
+  subject + envelope shape for all three transitions.

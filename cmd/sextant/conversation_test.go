@@ -112,8 +112,134 @@ func TestStreamConversationTailExitsOnLifecycleEnded(t *testing.T) {
 	if err := streamConversation(ctx, &buf, frames, lifecycle, agentID, false, true); err != nil {
 		t.Fatalf("streamConversation: %v", err)
 	}
-	if !strings.Contains(buf.String(), "lifecycle: ended") {
+	if !strings.Contains(buf.String(), "[lifecycle]") {
 		t.Errorf("output missing lifecycle marker: %q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "transition=ended") {
+		t.Errorf("output missing transition=ended: %q", buf.String())
+	}
+}
+
+// TestStreamConversationRendersLifecycleTurnEnded proves that lifecycle
+// transitions other than `ended` — notably `turn_ended` published by
+// the sidecar SDK driver after each prompt completes — are surfaced in
+// the rendered conversation. Before the fix the renderer dropped any
+// transition that wasn't `ended`, so external tooling couldn't tell
+// when a turn finished. Regresses
+// plans/issues/bug-lifecycle-turn-ended-missing.md.
+//
+// Driving with tailUntilEnd=true + a trailing `ended` envelope keeps
+// the exit deterministic. Without it the select between an open
+// `frames` channel and a one-shot lifecycle envelope is racy.
+func TestStreamConversationRendersLifecycleTurnEnded(t *testing.T) {
+	frames := make(chan client.Message)
+	lifecycle := make(chan client.Message, 2)
+	agentID := uuid.New()
+
+	turnEnded, err := json.Marshal(sextantproto.LifecyclePayload{
+		AgentUUID:  agentID,
+		Transition: sextantproto.LifecycleTurnEnded,
+		State:      sextantproto.IncarnationState("running"),
+	})
+	if err != nil {
+		t.Fatalf("marshal turn_ended: %v", err)
+	}
+	lifecycle <- client.Message{
+		Envelope: sextantproto.NewEnvelope(sextantproto.KindLifecycle,
+			sextantproto.Address{Kind: sextantproto.AddressAgent, ID: agentID.String()},
+			turnEnded),
+		Ack: func() error { return nil },
+	}
+	ended, err := json.Marshal(sextantproto.LifecyclePayload{
+		AgentUUID:  agentID,
+		Transition: sextantproto.LifecycleEnded,
+		State:      sextantproto.IncarnationExited,
+	})
+	if err != nil {
+		t.Fatalf("marshal ended: %v", err)
+	}
+	lifecycle <- client.Message{
+		Envelope: sextantproto.NewEnvelope(sextantproto.KindLifecycle,
+			sextantproto.Address{Kind: sextantproto.AddressAgent, ID: agentID.String()},
+			ended),
+		Ack: func() error { return nil },
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var buf bytes.Buffer
+	if err := streamConversation(ctx, &buf, frames, lifecycle, agentID, false, true); err != nil {
+		t.Fatalf("streamConversation: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "[lifecycle]") {
+		t.Errorf("output missing [lifecycle] label: %q", out)
+	}
+	if !strings.Contains(out, "transition=turn_ended") {
+		t.Errorf("output missing transition=turn_ended: %q", out)
+	}
+	if !strings.Contains(out, "transition=ended") {
+		t.Errorf("output missing transition=ended (the exit trigger): %q", out)
+	}
+}
+
+// TestStreamConversationLifecycleJSONEmitsEnvelope proves the JSON
+// renderer emits lifecycle envelopes as NDJSON (same line-per-envelope
+// shape as agent frames). Operator tooling that pipes
+// `sextant conversation --json` into jq needs the lifecycle envelopes
+// to be machine-readable too — not just the human-readable text mode.
+func TestStreamConversationLifecycleJSONEmitsEnvelope(t *testing.T) {
+	frames := make(chan client.Message)
+	lifecycle := make(chan client.Message, 2)
+	agentID := uuid.New()
+
+	turnEnded, err := json.Marshal(sextantproto.LifecyclePayload{
+		AgentUUID:  agentID,
+		Transition: sextantproto.LifecycleTurnEnded,
+		State:      sextantproto.IncarnationState("running"),
+	})
+	if err != nil {
+		t.Fatalf("marshal turn_ended: %v", err)
+	}
+	lifecycle <- client.Message{
+		Envelope: sextantproto.NewEnvelope(sextantproto.KindLifecycle,
+			sextantproto.Address{Kind: sextantproto.AddressAgent, ID: agentID.String()},
+			turnEnded),
+		Ack: func() error { return nil },
+	}
+	ended, err := json.Marshal(sextantproto.LifecyclePayload{
+		AgentUUID:  agentID,
+		Transition: sextantproto.LifecycleEnded,
+		State:      sextantproto.IncarnationExited,
+	})
+	if err != nil {
+		t.Fatalf("marshal ended: %v", err)
+	}
+	lifecycle <- client.Message{
+		Envelope: sextantproto.NewEnvelope(sextantproto.KindLifecycle,
+			sextantproto.Address{Kind: sextantproto.AddressAgent, ID: agentID.String()},
+			ended),
+		Ack: func() error { return nil },
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var buf bytes.Buffer
+	if err := streamConversation(ctx, &buf, frames, lifecycle, agentID, true, true); err != nil {
+		t.Fatalf("streamConversation: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("JSON line count = %d, want 2: %q", len(lines), buf.String())
+	}
+	for i, line := range lines {
+		var env sextantproto.Envelope
+		if err := json.Unmarshal([]byte(line), &env); err != nil {
+			t.Fatalf("line %d not JSON: %v (%q)", i, err, line)
+		}
+		if env.Kind != sextantproto.KindLifecycle {
+			t.Errorf("line %d envelope kind = %q, want %q", i, env.Kind, sextantproto.KindLifecycle)
+		}
 	}
 }
 
