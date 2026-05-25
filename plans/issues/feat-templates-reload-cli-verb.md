@@ -1,11 +1,29 @@
 ---
 title: Add `sextant templates reload` CLI verb (avoid daemon restart for template edits)
-status: open
+status: resolved
 priority: P3
 created_at: 2026-05-24T23:18-07:00
+resolved_at: 2026-05-25T00:00-07:00
 labels: [feature, cli, templates]
 discovered_in: operator workflow (lead.toml creation)
 ---
+
+## Resolution
+
+Landed in feat-lead-bc1e159e-001:
+
+- New control subject `sextant.control.templates_reload` (constant + types in
+  `pkg/sextantd/templates_reload.go`). Subscriber lives in
+  `cmd/sextantd/control.go`, mounted at daemon Start step 14.
+- CLI: `sextant templates reload` (`cmd/sextant/templates.go`) — publishes
+  the control request, awaits reply, prints `synced N template(s)`.
+- MCP tool `templates_reload` (cap `control.templates`) forwards through
+  the same subject so a CLI-driven reload and an agent-driven reload share
+  one canonical daemon-side path.
+- Tests: `TestTemplatesReloadHandlerCount`, `TestTemplatesReloadCLI`,
+  `TestTemplatesReloadCLISurfacesError`, `TestTemplatesReloadCLIAcceptance`
+  (Docker-gated spawn against the runtime-installed template).
+- rpc-catalog.md updated with the new MCP tool cap mapping.
 
 ## Summary
 

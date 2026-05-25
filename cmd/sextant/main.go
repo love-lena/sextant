@@ -63,6 +63,8 @@ func run(ctx context.Context, args []string) error {
 		return runTraces(ctx, rest)
 	case "worktree":
 		return runWorktree(ctx, rest)
+	case "templates":
+		return runTemplates(ctx, rest)
 	case "-h", "--help", "help":
 		printUsage(os.Stdout)
 		return nil
@@ -89,6 +91,7 @@ Subcommands:
   audit         Query or tail the audit log.
   traces        Render a distributed trace by trace_id.
   worktree      Manage agent worktrees (list|create|destroy|merge|diff).
+  templates     Manage agent templates (reload).
   help          Print this message.
   version       Print the sextant version.
 
