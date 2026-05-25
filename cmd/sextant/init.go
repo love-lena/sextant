@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/love-lena/sextant-initial/pkg/authjwt"
 	"github.com/love-lena/sextant-initial/pkg/sextantd"
@@ -146,6 +147,19 @@ func doInit(_ context.Context, w io.Writer, opts initOptions) error {
 	}
 
 	println(w, "done.")
+
+	// macOS-only postamble: steer operators to `make install`. Plain
+	// `cp bin/* ~/.local/bin/` stamps com.apple.provenance onto the
+	// destination, and Gatekeeper SIGKILLs the cp'd binary on
+	// invocation (exit 137, no stderr — silent kill). `make install`
+	// uses /usr/bin/install which sidesteps the xattr.
+	// Issue: docs-install-via-make-install-not-cp
+	if runtime.GOOS == "darwin" {
+		println(w, "")
+		println(w, "note: sextant binaries should be installed via `make install` (not plain cp).")
+		println(w, "macOS Gatekeeper SIGKILLs cp'd Go binaries due to the com.apple.provenance")
+		println(w, "xattr. `make install` uses /usr/bin/install which avoids the issue.")
+	}
 	return nil
 }
 
