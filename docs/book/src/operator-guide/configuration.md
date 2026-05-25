@@ -15,7 +15,7 @@ Created by `sextant init`. Required fields (asserted by `Config.Resolve()` at `p
 - `mcp.stdio_socket`
 - `paths.templates_dir`, `paths.client_config`, `paths.runtime_file`
 
-Defaults filled in by `Config.Resolve()` if missing: NATS/ClickHouse `listen_host` (`127.0.0.1`), ClickHouse `database`/`user` (`sextant`/`sextant`), MCP `http_host` (`127.0.0.1`), shipper `auto_supervise` (`true`).
+Defaults filled in by `Config.Resolve()` if missing: NATS/ClickHouse `listen_host` (`127.0.0.1`), ClickHouse `database`/`user` (`sextant`/`sextant`), MCP `http_host` (`127.0.0.1`), shipper `auto_supervise` (`true`), worktree `prune_interval` (`6h`), worktree `auto_prune` (`false`).
 
 ## `~/.config/sextant/client.toml`
 

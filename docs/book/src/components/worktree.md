@@ -116,6 +116,35 @@ Bucket `locks`, key `merge`, value JSON:
 
 The release closure uses a 5-second background context so caller cancellation doesn't strand the lock. A crashed holder is recoverable: the next attempt sees the lock value, finds `acquired_at + ttl_seconds < now`, deletes it, and proceeds.
 
+## Pruner
+
+`pkg/worktree/pruner.go` enforces the 14-day-archive / 30-day-delete idle policy from `conventions/git-workflow.md`.
+
+Constants (`pkg/worktree/pruner.go:22-24`):
+
+- `DefaultArchiveAge = 14 * 24 * time.Hour`
+- `DefaultDeleteAge = 30 * 24 * time.Hour`
+
+Public surface:
+
+| Symbol                            | Purpose                                                |
+|-----------------------------------|--------------------------------------------------------|
+| `Pruner`                          | The pruner. Construct via `NewPruner(cfg PruneConfig)`. |
+| `PruneConfig`                     | Archive/delete ages, registry, audit publisher.        |
+| `PruneRunOptions`                 | Per-call knobs: `DryRun`, `AllowOrphanDelete`, `Now`.  |
+| `Pruner.Run(ctx, opts) (Report, error)` | Walk registry + on-disk, archive eligible, delete past delete-age. |
+
+`Pruner.Run` returns a `Report` listing the worktrees in three buckets (archived, deleted, skipped-orphan) so a CLI dry-run can print them without acting.
+
+**Safety gates** (added in commit `73462f3`):
+
+- `PruneRunOptions.DryRun=true` → produce the report without mutating anything.
+- `PruneRunOptions.AllowOrphanDelete=false` (default) → on-disk dirs with no registry entry are reported but **not** deleted, even if they're older than the threshold. Pass `true` only when you trust the orphan list.
+
+`.merge-*` transient dirs from `worktree_merge` are always skipped.
+
+Operator surface: the `sextant worktree prune` CLI verb and the daemon's optional periodic ticker (`[worktree] auto_prune` in `sextantd.toml`, default `false`). There is **no MCP tool** for the pruner — it's operator-only.
+
 ## Test coverage
 
-`pkg/worktree/worktree_test.go` covers Create, Destroy, List, Get, Diff, Merge (clean), Merge (conflict), and the TOCTOU re-Get under lock. `pkg/worktree/lock_test.go` covers acquire/release, expiry, and the stale-cleanup path.
+`pkg/worktree/worktree_test.go` covers Create, Destroy, List, Get, Diff, Merge (clean), Merge (conflict), and the TOCTOU re-Get under lock. `pkg/worktree/lock_test.go` covers acquire/release, expiry, and the stale-cleanup path. `pkg/worktree/pruner_test.go` covers the policy bucketing (5d/20d/40d → skip/archive/delete), KV-orphan handling, the unregistered-path safety gate, dry-run, and the `.merge-*` skip.

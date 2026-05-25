@@ -34,14 +34,16 @@ Per `plans/bootstrap.md#M15`, the acceptance criteria are a verified *state*, no
 - Worktree create → work → merge flow works end-to-end.
 - Operator can dispatch a real dev task to a sextant agent and it completes.
 
-At the snapshot's commit (`f2295d1`), every gate has been hit. Sextant agents have been merging fixes on `main` via their own worktrees since `2026-05-24`.
+At the snapshot's commit (`73462f3`), every gate has been hit. Sextant agents have been merging fixes on `main` via their own worktrees since `2026-05-24`.
 
 ## What's still being worked on inside Phase 1
 
-A handful of fixes and small features are tracked in `plans/issues/` and have either landed recently or are open:
+A handful of fixes and small features have landed in `plans/issues/` since the snapshot was first cut, and a few are still open. Recently landed at the snapshot's commit (`73462f3`):
 
-- Recently landed: `bug-claude-seed-readonly-breaks-session-persistence`, `bug-classifier-rm-rf-too-broad`, `bug-classifier-curl-multipipe-bypass`, `bug-clienttoml-stale-port-on-restart`, `bug-initial-prompt-not-forwarded-to-sdk`, `bug-name-resolution-inconsistent-across-agents-verbs`, `docs-install-via-make-install-not-cp`.
-- Still open: see `plans/issues/` for the live list — files marked with a "Status: open" preamble.
+- Bugs: `bug-claude-seed-readonly-breaks-session-persistence`, `bug-classifier-rm-rf-too-broad`, `bug-classifier-curl-multipipe-bypass`, `bug-clienttoml-stale-port-on-restart`, `bug-initial-prompt-not-forwarded-to-sdk`, `bug-name-resolution-inconsistent-across-agents-verbs`, `bug-kill-doesnt-release-name`, `bug-restart-preserve-session-noop`, `docs-install-via-make-install-not-cp`.
+- Features: `feat-sextant-ask-verb` (synchronous prompt CLI verb), `feat-container-ssh-passthrough` (opt-in ssh mount class), `feat-worktree-pruner` (14d archive / 30d delete policy), `feat-doctor-stale-binary-detection`.
+
+For the current open list, check `plans/issues/` directly — the directory rotates faster than this book.
 
 These are not full milestones; they're targeted fixes layered onto the M0–M14 base.
 
