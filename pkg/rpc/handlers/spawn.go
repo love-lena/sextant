@@ -325,6 +325,13 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 			"SEXTANT_MCP_URL":        deps.MCPURL,
 			"SEXTANT_MODEL":          model,
 		}
+		// SEXTANT_PERMISSION_MODE tells the sidecar which Claude Agent
+		// SDK permissionMode to use. Mapped from the template's
+		// permission_ceiling at spawn time so the sidecar never has to
+		// re-derive the mapping. "acceptEdits" is the default (maps from
+		// "auto" or unset). See plans/issues/bug-sidecar-doesnt-set-
+		// permission-mode.md.
+		envVars["SEXTANT_PERMISSION_MODE"] = permissionCeilingToSDKMode(tpl.PermissionCeiling)
 		// Forward the operator's Anthropic API key when sextantd has one
 		// in its own env. Falling back to "" means the SDK uses its
 		// default credential chain (e.g. the operator's `claude` CLI
@@ -627,6 +634,27 @@ func containerName(agentName string, incID uuid.UUID) string {
 		short = short[:8]
 	}
 	return "sextant-" + safe + "-" + short
+}
+
+// permissionCeilingToSDKMode maps a sextant-internal permission_ceiling value
+// (from the template TOML) to the Claude Agent SDK permissionMode string that
+// the sidecar passes to sdkQuery. The mapping is:
+//
+//	"auto" or ""  → "acceptEdits"  (auto-accept Edit/Write; bash auto-gated)
+//	"plan"        → "plan"
+//
+// "bypassPermissions" is never produced — it is prohibited by the
+// [[sextant-permission-ceiling]] policy. Any unrecognized value falls
+// back to "acceptEdits" so a stale or hand-edited template can't
+// accidentally escalate privileges.
+func permissionCeilingToSDKMode(ceiling string) string {
+	switch ceiling {
+	case "plan":
+		return "plan"
+	default:
+		// Covers "auto", "" (unset), and any unrecognized value.
+		return "acceptEdits"
+	}
 }
 
 // insertDefinitionHistory writes one row into the agent_definitions_history

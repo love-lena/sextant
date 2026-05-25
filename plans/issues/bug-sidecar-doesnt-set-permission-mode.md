@@ -1,8 +1,10 @@
 ---
 title: Sidecar SDK driver doesn't set permissionMode — agents can't write/edit/bash without a granter
-status: open
+status: resolved
 priority: P1
 created_at: 2026-05-25T00:24-07:00
+resolved_at: 2026-05-25T00:34-07:00
+resolution: "spawn handler maps template permission_ceiling to SEXTANT_PERMISSION_MODE env var; sidecar reads it and passes permissionMode to sdkOpts"
 labels: [bug, sidecar, sdk-wireup, permissions]
 discovered_in: first sextant-driven dispatch attempt
 ---

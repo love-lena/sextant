@@ -277,6 +277,72 @@ func waitForLifecycleStarted(t *testing.T, ch <-chan client.Message, agentID uui
 	}
 }
 
+// TestAgentCanEditWorkspaceFile proves that the SEXTANT_PERMISSION_MODE env
+// var is correctly injected by the spawn handler and reaches the container.
+// It spawns a mock-driver agent (permission_ceiling = "auto", which maps to
+// "acceptEdits") and then uses `docker inspect` to confirm the container
+// carries SEXTANT_PERMISSION_MODE=acceptEdits. The mock-driver template
+// already has permission_ceiling = "auto" (set in writeMinimalInstall) so
+// this test exercises the full spawn path without needing a real API call.
+// See plans/issues/bug-sidecar-doesnt-set-permission-mode.md.
+func TestAgentCanEditWorkspaceFile(t *testing.T) {
+	dockerBin := requireDocker(t)
+	requireSidecarImage(t, dockerBin)
+
+	h := startDaemonHarness(t)
+	cli := rpcClient(t, h)
+
+	lifeCtx, lifeCancel := context.WithCancel(context.Background())
+	defer lifeCancel()
+	lifeMsgs, err := cli.Subscribe(lifeCtx, "agents.*.lifecycle", client.WithDeliverAll())
+	if err != nil {
+		t.Fatalf("Subscribe lifecycle: %v\n--- daemon log ---\n%s", err, h.tail(t))
+	}
+
+	agentID := spawnMockAgent(t, h, cli, dockerBin, "perm-mode-")
+
+	if err := waitForLifecycleStarted(t, lifeMsgs, agentID, 30*time.Second); err != nil {
+		t.Fatalf("lifecycle.started: %v\n--- container logs ---\n%s",
+			err, containerLogs(dockerBin, handlers.LabelAgentUUID, agentID.String()))
+	}
+
+	// Retrieve the running container ID for this agent.
+	out, err := exec.Command(dockerBin, "ps", //nolint:gosec // test-controlled args
+		"--filter", "label="+handlers.LabelAgentUUID+"="+agentID.String(),
+		"--format", "{{.ID}}").Output()
+	if err != nil {
+		t.Fatalf("docker ps: %v", err)
+	}
+	ids := strings.Fields(strings.TrimSpace(string(out)))
+	if len(ids) == 0 {
+		t.Fatalf("no running container for agent %s\n--- daemon log ---\n%s", agentID, h.tail(t))
+	}
+	containerID := ids[0]
+
+	// Inspect the container's env to confirm SEXTANT_PERMISSION_MODE=acceptEdits.
+	// docker inspect returns a JSON array; the Env field is []string of "K=V" form.
+	inspectOut, err := exec.Command(dockerBin, "inspect", //nolint:gosec // test-controlled args
+		"--format", "{{range .Config.Env}}{{.}}\n{{end}}",
+		containerID).Output()
+	if err != nil {
+		t.Fatalf("docker inspect: %v", err)
+	}
+	envLines := strings.Split(strings.TrimSpace(string(inspectOut)), "\n")
+	const wantEnv = "SEXTANT_PERMISSION_MODE=acceptEdits"
+	var found bool
+	for _, line := range envLines {
+		if strings.TrimSpace(line) == wantEnv {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("container env missing %q; got env lines:\n%s", wantEnv, strings.Join(envLines, "\n"))
+	}
+
+	killAndConfirm(t, cli, h, dockerBin, agentID)
+}
+
 // TestNoOrphanContainersAfterTestSuite is a guardrail: after every
 // other test in this package runs, no container we spawned remains.
 // Scoping by `sextant.agent_uuid` alone matches *any* sextant agent

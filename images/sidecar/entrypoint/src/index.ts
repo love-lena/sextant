@@ -80,6 +80,8 @@ interface SidecarEnv {
   mcpUrl: string | undefined;
   /** Claude model identifier passed to the SDK. */
   model: string;
+  /** SDK permissionMode derived from template permission_ceiling at spawn time. */
+  permissionMode: string;
 }
 
 /** Spec: §"Env vars". `SEXTANT_*` namespace, set by sextantd at spawn. */
@@ -105,7 +107,34 @@ function readEnv(): SidecarEnv {
     sessionId: process.env["SEXTANT_SESSION_ID"] || undefined,
     mcpUrl: process.env["SEXTANT_MCP_URL"] || undefined,
     model: process.env["SEXTANT_MODEL"] || DEFAULT_MODEL,
+    permissionMode: resolvePermissionMode(process.env["SEXTANT_PERMISSION_MODE"]),
   };
+}
+
+/**
+ * Resolve the Claude Agent SDK permissionMode from the env var injected by
+ * sextantd at spawn time. Accepts "acceptEdits" and "plan". Rejects
+ * "bypassPermissions" (prohibited by [[sextant-permission-ceiling]] policy)
+ * and falls back to "acceptEdits" for any unrecognised value.
+ *
+ * "default" is accepted as-is for operator-interactive use (e.g. local
+ * dev without sextantd). sextantd never emits it for non-interactive
+ * container spawns; the sidecar must handle it in case the env var is
+ * manually set.
+ */
+function resolvePermissionMode(raw: string | undefined): string {
+  switch (raw) {
+    case "acceptEdits":
+    case "plan":
+    case "default":
+      return raw;
+    case "bypassPermissions":
+      log("warn", "SEXTANT_PERMISSION_MODE=bypassPermissions is prohibited; falling back to acceptEdits");
+      return "acceptEdits";
+    default:
+      // Covers undefined (env var not set) and any unknown future value.
+      return "acceptEdits";
+  }
 }
 
 /**
@@ -496,6 +525,12 @@ function newSDKDriver(
 
       const sdkOpts: Record<string, unknown> = {
         model: env.model,
+        // Set permissionMode so the SDK doesn't fall back to interactive
+        // "default" mode. In non-interactive containers there is no granter,
+        // so leaving this unset causes every Edit/Write/Bash call to error
+        // with "you haven't granted it yet". See plans/issues/bug-sidecar-
+        // doesnt-set-permission-mode.md.
+        permissionMode: env.permissionMode,
         // SDK + MCP defer-loading interplay: without alwaysLoad the
         // sextant tools land behind tool search, which costs a turn.
         // Always load them so simple "what tools do you have" prompts
