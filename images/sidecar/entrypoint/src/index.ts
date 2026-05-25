@@ -45,7 +45,6 @@ import {
   connectWithConfig,
   KIND_AGENT_FRAME,
   KIND_HEARTBEAT,
-  KIND_LIFECYCLE,
   KVCASConflictError,
   newEnvelope,
   type Client,
@@ -53,6 +52,7 @@ import {
 } from "@sextant/client";
 
 import { classifyTool } from "./classifier.js";
+import { publishLifecycle as publishLifecycleEnvelope } from "./lifecycle.js";
 
 /** Bucket where AgentDefinition records live. Mirrors handlers.AgentDefinitionsBucket. */
 const AGENT_DEFINITIONS_BUCKET = "agent_definitions";
@@ -171,6 +171,13 @@ function log(level: "info" | "warn" | "error", msg: string, extra?: Record<strin
   stream.write(`${JSON.stringify(line)}\n`);
 }
 
+/**
+ * Thin wrapper around the extracted lifecycle envelope publisher so
+ * the rest of this file keeps its existing signature (passing the full
+ * SidecarEnv instead of the minimal LifecycleEnv). The envelope contract
+ * — notably `transition=turn_ended` published at the end of every SDK
+ * turn — lives in `./lifecycle.ts` so it can be tested independently.
+ */
 async function publishLifecycle(
   client: Client,
   env: SidecarEnv,
@@ -178,30 +185,7 @@ async function publishLifecycle(
   transition: "started" | "ended" | "turn_ended",
   reason?: string,
 ): Promise<void> {
-  const stateForTransition = (t: string): string => {
-    switch (t) {
-      case "started":
-        return "running";
-      case "ended":
-        return "ended";
-      default:
-        // turn_ended doesn't move the IncarnationState; report current.
-        return "running";
-    }
-  };
-  const payload = {
-    incarnation_id: incarnationId,
-    agent_uuid: env.agentUuid,
-    transition,
-    state: stateForTransition(transition),
-    ...(reason ? { reason } : {}),
-  };
-  const envelope = newEnvelope(
-    KIND_LIFECYCLE,
-    { kind: ADDRESS_AGENT, id: env.agentUuid, host: env.hostId },
-    payload,
-  );
-  await client.publish(`agents.${env.agentUuid}.lifecycle`, envelope);
+  return publishLifecycleEnvelope(client, env, incarnationId, transition, reason);
 }
 
 async function publishHeartbeat(
