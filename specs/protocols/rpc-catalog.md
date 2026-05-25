@@ -442,9 +442,75 @@ type QueryTraceResponse struct {
 
 Returns every span in `telemetry_traces` with the supplied TraceId. The CLI's `traces show` projects these into a tree by ParentSpanID.
 
+## Verb payloads — M14 additions
+
+These extend the M12 set. Pinned for M14 (worktree management).
+
+```go
+type WorktreeCreateRequest struct {
+    Name       string `json:"name"`
+    BaseBranch string `json:"base_branch,omitempty"` // default "main"
+}
+type WorktreeInfo struct {
+    Name         string    `json:"name"`
+    Path         string    `json:"path"`
+    Branch       string    `json:"branch"`
+    BaseBranch   string    `json:"base_branch"`
+    OwningAgent  uuid.UUID `json:"owning_agent,omitempty"` // zero uuid = operator-created
+    Status       string    `json:"status"`                  // active|merging|merged|conflict|archived
+    CreatedAt    time.Time `json:"created_at"`
+    LastActivity time.Time `json:"last_activity"`
+}
+type WorktreeCreateResponse struct {
+    Worktree WorktreeInfo `json:"worktree"`
+}
+
+type WorktreeDestroyRequest struct {
+    Name  string `json:"name"`
+    Force bool   `json:"force,omitempty"` // operator override: destroy even if status != archived
+}
+type WorktreeDestroyResponse struct {
+    OK bool `json:"ok"`
+}
+
+type WorktreeListRequest struct{}
+type WorktreeListResponse struct {
+    Worktrees []WorktreeInfo `json:"worktrees"`
+}
+
+type WorktreeMergeRequest struct {
+    Name   string `json:"name"`
+    Target string `json:"target,omitempty"` // default "main"
+}
+type WorktreeMergeResponse struct {
+    OK        bool             `json:"ok"`
+    Branch    string           `json:"branch,omitempty"`
+    Target    string           `json:"target,omitempty"`
+    Conflicts []string         `json:"conflicts,omitempty"` // file paths in conflict
+}
+
+type WorktreeDiffRequest struct {
+    Name    string `json:"name"`
+    Against string `json:"against,omitempty"` // default "main"
+}
+type WorktreeDiffResponse struct {
+    Diff string `json:"diff"`
+}
+```
+
+`WorktreeInfo.Status` values:
+
+- `active` — branch is in progress; the source-of-truth state for a freshly-created worktree.
+- `merging` — set while the merge handler holds `locks.merge` for this worktree.
+- `merged` — set on a successful merge; the worktree dir may still exist (the operator chooses when to `worktree_destroy`).
+- `conflict` — set when the most recent merge attempt produced conflicts. The worktree files are unchanged from before the attempt.
+- `archived` — set when the operator/agent marks the worktree done; it's safe to destroy.
+
+Audit envelope action strings: `worktree_create`, `worktree_destroy`, `worktree_list`, `worktree_merge`, `worktree_diff` — mirrors the verb name.
+
 ## Open
 
-- Per-verb detailed schemas (request/response struct fields) — keep here until they grow large enough to warrant own files. The four M7 verbs are pinned in the section above; M12 adds the file/exec/audit/trace verbs in the section above this one.
+- Per-verb detailed schemas (request/response struct fields) — keep here until they grow large enough to warrant own files. The four M7 verbs are pinned in the section above; M12 adds the file/exec/audit/trace verbs in the section above this one; M14 adds the worktree verbs.
 - Capability grant/revoke at runtime — out of scope for initial; JWTs are immutable per incarnation
 - Wildcard subject filtering in `query_history` — deferred; M7 ships exact-match only
 - Streaming `read_file_stream` — deferred to a follow-up; M12 ships `files tail` as a poll loop over `read_file`.

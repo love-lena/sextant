@@ -475,6 +475,34 @@ Each agent gets its own git worktree as its workspace mount; agents work on inde
 
 **Merge serialization**: single merge into main at a time via NATS KV lock `locks.merge` (bucket `locks`, key `merge`, TTL 5 min). Conflicts surface as user-input requests (§4a).
 
+**Merge strategy (M14 — DECIDED)**:
+
+The merge must land on the target branch (typically `main`) without touching the operator's main working tree (the operator may have uncommitted state, may be on a different branch, etc.). M14 implements this with a **dedicated transient merge worktree**:
+
+1. Acquire `locks.merge` (bucket `locks`, key `merge`, TTL 5 min).
+2. Create a transient worktree at `<WorktreesRoot>/.merge-<target>-<short-rand>/` checked out on `<target>` (if a stale `.merge-*` worktree exists from a crashed prior merge, the daemon removes it first via `git worktree remove --force`).
+3. Run `git -C <merge_worktree> merge --no-ff <branch>` inside it.
+4. On conflict: abort the merge (`git merge --abort`), tear down the transient worktree, release the lock, return `MergeResult{Conflicts: [...], Branch, Target}`. The source branch is unchanged; the operator can resolve and retry.
+5. On clean merge: the target ref is now advanced. Tear down the transient worktree (`git worktree remove`). Update the source worktree's KV entry to `status=merged`. Release the lock.
+6. Push to remote is **out of scope for M14** — the merge is local only. A future milestone wires remote push (and re-pulls the source branch into the transient worktree before merging) once a remote is configured.
+
+This approach has three properties:
+
+- **No mutation of operator's main worktree.** The operator can be on any branch, with any working-tree state, throughout the merge.
+- **No long-lived merge worktree.** The transient one is created and torn down per merge; no state to garbage-collect.
+- **Crash-safe.** A crash mid-merge leaves the transient worktree on disk; the next merge under the lock removes it and starts fresh.
+
+Limitations accepted for M14:
+
+- **No remote push.** Local merges only.
+- **No concurrent merges to different targets.** The lock serializes all merges regardless of target; a future spec change may scope the lock by target if needed.
+- **No CI gate.** The merge proceeds unconditionally on a clean merge result; M14 acceptance only requires the bytes land. Test-gated merges are a separate concern (M16-era).
+
+**Worktree naming**:
+
+- **Operator/agent-created worktrees**: `<kind>-<short-description>-<seq>` per `conventions/git-workflow.md` (`kind` ∈ `feat | fix | refactor | docs | test | chore | spec`).
+- **Agent-spawn worktrees** (the worktree created automatically when a template's `mounts` includes `worktree`): `<template_name>-<short_uuid>-001`, where `<short_uuid>` is the first 8 chars of the agent's UUID. Stable per agent; not in the `<kind>-<desc>-<seq>` form because the spawn flow has no task context yet. The agent can later create its own task-shaped worktree via the MCP tool and switch its work to it.
+
 **MCP tools** (§9c control category):
 - `worktree_create(name, base_branch)` → path
 - `worktree_destroy(name)` (operator-cap)
