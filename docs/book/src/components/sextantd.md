@@ -80,6 +80,9 @@ config_dir    = "~/.config/sextant"
 [worktree]
 repo_root      = ""           # empty disables worktree wiring
 worktrees_root = "~/.local/share/sextant/worktrees"
+prune_interval = "6h"          # how often the auto-pruner fires when enabled
+archive_root   = "~/.local/share/sextant/worktree-archive"   # where archived worktrees land
+auto_prune     = false         # default off (safe-by-default)
 ```
 
 `DefaultConfig(configDir, dataDir)` (`pkg/sextantd/config.go:162`) returns the canonical defaults. `LoadConfig(path)` (`pkg/sextantd/config.go:231`) reads from disk, applies defaults for missing fields, expands `~/` in every path field, and validates required fields.

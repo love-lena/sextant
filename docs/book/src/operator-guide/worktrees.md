@@ -95,14 +95,57 @@ A `WorktreeMergeResponse{OK: false, Conflicts: [...]}` means the merge ran clean
 
 The architecture spec describes conflicts surfacing as `user_input.requests` (a "I tried to merge, please resolve" event), but the UX of that isn't wired up yet — today the CLI just returns the conflict report.
 
-## Disk hygiene
+## Pruning idle worktrees
 
-`conventions/git-workflow.md` describes archival semantics:
+`pkg/worktree/pruner.go` implements the policy from `conventions/git-workflow.md` §"Disk hygiene":
 
-- Idle > 14 days → archive.
-- Idle > 30 days → delete.
+- Idle > 14 days → archive (move to the archive root, mark KV `status=archived`).
+- Idle > 30 days → delete (`git worktree remove --force`, drop KV entry).
 
-These rules aren't enforced by `pkg/worktree` itself at this snapshot — the operator (or a future cleanup agent) runs `worktree destroy` manually.
+The pruner is **safe-by-default**: nothing runs automatically unless you opt in.
+
+### Run it manually
+
+```bash
+sextant worktree prune                    # dry-run: report what would change
+sextant worktree prune --apply            # actually archive + delete
+sextant worktree prune --apply --orphan-delete   # also remove on-disk worktrees with no KV entry
+```
+
+Dry-run is the default specifically because the alternative is silent disk erasure. `--orphan-delete` is a separate gate because a dir on disk with no registry entry could be operator-managed work the daemon doesn't know about (`pkg/worktree/pruner_test.go:271`).
+
+The CLI verb publishes a single `sextant.control.worktree_prune` request to the daemon, which runs `pkg/worktree.Pruner.Run(ctx, opts)` and audits each action.
+
+### Enable the periodic ticker
+
+```toml
+[worktree]
+auto_prune     = true        # default: false (off)
+prune_interval = "6h"        # default: "6h"
+archive_root   = "~/.local/share/sextant/worktree-archive"
+```
+
+When `auto_prune = true`, the daemon runs a goroutine that fires `Pruner.Run` every `prune_interval` with `AllowOrphanDelete=false` (mirroring the CLI default). First fire happens after one interval, not at boot. See `cmd/sextantd/worktree.go:185`.
+
+### What gets audited
+
+Each pruner action publishes an envelope under `audit.>`:
+
+- `audit.worktree_archived` — one per archived worktree.
+- `audit.worktree_pruned` — one per deleted worktree.
+- `audit.worktree_pruned_orphan` — one per on-disk orphan removed (`--orphan-delete` only).
+
+### What's *not* pruned
+
+- `.merge-*` transient worktrees from `worktree_merge` are skipped (`pkg/worktree/pruner_test.go:TestWorktreePrunerSkipsMergeTransientDirs`).
+- Worktrees not yet idle past the archive threshold.
+- Orphans without `--orphan-delete`.
+
+### Layout of an archived worktree
+
+Archived dirs live under `archive_root` (default `~/.local/share/sextant/worktree-archive/`) with the original worktree name. The on-disk content of the worktree itself is moved; the git ref for the branch stays in the shared `.git` database. The KV entry's `status` becomes `archived`.
+
+Restoring an archived worktree is currently a manual operation — `worktree destroy` on the archived entry, then `worktree create <name>` to start fresh if you want the same name back.
 
 ## "Never force-push"
 

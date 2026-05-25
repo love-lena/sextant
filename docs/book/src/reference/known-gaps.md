@@ -1,6 +1,6 @@
 # Known gaps and drift
 
-Places where the code and the specs disagree, where a feature is documented but not built, or where behaviour is surprising in a way worth knowing. Snapshot commit `f2295d1`.
+Places where the code and the specs disagree, where a feature is documented but not built, or where behaviour is surprising in a way worth knowing. Snapshot commit `73462f3`.
 
 ## Not implemented (spec mentions them; code doesn't)
 

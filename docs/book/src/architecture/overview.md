@@ -59,9 +59,10 @@ The container's filesystem is augmented at spawn time (`pkg/containermgr` + spaw
 | `/workspace`                                | The agent's git worktree on the host                      | rw   |
 | `/workspace/.git` (worktree gitdir)         | Host's worktree-administrative `.git/worktrees/<name>` dir | rw   |
 | `/home/agent/.gitconfig`                    | Host bind, read-only                                       | ro   |
+| `/home/agent/.ssh`                          | Operator's `~/.ssh` (only when template `mounts` includes `"ssh"`) | ro   |
 | `/home/agent/.claude`                       | Per-agent Docker named volume (when `claude_seed_mode = "copy-on-spawn"`) or host bind-ro (when `"readonly-bind"`); omitted when no `claude_seed` set | rw / ro |
 
-> **Scope note**: the architecture spec (§3) lists additional mount classes (`/home/agent/.{cargo,npm,cache,local/share}` as per-agent named volumes, `/run/sextant/secrets/` from a template's `secrets` mount class). These are **not implemented at this snapshot** — the spawn handler only wires the mounts listed above. The `mounts = [...]` template field is honoured for `worktree` (resolves to `/workspace`); other mount-class names are reserved.
+> **Scope note**: the architecture spec (§3) lists additional mount classes (`/home/agent/.{cargo,npm,cache,local/share}` as per-agent named volumes, `/run/sextant/secrets/` from a template's `secrets` mount class). These are **not implemented at this snapshot** — the spawn handler only wires the mounts listed above. The `mounts = [...]` template field is honoured for `worktree` (resolves to `/workspace`) and `ssh` (resolves to `/home/agent/.ssh`); the `secrets` class is allowlisted in `pkg/templates/template.go:KnownMountClasses()` but not yet wired by the spawn handler.
 
 Plus container env vars set by `buildContainerEnv` (`pkg/rpc/handlers/container_env.go`):
 

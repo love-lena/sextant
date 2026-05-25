@@ -38,7 +38,7 @@ env = {
   SEXTANT_CUSTOM_FLAG = "yes",
 }
 
-mounts = ["worktree"]         # named mount classes: "worktree" | "secrets"
+mounts = ["worktree"]         # named mount classes: "worktree" | "ssh" | "secrets"
 
 initial_prompt   = "You are a research assistant…"  # systemPrompt for every turn
 model            = "claude-opus-4-7[1m]"
@@ -66,14 +66,19 @@ The capability allowlist. The spawn handler signs the agent's JWT with exactly t
 Extra env vars to inject into the container. Don't put secrets here — use `mounts = ["secrets"]` instead.
 
 ### `mounts`
-Named mount classes the daemon resolves into bind mounts and volumes at spawn:
+Named mount classes the daemon resolves into bind mounts and volumes at spawn. The allowlist is enforced by `pkg/templates/template.go:KnownMountClasses()` — unknown class names fail template validation.
 
 | Class       | What it mounts                                                  | Mode |
 |-------------|-----------------------------------------------------------------|------|
 | `worktree`  | The agent's git worktree → `/workspace`                         | rw   |
+| `ssh`       | Operator's `~/.ssh` → `/home/agent/.ssh`                        | ro   |
 | `secrets`   | Per-template subset of `~/.config/sextant/secrets/` → `/run/sextant/secrets/` | ro |
 
 If `mounts` includes `worktree`, the spawn handler creates a worktree named `feat-<template>-<short_uuid>-001` and mounts it. If it doesn't, the agent has no `/workspace` — useful for read-only agents.
+
+**`ssh`** (added by `feat-container-ssh-passthrough`): opt-in passthrough of the operator's SSH config and keys, mounted read-only. The whole `~/.ssh` directory comes through; there is no per-template filtering. Default templates do **not** include `ssh` — only declare it on templates that need to push to a private remote or `ssh` to a host. The spawn handler resolves it at `pkg/rpc/handlers/spawn.go:413-423`.
+
+**`secrets`** is reserved — see [Known gaps and drift](../reference/known-gaps.md). The class is in `KnownMountClasses()` so template validation passes, but the spawn handler does not yet wire a mount for it.
 
 ### `initial_prompt`
 Persistent context. The spawn handler base64-encodes this and injects it as `SEXTANT_INITIAL_PROMPT`; the sidecar decodes it and passes it to the SDK as `systemPrompt` on every turn. **Not** a first user message — use a regular `prompt_agent` call for greetings. See `plans/issues/bug-initial-prompt-not-forwarded-to-sdk.md`.

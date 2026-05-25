@@ -8,6 +8,7 @@ Twelve top-level subcommands (`cmd/sextant/main.go:46-69`):
 sextant init          # first-run setup
 sextant doctor        # health diagnostics
 sextant agents …      # agent lifecycle (7 subverbs: list|show|spawn|kill|restart|archive|prompt)
+sextant ask           # synchronous prompt (publish + wait for turn_ended)
 sextant conversation  # stream agent frames
 sextant pending …     # user-input request queue (4 subverbs)
 sextant files …       # read/list/tail files in a container (3 subverbs)
@@ -57,6 +58,23 @@ Health probes: config files parse, CA keypair exists, sextantd reachable, NATS r
 | `agents prompt <agent> "<text>"`                     | Send a prompt to the agent's inbox.                            |
 
 `<agent>` accepts either the UUID or the name.
+
+## `ask`
+
+```bash
+sextant ask <agent> "<text>" [--timeout 60s] [--json]
+```
+
+Synchronous prompt. Subscribes to the agent's `frames` and `lifecycle` subjects, then publishes the prompt via the `prompt_agent` RPC, then waits at the terminal until the agent emits `lifecycle.turn_ended` (or `lifecycle.ended`). Prints assistant frames inline as they arrive. Exits non-zero on timeout (default 60s).
+
+The subscribe-before-publish ordering is load-bearing (`cmd/sextant/ask.go:79-86`) — it ensures the first frame isn't missed under JetStream's default `start-time=now` semantics.
+
+Where to reach for this:
+
+- Daily-drive operator workflow: ask a question, wait for the answer, see the result in your terminal.
+- Replaces the three-command dance of starting `conversation --tail` in another terminal, then `agents prompt`, then `kill` once the reply lands.
+
+There is **no MCP tool equivalent** of `ask` — agents that need to wait on another agent use `prompt_agent` plus their own subscription, or the `wait_for_agent_to_finish` tool described in the architecture spec (not yet implemented).
 
 ## `conversation`
 
@@ -125,8 +143,9 @@ Queries `telemetry_traces` for one trace, renders the spans as a tree (parent_sp
 | `worktree destroy <name> [--force] [--json]`                    | Remove dir + registry entry.                            |
 | `worktree merge <name> [--target main] [--json]`                | Merge under `locks.merge`.                              |
 | `worktree diff <name> [--against main] [--json]`                | `git diff` output.                                      |
+| `worktree prune [--apply] [--orphan-delete] [--json]`           | Enforce the 14d-archive / 30d-delete idle policy. Defaults to dry-run. |
 
-Branch names must match `<kind>-<short-desc>-<seq>` per `conventions/git-workflow.md`.
+Branch names must match `<kind>-<short-desc>-<seq>` per `conventions/git-workflow.md`. The pruner is documented in detail in [Worktrees](./worktrees.md) §"Pruning idle worktrees".
 
 ## `templates`
 
@@ -142,6 +161,8 @@ There is no `templates list` / `templates show` at this snapshot — read the fi
 sextant version    # prints "sextant initial (M12)"
 sextant help       # prints the top-level usage
 ```
+
+**Note**: as of the snapshot's main, the dispatch table has 13 verbs (the 12 above plus `ask`). The `version` string is still `"sextant initial (M12)"` — it's a hand-rolled label, not a generated build version.
 
 ## Not yet implemented
 
