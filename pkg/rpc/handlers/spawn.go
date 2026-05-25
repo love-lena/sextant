@@ -377,8 +377,12 @@ func agentNameInUse(ctx context.Context, kv AgentMutableKV, name string) (bool, 
 		}
 		var def sextantproto.AgentDefinition
 		if err := json.Unmarshal(entry.Value(), &def); err != nil {
-			// Garbage in the bucket — don't crash spawn over it; log and
-			// move on so an operator can clean up later.
+			// Garbage in the bucket — don't crash spawn over it, but
+			// log so the operator notices. Silently continuing means
+			// a corrupt blob with the requested name would be
+			// invisible: the duplicate-name check would pass, and the
+			// spawn would succeed against a poisoned bucket.
+			fmt.Fprintf(os.Stderr, "spawn_agent: agentNameInUse: decode %s: %v\n", key, err)
 			continue
 		}
 		if def.Name == name && def.Lifecycle != sextantproto.LifecycleArchived {

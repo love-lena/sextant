@@ -218,12 +218,20 @@ func containerLogs(dockerBin, key, value string) string {
 	return string(logs)
 }
 
-// waitForContainerGone polls `docker ps` until no container matches
-// the label or the timeout elapses. Returns nil on success.
+// waitForContainerGone polls `docker ps -a` until no container
+// (running OR exited) matches the label, or the timeout elapses.
+// Returns nil on success.
+//
+// We use `-a` here even though a `docker stop` immediately moves the
+// container out of `docker ps` (running): with AutoRemove=true the
+// daemon then asynchronously removes the container, and that's the
+// state we actually want to wait for. Otherwise the next assertion
+// (`containersWithLabel` with `-a`) races against AutoRemove and
+// flakes.
 func waitForContainerGone(dockerBin, key, value string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		out, _ := exec.Command(dockerBin, "ps", //nolint:gosec // test-controlled args
+		out, _ := exec.Command(dockerBin, "ps", "-a", //nolint:gosec // test-controlled args
 			"--filter", "label="+key+"="+value,
 			"--format", "{{.ID}}").Output()
 		if strings.TrimSpace(string(out)) == "" {
