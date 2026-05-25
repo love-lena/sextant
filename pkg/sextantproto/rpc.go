@@ -39,4 +39,9 @@ const (
 	ErrCodeInternal          = "internal"
 	ErrCodeStreamCanceled    = "stream_canceled"
 	ErrCodeIdempotencyReplay = "idempotency_replay"
+	// ErrCodeNotImplemented marks a verb/tool that is registered in the
+	// catalog (so unknown-verb / unknown-tool paths don't fire) but
+	// whose body lands in a later milestone. Stable string so clients
+	// can pattern-match without reading the message.
+	ErrCodeNotImplemented = "not_implemented"
 )

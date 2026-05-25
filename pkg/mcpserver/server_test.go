@@ -403,8 +403,8 @@ func TestNotImplementedToolReturnsError(t *testing.T) {
 		t.Fatalf("expected error result; got success")
 	}
 	body := parseToolError(t, res)
-	if body["code"] != "not_implemented" {
-		t.Errorf("error code = %v, want not_implemented", body["code"])
+	if body["code"] != sextantproto.ErrCodeNotImplemented {
+		t.Errorf("error code = %v, want %s", body["code"], sextantproto.ErrCodeNotImplemented)
 	}
 }
 
