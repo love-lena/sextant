@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/love-lena/sextant-initial/pkg/sextantproto/exec-in-container-request",
+  "$ref": "#/$defs/ExecInContainerRequest",
+  "$defs": {
+    "ExecInContainerRequest": {
+      "properties": {
+        "agent_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "cmd": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "workdir": {
+          "type": "string"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "agent_id",
+        "cmd"
+      ]
+    },
+    "UUID": {
+      "items": {
+        "type": "integer"
+      },
+      "type": "array",
+      "maxItems": 16,
+      "minItems": 16
+    }
+  }
+}

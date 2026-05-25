@@ -1,6 +1,7 @@
 package containermgr
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
 )
 
 // SocketEnvVar is the env-var override callers can set to force a
@@ -409,6 +411,92 @@ func (m *Manager) ForceRemoveByLabel(ctx context.Context, key, value string) err
 		return errors.Join(errs...)
 	}
 	return nil
+}
+
+// ExecResult is the structured return of Exec — stdout, stderr, exit
+// code. Stdout/Stderr are captured in-process; long-running execs are
+// not the intended use case (the operator-level `sextant exec` is a
+// one-shot tool).
+type ExecResult struct {
+	Stdout   []byte
+	Stderr   []byte
+	ExitCode int
+}
+
+// ExecSpec is the input to Exec. WorkingDir and Env are optional.
+type ExecSpec struct {
+	Cmd        []string
+	WorkingDir string
+	Env        map[string]string
+}
+
+// Exec runs a one-shot command inside the supplied container and
+// returns the captured stdout/stderr + exit code. Errors that the
+// caller cares about (container missing, daemon unreachable) are
+// wrapped with ErrDaemonUnavailable; a non-zero exit code is NOT an
+// error — it's returned via ExecResult.ExitCode so the caller can
+// surface it untouched (mirroring docker exec semantics).
+//
+// The implementation uses Docker's exec API: create the exec
+// instance, attach to get stdout/stderr, inspect to read the exit
+// code. The exec dies if ctx is canceled; the caller's deadline is
+// the only timeout.
+func (m *Manager) Exec(ctx context.Context, id string, spec ExecSpec) (ExecResult, error) {
+	if m == nil {
+		return ExecResult{}, fmt.Errorf("%w: nil manager", ErrDaemonUnavailable)
+	}
+	if strings.TrimSpace(id) == "" {
+		return ExecResult{}, fmt.Errorf("containermgr: Exec requires a container id")
+	}
+	if len(spec.Cmd) == 0 {
+		return ExecResult{}, fmt.Errorf("containermgr: Exec requires a non-empty Cmd")
+	}
+
+	env := make([]string, 0, len(spec.Env))
+	for k, v := range spec.Env {
+		env = append(env, k+"="+v)
+	}
+
+	createResp, err := m.cli.ContainerExecCreate(ctx, id, container.ExecOptions{
+		AttachStdout: true,
+		AttachStderr: true,
+		Cmd:          spec.Cmd,
+		Env:          env,
+		WorkingDir:   spec.WorkingDir,
+	})
+	if err != nil {
+		if isNotFound(err) {
+			return ExecResult{}, fmt.Errorf("containermgr: container %s not found", id)
+		}
+		return ExecResult{}, fmt.Errorf("%w: exec create %s: %w", ErrDaemonUnavailable, id, err)
+	}
+
+	hijack, err := m.cli.ContainerExecAttach(ctx, createResp.ID, container.ExecStartOptions{})
+	if err != nil {
+		return ExecResult{}, fmt.Errorf("%w: exec attach %s: %w", ErrDaemonUnavailable, id, err)
+	}
+	defer hijack.Close()
+
+	// Docker multiplexes stdout/stderr on the same hijacked stream with
+	// a leading 8-byte header per frame: {stream-id, 0, 0, 0, len[4]}.
+	// We use stdcopy to demux — that's what the Docker CLI does
+	// internally, so the formatting matches `docker exec` byte-for-byte.
+	var stdout, stderr bytes.Buffer
+	if _, err := stdcopy.StdCopy(&stdout, &stderr, hijack.Reader); err != nil {
+		// Best-effort: return what we have plus the error.
+		return ExecResult{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}, fmt.Errorf("containermgr: exec stream %s: %w", id, err)
+	}
+
+	inspect, err := m.cli.ContainerExecInspect(ctx, createResp.ID)
+	if err != nil {
+		return ExecResult{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()},
+			fmt.Errorf("%w: exec inspect %s: %w", ErrDaemonUnavailable, id, err)
+	}
+	return ExecResult{
+		Stdout:   stdout.Bytes(),
+		Stderr:   stderr.Bytes(),
+		ExitCode: inspect.ExitCode,
+	}, nil
 }
 
 // Logs returns the combined stdout+stderr of a container, tailing the

@@ -50,6 +50,19 @@ func TestSchemasOnDisk(t *testing.T) {
 		"kill_agent_response.json":   false,
 		"prompt_agent_request.json":  false,
 		"prompt_agent_response.json": false,
+		// M12 verb payloads.
+		"restart_agent_request.json":      false,
+		"restart_agent_response.json":     false,
+		"list_dir_request.json":           false,
+		"list_dir_response.json":          false,
+		"stat_request.json":               false,
+		"stat_response.json":              false,
+		"exec_in_container_request.json":  false,
+		"exec_in_container_response.json": false,
+		"query_audit_request.json":        false,
+		"query_audit_response.json":       false,
+		"query_trace_request.json":        false,
+		"query_trace_response.json":       false,
 	}
 	for _, e := range entries {
 		if e.IsDir() {

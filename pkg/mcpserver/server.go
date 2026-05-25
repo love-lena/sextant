@@ -819,19 +819,24 @@ func (s *Server) handleQueryAudit(ctx context.Context, _ Caller, in QueryAuditAr
 	if s.cfg.QueryDB == nil {
 		return nil, fmtErrf(sextantproto.ErrCodeInternal, "history backend unavailable")
 	}
-	req := sextantproto.QueryHistoryRequest{
-		Filter: sextantproto.QueryHistoryFilter{Kind: string(sextantproto.KindAudit)},
-		Limit:  in.Limit,
-	}
-	if in.Actor != "" {
-		req.Filter.FromID = in.Actor
+	// M12 routes the MCP tool through the dedicated query_audit handler
+	// so the column shape matches the ClickHouse audit table directly.
+	// Previously the tool reused query_history with kind=audit, which
+	// projected envelopes from the events table — same data, but a
+	// shape mismatch with the spec.
+	req := sextantproto.QueryAuditRequest{
+		Filter: sextantproto.QueryAuditFilter{
+			Actor:  in.Actor,
+			Action: in.Action,
+		},
+		Limit: in.Limit,
 	}
 	raw, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmtErrf(sextantproto.ErrCodeInternal, "marshal request: %v", err)
 	}
 	env := sextantproto.NewEnvelope(sextantproto.KindRPCRequest, s.cfg.From, raw)
-	return runRPCAsTool(ctx, handlers.NewQueryHistory(s.cfg.QueryDB), env)
+	return runRPCAsTool(ctx, handlers.NewQueryAudit(s.cfg.QueryDB), env)
 }
 
 func (s *Server) handleNotImplemented(_ context.Context, _ Caller, _ any) (any, error) {

@@ -150,3 +150,142 @@ type PromptAgentRequest struct {
 type PromptAgentResponse struct {
 	OK bool `json:"ok"`
 }
+
+// RestartAgentRequest is the restart_agent request payload. The handler
+// stops the live incarnation (if any) and spawns a fresh one against the
+// same AgentDefinition. PreserveSession is reserved — M12 records the
+// flag but does not yet wire session continuity (no driver loop ships
+// in phase 1).
+type RestartAgentRequest struct {
+	AgentID         uuid.UUID `json:"agent_id"`
+	PreserveSession bool      `json:"preserve_session,omitempty"`
+}
+
+// RestartAgentResponse is the restart_agent reply payload. AgentID
+// echoes the request so a CLI caller can confirm the same agent came
+// back — a fresh incarnation lives behind the same UUID.
+type RestartAgentResponse struct {
+	AgentID uuid.UUID `json:"agent_id"`
+	OK      bool      `json:"ok"`
+}
+
+// ListDirRequest is the list_dir request payload.
+type ListDirRequest struct {
+	AgentID uuid.UUID `json:"agent_id"`
+	Path    string    `json:"path"`
+}
+
+// ListDirEntry is one row of a list_dir response.
+//
+// Size and Mode are populated best-effort; on a non-stat'able entry
+// they are zero-valued.
+type ListDirEntry struct {
+	Name  string `json:"name"`
+	IsDir bool   `json:"is_dir"`
+	Size  int64  `json:"size,omitempty"`
+	Mode  string `json:"mode,omitempty"`
+}
+
+// ListDirResponse is the list_dir reply payload.
+type ListDirResponse struct {
+	Entries []ListDirEntry `json:"entries"`
+}
+
+// StatRequest is the stat request payload.
+type StatRequest struct {
+	AgentID uuid.UUID `json:"agent_id"`
+	Path    string    `json:"path"`
+}
+
+// StatResponse is the stat reply payload.
+type StatResponse struct {
+	Name  string `json:"name"`
+	Size  int64  `json:"size"`
+	Mode  string `json:"mode"`
+	IsDir bool   `json:"is_dir"`
+}
+
+// ExecInContainerRequest is the exec_in_container request payload.
+// Cmd's first element is the executable; subsequent elements are
+// passed as argv to the docker exec call.
+type ExecInContainerRequest struct {
+	AgentID uuid.UUID         `json:"agent_id"`
+	Cmd     []string          `json:"cmd"`
+	Workdir string            `json:"workdir,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+}
+
+// ExecInContainerResponse is the exec_in_container reply payload.
+// Stdout and Stderr are the captured streams (utf-8 best-effort);
+// ExitCode is the process exit status the container reported.
+type ExecInContainerResponse struct {
+	Stdout   string `json:"stdout"`
+	Stderr   string `json:"stderr"`
+	ExitCode int    `json:"exit_code"`
+}
+
+// QueryAuditRequest is the query_audit request payload.
+type QueryAuditRequest struct {
+	Filter    QueryAuditFilter `json:"filter"`
+	TimeRange TimeRange        `json:"time_range"`
+	Limit     int              `json:"limit,omitempty"`
+}
+
+// QueryAuditFilter narrows the ClickHouse audit query. Empty
+// strings / nil UUIDs are treated as "any".
+type QueryAuditFilter struct {
+	Actor     string    `json:"actor,omitempty"`
+	Action    string    `json:"action,omitempty"`
+	AgentUUID uuid.UUID `json:"agent_uuid,omitempty"`
+}
+
+// QueryAuditRow projects one row of the ClickHouse audit table.
+// Payload is the raw JSON blob — the audit envelope payload at the
+// time of insert. Callers that want the structured AuditPayload
+// shape can json.Unmarshal it themselves.
+type QueryAuditRow struct {
+	ID                 uuid.UUID `json:"id"`
+	Ts                 time.Time `json:"ts"`
+	Actor              string    `json:"actor"`
+	AgentUUID          uuid.UUID `json:"agent_uuid"`
+	Action             string    `json:"action"`
+	CapabilityRequired string    `json:"capability_required"`
+	Result             string    `json:"result"`
+	Payload            string    `json:"payload"`
+}
+
+// QueryAuditResponse is the query_audit reply payload. Rows is
+// always non-nil; empty slice when no rows match.
+type QueryAuditResponse struct {
+	Rows []QueryAuditRow `json:"rows"`
+}
+
+// QueryTraceRequest is the query_trace request payload.
+type QueryTraceRequest struct {
+	TraceID string `json:"trace_id"`
+}
+
+// TraceSpan projects one row of the ClickHouse telemetry_traces
+// table. Attributes is the SpanAttributes column; resource
+// attributes are intentionally dropped for the M12 CLI surface — the
+// trace-tree projection only needs span-local context.
+type TraceSpan struct {
+	TraceID       string            `json:"trace_id"`
+	SpanID        string            `json:"span_id"`
+	ParentSpanID  string            `json:"parent_span_id,omitempty"`
+	SpanName      string            `json:"span_name"`
+	SpanKind      string            `json:"span_kind"`
+	ServiceName   string            `json:"service_name"`
+	Timestamp     time.Time         `json:"timestamp"`
+	DurationNanos int64             `json:"duration_nanos"`
+	StatusCode    string            `json:"status_code,omitempty"`
+	StatusMessage string            `json:"status_message,omitempty"`
+	Attributes    map[string]string `json:"attributes,omitempty"`
+}
+
+// QueryTraceResponse is the query_trace reply payload. Spans is
+// ordered by Timestamp ASC — the CLI projects this into a tree
+// keyed by ParentSpanID.
+type QueryTraceResponse struct {
+	Spans []TraceSpan `json:"spans"`
+}

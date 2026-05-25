@@ -116,6 +116,12 @@ func (d *daemon) startRPC(ctx context.Context) (*rpcRuntime, error) {
 	}, nil
 }
 
+// registerInitialVerbs installs the verbs that have no container-runtime
+// dependency. The M7-era set: list_agents, get_agent_status,
+// query_history. M12 added query_audit and query_trace (both ClickHouse-
+// only, no container deps). The container-touching verbs (read_file,
+// list_dir, stat, exec_in_container, restart_agent) wait for the spawn
+// runtime in registerLifecycleVerbs.
 func registerInitialVerbs(srv *rpc.Server, kv handlers.AgentKV, chConn handlers.QueryHistoryDB) error {
 	if err := srv.Register(rpc.VerbListAgents, handlers.NewListAgents(kv)); err != nil {
 		return err
@@ -123,18 +129,22 @@ func registerInitialVerbs(srv *rpc.Server, kv handlers.AgentKV, chConn handlers.
 	if err := srv.Register(rpc.VerbGetAgentStatus, handlers.NewGetAgentStatus(kv)); err != nil {
 		return err
 	}
-	if err := srv.Register(rpc.VerbReadFile, handlers.NewReadFile()); err != nil {
+	if err := srv.Register(rpc.VerbQueryHistory, handlers.NewQueryHistory(chConn)); err != nil {
 		return err
 	}
-	if err := srv.Register(rpc.VerbQueryHistory, handlers.NewQueryHistory(chConn)); err != nil {
+	if err := srv.Register(rpc.VerbQueryAudit, handlers.NewQueryAudit(chConn)); err != nil {
+		return err
+	}
+	if err := srv.Register(rpc.VerbQueryTrace, handlers.NewQueryTrace(chConn)); err != nil {
 		return err
 	}
 	return nil
 }
 
-// registerLifecycleVerbs wires the M11 agent-lifecycle verbs onto the
-// RPC server now that the spawn runtime exists. The CA is the daemon's
-// signing CA (rpc handler embeds it in every issued JWT).
+// registerLifecycleVerbs wires the M11+M12 agent-lifecycle and
+// container-filesystem verbs onto the RPC server now that the spawn
+// runtime exists. The CA is the daemon's signing CA (rpc handler
+// embeds it in every issued JWT).
 func (r *rpcRuntime) registerLifecycleVerbs(ca *authjwt.CA, spawnRT *spawnRuntime) error {
 	spawnDeps := spawnRT.asSpawnDeps(r.chConn)
 	spawnDeps.CA = ca
@@ -156,6 +166,39 @@ func (r *rpcRuntime) registerLifecycleVerbs(ca *authjwt.CA, spawnRT *spawnRuntim
 			ID:   "daemon",
 		},
 	})); err != nil {
+		return err
+	}
+	if err := r.server.Register(rpc.VerbRestartAgent, handlers.NewRestartAgent(handlers.RestartDeps{
+		Definitions:   spawnDeps.Definitions,
+		Incarnations:  spawnDeps.Incarnations,
+		Containers:    spawnRT.containers,
+		CA:            ca,
+		WorkspaceRoot: spawnDeps.WorkspaceRoot,
+		HostID:        spawnDeps.HostID,
+		NATSURL:       spawnDeps.NATSURL,
+		NATSUser:      spawnDeps.NATSUser,
+		NATSPassword:  spawnDeps.NATSPassword,
+		MCPURL:        spawnDeps.MCPURL,
+		Issuer:        spawnDeps.Issuer,
+		TestRunLabel:  spawnDeps.TestRunLabel,
+	})); err != nil {
+		return err
+	}
+	filesDeps := handlers.FilesDeps{
+		Definitions:  spawnDeps.Definitions,
+		Incarnations: spawnDeps.Incarnations,
+		Containers:   spawnRT.containers,
+	}
+	if err := r.server.Register(rpc.VerbReadFile, handlers.NewReadFile(filesDeps)); err != nil {
+		return err
+	}
+	if err := r.server.Register(rpc.VerbListDir, handlers.NewListDir(filesDeps)); err != nil {
+		return err
+	}
+	if err := r.server.Register(rpc.VerbStat, handlers.NewStat(filesDeps)); err != nil {
+		return err
+	}
+	if err := r.server.Register(rpc.VerbExecInContainer, handlers.NewExecInContainer(filesDeps)); err != nil {
 		return err
 	}
 	return nil
