@@ -1,10 +1,11 @@
 ---
 title: Implement worktree pruning policy — orphan worktrees accumulate on disk
-status: open
+status: fixed
 priority: P3
 created_at: 2026-05-25T14:53-07:00
 labels: [feature, worktree, daemon, cleanup]
 discovered_in: post-overnight disk inspection
+fixed_in: TBD
 ---
 
 ## Summary

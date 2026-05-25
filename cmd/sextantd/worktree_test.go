@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,9 +10,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/nats-io/nats.go/jetstream"
+
 	"github.com/love-lena/sextant-initial/pkg/rpc"
 	"github.com/love-lena/sextant-initial/pkg/sextantd"
 	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+	"github.com/love-lena/sextant-initial/pkg/worktree"
 )
 
 // startDaemonHarnessWithWorktree spins up a tiny ephemeral git repo
@@ -305,4 +310,154 @@ func TestM14WorktreeAcceptance(t *testing.T) {
 			t.Errorf("stale merge worktree leftover: %s", e.Name())
 		}
 	}
+}
+
+// TestSextantWorktreePruneCLI exercises the
+// `sextant worktree prune [--dry-run]` round-trip end-to-end:
+//
+//  1. Bring the daemon up with a worktree manager wired.
+//  2. Create three worktrees via the RPC surface: a fresh one and two
+//     we back-date in KV to 20 days / 40 days idle.
+//  3. Publish on sextant.control.worktree_prune with DryRun=true; assert
+//     the response lists the 20d/40d as would-archive / would-delete
+//     and the on-disk state is untouched.
+//  4. Publish again with DryRun=false; assert the 20d worktree is
+//     archived to ArchiveRoot, the 40d worktree is deleted, and the
+//     fresh worktree is untouched.
+//
+// The dry-run/perform pair is the load-bearing CLI contract from
+// plans/issues/feat-worktree-pruner.md.
+func TestSextantWorktreePruneCLI(t *testing.T) {
+	h, _, worktreesDir := startDaemonHarnessWithWorktree(t)
+	cli := rpcClient(t, h)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	// Create three worktrees via the RPC surface.
+	names := []struct {
+		name string
+		age  time.Duration
+	}{
+		{"feat-prune-fresh-001", 1 * 24 * time.Hour},
+		{"feat-prune-aging-001", 20 * 24 * time.Hour},
+		{"feat-prune-stale-001", 40 * 24 * time.Hour},
+	}
+	for _, c := range names {
+		var resp sextantproto.WorktreeCreateResponse
+		if err := cli.RPC(ctx, rpc.VerbWorktreeCreate,
+			sextantproto.WorktreeCreateRequest{Name: c.name, BaseBranch: "main"},
+			&resp); err != nil {
+			t.Fatalf("worktree_create %s: %v\n--- daemon log ---\n%s", c.name, err, h.tail(t))
+		}
+	}
+
+	// Back-date LastActivity for the older two by reaching directly into
+	// the `worktrees` KV bucket. The daemon's pruner reads LastActivity
+	// from KV, not from disk mtime, so this is what shifts the decision.
+	js, err := jetstream.New(cli.Conn())
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	kv, err := js.KeyValue(ctx, worktree.WorktreesBucket)
+	if err != nil {
+		t.Fatalf("kv: %v", err)
+	}
+	for _, c := range names {
+		if c.age < 14*24*time.Hour {
+			continue
+		}
+		entry, err := kv.Get(ctx, c.name)
+		if err != nil {
+			t.Fatalf("kv get %s: %v", c.name, err)
+		}
+		var info sextantproto.WorktreeInfo
+		if err := json.Unmarshal(entry.Value(), &info); err != nil {
+			t.Fatalf("decode %s: %v", c.name, err)
+		}
+		info.LastActivity = time.Now().UTC().Add(-c.age)
+		raw, _ := json.Marshal(info)
+		if _, err := kv.Put(ctx, c.name, raw); err != nil {
+			t.Fatalf("kv put %s: %v", c.name, err)
+		}
+	}
+
+	// --- 1. dry-run ---
+	dryReq, _ := json.Marshal(sextantd.WorktreePruneRequest{DryRun: true})
+	msg, err := cli.Conn().RequestWithContext(ctx,
+		sextantd.ControlWorktreePruneSubject, dryReq)
+	if err != nil {
+		t.Fatalf("dry-run prune request: %v\n--- daemon log ---\n%s", err, h.tail(t))
+	}
+	var dryResp sextantd.WorktreePruneResponse
+	if err := json.Unmarshal(msg.Data, &dryResp); err != nil {
+		t.Fatalf("decode dry-run response: %v", err)
+	}
+	if dryResp.Error != "" {
+		t.Fatalf("dry-run reported error: %s", dryResp.Error)
+	}
+	if !dryResp.DryRun {
+		t.Errorf("dry-run response missing DryRun=true: %+v", dryResp)
+	}
+	if dryResp.Archived != 1 || dryResp.Deleted != 1 {
+		t.Errorf("dry-run plan = archived=%d deleted=%d, want 1/1 (%+v)", dryResp.Archived, dryResp.Deleted, dryResp)
+	}
+	// On-disk state should be untouched after dry-run.
+	for _, c := range names {
+		path := filepath.Join(worktreesDir, c.name)
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("dry-run mutated disk: %s missing: %v", c.name, err)
+		}
+	}
+
+	// --- 2. perform ---
+	doReq, _ := json.Marshal(sextantd.WorktreePruneRequest{})
+	msg2, err := cli.Conn().RequestWithContext(ctx,
+		sextantd.ControlWorktreePruneSubject, doReq)
+	if err != nil {
+		t.Fatalf("perform prune request: %v\n--- daemon log ---\n%s", err, h.tail(t))
+	}
+	var doResp sextantd.WorktreePruneResponse
+	if err := json.Unmarshal(msg2.Data, &doResp); err != nil {
+		t.Fatalf("decode perform response: %v", err)
+	}
+	if doResp.Error != "" {
+		t.Fatalf("perform reported error: %s\nerrors=%v", doResp.Error, doResp.Errors)
+	}
+	if doResp.Archived != 1 || doResp.Deleted != 1 {
+		t.Errorf("perform tallies = archived=%d deleted=%d, want 1/1; errors=%v plans=%+v",
+			doResp.Archived, doResp.Deleted, doResp.Errors, doResp.Plans)
+	}
+	// 40d gone.
+	if _, err := os.Stat(filepath.Join(worktreesDir, "feat-prune-stale-001")); err == nil {
+		t.Errorf("40d worktree still on disk")
+	}
+	// 20d gone from the worktrees root.
+	if _, err := os.Stat(filepath.Join(worktreesDir, "feat-prune-aging-001")); err == nil {
+		t.Errorf("20d worktree still in worktrees root")
+	}
+	// 20d landed in the archive.
+	archived := filepath.Join(h.cfg.Worktree.ArchiveRoot, "feat-prune-aging-001")
+	if _, err := os.Stat(archived); err != nil {
+		t.Errorf("20d worktree missing in archive root %s: %v", archived, err)
+	}
+	// 1d untouched.
+	if _, err := os.Stat(filepath.Join(worktreesDir, "feat-prune-fresh-001")); err != nil {
+		t.Errorf("1d worktree gone: %v", err)
+	}
+	// KV state: 40d entry removed; 20d entry present with status=archived.
+	if _, err := kv.Get(ctx, "feat-prune-stale-001"); err == nil {
+		t.Errorf("40d KV entry still present")
+	}
+	entry, err := kv.Get(ctx, "feat-prune-aging-001")
+	if err != nil {
+		t.Fatalf("20d KV entry missing: %v", err)
+	}
+	var post sextantproto.WorktreeInfo
+	if err := json.Unmarshal(entry.Value(), &post); err != nil {
+		t.Fatalf("decode 20d post-prune: %v", err)
+	}
+	if post.Status != sextantproto.WorktreeStatusArchived {
+		t.Errorf("20d KV status = %s, want archived", post.Status)
+	}
+	_ = uuid.Nil
 }

@@ -127,6 +127,15 @@ func New(cfg Config) (*Manager, error) {
 	return &Manager{cfg: cfg}, nil
 }
 
+// RepoRoot returns the operator's main repo path the manager was
+// configured with. Exported so callers (Pruner, tests) can compose
+// against the same path without re-deriving it.
+func (m *Manager) RepoRoot() string { return m.cfg.RepoRoot }
+
+// WorktreesRoot returns the directory where per-task worktrees land.
+// Exported for the same reason as RepoRoot.
+func (m *Manager) WorktreesRoot() string { return m.cfg.WorktreesRoot }
+
 // ValidateName returns nil if name matches the branch-naming convention.
 // Exported so callers (CLI, MCP) can fail-fast before calling Create.
 func ValidateName(name string) error {
