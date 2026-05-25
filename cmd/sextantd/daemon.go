@@ -67,6 +67,12 @@ type daemon struct {
 	// in doShutdown.
 	mcpRT *mcpRuntime
 
+	// spawnRT bundles the agent-spawn-flow dependencies (containermgr,
+	// KV buckets, etc.) shared by RPC + MCP. Set after the RPC server is
+	// up (we need the KV handle the RPC opened) and torn down in
+	// doShutdown.
+	spawnRT *spawnRuntime
+
 	shutdownOnce sync.Once
 	shutdownErr  error
 }
@@ -214,7 +220,8 @@ func (d *daemon) Start(ctx context.Context) error {
 
 	// 8. Bring the MCP server up before RPC: spec lists MCP at step 7,
 	// RPC at step 8. MCP needs a live NATS + ClickHouse so we sequence
-	// it after the supervisors are running.
+	// it after the supervisors are running. SpawnDeps is wired after
+	// MCP starts (it needs the resolved MCP URL).
 	mcpRT, err := d.startMCP(ctx)
 	if err != nil {
 		if d.supCancel != nil {
@@ -237,6 +244,8 @@ func (d *daemon) Start(ctx context.Context) error {
 	}
 
 	// 9. Bring the RPC server up. Same NATS/ClickHouse precondition.
+	// startRPC opens the agent_definitions KV handle which the spawn
+	// runtime reuses, so we sequence it before buildSpawnRuntime.
 	rpcRT, err := d.startRPC(ctx)
 	if err != nil {
 		// Roll back: tear MCP down, cancel the supervisors and tear
@@ -255,6 +264,45 @@ func (d *daemon) Start(ctx context.Context) error {
 	d.mu.Lock()
 	d.rpcRT = rpcRT
 	d.mu.Unlock()
+
+	// 10. Build the spawn runtime. Reuse the RPC server's NATS conn
+	// and definitions KV so we don't end up with two connections for
+	// the same daemon.
+	spawnRT, err := d.buildSpawnRuntime(ctx, rpcRT.nc, rpcRT.agentDefsKV)
+	if err != nil {
+		_ = rpcRT.stopRPC()
+		_ = mcpRT.stop(ctx)
+		if d.supCancel != nil {
+			d.supCancel()
+		}
+		d.closeSocket()
+		_ = sextantd.RemoveRuntimeInfo(d.cfg.Paths.RuntimeFile)
+		_ = d.stopClickHouseNow(ctx)
+		_ = d.stopNATSNow(ctx)
+		return fmt.Errorf("build spawn runtime: %w", err)
+	}
+	spawnRT.setMCPURL(mcpRT.server.HTTPAddr())
+	d.mu.Lock()
+	d.spawnRT = spawnRT
+	d.mu.Unlock()
+
+	// 11. Register the lifecycle verbs on the RPC server now that the
+	// spawn runtime exists. Also hand the same dep bag to the MCP
+	// server so the agent path uses the same backend.
+	if err := rpcRT.registerLifecycleVerbs(d.ca, spawnRT); err != nil {
+		_ = spawnRT.containers.Close()
+		_ = rpcRT.stopRPC()
+		_ = mcpRT.stop(ctx)
+		if d.supCancel != nil {
+			d.supCancel()
+		}
+		d.closeSocket()
+		_ = sextantd.RemoveRuntimeInfo(d.cfg.Paths.RuntimeFile)
+		_ = d.stopClickHouseNow(ctx)
+		_ = d.stopNATSNow(ctx)
+		return fmt.Errorf("register lifecycle verbs: %w", err)
+	}
+	mcpRT.server.SetSpawnDeps(spawnRT.asMCPDeps(d.ca, rpcRT.chConn))
 
 	log.Printf("sextantd: ready (nats=%s clickhouse=%s control=%s rpc=sextant.rpc.* mcp=%s)",
 		natsSrv.Address(), chSrv.TCPAddress(), d.cfg.Daemon.ControlSocket, mcpRT.server.HTTPURL())
@@ -290,7 +338,13 @@ func (d *daemon) doShutdown() error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	// Tear the RPC and MCP servers down first — both hold open
+	// Stop running sidecar containers BEFORE we tear NATS / ClickHouse
+	// down. The sidecar's last heartbeat goes through NATS; if we
+	// killed NATS first, the sidecar's shutdown publish would dangle.
+	// Best-effort: continue shutdown even if a container stop fails.
+	d.stopRunningIncarnations(ctx)
+
+	// Tear the RPC and MCP servers down next — both hold open
 	// connections to NATS and ClickHouse, so they must drain before we
 	// kill the subprocesses underneath them. MCP first because it has
 	// its own listeners (HTTP + Unix socket) that must close before any
@@ -301,6 +355,8 @@ func (d *daemon) doShutdown() error {
 	d.mcpRT = nil
 	rpcRT := d.rpcRT
 	d.rpcRT = nil
+	spawnRT := d.spawnRT
+	d.spawnRT = nil
 	d.mu.Unlock()
 	if mcpRT != nil {
 		if err := mcpRT.stop(ctx); err != nil {
@@ -310,6 +366,11 @@ func (d *daemon) doShutdown() error {
 	if rpcRT != nil {
 		if err := rpcRT.stopRPC(); err != nil {
 			errs = append(errs, fmt.Errorf("rpc stop: %w", err))
+		}
+	}
+	if spawnRT != nil && spawnRT.containers != nil {
+		if err := spawnRT.containers.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("containermgr close: %w", err))
 		}
 	}
 

@@ -74,8 +74,19 @@ func writeMinimalInstall(configDir, dataDir string) error {
 	if err := os.MkdirAll(cfg.Paths.TemplatesDir, 0o700); err != nil {
 		return err
 	}
+	// Default template content must satisfy templates.Validate (image
+	// + non-empty permissions) so the daemon's KV sync succeeds. Match
+	// what `sextant init` writes byte-for-byte in production.
+	defaultTpl := `name = "default"
+description = "Test agent template."
+image = "sextant-sidecar:latest"
+permissions = ["read.agents", "read.history", "control.prompt"]
+mounts = ["worktree"]
+model = "claude-opus-4-7[1m]"
+permission_ceiling = "auto"
+`
 	if err := os.WriteFile(filepath.Join(cfg.Paths.TemplatesDir, "default.toml"),
-		[]byte(`name = "default"`+"\n"), 0o600); err != nil {
+		[]byte(defaultTpl), 0o600); err != nil {
 		return err
 	}
 	// CA.

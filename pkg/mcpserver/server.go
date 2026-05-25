@@ -231,6 +231,17 @@ func (s *Server) Run(ctx context.Context) error {
 	return s.shutdown(ctx)
 }
 
+// SetSpawnDeps installs (or replaces) the spawn/kill/prompt backend.
+// Safe to call after Start: the dispatcher reads s.cfg.SpawnDeps per
+// invocation, so a late-bind is the supported pattern for daemons that
+// can't build the dep bag before MCP binds (e.g. when the dep bag
+// needs the MCP HTTP URL itself).
+func (s *Server) SetSpawnDeps(deps *SpawnDeps) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cfg.SpawnDeps = deps
+}
+
 // HTTPAddr returns the actual bound address of the HTTP listener
 // (host:port). Returns "" if Start has not completed.
 func (s *Server) HTTPAddr() string {
@@ -827,11 +838,20 @@ func (s *Server) handleNotImplemented(_ context.Context, _ Caller, _ any) (any, 
 	return nil, fmtErrf(sextantproto.ErrCodeNotImplemented, "tool ships in M11 when spawn flow lands")
 }
 
+// spawnDepsSnapshot grabs the current SpawnDeps under the mutex so a
+// late SetSpawnDeps cannot race with an in-flight tool call.
+func (s *Server) spawnDepsSnapshot() *SpawnDeps {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.SpawnDeps
+}
+
 // handleSpawnAgent re-uses the RPC spawn handler so the wire shapes
 // (envelope + RPCResponse) match the operator NATS path byte-for-byte.
 // Returns the raw result map for the MCP client.
 func (s *Server) handleSpawnAgent(ctx context.Context, _ Caller, in SpawnAgentArgs) (any, error) {
-	if s.cfg.SpawnDeps == nil {
+	deps := s.spawnDepsSnapshot()
+	if deps == nil {
 		return nil, fmtErrf(sextantproto.ErrCodeInternal, "spawn backend not configured")
 	}
 	raw, err := json.Marshal(sextantproto.SpawnAgentRequest{
@@ -843,24 +863,25 @@ func (s *Server) handleSpawnAgent(ctx context.Context, _ Caller, in SpawnAgentAr
 	}
 	env := sextantproto.NewEnvelope(sextantproto.KindRPCRequest, s.cfg.From, raw)
 	return runRPCAsTool(ctx, handlers.NewSpawnAgent(handlers.SpawnDeps{
-		Definitions:   s.cfg.SpawnDeps.Definitions,
-		Incarnations:  s.cfg.SpawnDeps.Incarnations,
-		Templates:     s.cfg.SpawnDeps.Templates,
-		Containers:    s.cfg.SpawnDeps.Containers,
-		CA:            s.cfg.SpawnDeps.CA,
-		History:       s.cfg.SpawnDeps.History,
-		WorkspaceRoot: s.cfg.SpawnDeps.WorkspaceDir,
-		HostID:        s.cfg.SpawnDeps.HostID,
-		NATSURL:       s.cfg.SpawnDeps.NATSURL,
-		NATSUser:      s.cfg.SpawnDeps.NATSUser,
-		NATSPassword:  s.cfg.SpawnDeps.NATSPassword,
-		MCPURL:        s.cfg.SpawnDeps.MCPURL,
-		Issuer:        s.cfg.SpawnDeps.Issuer,
+		Definitions:   deps.Definitions,
+		Incarnations:  deps.Incarnations,
+		Templates:     deps.Templates,
+		Containers:    deps.Containers,
+		CA:            deps.CA,
+		History:       deps.History,
+		WorkspaceRoot: deps.WorkspaceDir,
+		HostID:        deps.HostID,
+		NATSURL:       deps.NATSURL,
+		NATSUser:      deps.NATSUser,
+		NATSPassword:  deps.NATSPassword,
+		MCPURL:        deps.MCPURL,
+		Issuer:        deps.Issuer,
 	}), env)
 }
 
 func (s *Server) handleKillAgent(ctx context.Context, _ Caller, in KillAgentArgs) (any, error) {
-	if s.cfg.SpawnDeps == nil {
+	deps := s.spawnDepsSnapshot()
+	if deps == nil {
 		return nil, fmtErrf(sextantproto.ErrCodeInternal, "spawn backend not configured")
 	}
 	id, err := uuidFromString(in.AgentID)
@@ -876,14 +897,15 @@ func (s *Server) handleKillAgent(ctx context.Context, _ Caller, in KillAgentArgs
 	}
 	env := sextantproto.NewEnvelope(sextantproto.KindRPCRequest, s.cfg.From, raw)
 	return runRPCAsTool(ctx, handlers.NewKillAgent(handlers.KillDeps{
-		Definitions:  s.cfg.SpawnDeps.Definitions,
-		Incarnations: s.cfg.SpawnDeps.Incarnations,
-		Containers:   s.cfg.SpawnDeps.Containers,
+		Definitions:  deps.Definitions,
+		Incarnations: deps.Incarnations,
+		Containers:   deps.Containers,
 	}), env)
 }
 
 func (s *Server) handlePromptAgent(ctx context.Context, _ Caller, in PromptAgentArgs) (any, error) {
-	if s.cfg.SpawnDeps == nil {
+	deps := s.spawnDepsSnapshot()
+	if deps == nil {
 		return nil, fmtErrf(sextantproto.ErrCodeInternal, "spawn backend not configured")
 	}
 	id, err := uuidFromString(in.AgentID)
@@ -899,7 +921,7 @@ func (s *Server) handlePromptAgent(ctx context.Context, _ Caller, in PromptAgent
 	}
 	env := sextantproto.NewEnvelope(sextantproto.KindRPCRequest, s.cfg.From, raw)
 	return runRPCAsTool(ctx, handlers.NewPromptAgent(handlers.PromptDeps{
-		Definitions: s.cfg.SpawnDeps.Definitions,
+		Definitions: deps.Definitions,
 		NATS:        s.cfg.NATS,
 		From:        s.cfg.From,
 	}), env)
