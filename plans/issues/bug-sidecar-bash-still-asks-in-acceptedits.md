@@ -1,8 +1,10 @@
 ---
 title: SDK acceptEdits mode auto-allows Edit/Write only — Bash still requires per-call approval
-status: open
+status: resolved
 priority: P1
 created_at: 2026-05-25T00:50-07:00
+resolved_at: 2026-05-25T01:05-07:00
+resolution: added canUseTool callback in newSDKDriver using safe-bash classifier (Option A); classifier extracted to src/classifier.ts with 64 unit tests
 labels: [bug, sidecar, sdk-wireup, permissions]
 discovered_in: first end-to-end sextant-driven dispatch attempt (dev-2)
 ---
