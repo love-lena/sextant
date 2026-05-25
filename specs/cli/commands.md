@@ -16,6 +16,7 @@ sextant pending                       # user-input request queue
 sextant files <verb>                  # container filesystem access
 sextant exec <agent> -- <cmd>         # exec in container
 sextant audit <verb>                  # audit log
+sextant tail <subject>                # subscribe to any bus subject
 sextant traces <verb>                 # OTel traces
 sextant worktree <verb>               # worktree management (post-M14)
 sextant self <verb>                   # self-management (post-M16)
@@ -86,6 +87,24 @@ Run command inside agent's container. Capability-gated (operator-level). Audited
 | `tail [--filter ...]` | Live audit stream | NATS subscribe on `audit.>` |
 
 `query_audit` is a dedicated RPC verb (not `query_history`): it targets the ClickHouse `audit` table directly so the column shape matches `pkg/shipper/mapping.go::AuditRow` (actor, action, capability_required, result, payload) rather than the generic envelope shape. Pinned for M12; the M10 MCP tool `query_audit` switches to this new verb so both surfaces share one backend.
+
+### `sextant tail <subject> [--from-seq N] [--json]`
+
+Subscribe to an arbitrary NATS subject and print envelopes as they arrive. `audit tail` and `conversation` are narrow special-cases of this — `tail` exposes the same `pkg/client.Subscribe` machinery for any subject pattern so operators don't need a separate `nats` CLI install for ad-hoc bus observation.
+
+Subjects accept NATS wildcards (`*` matches one token, `>` matches one or more). Common patterns:
+
+| Pattern | Use |
+|---|---|
+| `agents.>` | every agent's events (frames, lifecycle, heartbeat, inbox) |
+| `agents.*.lifecycle` | lifecycle transitions across all agents |
+| `telemetry.>` | OTel firehose |
+| `sextant.system.>` | daemon self-management events |
+| `audit.>` | audit log (equivalent to `sextant audit tail`) |
+
+`--from-seq N` rebinds the consumer at JetStream stream sequence `N` so an operator can gap-fill after a disconnect. `--json` swaps the default human-readable renderer for raw envelope JSON, one per line (NDJSON).
+
+A JetStream ordered consumer binds to exactly one stream, so the subject must resolve to a single stream. A bare `>` firehose spans every stream and is not subscribable as one consumer — use a stream-scoped prefix.
 
 ### `sextant traces show <trace_id>`
 
