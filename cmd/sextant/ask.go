@@ -65,7 +65,7 @@ func runAsk(ctx context.Context, args []string) error {
 	}
 	defer cli.Close() //nolint:errcheck // best-effort close
 
-	id, err := resolveAgentID(ctx, cli, rest[0])
+	id, err := resolveAgentRef(ctx, cli, rest[0])
 	if err != nil {
 		return errUserUsage(fmt.Sprintf("agent: %v", err))
 	}
