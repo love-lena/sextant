@@ -18,15 +18,15 @@ import (
 // and records the args it received so tests can assert dispatch
 // reached the right call.
 type fakeWorktreeMgr struct {
-	createInfo  sextantproto.WorktreeInfo
-	createErr   error
-	destroyErr  error
-	listOut     []sextantproto.WorktreeInfo
-	listErr     error
-	diffOut     string
-	diffErr     error
-	mergeOut    worktree.MergeResult
-	mergeErr    error
+	createInfo sextantproto.WorktreeInfo
+	createErr  error
+	destroyErr error
+	listOut    []sextantproto.WorktreeInfo
+	listErr    error
+	diffOut    string
+	diffErr    error
+	mergeOut   worktree.MergeResult
+	mergeErr   error
 
 	calls []string
 }
