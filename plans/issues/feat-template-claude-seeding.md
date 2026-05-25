@@ -1,10 +1,22 @@
 ---
 title: Template-declared seeding source for /home/agent/.claude
-status: open
+status: resolved
 priority: P2
 created_at: 2026-05-25T01:25-07:00
+resolved_at: 2026-05-25T01:25-07:00
 labels: [feature, template, sidecar, agent-memory]
 discovered_in: assistant-agent daily-drive scoping
+resolution: |
+  Added optional `claude_seed` field to the Template TOML schema. When
+  set, sextantd expands `~/` via os.UserHomeDir, validates the path is
+  an existing directory at template load time, and bind-mounts the
+  directory read-only at /home/agent/.claude on every spawn (replacing
+  the default empty per-agent volume). Unset templates keep the
+  current empty-volume behavior. Documented at specs/architecture.md
+  §11b; resolved the §3 "claude volume seeding" open sub-decision.
+  Coverage: TestTemplateValidationRejectsMissingClaudeSeed (validation
+  fail-fast) and TestSpawnedContainerSeedsClaudeFromHostPath
+  (end-to-end docker exec marker check).
 ---
 
 ## Summary
