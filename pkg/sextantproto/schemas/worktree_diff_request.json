@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/love-lena/sextant-initial/pkg/sextantproto/worktree-diff-request",
+  "$ref": "#/$defs/WorktreeDiffRequest",
+  "$defs": {
+    "WorktreeDiffRequest": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "against": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "name"
+      ]
+    }
+  }
+}

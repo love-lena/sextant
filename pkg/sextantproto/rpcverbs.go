@@ -289,3 +289,94 @@ type TraceSpan struct {
 type QueryTraceResponse struct {
 	Spans []TraceSpan `json:"spans"`
 }
+
+// WorktreeStatus enumerates the worktree lifecycle states. Mirrors
+// specs/protocols/rpc-catalog.md §"Verb payloads — M14 additions"
+// `WorktreeInfo.Status`.
+type WorktreeStatus string
+
+const (
+	WorktreeStatusActive   WorktreeStatus = "active"
+	WorktreeStatusMerging  WorktreeStatus = "merging"
+	WorktreeStatusMerged   WorktreeStatus = "merged"
+	WorktreeStatusConflict WorktreeStatus = "conflict"
+	WorktreeStatusArchived WorktreeStatus = "archived"
+)
+
+// WorktreeInfo is the per-worktree registry shape. Mirrors the row
+// stored under `worktrees.<name>` in NATS KV.
+type WorktreeInfo struct {
+	Name         string         `json:"name"`
+	Path         string         `json:"path"`
+	Branch       string         `json:"branch"`
+	BaseBranch   string         `json:"base_branch"`
+	OwningAgent  uuid.UUID      `json:"owning_agent,omitempty"`
+	Status       WorktreeStatus `json:"status"`
+	CreatedAt    time.Time      `json:"created_at"`
+	LastActivity time.Time      `json:"last_activity"`
+}
+
+// WorktreeCreateRequest is the worktree_create request payload.
+// BaseBranch defaults to "main" when empty.
+type WorktreeCreateRequest struct {
+	Name       string `json:"name"`
+	BaseBranch string `json:"base_branch,omitempty"`
+}
+
+// WorktreeCreateResponse is the worktree_create reply payload.
+type WorktreeCreateResponse struct {
+	Worktree WorktreeInfo `json:"worktree"`
+}
+
+// WorktreeDestroyRequest is the worktree_destroy request payload.
+// Force=true is the operator-only override: destroy even when status
+// isn't archived. Agent callers (control.worktree cap) get the
+// default-false path.
+type WorktreeDestroyRequest struct {
+	Name  string `json:"name"`
+	Force bool   `json:"force,omitempty"`
+}
+
+// WorktreeDestroyResponse is the worktree_destroy reply payload.
+type WorktreeDestroyResponse struct {
+	OK bool `json:"ok"`
+}
+
+// WorktreeListRequest is the worktree_list request payload. Empty
+// today; reserved for future filters.
+type WorktreeListRequest struct{}
+
+// WorktreeListResponse is the worktree_list reply payload. Worktrees
+// is always non-nil; empty slice when none exist.
+type WorktreeListResponse struct {
+	Worktrees []WorktreeInfo `json:"worktrees"`
+}
+
+// WorktreeMergeRequest is the worktree_merge request payload.
+// Target defaults to "main" when empty.
+type WorktreeMergeRequest struct {
+	Name   string `json:"name"`
+	Target string `json:"target,omitempty"`
+}
+
+// WorktreeMergeResponse is the worktree_merge reply payload. OK is
+// true on a clean merge; on conflicts OK is false and Conflicts
+// lists the file paths git reported as unmerged.
+type WorktreeMergeResponse struct {
+	OK        bool     `json:"ok"`
+	Branch    string   `json:"branch,omitempty"`
+	Target    string   `json:"target,omitempty"`
+	Conflicts []string `json:"conflicts,omitempty"`
+}
+
+// WorktreeDiffRequest is the worktree_diff request payload.
+// Against defaults to "main" when empty.
+type WorktreeDiffRequest struct {
+	Name    string `json:"name"`
+	Against string `json:"against,omitempty"`
+}
+
+// WorktreeDiffResponse is the worktree_diff reply payload.
+type WorktreeDiffResponse struct {
+	Diff string `json:"diff"`
+}

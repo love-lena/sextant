@@ -90,6 +90,18 @@ func main() {
 		{"query_audit_response", &sextantproto.QueryAuditResponse{}},
 		{"query_trace_request", &sextantproto.QueryTraceRequest{}},
 		{"query_trace_response", &sextantproto.QueryTraceResponse{}},
+		// M14 verb payloads.
+		{"worktree_info", &sextantproto.WorktreeInfo{}},
+		{"worktree_create_request", &sextantproto.WorktreeCreateRequest{}},
+		{"worktree_create_response", &sextantproto.WorktreeCreateResponse{}},
+		{"worktree_destroy_request", &sextantproto.WorktreeDestroyRequest{}},
+		{"worktree_destroy_response", &sextantproto.WorktreeDestroyResponse{}},
+		{"worktree_list_request", &sextantproto.WorktreeListRequest{}},
+		{"worktree_list_response", &sextantproto.WorktreeListResponse{}},
+		{"worktree_merge_request", &sextantproto.WorktreeMergeRequest{}},
+		{"worktree_merge_response", &sextantproto.WorktreeMergeResponse{}},
+		{"worktree_diff_request", &sextantproto.WorktreeDiffRequest{}},
+		{"worktree_diff_response", &sextantproto.WorktreeDiffResponse{}},
 	}
 
 	for _, e := range entries {
