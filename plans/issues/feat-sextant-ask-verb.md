@@ -1,8 +1,9 @@
 ---
 title: Add `sextant ask <agent> "<text>"` — synchronous prompt+wait+print for daily-drive
-status: open
+status: fixed
 priority: P3
 created_at: 2026-05-25T14:53-07:00
+fixed_in: f509649
 labels: [feature, cli, ergonomics, assistant]
 discovered_in: assistant-agent daily-drive setup
 ---
