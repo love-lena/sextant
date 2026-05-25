@@ -25,6 +25,11 @@ import (
 type fakeMutableKV struct {
 	mu      sync.Mutex
 	entries map[string][]byte
+	// putHook, if non-nil, runs before every Put and can return an
+	// error to abort the write. Used by the lifecycle-flip rollback
+	// test to fail the second Put on the definitions bucket.
+	putHook func(key string, callIdx int) error
+	putN    int
 }
 
 func newFakeMutableKV() *fakeMutableKV {
@@ -57,6 +62,16 @@ func (f *fakeMutableKV) ListKeys(_ context.Context, _ ...jetstream.WatchOpt) (je
 }
 
 func (f *fakeMutableKV) Put(_ context.Context, key string, value []byte) (uint64, error) {
+	f.mu.Lock()
+	f.putN++
+	hook := f.putHook
+	call := f.putN
+	f.mu.Unlock()
+	if hook != nil {
+		if err := hook(key, call); err != nil {
+			return 0, err
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.entries[key] = append([]byte(nil), value...)
@@ -407,6 +422,116 @@ func TestSpawnAgentRollsBackOnContainerStartFailure(t *testing.T) {
 	}
 	if got := len(incs.snapshot()); got != 0 {
 		t.Errorf("incarnations count after rollback = %d, want 0", got)
+	}
+}
+
+// TestSpawnAgentRollsBackWorkspaceOnContainerFailure pins the
+// workspace-dir leak fix: a container-start failure must remove the
+// per-agent workspace dir from the rollback ledger, not leave it on
+// disk for the next failed spawn to accumulate. Reads the workspace
+// root from deps.WorkspaceRoot and asserts no children remain.
+func TestSpawnAgentRollsBackWorkspaceOnContainerFailure(t *testing.T) {
+	deps, _, _, runner, _ := buildDeps(t)
+	runner.runErr = errors.New("dockerd is asleep")
+
+	// Sanity: root exists and is empty before the spawn attempt.
+	entries, err := os.ReadDir(deps.WorkspaceRoot)
+	if err != nil {
+		t.Fatalf("ReadDir root: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("workspace root not empty pre-spawn: %d entries", len(entries))
+	}
+
+	h := handlers.NewSpawnAgent(deps)
+	cap := &captureEmit{}
+	req := makeReq(t, sextantproto.SpawnAgentRequest{Name: "alpha", Template: "default"})
+	if err := h(context.Background(), req, cap.emit()); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if cap.resp.Error == nil {
+		t.Fatal("expected error")
+	}
+
+	entries, err = os.ReadDir(deps.WorkspaceRoot)
+	if err != nil {
+		t.Fatalf("ReadDir root post-spawn: %v", err)
+	}
+	if len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("workspace root has %d leftover entry/entries after rollback: %v",
+			len(entries), names)
+	}
+}
+
+// TestSpawnAgentRollsBackEverythingOnLifecycleFlipFailure pins the
+// lifecycle-flip rollback fix: when the final definitions Put (the
+// one that flips lifecycle defined→running) fails, the rollback ledger
+// must:
+//
+//   - stop the spawned container,
+//   - delete the incarnation KV entry,
+//   - delete the definition KV entry,
+//   - remove the workspace dir.
+//
+// We inject the failure by counting Put calls on the definitions KV:
+// the first Put is the initial definition (success), the second is
+// the lifecycle flip (fail). The incarnation Put is on a different
+// bucket so it doesn't interfere with the counter.
+func TestSpawnAgentRollsBackEverythingOnLifecycleFlipFailure(t *testing.T) {
+	deps, defs, incs, runner, _ := buildDeps(t)
+	// Fail the SECOND Put on the definitions bucket — that's the
+	// lifecycle flip; the first is the initial definition write.
+	defs.putHook = func(_ string, callIdx int) error {
+		if callIdx == 2 {
+			return errors.New("nats KV unhealthy")
+		}
+		return nil
+	}
+
+	h := handlers.NewSpawnAgent(deps)
+	cap := &captureEmit{}
+	req := makeReq(t, sextantproto.SpawnAgentRequest{Name: "alpha", Template: "default"})
+	if err := h(context.Background(), req, cap.emit()); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if cap.resp.Error == nil {
+		t.Fatal("expected error")
+	}
+	if cap.resp.Error.Code != sextantproto.ErrCodeInternal {
+		t.Errorf("Code = %q, want internal", cap.resp.Error.Code)
+	}
+
+	// Container was stopped via the rollback (Stop received the ID).
+	runner.mu.Lock()
+	stopped := append([]string(nil), runner.stopped...)
+	runner.mu.Unlock()
+	if len(stopped) != 1 {
+		t.Errorf("runner.stopped = %v, want 1 entry (the rollback Stop)", stopped)
+	}
+
+	// No definition, no incarnation left in KV.
+	if got := len(defs.snapshot()); got != 0 {
+		t.Errorf("definitions count = %d, want 0", got)
+	}
+	if got := len(incs.snapshot()); got != 0 {
+		t.Errorf("incarnations count = %d, want 0", got)
+	}
+
+	// Workspace dir gone too.
+	entries, err := os.ReadDir(deps.WorkspaceRoot)
+	if err != nil {
+		t.Fatalf("ReadDir root: %v", err)
+	}
+	if len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("workspace root has %d leftover entry/entries: %v", len(entries), names)
 	}
 }
 
