@@ -41,11 +41,13 @@ func run(ctx context.Context, args []string) error {
 		return runInit(ctx, rest)
 	case "doctor":
 		return runDoctor(ctx, rest)
+	case "agents":
+		return runAgents(ctx, rest)
 	case "-h", "--help", "help":
 		printUsage(os.Stdout)
 		return nil
 	case "--version", "version":
-		fmt.Println("sextant initial (M5)")
+		fmt.Println("sextant initial (M11)")
 		return nil
 	default:
 		printUsage(os.Stderr)
@@ -59,6 +61,7 @@ func printUsage(w *os.File) {
 Subcommands:
   init     First-run setup: CA + config + data dirs + default template.
   doctor   Health diagnostics for sextantd, NATS, ClickHouse, config.
+  agents   Agent operations (list|show|spawn|kill|prompt).
   help     Print this message.
   version  Print the sextant version.
 
