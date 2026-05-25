@@ -1,8 +1,9 @@
 ---
 title: Sidecar bash classifier `curl|wget … | sh` denylist is bypassed by intermediate pipes (`| tee | bash`)
-status: open
+status: fixed
 priority: P3
 created_at: 2026-05-25T14:53-07:00
+fixed_in: 800eb77
 labels: [bug, sidecar, classifier, permissions, defense-in-depth]
 discovered_in: post-cf8cbed quality review (medium-severity finding)
 ---
