@@ -58,6 +58,34 @@ A TUI that cares about selected agent **subscribes** to `ui.state.<operator>.sel
 
 If a TUI is run standalone (no companion TUI sharing state), it reads from the KV at startup and writes back on change, but doesn't break if no one else is subscribed.
 
+### `ui.state.*` key format
+
+Bucket: `ui_state` (defined in `pkg/natsboot/layout.go`; one bucket holds every operator's keys).
+
+Key string: dot-separated, lower-snake; the literal `ui.state` prefix is implicit in the bucket and **not** repeated in the key. The on-the-wire key shape is `<operator>.<field>`. For example:
+
+- `lena.selected_agent`
+- `lena.focused_pane`
+- `lena.filter`
+
+The legacy `ui.state.<operator>.<field>` spelling refers to the same key — read either way in prose. Code MUST write `<operator>.<field>`.
+
+Value format (per field):
+
+| Field | Value | Empty / unset semantics |
+|---|---|---|
+| `selected_agent` | RFC-4122 UUID string, ASCII, no quotes, no surrounding JSON | Absent key = no selection. A deliberate "no selection" write uses the literal value `none`. |
+| `focused_pane` | Opaque ASCII string the producing TUI defines | Absent key = no focus |
+| `filter` | Filter DSL expression (TBD; out of scope for M13) | Absent key = no filter |
+
+**Operator identity**: TUIs source the operator name from, in order of precedence:
+
+1. The `--operator <name>` CLI flag, when given.
+2. The `SEXTANT_OPERATOR` environment variable, when set non-empty.
+3. `os/user.Current().Username` (falling back to `USER` env var if that lookup fails).
+
+The chosen name is sanitized to `[a-zA-Z0-9_-]+` — invalid chars are replaced with `_` — so it slots safely into a NATS KV key. Empty after sanitization is a startup error.
+
 ## CLI conventions
 
 - Every command supports `--json` for scriptable output.
