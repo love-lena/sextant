@@ -19,7 +19,9 @@ import (
 
 const conversationUsage = `usage: sextant conversation <agent_uuid> [--tail] [--from-seq N] [--json]
 
-Stream agents.<uuid>.frames in human-readable form. Defaults to a
+Stream agents.<uuid>.frames + agents.<uuid>.lifecycle in human-readable
+form. Lifecycle transitions (started, turn_ended, ended, …) are rendered
+inline so external tooling can tell when a turn finishes. Defaults to a
 forever-live tail; --tail exits on the next lifecycle.ended event for
 the same agent. --from-seq N resumes from the given JetStream stream
 sequence so the operator can pick up after a disconnect.`
@@ -51,9 +53,15 @@ func runConversation(ctx context.Context, args []string) error {
 
 	subject := "agents." + id.String() + ".frames"
 
-	// Subscribe to lifecycle too when --tail is set so we can exit
-	// cleanly on the end-of-session signal. Two subscriptions multiplex
-	// onto a single select below.
+	// Always subscribe to lifecycle so per-turn transitions (notably
+	// turn_ended, emitted by the sidecar SDK driver at the end of every
+	// turn) show up in the rendered conversation. Without this, external
+	// tooling — and the operator at the terminal — has no way to tell
+	// when a turn finished without polling for ancillary signals. The
+	// `--tail` flag still controls whether streamConversation exits when
+	// a lifecycle.ended for this agent arrives; turn_ended is rendered
+	// in both tail and non-tail modes. See
+	// plans/issues/bug-lifecycle-turn-ended-missing.md.
 	frameOpts := []client.SubscribeOption{}
 	if fromSeq > 0 {
 		frameOpts = append(frameOpts, client.WithStartSeq(fromSeq))
@@ -63,13 +71,9 @@ func runConversation(ctx context.Context, args []string) error {
 		return fmt.Errorf("subscribe %s: %w", subject, err)
 	}
 
-	var lifecycle <-chan client.Message
-	if tail {
-		ls, err := cli.Subscribe(ctx, "agents."+id.String()+".lifecycle")
-		if err != nil {
-			return fmt.Errorf("subscribe lifecycle: %w", err)
-		}
-		lifecycle = ls
+	lifecycle, err := cli.Subscribe(ctx, "agents."+id.String()+".lifecycle")
+	if err != nil {
+		return fmt.Errorf("subscribe lifecycle: %w", err)
 	}
 
 	return streamConversation(ctx, os.Stdout, frames, lifecycle, id, opts.asJSON, tail)
@@ -120,10 +124,20 @@ func streamConversation(
 			if err := json.Unmarshal(msg.Envelope.Payload, &p); err != nil {
 				continue
 			}
-			if p.AgentUUID == agentID && p.Transition == sextantproto.LifecycleEnded {
-				if !asJSON {
-					printf(w, "[lifecycle: ended]\n")
-				}
+			// Only render transitions for the agent we're following. Lifecycle
+			// envelopes carry agent_uuid in their payload; the subject already
+			// scopes the subscription, but the payload check is cheap insurance
+			// against accidental cross-agent rendering if the subject is ever
+			// widened.
+			if p.AgentUUID != agentID {
+				_ = msg.Ack()
+				continue
+			}
+			if err := renderLifecycle(w, msg, p, asJSON); err != nil {
+				return err
+			}
+			_ = msg.Ack()
+			if tailUntilEnd && p.Transition == sextantproto.LifecycleEnded {
 				return nil
 			}
 		}
@@ -170,6 +184,31 @@ func renderFrame(w io.Writer, msg client.Message, asJSON bool) error {
 		printf(w, "%s [error] %s\n", ts, summarizeBody(fp.Body))
 	default:
 		printf(w, "%s [%s] %s\n", ts, fp.FrameKind, summarizeBody(fp.Body))
+	}
+	return nil
+}
+
+// renderLifecycle writes one lifecycle envelope to w. JSON mode emits
+// the raw envelope (NDJSON, same shape as frame rendering); text mode
+// emits a compact `[ts] [lifecycle] transition=<x>` line, plus any
+// reason if the sidecar provided one. The sidecar publishes
+// `transition=turn_ended` after every SDK turn (success or error);
+// rendering it here is what lets external tooling — and the operator
+// reading `sextant conversation` — see when a turn finishes.
+func renderLifecycle(w io.Writer, msg client.Message, p sextantproto.LifecyclePayload, asJSON bool) error {
+	if asJSON {
+		raw, err := json.Marshal(msg.Envelope)
+		if err != nil {
+			return fmt.Errorf("marshal lifecycle envelope: %w", err)
+		}
+		_, err = fmt.Fprintln(w, string(raw))
+		return err
+	}
+	ts := msg.Envelope.Ts.Format(time.RFC3339)
+	if p.Reason != "" {
+		printf(w, "%s [lifecycle] transition=%s reason=%q\n", ts, p.Transition, p.Reason)
+	} else {
+		printf(w, "%s [lifecycle] transition=%s\n", ts, p.Transition)
 	}
 	return nil
 }
