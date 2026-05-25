@@ -82,6 +82,11 @@ type Config struct {
 	// callers don't crash. The daemon (M11+) always populates this.
 	SpawnDeps *SpawnDeps
 
+	// Worktree is the manager backing the M14 worktree_* tools. When
+	// nil the tools return ErrCodeInternal (not configured). The
+	// daemon (M14+) always populates this.
+	Worktree handlers.WorktreeManager
+
 	// Logger receives diagnostic messages. Defaults to log.Default.
 	Logger *log.Logger
 }
@@ -98,6 +103,7 @@ type SpawnDeps struct {
 	CA           *authjwt.CA
 	History      handlers.HistoryWriter
 	WorkspaceDir string
+	Worktree     handlers.WorktreeProvider
 	HostID       string
 	NATSURL      string
 	NATSUser     string
@@ -592,6 +598,32 @@ func (s *Server) registerTools() {
 		Name:        ToolGetMetric,
 		Description: "Fetch a metric series from ClickHouse. (M10: stubbed.)",
 	}, wrapHandler(s, ToolGetMetric, s.handleNotImplemented))
+
+	// M14 worktree tools.
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        ToolWorktreeCreate,
+		Description: "Create a new git worktree on a fresh branch off the given base branch.",
+	}, wrapHandler(s, ToolWorktreeCreate, s.handleWorktreeCreate))
+
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        ToolWorktreeDestroy,
+		Description: "Remove a git worktree and delete its registry entry.",
+	}, wrapHandler(s, ToolWorktreeDestroy, s.handleWorktreeDestroy))
+
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        ToolWorktreeList,
+		Description: "List every known worktree with status, branch, and ownership.",
+	}, wrapHandler(s, ToolWorktreeList, s.handleWorktreeList))
+
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        ToolWorktreeMerge,
+		Description: "Merge a worktree's branch into target (default main) under the merge lock.",
+	}, wrapHandler(s, ToolWorktreeMerge, s.handleWorktreeMerge))
+
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        ToolWorktreeDiff,
+		Description: "Show the diff of a worktree against a target branch (default main).",
+	}, wrapHandler(s, ToolWorktreeDiff, s.handleWorktreeDiff))
 }
 
 // dispatchHandler is the per-tool signature after argument decoding.
@@ -875,6 +907,7 @@ func (s *Server) handleSpawnAgent(ctx context.Context, _ Caller, in SpawnAgentAr
 		CA:            deps.CA,
 		History:       deps.History,
 		WorkspaceRoot: deps.WorkspaceDir,
+		Worktree:      deps.Worktree,
 		HostID:        deps.HostID,
 		NATSURL:       deps.NATSURL,
 		NATSUser:      deps.NATSUser,
@@ -930,6 +963,96 @@ func (s *Server) handlePromptAgent(ctx context.Context, _ Caller, in PromptAgent
 		NATS:        s.cfg.NATS,
 		From:        s.cfg.From,
 	}), env)
+}
+
+// worktreeMgr returns the configured worktree manager under the mutex
+// so a late SetWorktree won't race with an in-flight tool call.
+func (s *Server) worktreeMgr() handlers.WorktreeManager {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.Worktree
+}
+
+// SetWorktree installs (or replaces) the worktree manager. Safe to
+// call after Start: tool handlers re-read the field per invocation.
+func (s *Server) SetWorktree(mgr handlers.WorktreeManager) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cfg.Worktree = mgr
+}
+
+func (s *Server) handleWorktreeCreate(ctx context.Context, _ Caller, in WorktreeCreateArgs) (any, error) {
+	mgr := s.worktreeMgr()
+	if mgr == nil {
+		return nil, fmtErrf(sextantproto.ErrCodeInternal, "worktree manager not configured")
+	}
+	raw, err := json.Marshal(sextantproto.WorktreeCreateRequest{
+		Name:       in.Name,
+		BaseBranch: in.BaseBranch,
+	})
+	if err != nil {
+		return nil, fmtErrf(sextantproto.ErrCodeInternal, "marshal: %v", err)
+	}
+	env := sextantproto.NewEnvelope(sextantproto.KindRPCRequest, s.cfg.From, raw)
+	return runRPCAsTool(ctx, handlers.NewWorktreeCreate(handlers.WorktreeDeps{Manager: mgr}), env)
+}
+
+func (s *Server) handleWorktreeDestroy(ctx context.Context, _ Caller, in WorktreeDestroyArgs) (any, error) {
+	mgr := s.worktreeMgr()
+	if mgr == nil {
+		return nil, fmtErrf(sextantproto.ErrCodeInternal, "worktree manager not configured")
+	}
+	raw, err := json.Marshal(sextantproto.WorktreeDestroyRequest{
+		Name:  in.Name,
+		Force: in.Force,
+	})
+	if err != nil {
+		return nil, fmtErrf(sextantproto.ErrCodeInternal, "marshal: %v", err)
+	}
+	env := sextantproto.NewEnvelope(sextantproto.KindRPCRequest, s.cfg.From, raw)
+	return runRPCAsTool(ctx, handlers.NewWorktreeDestroy(handlers.WorktreeDeps{Manager: mgr}), env)
+}
+
+func (s *Server) handleWorktreeList(ctx context.Context, _ Caller, _ WorktreeListArgs) (any, error) {
+	mgr := s.worktreeMgr()
+	if mgr == nil {
+		return nil, fmtErrf(sextantproto.ErrCodeInternal, "worktree manager not configured")
+	}
+	raw, _ := json.Marshal(sextantproto.WorktreeListRequest{})
+	env := sextantproto.NewEnvelope(sextantproto.KindRPCRequest, s.cfg.From, raw)
+	return runRPCAsTool(ctx, handlers.NewWorktreeList(handlers.WorktreeDeps{Manager: mgr}), env)
+}
+
+func (s *Server) handleWorktreeMerge(ctx context.Context, _ Caller, in WorktreeMergeArgs) (any, error) {
+	mgr := s.worktreeMgr()
+	if mgr == nil {
+		return nil, fmtErrf(sextantproto.ErrCodeInternal, "worktree manager not configured")
+	}
+	raw, err := json.Marshal(sextantproto.WorktreeMergeRequest{
+		Name:   in.Name,
+		Target: in.Target,
+	})
+	if err != nil {
+		return nil, fmtErrf(sextantproto.ErrCodeInternal, "marshal: %v", err)
+	}
+	env := sextantproto.NewEnvelope(sextantproto.KindRPCRequest, s.cfg.From, raw)
+	return runRPCAsTool(ctx, handlers.NewWorktreeMerge(handlers.WorktreeDeps{Manager: mgr}), env)
+}
+
+func (s *Server) handleWorktreeDiff(ctx context.Context, _ Caller, in WorktreeDiffArgs) (any, error) {
+	mgr := s.worktreeMgr()
+	if mgr == nil {
+		return nil, fmtErrf(sextantproto.ErrCodeInternal, "worktree manager not configured")
+	}
+	raw, err := json.Marshal(sextantproto.WorktreeDiffRequest{
+		Name:    in.Name,
+		Against: in.Against,
+	})
+	if err != nil {
+		return nil, fmtErrf(sextantproto.ErrCodeInternal, "marshal: %v", err)
+	}
+	env := sextantproto.NewEnvelope(sextantproto.KindRPCRequest, s.cfg.From, raw)
+	return runRPCAsTool(ctx, handlers.NewWorktreeDiff(handlers.WorktreeDeps{Manager: mgr}), env)
 }
 
 // runRPCAsTool runs an rpc.Handler synchronously and unmarshals its
