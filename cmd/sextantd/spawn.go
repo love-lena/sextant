@@ -42,6 +42,12 @@ type spawnRuntime struct {
 	mcpURL       string
 	issuer       string
 	workspaceDir string
+	// testRunLabel, when non-empty, stamps sextant.test_run=<value> on
+	// every spawned container so the orphan-tripwire test can scope
+	// its check to containers this daemon instance created. Sourced
+	// from the SEXTANT_TEST_RUN_LABEL env var at daemon start; empty
+	// in production.
+	testRunLabel string
 
 	// worktree, when non-nil, is the M14 provider passed through to
 	// handlers.SpawnDeps.Worktree. The daemon sets this after the
@@ -125,6 +131,7 @@ func (d *daemon) buildSpawnRuntime(ctx context.Context, nc *nats.Conn, agentDefs
 		mcpURL:       "",
 		issuer:       "sextantd@" + hostID,
 		workspaceDir: workspaceRoot,
+		testRunLabel: os.Getenv("SEXTANT_TEST_RUN_LABEL"),
 	}, nil
 }
 
@@ -167,6 +174,7 @@ func (r *spawnRuntime) asSpawnDeps(chConn driver.Conn) handlers.SpawnDeps {
 		NATSPassword:  r.natsPassword,
 		MCPURL:        r.mcpURL,
 		Issuer:        r.issuer,
+		TestRunLabel:  r.testRunLabel,
 	}
 }
 
@@ -193,6 +201,7 @@ func (r *spawnRuntime) asMCPDeps(ca *authjwt.CA, chConn driver.Conn) *mcpserver.
 		NATSPassword: r.natsPassword,
 		MCPURL:       r.mcpURL,
 		Issuer:       r.issuer,
+		TestRunLabel: r.testRunLabel,
 	}
 }
 

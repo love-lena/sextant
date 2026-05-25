@@ -110,6 +110,10 @@ type SpawnDeps struct {
 	NATSPassword string
 	MCPURL       string
 	Issuer       string
+	// TestRunLabel, when non-empty, is forwarded to handlers.SpawnDeps
+	// so every spawn via the MCP path stamps sextant.test_run=<value>.
+	// Empty in production.
+	TestRunLabel string
 }
 
 // Server is the in-process MCP server. One Server per daemon. Build
@@ -914,6 +918,7 @@ func (s *Server) handleSpawnAgent(ctx context.Context, _ Caller, in SpawnAgentAr
 		NATSPassword:  deps.NATSPassword,
 		MCPURL:        deps.MCPURL,
 		Issuer:        deps.Issuer,
+		TestRunLabel:  deps.TestRunLabel,
 	}), env)
 }
 
