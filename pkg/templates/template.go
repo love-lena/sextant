@@ -32,15 +32,62 @@ type Template struct {
 	Model             string            `toml:"model" json:"model"`
 	PermissionCeiling string            `toml:"permission_ceiling" json:"permission_ceiling,omitempty"`
 	// ClaudeSeed is an optional host path that the spawn handler
-	// bind-mounts read-only into the container at /home/agent/.claude.
-	// Use it to pre-load operator-curated CLAUDE.md, custom slash
-	// commands, hooks, or settings.json for the agent class. Tilde
-	// (`~/`) is expanded against os.UserHomeDir at validation time.
-	// When empty, the spawn handler leaves /home/agent/.claude as the
-	// default per-agent empty named volume.
-	// See specs/architecture.md §11b and
-	// plans/issues/feat-template-claude-seeding.md.
+	// surfaces into the container at /home/agent/.claude. Use it to
+	// pre-load operator-curated CLAUDE.md, custom slash commands,
+	// hooks, or settings.json for the agent class. Tilde (`~/`) is
+	// expanded against os.UserHomeDir at validation time. When empty,
+	// the spawn handler leaves /home/agent/.claude as the default
+	// per-agent empty named volume.
+	// See specs/architecture.md §11b,
+	// plans/issues/feat-template-claude-seeding.md, and
+	// plans/issues/bug-claude-seed-readonly-breaks-session-persistence.md.
 	ClaudeSeed string `toml:"claude_seed" json:"claude_seed,omitempty"`
+	// ClaudeSeedMode controls how ClaudeSeed is surfaced to the agent:
+	//
+	//   - "" (unset) or "copy-on-spawn" (default when ClaudeSeed is set):
+	//     at first spawn, sextantd creates a per-agent named volume
+	//     `sextant-claude-seed-<uuid>`, populates it by copying the host
+	//     seed dir contents, and mounts the volume rw at
+	//     /home/agent/.claude. Subsequent spawns of the same agent re-
+	//     attach the existing volume so the SDK's session journal in
+	//     `projects/<encoded-cwd>/<session-id>.jsonl` survives restart.
+	//     This is the right behavior for assistant-style agents.
+	//
+	//   - "readonly-bind": legacy behavior — bind-mount the host seed
+	//     dir read-only at /home/agent/.claude. Suitable for one-shot
+	//     agents that don't need the SDK to persist session state.
+	//     Note: this mode *breaks* multi-turn session resume, because
+	//     the SDK can't write `~/.claude/projects/.../*.jsonl`. Operators
+	//     who pick this mode have explicitly opted into that trade.
+	//
+	// Ignored when ClaudeSeed is empty.
+	ClaudeSeedMode string `toml:"claude_seed_mode" json:"claude_seed_mode,omitempty"`
+}
+
+// ClaudeSeed mode constants. These are the values ClaudeSeedMode
+// accepts. Keep in sync with the doc comment on Template.ClaudeSeedMode
+// and with specs/architecture.md §11b.
+const (
+	ClaudeSeedModeCopyOnSpawn = "copy-on-spawn"
+	ClaudeSeedModeReadonly    = "readonly-bind"
+)
+
+// ResolveClaudeSeedMode returns the effective seed mode for a template.
+// When ClaudeSeed is empty, the seed mode is meaningless; the empty
+// string is returned. When ClaudeSeed is set and ClaudeSeedMode is
+// blank, the default "copy-on-spawn" is returned (the right behavior
+// for the assistant-style use case — see
+// plans/issues/bug-claude-seed-readonly-breaks-session-persistence.md).
+// Otherwise the explicit ClaudeSeedMode is returned verbatim (already
+// validated at template load time).
+func (t Template) ResolveClaudeSeedMode() string {
+	if t.ClaudeSeed == "" {
+		return ""
+	}
+	if t.ClaudeSeedMode == "" {
+		return ClaudeSeedModeCopyOnSpawn
+	}
+	return t.ClaudeSeedMode
 }
 
 // Validate asserts the invariants the spawn handler relies on: a name,
@@ -75,6 +122,14 @@ func (t Template) Validate() error {
 		if !info.IsDir() {
 			return fmt.Errorf("templates: claude_seed %q (template %q) is not a directory", expanded, t.Name)
 		}
+	}
+	switch t.ClaudeSeedMode {
+	case "", ClaudeSeedModeCopyOnSpawn, ClaudeSeedModeReadonly:
+		// valid (empty means "use the copy-on-spawn default" — see
+		// ResolveClaudeSeedMode).
+	default:
+		return fmt.Errorf("templates: claude_seed_mode must be %q or %q (template %q, got %q)",
+			ClaudeSeedModeCopyOnSpawn, ClaudeSeedModeReadonly, t.Name, t.ClaudeSeedMode)
 	}
 	return nil
 }

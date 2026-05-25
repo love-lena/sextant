@@ -386,9 +386,15 @@ func loadOperatorCreds(t *testing.T, h *daemonHarness) sextantd.OperatorCreds {
 // TestSpawnedContainerSeedsClaudeFromHostPath is the acceptance test
 // for plans/issues/feat-template-claude-seeding.md: when a template
 // carries `claude_seed = "<host dir>"`, a spawned container has the
-// directory's contents bind-mounted at /home/agent/.claude. Marker
-// file proves the read path; docker exec inside the container is the
+// directory's contents visible at /home/agent/.claude. Marker file
+// proves the read path; docker exec inside the container is the
 // observation point.
+//
+// Since plans/issues/bug-claude-seed-readonly-breaks-session-persistence.md
+// the default mode is "copy-on-spawn" — the host dir is copied into a
+// per-agent named volume and the volume is mounted rw. The seed file
+// is still readable (the populate step copies it in), so this test
+// continues to exercise the happy path of the default mode.
 //
 // Flow:
 //   - Create a host tempdir with stub CLAUDE.md containing
@@ -471,8 +477,8 @@ SEXTANT_DRIVER = "mock"
 	containerID := waitForContainer(t, dockerBin, agentID, 30*time.Second)
 
 	// 4. Cat the seed file inside the container; assert the marker is
-	// present. docker exec runs as `agent`; the bind is read-only but
-	// reads don't need write perms.
+	// present. docker exec runs as `agent`; reads don't need write
+	// perms.
 	out := mustDockerExec(t, dockerBin, containerID,
 		"cat", "/home/agent/.claude/CLAUDE.md")
 	if !strings.Contains(out, marker) {
@@ -480,4 +486,138 @@ SEXTANT_DRIVER = "mock"
 	}
 
 	cleanUpAgent(t, cli, agentID)
+}
+
+// TestSpawnedContainerClaudeSeedCopyOnSpawnIsWritable is the
+// acceptance test for the
+// bug-claude-seed-readonly-breaks-session-persistence fix: in the
+// default (copy-on-spawn) mode, the agent's /home/agent/.claude must
+// be writable so the Claude Agent SDK can persist its session journal.
+// Without this, multi-turn conversation resume silently fails.
+//
+// Flow:
+//   - Host seed dir with a stub CLAUDE.md (read-side proof).
+//   - Spawn an agent against a template that sets claude_seed (no
+//     explicit mode → defaults to copy-on-spawn).
+//   - docker exec inside the container:
+//     1. cat CLAUDE.md — proves the populate step ran.
+//     2. write a fake session journal under projects/... — proves the
+//        mount is rw, which is the bug fix's defining behavior.
+//     3. cat back the journal — round-trips the write.
+//   - docker volume inspect sextant-claude-seed-<uuid> — proves the
+//     volume exists and outlives the container (the per-agent volume
+//     is the mechanism that lets session journals survive restart).
+func TestSpawnedContainerClaudeSeedCopyOnSpawnIsWritable(t *testing.T) {
+	dockerBin := requireDocker(t)
+	requireSidecarImage(t, dockerBin)
+
+	seedDir, err := os.MkdirTemp("", "claude-seed-cos-")
+	if err != nil {
+		t.Fatalf("MkdirTemp seed: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(seedDir) })
+	const marker = "marker: copy-on-spawn-writable"
+	seedFile := filepath.Join(seedDir, "CLAUDE.md")
+	if err := os.WriteFile(seedFile, []byte(marker+"\n"), 0o600); err != nil {
+		t.Fatalf("write CLAUDE.md: %v", err)
+	}
+
+	configDir, _ := runInitForTest(t)
+	cfgPath := filepath.Join(configDir, "sextantd.toml")
+	cfg, err := sextantd.LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	cfg.Daemon.RestartBackoffInitial = sextantd.Duration(100 * time.Millisecond)
+	cfg.Daemon.RestartBackoffMax = sextantd.Duration(1 * time.Second)
+	cfg.MCP.HTTPPort = 0
+	if err := sextantd.SaveConfig(cfgPath, cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	// Note: no `claude_seed_mode` line → defaults to copy-on-spawn.
+	tplBody := `name = "claude-seed-cos"
+description = "Acceptance template for copy-on-spawn writability."
+image = "sextant-sidecar:latest"
+permissions = ["read.agents", "control.prompt"]
+mounts = ["worktree"]
+model = "claude-opus-4-7[1m]"
+permission_ceiling = "auto"
+claude_seed = "` + seedDir + `"
+
+[env]
+SEXTANT_DRIVER = "mock"
+`
+	if err := os.WriteFile(
+		filepath.Join(cfg.Paths.TemplatesDir, "claude-seed-cos.toml"),
+		[]byte(tplBody), 0o600,
+	); err != nil {
+		t.Fatalf("write claude-seed-cos.toml: %v", err)
+	}
+
+	h := bootDaemonAtConfig(t, cfgPath)
+	cli := rpcClient(t, h)
+
+	spawnCtx, spawnCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer spawnCancel()
+	var spawnResp sextantproto.SpawnAgentResponse
+	if err := cli.RPC(spawnCtx, rpc.VerbSpawnAgent, sextantproto.SpawnAgentRequest{
+		Name:     "cos-" + uuid.New().String()[:8],
+		Template: "claude-seed-cos",
+	}, &spawnResp); err != nil {
+		t.Fatalf("spawn_agent: %v\n--- daemon log ---\n%s", err, h.tail(t))
+	}
+	agentID := spawnResp.AgentID
+	if agentID == uuid.Nil {
+		t.Fatal("spawn_agent returned zero UUID")
+	}
+	t.Cleanup(func() { forceRemoveByAgent(dockerBin, agentID) })
+
+	// Per-agent volume name follows the canonical prefix.
+	volName := handlers.ClaudeSeedVolumeName(agentID)
+	t.Cleanup(func() {
+		_ = exec.Command(dockerBin, "volume", "rm", "-f", volName).Run() //nolint:gosec // test-controlled args
+	})
+
+	containerID := waitForContainer(t, dockerBin, agentID, 30*time.Second)
+
+	// 1. Seed file is readable — the populate step ran.
+	out := mustDockerExec(t, dockerBin, containerID,
+		"cat", "/home/agent/.claude/CLAUDE.md")
+	if !strings.Contains(out, marker) {
+		t.Errorf("CLAUDE.md inside container missing marker %q; got:\n%s", marker, out)
+	}
+
+	// 2. Mount is rw — agent can create a fake session journal. This is
+	// the bug fix's defining behavior: a RO bind would silently fail
+	// this write and the SDK's session resume on the next turn would
+	// 404. The copy-on-spawn volume must be writable for the SDK's
+	// `projects/<cwd>/<session-id>.jsonl` to land.
+	mustDockerExec(t, dockerBin, containerID,
+		"mkdir", "-p", "/home/agent/.claude/projects/test")
+	mustDockerExec(t, dockerBin, containerID,
+		"sh", "-c", "echo 'session-journal-marker' > /home/agent/.claude/projects/test/session.jsonl")
+	out = mustDockerExec(t, dockerBin, containerID,
+		"cat", "/home/agent/.claude/projects/test/session.jsonl")
+	if !strings.Contains(out, "session-journal-marker") {
+		t.Errorf("session journal write did not round-trip; got:\n%s", out)
+	}
+
+	// 3. Volume is present on the host — confirms the per-agent volume
+	// outlives the container and would survive a restart.
+	inspectCmd := exec.Command(dockerBin, "volume", "inspect", volName) //nolint:gosec // test-controlled args
+	inspectOut, err := inspectCmd.CombinedOutput()
+	if err != nil {
+		t.Errorf("docker volume inspect %s: %v\n%s", volName, err, string(inspectOut))
+	}
+
+	cleanUpAgent(t, cli, agentID)
+
+	// 4. After the agent's container is gone, the volume is still
+	// present — it will be reattached on a subsequent spawn of the same
+	// UUID (the foundation of the multi-turn-across-restart guarantee).
+	inspectCmd2 := exec.Command(dockerBin, "volume", "inspect", volName) //nolint:gosec // test-controlled args
+	if err := inspectCmd2.Run(); err != nil {
+		t.Errorf("volume %s gone after cleanUpAgent (kill); want still present (archive is the cleanup hook): %v",
+			volName, err)
+	}
 }
