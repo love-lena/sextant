@@ -9,13 +9,16 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/love-lena/sextant-initial/pkg/authjwt"
 	"github.com/love-lena/sextant-initial/pkg/sextantd"
+	"github.com/love-lena/sextant-initial/pkg/version"
 )
 
 // CheckStatus enumerates a check's outcome.
@@ -102,6 +105,17 @@ func collectChecks(ctx context.Context, cfgDir, dataDir string) []CheckResult {
 	out = append(out, checkClickHousePassword(cfg.ClickHouse.PasswordFile))
 	out = append(out, checkTemplates(cfg.Paths.TemplatesDir))
 	out = append(out, checkDataDirs(cfg)...)
+
+	// Workspace-aware checks: only emitted when cfg.Worktree.RepoRoot is
+	// set AND points at a real git checkout. Both are operator-checkout
+	// drift detectors (issues: feat-doctor-stale-binary-detection,
+	// bug-worktree-merge-leaves-operator-checkout-stale).
+	if r, ok := checkBinaryVersion(cfg.Worktree.RepoRoot, version.GitSHA); ok {
+		out = append(out, r)
+	}
+	if r, ok := checkWorkingTree(cfg.Worktree.RepoRoot); ok {
+		out = append(out, r)
+	}
 
 	runtime, runtimeErr := sextantd.ReadRuntimeInfo(cfg.Paths.RuntimeFile)
 	switch {
@@ -275,6 +289,116 @@ func checkClickHouseAddr(addr string) CheckResult {
 	}
 	_ = conn.Close()
 	return CheckResult{Kind: "clickhouse", Check: addr, Status: StatusPass, Detail: "tcp reachable"}
+}
+
+// checkBinaryVersion compares the binary's ldflags-embedded git SHA with
+// the workspace HEAD at repoRoot. It returns (result, true) when something
+// useful can be reported and (zero, false) when the check should be omitted
+// silently — either because no SHA was embedded (binary built without
+// -ldflags), no workspace root is configured, or repoRoot isn't a git
+// checkout. The check is warn-only: an operator may deliberately run an
+// older binary, so we never escalate to fail.
+func checkBinaryVersion(repoRoot, installedSHA string) (CheckResult, bool) {
+	if installedSHA == "" || repoRoot == "" {
+		return CheckResult{}, false
+	}
+	headSHA, err := gitRevParseHEAD(repoRoot)
+	if err != nil {
+		// Not a git checkout (or git missing) — skip silently rather
+		// than failing a check the operator can't act on.
+		return CheckResult{}, false
+	}
+	if headSHA == installedSHA {
+		return CheckResult{
+			Kind: "binary-version", Check: repoRoot, Status: StatusPass,
+			Detail: fmt.Sprintf("installed binary matches HEAD %s", shortSHA(headSHA)),
+		}, true
+	}
+	// Is the installed SHA an ancestor of HEAD? If yes, count how far
+	// behind; if no, the operator built from a different branch.
+	ahead, ancestor := gitAheadCount(repoRoot, installedSHA, headSHA)
+	if !ancestor {
+		return CheckResult{
+			Kind: "binary-version", Check: repoRoot, Status: StatusWarn,
+			Detail: fmt.Sprintf("installed %s is not in ancestry of workspace HEAD %s; consider `make install`",
+				shortSHA(installedSHA), shortSHA(headSHA)),
+		}, true
+	}
+	return CheckResult{
+		Kind: "binary-version", Check: repoRoot, Status: StatusWarn,
+		Detail: fmt.Sprintf("installed binary is %d commits behind workspace HEAD (%s → %s); consider `make install`",
+			ahead, shortSHA(installedSHA), shortSHA(headSHA)),
+	}, true
+}
+
+// checkWorkingTree warns when the workspace at repoRoot has tracked files
+// that differ from HEAD. The driving case is `worktree_merge` advancing
+// main externally to the operator's checkout (issue: bug-worktree-merge-
+// leaves-operator-checkout-stale): the ref moves but the working tree
+// doesn't, leaving `git status` showing apparent edits the operator never
+// made. The fix is a single `git checkout HEAD -- .` and this check tells
+// the operator that's what they need.
+func checkWorkingTree(repoRoot string) (CheckResult, bool) {
+	if repoRoot == "" {
+		return CheckResult{}, false
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, ".git")); err != nil {
+		return CheckResult{}, false
+	}
+	cmd := exec.Command("git", "-C", repoRoot, "diff", "--name-only", "HEAD")
+	out, err := cmd.Output()
+	if err != nil {
+		return CheckResult{
+			Kind: "working-tree", Check: repoRoot, Status: StatusWarn,
+			Detail: fmt.Sprintf("git diff failed: %v", err),
+		}, true
+	}
+	trimmed := strings.TrimRight(string(out), "\n")
+	if trimmed == "" {
+		return CheckResult{
+			Kind: "working-tree", Check: repoRoot, Status: StatusPass,
+			Detail: "working tree matches HEAD",
+		}, true
+	}
+	n := strings.Count(trimmed, "\n") + 1
+	return CheckResult{
+		Kind: "working-tree", Check: repoRoot, Status: StatusWarn,
+		Detail: fmt.Sprintf("%d files differ from HEAD; run `git checkout HEAD -- .` to sync", n),
+	}, true
+}
+
+// gitRevParseHEAD returns the full SHA of HEAD in repoRoot.
+func gitRevParseHEAD(repoRoot string) (string, error) {
+	out, err := exec.Command("git", "-C", repoRoot, "rev-parse", "HEAD").Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// gitAheadCount returns the number of commits in repoRoot reachable from
+// tip but not from base, and whether base is actually an ancestor of tip.
+// When ancestor is false, the returned count is meaningless.
+func gitAheadCount(repoRoot, base, tip string) (count int, ancestor bool) {
+	if err := exec.Command("git", "-C", repoRoot, "merge-base", "--is-ancestor", base, tip).Run(); err != nil {
+		return 0, false
+	}
+	out, err := exec.Command("git", "-C", repoRoot, "rev-list", "--count", base+".."+tip).Output()
+	if err != nil {
+		return 0, true
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return 0, true
+	}
+	return n, true
+}
+
+func shortSHA(sha string) string {
+	if len(sha) > 12 {
+		return sha[:12]
+	}
+	return sha
 }
 
 // emit prints the results in either tabular or JSON form. Returns true
