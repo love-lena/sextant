@@ -177,7 +177,7 @@ Networking:
 **Open sub-decisions**:
 - **Custom per-agent images**: do we support agent definitions that declare extra system packages, building a derived image at definition time? Lean: yes for initial, but ship without it and add when first needed.
 - **Image build & distribution**: ship the image build script (operator builds locally), or pull from a registry (and which registry — ghcr.io? docker hub?). Lean: ship the build script for initial; registry distribution later.
-- **`.claude` volume seeding**: when a per-agent `.claude` volume is created, what's it seeded with? Empty (agent starts fresh)? Snapshot from host's `~/.claude`? Per-template defaults? Lean: empty by default; template can declare `.claude` seeding source.
+- ~~**`.claude` volume seeding**: when a per-agent `.claude` volume is created, what's it seeded with? Empty (agent starts fresh)? Snapshot from host's `~/.claude`? Per-template defaults? Lean: empty by default; template can declare `.claude` seeding source.~~ **Resolved**: templates carry an optional `claude_seed` host path (§11b); when set, the spawn handler bind-mounts it read-only at `/home/agent/.claude`. Unset = empty per-agent volume (default). See `plans/issues/feat-template-claude-seeding.md`.
 
 ## 4. Inter-agent communication
 
@@ -537,7 +537,10 @@ mounts = ["worktree"]                  # named mount classes (worktree | secrets
 initial_prompt = ""                    # optional first prompt on spawn
 model = "claude-opus-4-7[1m]"          # model id passed to Claude SDK
 permission_ceiling = "auto"            # max permission mode (locked to "auto")
+claude_seed = "~/.config/sextant/assistant-claude"  # optional; host dir bind-mounted ro at /home/agent/.claude
 ```
+
+**`claude_seed`** (optional): when set, sextantd resolves the path (`~/` expands via `os.UserHomeDir`) and bind-mounts the directory **read-only** into the container at `/home/agent/.claude`, replacing the default empty per-agent volume. Use it to pre-load operator-curated CLAUDE.md, slash commands, hooks, or `settings.json` for the agent class. Missing or non-directory paths fail template validation at load time. Two-way sync (operator edits → agent, agent writes → host) is intentionally out of scope; the agent's writes stay container-local. See `plans/issues/feat-template-claude-seeding.md`.
 
 **Default template**: `default.toml` ships with `sextant init`. Contents:
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -64,6 +65,45 @@ func TestLoadFromFileRoundTrip(t *testing.T) {
 	}
 	if len(tpl.Permissions) != 2 {
 		t.Errorf("Permissions = %v", tpl.Permissions)
+	}
+}
+
+func TestTemplateValidationRejectsMissingClaudeSeed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "seed.toml")
+	body := `name = "seed"
+image = "sextant-sidecar:latest"
+permissions = ["read.agents"]
+claude_seed = "/nonexistent/sextant-claude-seed-` + filepath.Base(dir) + `"
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := LoadFromFile(path)
+	if err == nil {
+		t.Fatal("expected validation error for missing claude_seed dir")
+	}
+	if !strings.Contains(err.Error(), "claude_seed") {
+		t.Errorf("err = %v, want substring \"claude_seed\"", err)
+	}
+}
+
+func TestTemplateValidationAcceptsExistingClaudeSeed(t *testing.T) {
+	// Sanity: an existing directory satisfies validation. Guards against
+	// the validation being so strict it rejects the happy path.
+	seedDir := t.TempDir()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "seed-ok.toml")
+	body := `name = "seed-ok"
+image = "sextant-sidecar:latest"
+permissions = ["read.agents"]
+claude_seed = "` + seedDir + `"
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := LoadFromFile(path); err != nil {
+		t.Fatalf("LoadFromFile: %v", err)
 	}
 }
 
