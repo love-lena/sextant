@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -130,6 +131,53 @@ func AcquireMergeLock(
 	return mkRelease(kv), nil
 }
 
+// acquireMergeLockWithWait wraps AcquireMergeLock with a bounded
+// polling loop: on ErrLockHeld, sleep mergeLockRetryInterval and
+// retry until ctx is canceled or the cumulative wait exceeds the
+// bound. The bound is the lock's own TTL — a holder that's past
+// its TTL is reclaimed by AcquireMergeLock itself, so any caller
+// waiting beyond one TTL would be wedged behind a healthy peer
+// (and the right reply to that caller is "lock held" so they can
+// report back rather than hang indefinitely). Used by Manager.
+// Merge; exposed unexported because the wait policy belongs to
+// Merge, not to the primitive.
+func acquireMergeLockWithWait(
+	ctx context.Context,
+	kv LockKV,
+	holder string,
+	ttl time.Duration,
+	now func() time.Time,
+) (release func() error, err error) {
+	if ttl <= 0 {
+		ttl = DefaultMergeLockTTL
+	}
+	deadline := time.Now().Add(ttl)
+	for {
+		rel, acquireErr := AcquireMergeLock(ctx, kv, holder, ttl, now)
+		if acquireErr == nil {
+			return rel, nil
+		}
+		if !errors.Is(acquireErr, ErrLockHeld) {
+			return nil, acquireErr
+		}
+		if time.Now().After(deadline) {
+			return nil, acquireErr
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("worktree: wait for merge lock: %w", ctx.Err())
+		case <-time.After(mergeLockRetryInterval):
+		}
+	}
+}
+
+// mergeLockRetryInterval is the poll cadence
+// acquireMergeLockWithWait uses while parked on ErrLockHeld. Short
+// enough that a serialized peer cuts the lock release latency to
+// the noise floor; long enough that a wedged lock doesn't burn
+// CPU on Get calls.
+const mergeLockRetryInterval = 50 * time.Millisecond
+
 // mkRelease returns the release closure used by AcquireMergeLock.
 // Pulled out so the success and stale-retry paths share one
 // implementation.
@@ -161,21 +209,6 @@ func isAlreadyExists(err error) bool {
 	}
 	// Fall-through: match the text the server returns. Cheap defensive
 	// check so a small driver version drift doesn't lose us a lock.
-	return contains(err.Error(), "wrong last sequence") || contains(err.Error(), "key exists")
-}
-
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && indexOf(s, sub) >= 0
-}
-
-func indexOf(s, sub string) int {
-	if sub == "" {
-		return 0
-	}
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
+	msg := err.Error()
+	return strings.Contains(msg, "wrong last sequence") || strings.Contains(msg, "key exists")
 }
