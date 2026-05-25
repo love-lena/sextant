@@ -373,6 +373,27 @@ func (d *daemon) Start(ctx context.Context) error {
 	}
 	mcpRT.server.SetSpawnDeps(spawnRT.asMCPDeps(d.ca, rpcRT.chConn))
 
+	// 12b. Spin up the periodic pruner ticker + control subscription.
+	// Best-effort: a subscribe failure is fatal-on-boot (the daemon's
+	// surface would be incomplete) but a per-tick prune error is
+	// logged inside the loop.
+	if worktreeRT != nil {
+		if err := worktreeRT.startPruneLoop(d.supCtx); err != nil {
+			_ = spawnRT.containers.Close()
+			_ = rpcRT.stopRPC()
+			_ = mcpRT.stop(ctx)
+			if d.supCancel != nil {
+				d.supCancel()
+			}
+			d.closeSocket()
+			_ = sextantd.RemoveRuntimeInfo(d.cfg.Paths.RuntimeFile)
+			_ = d.stopShipperNow(ctx)
+			_ = d.stopClickHouseNow(ctx)
+			_ = d.stopNATSNow(ctx)
+			return fmt.Errorf("start worktree pruner loop: %w", err)
+		}
+	}
+
 	// 13. Register the worktree verbs/tools.
 	if worktreeRT != nil {
 		if err := rpcRT.registerWorktreeVerbs(worktreeRT); err != nil {
@@ -468,7 +489,15 @@ func (d *daemon) doShutdown() error {
 	d.spawnRT = nil
 	controlRT := d.controlRT
 	d.controlRT = nil
+	worktreeRT := d.worktreeRT
+	d.worktreeRT = nil
 	d.mu.Unlock()
+	if worktreeRT != nil {
+		// Stop the prune ticker + unsubscribe the control subject.
+		// Independent of the supervisors so it can drain before NATS
+		// goes away (the unsubscribe needs a live conn).
+		worktreeRT.stopPruneLoop()
+	}
 	if controlRT != nil {
 		if err := controlRT.stop(); err != nil {
 			errs = append(errs, fmt.Errorf("control stop: %w", err))
