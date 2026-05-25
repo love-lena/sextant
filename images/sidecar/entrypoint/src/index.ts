@@ -52,6 +52,8 @@ import {
   type ClientConfig,
 } from "@sextant/client";
 
+import { classifyTool } from "./classifier.js";
+
 /** Bucket where AgentDefinition records live. Mirrors handlers.AgentDefinitionsBucket. */
 const AGENT_DEFINITIONS_BUCKET = "agent_definitions";
 
@@ -549,6 +551,27 @@ function newSDKDriver(
           },
         };
       }
+
+      // canUseTool — mirrors Claude Code CLI's `--permission-mode auto`.
+      // The SDK's `acceptEdits` permissionMode already auto-allows file edits
+      // but treats Bash as requiring per-call approval, which blocks agents in
+      // non-interactive containers. This callback extends that to Bash with a
+      // safe-command classifier: allows git/make/go/etc., denies bright-line
+      // destructive patterns (rm -rf /, sudo, curl|sh, …).
+      // See plans/issues/bug-sidecar-bash-still-asks-in-acceptedits.md.
+      sdkOpts["canUseTool"] = (
+        toolName: string,
+        input: Record<string, unknown>,
+      ) => {
+        const decision = classifyTool(toolName, input);
+        if (decision.behavior === "deny") {
+          log("warn", "canUseTool: denied", {
+            tool: toolName,
+            reason: decision.message,
+          });
+        }
+        return decision;
+      };
 
       try {
         // The SDK supports `prompt` as either a string or an async

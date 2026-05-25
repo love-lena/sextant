@@ -12,13 +12,14 @@ PKGS := ./...
 
 BIN_DIR := bin
 TS_DIR := clients/typescript
+SIDECAR_DIR := images/sidecar/entrypoint
 
 # Binaries built by `make build`. New cmd/<name> dirs land here as milestones add them.
 CMDS := sextant sextantd sextant-shipper sextant-natsboot sextant-clickhouseboot sextant-client-demo sextant-tui-agents
 
-.PHONY: all fmt lint lint-go lint-nilaway lint-ts test test-go test-ts build clean tidy install-tools \
+.PHONY: all fmt lint lint-go lint-nilaway lint-ts lint-sidecar test test-go test-ts test-sidecar build clean tidy install-tools \
         ts-install ts-codegen ts-lint ts-test ts-build \
-        sidecar-image sidecar-image-test
+        sidecar-install sidecar-image sidecar-image-test
 
 all: lint test
 
@@ -43,8 +44,12 @@ lint-nilaway:
 lint-ts: ts-install
 	cd $(TS_DIR) && $(NPM) run lint
 
-## test — go test with race detector + TS integration suite.
-test: test-go test-ts
+# lint-sidecar — tsc --noEmit for the sidecar entrypoint (includes test/ dir).
+lint-sidecar: sidecar-install
+	cd $(SIDECAR_DIR) && $(NPM) run lint
+
+## test — go test with race detector + TS integration suite + sidecar unit tests.
+test: test-go test-ts test-sidecar
 
 test-go:
 	$(GO) test -race -count=1 $(PKGS)
@@ -54,9 +59,18 @@ test-go:
 test-ts: ts-install
 	cd $(TS_DIR) && $(NPM) test
 
+# test-sidecar — vitest unit tests for the sidecar entrypoint classifier.
+# No external services required; runs entirely in-process.
+test-sidecar: sidecar-install
+	cd $(SIDECAR_DIR) && $(NPM) test
+
 # ts-* targets — TypeScript client maintenance.
 ts-install:
 	@cd $(TS_DIR) && [ -d node_modules ] || $(NPM) ci
+
+# sidecar-install — install sidecar entrypoint dev deps (idempotent).
+sidecar-install:
+	@cd $(SIDECAR_DIR) && [ -d node_modules ] || $(NPM) install
 
 ts-codegen: ts-install
 	cd $(TS_DIR) && $(NPM) run codegen
