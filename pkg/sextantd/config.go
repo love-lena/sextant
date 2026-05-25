@@ -20,8 +20,41 @@ type Config struct {
 	NATS       NATSConfig       `toml:"nats"`
 	ClickHouse ClickHouseConfig `toml:"clickhouse"`
 	MCP        MCPConfig        `toml:"mcp"`
+	Shipper    ShipperConfig    `toml:"shipper"`
 	Paths      PathsConfig      `toml:"paths"`
 	Worktree   WorktreeConfig   `toml:"worktree"`
+}
+
+// ShipperConfig governs sextantd's supervision of the sextant-shipper
+// subprocess. See specs/components/sextantd.md §"Startup sequence" and
+// specs/components/shipper.md §"Wire-up to sextantd".
+//
+//   - AutoSupervise gates whether the daemon spawns sextant-shipper at
+//     startup. Default true (set by DefaultConfig and Resolve). When
+//     false, the daemon boots without a shipper and the operator runs
+//     `sextant-shipper` standalone.
+//   - BinaryPath optionally overrides the path to the sextant-shipper
+//     executable. Empty triggers the default resolution: same directory
+//     as the running sextantd binary, then a PATH lookup.
+//   - ConfigPath optionally overrides the shipper.toml path. Empty
+//     defaults to <config_dir>/shipper.toml.
+//   - LogFile optionally redirects the shipper's stdout/stderr to a
+//     file. Empty routes to /dev/null.
+type ShipperConfig struct {
+	AutoSupervise *bool  `toml:"auto_supervise"`
+	BinaryPath    string `toml:"binary_path"`
+	ConfigPath    string `toml:"config_path"`
+	LogFile       string `toml:"log_file"`
+}
+
+// AutoSuperviseEnabled returns the effective auto_supervise flag. nil
+// (omitted in TOML) defaults to true so a fresh sextantd.toml without a
+// [shipper] block still gets shipper supervision.
+func (s ShipperConfig) AutoSuperviseEnabled() bool {
+	if s.AutoSupervise == nil {
+		return true
+	}
+	return *s.AutoSupervise
 }
 
 // WorktreeConfig governs the M14 worktree manager.
@@ -159,6 +192,10 @@ func DefaultConfig(configDir, dataDir string) Config {
 			HTTPPort:    5172,
 			StdioSocket: filepath.Join(dataDir, "sextantd-mcp.sock"),
 		},
+		Shipper: ShipperConfig{
+			AutoSupervise: boolPtr(true),
+			ConfigPath:    filepath.Join(configDir, "shipper.toml"),
+		},
 		Paths: PathsConfig{
 			TemplatesDir: filepath.Join(configDir, "templates"),
 			ClientConfig: filepath.Join(configDir, "client.toml"),
@@ -261,12 +298,27 @@ func (c Config) Resolve() (Config, error) {
 	// explicitly serializes `http_port = 0` doesn't get silently
 	// reverted to 5172 on Load.
 
+	// AutoSupervise defaults to true on a missing [shipper] block so
+	// upgrades from pre-shipper-supervisor sextantd.toml get the new
+	// behavior. Explicit `auto_supervise = false` is preserved.
+	if out.Shipper.AutoSupervise == nil {
+		out.Shipper.AutoSupervise = boolPtr(true)
+	}
+	// ConfigPath default kicks in here (not at DefaultConfig) so a
+	// hand-rolled sextantd.toml that omits the [shipper] block still
+	// gets the canonical <config_dir>/shipper.toml path. Skip when
+	// ConfigDir hasn't been set (some test paths leave it empty).
+	if out.Shipper.ConfigPath == "" && out.Paths.ConfigDir != "" {
+		out.Shipper.ConfigPath = filepath.Join(out.Paths.ConfigDir, "shipper.toml")
+	}
+
 	pathFields := []*string{
 		&out.Daemon.ControlSocket,
 		&out.CA.KeyPath, &out.CA.PubPath,
 		&out.NATS.DataDir, &out.NATS.OperatorCreds, &out.NATS.LogFile,
 		&out.ClickHouse.DataDir, &out.ClickHouse.PasswordFile, &out.ClickHouse.LogFile,
 		&out.MCP.StdioSocket,
+		&out.Shipper.BinaryPath, &out.Shipper.ConfigPath, &out.Shipper.LogFile,
 		&out.Paths.TemplatesDir, &out.Paths.ClientConfig, &out.Paths.RuntimeFile,
 		&out.Paths.ConfigDir, &out.Paths.DataDir,
 		&out.Worktree.RepoRoot, &out.Worktree.WorktreesRoot,
@@ -312,6 +364,10 @@ func (c Config) Resolve() (Config, error) {
 	}
 	return out, nil
 }
+
+// boolPtr returns a pointer to b. Used so ShipperConfig.AutoSupervise
+// can distinguish "omitted" from "explicitly false".
+func boolPtr(b bool) *bool { return &b }
 
 // expandHome resolves a leading "~/" against os.UserHomeDir.
 func expandHome(path string) (string, error) {

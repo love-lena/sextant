@@ -16,6 +16,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/love-lena/sextant-initial/pkg/sextantd"
+	"github.com/love-lena/sextant-initial/pkg/shipper"
 )
 
 // requireBins skips when the required binaries are not available on
@@ -135,6 +136,14 @@ SEXTANT_DRIVER = "mock"
 	if err := sextantd.WritePasswordFile(cfg.ClickHouse.PasswordFile, chPw); err != nil {
 		return err
 	}
+	// shipper.toml — required for sextantd's auto-supervise path
+	// (cfg.Shipper.AutoSupervise=true by default). Construct via
+	// shipper.DefaultConfig + SaveConfig instead of mirroring cmd/sextant's
+	// hand-written TOML so any future schema drift surfaces here too.
+	shipperCfg := shipper.DefaultConfig(configDir, dataDir)
+	if err := shipper.SaveConfig(filepath.Join(configDir, "shipper.toml"), shipperCfg); err != nil {
+		return err
+	}
 	// sextantd.toml.
 	return sextantd.SaveConfig(filepath.Join(configDir, "sextantd.toml"), cfg)
 }
@@ -201,7 +210,19 @@ func startDaemonHarness(t *testing.T) *daemonHarness {
 	if err := sextantd.SaveConfig(cfgPath, cfg); err != nil {
 		t.Fatalf("SaveConfig (tightened): %v", err)
 	}
-	cfg, err = sextantd.LoadConfig(cfgPath)
+	return startDaemonHarnessWithCfgPath(t, cfgPath)
+}
+
+// startDaemonHarnessWithCfgPath starts the daemon against a sextantd.toml
+// the caller already prepared (e.g. after flipping a [shipper] knob).
+// The caller is responsible for tightening backoff / port knobs before
+// calling — this entry point only handles the build + spawn + greeting
+// wait. Use startDaemonHarness for the common case.
+func startDaemonHarnessWithCfgPath(t *testing.T, cfgPath string) *daemonHarness {
+	t.Helper()
+	requireBins(t)
+
+	cfg, err := sextantd.LoadConfig(cfgPath)
 	if err != nil {
 		t.Fatalf("LoadConfig (post-tighten): %v", err)
 	}
@@ -212,6 +233,16 @@ func startDaemonHarness(t *testing.T) *daemonHarness {
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
 		t.Fatalf("go build sextantd: %v", err)
+	}
+	// Also build sextant-shipper into the same dir so the daemon's
+	// resolveShipperBinary "sibling of sextantd" path picks it up. This
+	// matches the production layout where `go install` drops both
+	// binaries into $GOBIN.
+	shipperBin := filepath.Join(binDir, "sextant-shipper")
+	buildShipper := exec.Command("go", "build", "-o", shipperBin, "github.com/love-lena/sextant-initial/cmd/sextant-shipper") //nolint:gosec // test-controlled args
+	buildShipper.Stderr = os.Stderr
+	if err := buildShipper.Run(); err != nil {
+		t.Fatalf("go build sextant-shipper: %v", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)

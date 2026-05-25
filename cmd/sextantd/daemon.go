@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/love-lena/sextant-initial/pkg/clickhouseboot"
 	"github.com/love-lena/sextant-initial/pkg/natsboot"
 	"github.com/love-lena/sextant-initial/pkg/sextantd"
+	"github.com/love-lena/sextant-initial/pkg/shipperboot"
 	"github.com/love-lena/sextant-initial/pkg/supervisor"
 	"github.com/love-lena/sextant-initial/pkg/version"
 )
@@ -38,12 +40,14 @@ type daemon struct {
 	chBaseCfg   clickhouseboot.Config
 
 	// Current subprocess handles. Replaced on each supervisor restart.
-	mu  sync.Mutex
-	nc  *natsServerHandle
-	chh *clickhouseServerHandle
+	mu   sync.Mutex
+	nc   *natsServerHandle
+	chh  *clickhouseServerHandle
+	shph *shipperServerHandle
 
-	natsSup *supervisor.Supervisor
-	chSup   *supervisor.Supervisor
+	natsSup    *supervisor.Supervisor
+	chSup      *supervisor.Supervisor
+	shipperSup *supervisor.Supervisor
 
 	listener     *net.UnixListener
 	socketCloser sync.Once
@@ -95,6 +99,10 @@ type natsServerHandle struct {
 
 type clickhouseServerHandle struct {
 	srv *clickhouseboot.Server
+}
+
+type shipperServerHandle struct {
+	srv *shipperboot.Server
 }
 
 func newDaemon(cfg sextantd.Config) (*daemon, error) {
@@ -229,6 +237,27 @@ func (d *daemon) Start(ctx context.Context) error {
 	go d.drainEvents("nats", natsSup.Events())
 	go d.drainEvents("clickhouse", chSup.Events())
 
+	// 7b. Start the sextant-shipper supervisor when auto_supervise is
+	// on. The shipper depends on NATS + ClickHouse so we sequence it
+	// after both supervisors are running. On failure we fold cleanup
+	// into the supervisor loop's quarantine path; on auto_supervise=off
+	// we skip and the operator runs `sextant-shipper` standalone (the
+	// M6 transitional behavior).
+	if d.cfg.Shipper.AutoSuperviseEnabled() {
+		if err := d.startShipperSupervisor(); err != nil {
+			if d.supCancel != nil {
+				d.supCancel()
+			}
+			d.closeSocket()
+			_ = sextantd.RemoveRuntimeInfo(d.cfg.Paths.RuntimeFile)
+			_ = d.stopClickHouseNow(ctx)
+			_ = d.stopNATSNow(ctx)
+			return fmt.Errorf("start shipper supervisor: %w", err)
+		}
+	} else {
+		log.Printf("sextantd: shipper.auto_supervise=false — operator must run sextant-shipper standalone")
+	}
+
 	// 8. Bring the MCP server up before RPC: spec lists MCP at step 7,
 	// RPC at step 8. MCP needs a live NATS + ClickHouse so we sequence
 	// it after the supervisors are running. SpawnDeps is wired after
@@ -240,6 +269,7 @@ func (d *daemon) Start(ctx context.Context) error {
 		}
 		d.closeSocket()
 		_ = sextantd.RemoveRuntimeInfo(d.cfg.Paths.RuntimeFile)
+		_ = d.stopShipperNow(ctx)
 		_ = d.stopClickHouseNow(ctx)
 		_ = d.stopNATSNow(ctx)
 		return fmt.Errorf("start mcp: %w", err)
@@ -260,14 +290,15 @@ func (d *daemon) Start(ctx context.Context) error {
 	rpcRT, err := d.startRPC(ctx)
 	if err != nil {
 		// Roll back: tear MCP down, cancel the supervisors and tear
-		// NATS/ClickHouse back down so Start's contract (clean state on
-		// failure) holds.
+		// shipper/ClickHouse/NATS back down (reverse-dependency order)
+		// so Start's contract (clean state on failure) holds.
 		_ = mcpRT.stop(ctx)
 		if d.supCancel != nil {
 			d.supCancel()
 		}
 		d.closeSocket()
 		_ = sextantd.RemoveRuntimeInfo(d.cfg.Paths.RuntimeFile)
+		_ = d.stopShipperNow(ctx)
 		_ = d.stopClickHouseNow(ctx)
 		_ = d.stopNATSNow(ctx)
 		return fmt.Errorf("start rpc: %w", err)
@@ -288,6 +319,7 @@ func (d *daemon) Start(ctx context.Context) error {
 		}
 		d.closeSocket()
 		_ = sextantd.RemoveRuntimeInfo(d.cfg.Paths.RuntimeFile)
+		_ = d.stopShipperNow(ctx)
 		_ = d.stopClickHouseNow(ctx)
 		_ = d.stopNATSNow(ctx)
 		return fmt.Errorf("build spawn runtime: %w", err)
@@ -309,6 +341,7 @@ func (d *daemon) Start(ctx context.Context) error {
 		}
 		d.closeSocket()
 		_ = sextantd.RemoveRuntimeInfo(d.cfg.Paths.RuntimeFile)
+		_ = d.stopShipperNow(ctx)
 		_ = d.stopClickHouseNow(ctx)
 		_ = d.stopNATSNow(ctx)
 		return fmt.Errorf("build worktree runtime: %w", err)
@@ -333,6 +366,7 @@ func (d *daemon) Start(ctx context.Context) error {
 		}
 		d.closeSocket()
 		_ = sextantd.RemoveRuntimeInfo(d.cfg.Paths.RuntimeFile)
+		_ = d.stopShipperNow(ctx)
 		_ = d.stopClickHouseNow(ctx)
 		_ = d.stopNATSNow(ctx)
 		return fmt.Errorf("register lifecycle verbs: %w", err)
@@ -350,6 +384,7 @@ func (d *daemon) Start(ctx context.Context) error {
 			}
 			d.closeSocket()
 			_ = sextantd.RemoveRuntimeInfo(d.cfg.Paths.RuntimeFile)
+			_ = d.stopShipperNow(ctx)
 			_ = d.stopClickHouseNow(ctx)
 			_ = d.stopNATSNow(ctx)
 			return fmt.Errorf("register worktree verbs: %w", err)
@@ -455,7 +490,16 @@ func (d *daemon) doShutdown() error {
 		}
 	}
 
-	// Tell the supervisors to stop, then cancel their root context.
+	// Tell the supervisors to stop in reverse-dependency order: shipper
+	// reads from NATS and writes to ClickHouse, so it must drain before
+	// we tear the deps underneath it. Same pattern as the clickhouse
+	// pgroup-kill fix (commit 6c05784): stop the consumer before its
+	// upstream, otherwise the consumer's last NATS publish dangles.
+	if d.shipperSup != nil {
+		if err := d.shipperSup.Stop(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("shipper stop: %w", err))
+		}
+	}
 	if d.chSup != nil {
 		if err := d.chSup.Stop(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("clickhouse stop: %w", err))
@@ -489,7 +533,13 @@ func (d *daemon) doShutdown() error {
 		errs = append(errs, fmt.Errorf("supervisors did not drain within %s", timeout))
 	}
 
-	// Belt-and-suspenders: ensure subprocesses are truly gone.
+	// Belt-and-suspenders: ensure subprocesses are truly gone. Same
+	// reverse-dependency order — shipper first, then ClickHouse, then
+	// NATS — so a shipper that ignored SIGTERM doesn't briefly write
+	// into a half-torn-down ClickHouse during shutdown.
+	if err := d.stopShipperNow(ctx); err != nil {
+		errs = append(errs, err)
+	}
 	if err := d.stopClickHouseNow(ctx); err != nil {
 		errs = append(errs, err)
 	}
@@ -651,6 +701,88 @@ func (d *daemon) buildClickHouseSupervisor(initial *clickhouseboot.Server) (*sup
 	})
 }
 
+// startShipperSupervisor resolves the sextant-shipper binary path and
+// hands the unit to a fresh supervisor. The first StartFn invocation
+// exec's the binary; subsequent restarts repeat the exec under the same
+// Setpgid:true wrapper so the SIGTERM-then-SIGKILL escalation works the
+// same way as nats/clickhouse.
+func (d *daemon) startShipperSupervisor() error {
+	binPath, err := resolveShipperBinary(d.cfg.Shipper.BinaryPath)
+	if err != nil {
+		return err
+	}
+	configPath := d.cfg.Shipper.ConfigPath
+	if configPath == "" {
+		configPath = filepath.Join(d.cfg.Paths.ConfigDir, "shipper.toml")
+	}
+	runtimePath := d.cfg.Paths.RuntimeFile
+	logFile := d.cfg.Shipper.LogFile
+
+	sup, err := supervisor.New(supervisor.Unit{
+		Name: "shipper",
+		Policy: supervisor.Policy{
+			InitialBackoff:  d.cfg.Daemon.RestartBackoffInitial.AsDuration(),
+			MaxBackoff:      d.cfg.Daemon.RestartBackoffMax.AsDuration(),
+			QuarantineAfter: d.cfg.Daemon.RestartQuarantineAfter,
+			ResetAfter:      d.cfg.Daemon.RestartBackoffMax.AsDuration(),
+		},
+		Start: func(ctx context.Context) (supervisor.Process, error) {
+			srv, err := shipperboot.Start(ctx, shipperboot.Config{
+				BinaryPath:      binPath,
+				ConfigPath:      configPath,
+				RuntimePath:     runtimePath,
+				LogFile:         logFile,
+				ShutdownTimeout: d.cfg.Daemon.ShutdownTimeout.AsDuration(),
+			})
+			if err != nil {
+				return nil, fmt.Errorf("start sextant-shipper: %w", err)
+			}
+			d.setShipperHandle(srv)
+			return newShipperProcess(srv), nil
+		},
+	})
+	if err != nil {
+		return err
+	}
+	d.shipperSup = sup
+	d.wg.Add(1)
+	go d.runSupervisor("shipper", sup)
+	go d.drainEvents("shipper", sup.Events())
+	log.Printf("sextantd: shipper supervisor started (binary=%s config=%s runtime=%s)",
+		binPath, configPath, runtimePath)
+	return nil
+}
+
+// resolveShipperBinary picks the path the daemon will exec for
+// sextant-shipper. Preference order:
+//
+//  1. Operator override via cfg.Shipper.BinaryPath.
+//  2. Sibling of the running sextantd binary (os.Executable's directory).
+//     Most production installs land both binaries next to each other.
+//  3. PATH lookup. The fallback for development setups.
+//
+// Returns the absolute path or an error if none of the candidates
+// resolve to an executable file.
+func resolveShipperBinary(override string) (string, error) {
+	if override != "" {
+		if _, err := os.Stat(override); err != nil {
+			return "", fmt.Errorf("shipper binary override %s: %w", override, err)
+		}
+		return override, nil
+	}
+	if exe, err := os.Executable(); err == nil {
+		candidate := filepath.Join(filepath.Dir(exe), "sextant-shipper")
+		if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
+			return candidate, nil
+		}
+	}
+	path, err := exec.LookPath("sextant-shipper")
+	if err != nil {
+		return "", fmt.Errorf("sextant-shipper not next to sextantd and not on PATH: %w", err)
+	}
+	return path, nil
+}
+
 // runSupervisor blocks until the supervisor.Run returns, then records
 // any error and signals the daemon as done if both supervisors have
 // finished.
@@ -745,6 +877,37 @@ func (d *daemon) setClickHouseHandle(srv *clickhouseboot.Server) {
 	d.mu.Lock()
 	d.chh = &clickhouseServerHandle{srv: srv}
 	d.mu.Unlock()
+}
+
+func (d *daemon) setShipperHandle(srv *shipperboot.Server) {
+	d.mu.Lock()
+	d.shph = &shipperServerHandle{srv: srv}
+	d.mu.Unlock()
+}
+
+func (d *daemon) currentShipper() *shipperboot.Server {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.shph == nil {
+		return nil
+	}
+	return d.shph.srv
+}
+
+// stopShipperNow is the unconditional-stop safety net. Mirrors
+// stopNATSNow / stopClickHouseNow — the supervisor's Stop path is the
+// preferred shutdown route; this is the belt-and-suspenders cleanup
+// that runs after the supervisor goroutines drain.
+func (d *daemon) stopShipperNow(ctx context.Context) error {
+	srv := d.currentShipper()
+	if srv == nil {
+		return nil
+	}
+	err := srv.Stop(ctx)
+	d.mu.Lock()
+	d.shph = nil
+	d.mu.Unlock()
+	return err
 }
 
 func (d *daemon) currentNATS() *natsboot.Server {
