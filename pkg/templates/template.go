@@ -47,8 +47,11 @@ func (t Template) Validate() error {
 	if len(t.Permissions) == 0 {
 		return fmt.Errorf("templates: permissions is required and must be non-empty (template %q)", t.Name)
 	}
-	if t.PermissionCeiling != "" && t.PermissionCeiling != "auto" {
-		return fmt.Errorf("templates: permission_ceiling must be \"auto\" (template %q, got %q)", t.Name, t.PermissionCeiling)
+	switch t.PermissionCeiling {
+	case "", "auto", "plan":
+		// valid
+	default:
+		return fmt.Errorf("templates: permission_ceiling must be \"auto\" or \"plan\" (template %q, got %q)", t.Name, t.PermissionCeiling)
 	}
 	return nil
 }

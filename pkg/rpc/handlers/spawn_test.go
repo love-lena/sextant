@@ -795,6 +795,150 @@ func TestSpawnAgentWritesGitConfigMount(t *testing.T) {
 	}
 }
 
+// TestPermissionCeilingToSDKMode_Auto asserts that a template with
+// permission_ceiling = "auto" injects SEXTANT_PERMISSION_MODE=acceptEdits
+// into the container env. This is the default sextant ceiling; the sidecar
+// needs "acceptEdits" to auto-grant Edit/Write without prompting a human
+// granter. See plans/issues/bug-sidecar-doesnt-set-permission-mode.md.
+func TestPermissionCeilingToSDKMode_Auto(t *testing.T) {
+	deps, _, _, runner, _ := buildDeps(t)
+
+	// Override the template KV with one that explicitly sets permission_ceiling = "auto".
+	tplJSON, err := json.Marshal(map[string]any{
+		"name":               "auto-ceiling",
+		"image":              "sextant-sidecar:latest",
+		"permissions":        []string{"read.agents", "control.prompt"},
+		"mounts":             []string{"worktree"},
+		"model":              "claude-opus-4-7[1m]",
+		"permission_ceiling": "auto",
+	})
+	if err != nil {
+		t.Fatalf("marshal template: %v", err)
+	}
+	tplKV := &fakeTemplatesKV{}
+	if _, err := tplKV.Put(context.Background(), "auto-ceiling", tplJSON); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+	deps.Templates = tplKV
+
+	h := handlers.NewSpawnAgent(deps)
+	cap := &captureEmit{}
+	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+		Name: "alpha", Template: "auto-ceiling",
+	}), cap.emit()); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if cap.resp.Error != nil {
+		t.Fatalf("Error = %+v", cap.resp.Error)
+	}
+
+	if got := runner.specs[0].Env["SEXTANT_PERMISSION_MODE"]; got != "acceptEdits" {
+		t.Errorf("SEXTANT_PERMISSION_MODE = %q, want %q", got, "acceptEdits")
+	}
+}
+
+// TestPermissionCeilingToSDKMode_Unset asserts that a template with no
+// permission_ceiling set (empty string) also injects
+// SEXTANT_PERMISSION_MODE=acceptEdits, since "auto" is the default ceiling
+// and the sidecar must not end up in interactive-prompt mode.
+func TestPermissionCeilingToSDKMode_Unset(t *testing.T) {
+	deps, _, _, runner, _ := buildDeps(t)
+
+	// The default template seeded by buildDeps has no permission_ceiling field.
+	// Confirm the env var is still injected with the correct default.
+	h := handlers.NewSpawnAgent(deps)
+	cap := &captureEmit{}
+	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+		Name: "beta", Template: "default",
+	}), cap.emit()); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if cap.resp.Error != nil {
+		t.Fatalf("Error = %+v", cap.resp.Error)
+	}
+
+	if got := runner.specs[0].Env["SEXTANT_PERMISSION_MODE"]; got != "acceptEdits" {
+		t.Errorf("SEXTANT_PERMISSION_MODE = %q, want %q", got, "acceptEdits")
+	}
+}
+
+// TestPermissionCeilingToSDKMode_Plan asserts that a template with
+// permission_ceiling = "plan" injects SEXTANT_PERMISSION_MODE=plan.
+func TestPermissionCeilingToSDKMode_Plan(t *testing.T) {
+	deps, _, _, runner, _ := buildDeps(t)
+
+	tplJSON, err := json.Marshal(map[string]any{
+		"name":               "plan-ceiling",
+		"image":              "sextant-sidecar:latest",
+		"permissions":        []string{"read.agents", "control.prompt"},
+		"mounts":             []string{"worktree"},
+		"model":              "claude-opus-4-7[1m]",
+		"permission_ceiling": "plan",
+	})
+	if err != nil {
+		t.Fatalf("marshal template: %v", err)
+	}
+	tplKV := &fakeTemplatesKV{}
+	if _, err := tplKV.Put(context.Background(), "plan-ceiling", tplJSON); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+	deps.Templates = tplKV
+
+	h := handlers.NewSpawnAgent(deps)
+	cap := &captureEmit{}
+	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+		Name: "gamma", Template: "plan-ceiling",
+	}), cap.emit()); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if cap.resp.Error != nil {
+		t.Fatalf("Error = %+v", cap.resp.Error)
+	}
+
+	if got := runner.specs[0].Env["SEXTANT_PERMISSION_MODE"]; got != "plan" {
+		t.Errorf("SEXTANT_PERMISSION_MODE = %q, want %q", got, "plan")
+	}
+}
+
+// TestPermissionCeilingToSDKMode_BypassFails asserts that a template with
+// permission_ceiling = "bypassPermissions" fails template validation and
+// therefore causes the spawn to return an error rather than ever reaching
+// the container env. The validator enforces this at load time (not just at
+// spawn) to ensure bypassPermissions never appears anywhere in the system.
+// See [[sextant-permission-ceiling]] memory note.
+func TestPermissionCeilingToSDKMode_BypassFails(t *testing.T) {
+	deps, _, _, _, _ := buildDeps(t)
+
+	// Inject a template JSON that has an invalid permission_ceiling. The
+	// LoadFromKV call in the spawn handler will reject it during Validate().
+	tplJSON, err := json.Marshal(map[string]any{
+		"name":               "bypass-attempt",
+		"image":              "sextant-sidecar:latest",
+		"permissions":        []string{"read.agents"},
+		"permission_ceiling": "bypassPermissions",
+	})
+	if err != nil {
+		t.Fatalf("marshal template: %v", err)
+	}
+	tplKV := &fakeTemplatesKV{}
+	if _, err := tplKV.Put(context.Background(), "bypass-attempt", tplJSON); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+	deps.Templates = tplKV
+
+	h := handlers.NewSpawnAgent(deps)
+	cap := &captureEmit{}
+	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+		Name: "delta", Template: "bypass-attempt",
+	}), cap.emit()); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	// The spawn must return an error — validation failure or internal error.
+	if cap.resp.Error == nil {
+		t.Fatal("expected spawn to fail for bypassPermissions ceiling, but it succeeded")
+	}
+}
+
 // TestSpawnAgentRollsBackGitConfigOnContainerFailure confirms the
 // gitconfig temp file is cleaned up by the rollback ledger when the
 // container fails to start.
