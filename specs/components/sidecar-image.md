@@ -64,14 +64,14 @@ Responsibilities:
 7. Publish heartbeat to `agents.<uuid>.heartbeat` every N seconds
 8. On SDK exit: publish `lifecycle.session_ended` event with reason; container exits
 
-### M9 scope (scaffold only)
+### Scope progression
 
-M9 ships the image and a *scaffolded* entrypoint that satisfies the image-build acceptance and proves the env-var contract. The full responsibility set above lands progressively:
+- **M9** (scaffold): image + env-var contract + `lifecycle.started` / heartbeat / `lifecycle.ended`.
+- **M10**: MCP server side bound. Sidecar opens the MCP client connection over Streamable HTTP at `SEXTANT_MCP_URL`, presenting `SEXTANT_JWT` as the Bearer token. The MCP server verifies the JWT against the M5 CA and enforces per-tool capability checks.
+- **M11**: spawn flow + per-incarnation JWT. Sidecar subscribes to `agents.<uuid>.inbox`. Operator-creds NATS auth (`SEXTANT_NATS_USER` / `SEXTANT_NATS_PASSWORD`) per `specs/components/nats.md` §"Agent path" — the JWT remains MCP-only at this stage.
+- **Post-Phase-1 (`feat-sidecar-sdk-driver-001`)**: Claude Agent SDK driver loop is wired. On each inbox prompt the sidecar invokes `@anthropic-ai/claude-agent-sdk` `query()`, streams its events as `agent_frame` envelopes to `agents.<uuid>.frames`, and publishes a `lifecycle.turn_ended` envelope when the turn completes. The first turn's SDK-issued `session_id` is persisted back to the `agent_definitions.<uuid>` KV entry (`runtime.session_id`); subsequent spawns of the same agent set `SEXTANT_SESSION_ID` to resume that session. A `--driver=mock` mode is provided for tests (canned events, no API call).
 
-- **JWT-authenticated NATS connection** is deferred (see `specs/components/nats.md` §"Config"). M11 sidecars connect to NATS via `SEXTANT_NATS_USER`/`SEXTANT_NATS_PASSWORD` (operator credentials forwarded into the container at spawn). The JWT (`SEXTANT_JWT`) is consumed only by the MCP transport, where capability checks are real (M10).
-- **MCP connection** is opened by the M10 entrypoint over Streamable HTTP at `SEXTANT_MCP_URL`, presenting `SEXTANT_JWT` as the Bearer token. The MCP server verifies the JWT against the M5 CA and enforces per-tool capability checks.
-- **Claude Code SDK invocation** lands post-Phase-1 (M16+). M9–M11 ship a `lifecycle.started` publish + 5-second heartbeat publish loop and a clean `lifecycle.ended` on SIGTERM. That is sufficient to prove the image+entrypoint integration; the SDK loop is bolted on without changing the surrounding contract.
-- The entrypoint exits with a clear error if required NATS credentials are missing.
+The entrypoint exits with a clear error if required NATS credentials are missing.
 
 ## Volume mounts (set by sextantd at spawn)
 
@@ -90,10 +90,12 @@ M9 ships the image and a *scaffolded* entrypoint that satisfies the image-build 
 - `SEXTANT_NATS_URL`
 - `SEXTANT_JWT` — per-incarnation JWT signed by the M5 CA. Consumed by the **MCP** transport (Bearer token); see `specs/components/sextantd.md` §"MCP server" and `architecture.md` §9c. Not consumed by NATS at M11 — see `specs/components/nats.md` §"Config" for the per-agent NATS auth deferral.
 - `SEXTANT_NATS_USER`, `SEXTANT_NATS_PASSWORD` (M11+) — operator NATS credentials, set by sextantd at spawn so the sidecar can connect to NATS. This is the explicit M11 stop-gap for per-agent NATS authentication; the eventual per-incarnation NATS-user promotion drops these in favor of the JWT being consumed directly by NATS. Documented in `specs/components/nats.md` §"Config".
-- `SEXTANT_SESSION_ID` (optional; if set, sidecar starts SDK with `--resume`)
+- `SEXTANT_SESSION_ID` (optional; if set, sidecar passes it to the SDK as `resume`)
 - `SEXTANT_MCP_URL` (M11+ — sidecar wires MCP)
 - `SEXTANT_HOST_ID`
 - `SEXTANT_INCARNATION_ID` (M11+) — sidecar uses this as the lifecycle/heartbeat `incarnation_id` so envelopes match the KV record sextantd wrote. If unset (older spawns, tests) the sidecar generates a UUID and that becomes the de-facto incarnation ID for the run.
+- `SEXTANT_MODEL` (post-Phase-1 SDK wire-up) — Claude model identifier passed to the Agent SDK. Spawn handler resolves this from the agent template's `model` field, defaulting to `claude-opus-4-7[1m]` (per `architecture.md` §11b) when the template doesn't set it.
+- `ANTHROPIC_API_KEY` (post-Phase-1 SDK wire-up) — pass-through of the operator's API key so the Claude Agent SDK can authenticate against the Anthropic API. Resolved at spawn time from sextantd's own process environment (the operator exports it before starting sextantd). Forwarded verbatim into the container env; not stored in KV. Falls through to the SDK's default credential resolution when unset — see `architecture.md` §3 "Credentials & secrets" for the longer-term `credentials` block.
 
 Plus any per-agent credentials declared in the agent definition.
 
