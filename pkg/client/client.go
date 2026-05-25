@@ -85,6 +85,21 @@ func WithExtraNATSOptions(opts ...nats.Option) Option { return natsOptOpt{opts: 
 // Connect loads ~/.config/sextant/client.toml (or the supplied path) and
 // returns a connected Client. Pass an empty configPath to use
 // DefaultConfigPath.
+//
+// The NATS URL on disk in client.toml is a placeholder written by
+// `sextant init`; the live daemon binds an auto-allocated port and
+// records it in runtime.json. To avoid the silent-stale-port failure
+// mode (every restart where the daemon picks a new port → every CLI
+// verb hangs on connect timeout), Connect prefers runtime.json's
+// nats_addr when the file exists and parses cleanly. The client.toml
+// URL is used as the fallback. This makes the client transparently
+// follow the daemon across restarts without operators having to edit
+// client.toml.
+//
+// runtime.json is read from DefaultRuntimePath() (the canonical
+// ~/.local/share/sextant/runtime.json). A non-existent, unreadable, or
+// malformed runtime.json silently falls back to client.toml so the
+// pre-fix behavior is preserved when the daemon isn't running.
 func Connect(ctx context.Context, configPath string, opts ...Option) (*Client, error) {
 	if configPath == "" {
 		p, err := DefaultConfigPath()
@@ -96,6 +111,15 @@ func Connect(ctx context.Context, configPath string, opts ...Option) (*Client, e
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		return nil, err
+	}
+	// Prefer the live NATS address from runtime.json. Errors resolving
+	// the path (e.g. home-dir lookup fails) are non-fatal — we fall
+	// back to client.toml's URL, which is what the pre-fix code did
+	// unconditionally.
+	if runtimePath, rpErr := DefaultRuntimePath(); rpErr == nil {
+		if liveURL, ok := readRuntimeNATSURL(runtimePath); ok {
+			cfg.NATS.URL = liveURL
+		}
 	}
 	return ConnectWithConfig(ctx, cfg, opts...)
 }
