@@ -202,6 +202,56 @@ claude_seed_mode = "readonly-bind"
 	}
 }
 
+// TestMountsAcceptsSSH pins the feat-container-ssh-passthrough fix:
+// templates may declare `mounts = ["worktree", "ssh"]` to opt into the
+// ~/.ssh bind mount the spawn handler attaches read-only at
+// /home/agent/.ssh. The ssh class is opt-in (no default template lists
+// it); validation must accept it explicitly so a typo'd value (e.g.
+// "shh") still errors. See plans/issues/feat-container-ssh-passthrough.md.
+func TestMountsAcceptsSSH(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "with-ssh.toml")
+	body := `name = "with-ssh"
+image = "sextant-sidecar:latest"
+permissions = ["read.agents"]
+mounts = ["worktree", "ssh"]
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	tpl, err := LoadFromFile(path)
+	if err != nil {
+		t.Fatalf("LoadFromFile: %v", err)
+	}
+	if len(tpl.Mounts) != 2 || tpl.Mounts[1] != "ssh" {
+		t.Errorf("Mounts = %v, want [worktree ssh]", tpl.Mounts)
+	}
+}
+
+// TestMountsRejectsUnknownClass guards the mount-class allowlist —
+// arbitrary strings must error at validation so a typo doesn't silently
+// produce an agent missing the intended mount. The error message must
+// name the offending value so the operator can spot it in the TOML.
+func TestMountsRejectsUnknownClass(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad-mount.toml")
+	body := `name = "bad-mount"
+image = "sextant-sidecar:latest"
+permissions = ["read.agents"]
+mounts = ["worktree", "shh"]
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := LoadFromFile(path)
+	if err == nil {
+		t.Fatal("expected validation error for unknown mount class")
+	}
+	if !strings.Contains(err.Error(), "shh") {
+		t.Errorf("err = %v, want substring \"shh\"", err)
+	}
+}
+
 func TestLoadFromFileMissingPermissionsFails(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad.toml")

@@ -1,10 +1,11 @@
 ---
 title: Add opt-in SSH key passthrough so agents can `git push`
-status: open
+status: fixed
 priority: P2
 created_at: 2026-05-24T23:18-07:00
 labels: [feature, container, sidecar, git, auth]
 discovered_in: pre-flight gap analysis
+fixed_in: cafbfb28a09592a1cf611d10bfcbe45e63ff5582
 ---
 
 ## Summary
