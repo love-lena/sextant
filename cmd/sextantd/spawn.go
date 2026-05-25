@@ -53,6 +53,11 @@ type spawnRuntime struct {
 	// handlers.SpawnDeps.Worktree. The daemon sets this after the
 	// worktree runtime is built; nil when worktree.repo_root is unset.
 	worktree handlers.WorktreeProvider
+	// repoRoot mirrors worktree.repo_root from the config. The spawn
+	// handler uses it to bind-mount <repoRoot>/.git into worktree
+	// containers so the worktree's `.git` pointer resolves inside the
+	// container. Empty when worktree is disabled.
+	repoRoot string
 }
 
 // buildSpawnRuntime opens the KV buckets, the docker client, and
@@ -143,11 +148,14 @@ func (r *spawnRuntime) setMCPURL(addr string) {
 	r.mcpURL = sidecarMCPURL(addr)
 }
 
-// setWorktree installs the M14 worktree provider. Called by the
-// daemon after the worktree runtime is built (see worktree.go); nil
-// is allowed when the worktree surface is disabled.
-func (r *spawnRuntime) setWorktree(p handlers.WorktreeProvider) {
+// setWorktree installs the M14 worktree provider and the host repo
+// root the spawn handler uses to bind-mount <repoRoot>/.git into
+// worktree containers. Called by the daemon after the worktree
+// runtime is built (see worktree.go); a nil provider + empty root is
+// allowed when the worktree surface is disabled.
+func (r *spawnRuntime) setWorktree(p handlers.WorktreeProvider, repoRoot string) {
 	r.worktree = p
+	r.repoRoot = repoRoot
 }
 
 // asSpawnDeps adapts the runtime into the dep bag the handlers expect.
@@ -168,6 +176,7 @@ func (r *spawnRuntime) asSpawnDeps(chConn driver.Conn) handlers.SpawnDeps {
 		History:       hist,
 		WorkspaceRoot: r.workspaceDir,
 		Worktree:      r.worktree,
+		RepoRoot:      r.repoRoot,
 		HostID:        r.hostID,
 		NATSURL:       r.natsURL,
 		NATSUser:      r.natsUser,
@@ -195,6 +204,7 @@ func (r *spawnRuntime) asMCPDeps(ca *authjwt.CA, chConn driver.Conn) *mcpserver.
 		History:      hist,
 		WorkspaceDir: r.workspaceDir,
 		Worktree:     r.worktree,
+		RepoRoot:     r.repoRoot,
 		HostID:       r.hostID,
 		NATSURL:      r.natsURL,
 		NATSUser:     r.natsUser,

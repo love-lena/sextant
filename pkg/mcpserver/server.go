@@ -104,6 +104,10 @@ type SpawnDeps struct {
 	History      handlers.HistoryWriter
 	WorkspaceDir string
 	Worktree     handlers.WorktreeProvider
+	// RepoRoot mirrors handlers.SpawnDeps.RepoRoot. The MCP path
+	// forwards it verbatim so the operator-NATS and agent-MCP spawn
+	// surfaces produce containers with the same mount set.
+	RepoRoot     string
 	HostID       string
 	NATSURL      string
 	NATSUser     string
@@ -912,6 +916,7 @@ func (s *Server) handleSpawnAgent(ctx context.Context, _ Caller, in SpawnAgentAr
 		History:       deps.History,
 		WorkspaceRoot: deps.WorkspaceDir,
 		Worktree:      deps.Worktree,
+		RepoRoot:      deps.RepoRoot,
 		HostID:        deps.HostID,
 		NATSURL:       deps.NATSURL,
 		NATSUser:      deps.NATSUser,
