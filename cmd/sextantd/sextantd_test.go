@@ -144,6 +144,20 @@ func makeCA() (priv, pub []byte, err error) {
 	return generateCAForTest()
 }
 
+// testRunLabel returns the sextant.test_run value every daemon-harness
+// process stamps on its spawned containers. Sourced from
+// SEXTANT_TEST_RUN_LABEL when set (the makefile/CI path could pin a
+// known label), or derived once per `go test` invocation from the
+// test-binary PID otherwise. The PID-derived form is stable across
+// every harness call in a single `go test` run, which is what the
+// orphan tripwire needs to scope its scan correctly.
+func testRunLabel() string {
+	if v := os.Getenv("SEXTANT_TEST_RUN_LABEL"); v != "" {
+		return v
+	}
+	return fmt.Sprintf("gotest-%d", os.Getpid())
+}
+
 // daemonHarness is the test fixture shared by the daemon integration
 // tests. It builds the sextantd binary, runs `sextant init` in a temp
 // home, starts the daemon, waits for the control-socket greeting, and
@@ -210,6 +224,12 @@ func startDaemonHarness(t *testing.T) *daemonHarness {
 	cmd := exec.CommandContext(ctx, binPath, "--config", cfgPath) //nolint:gosec // test-controlled args
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
+	// Stamp every container spawned via this daemon with a known
+	// test_run label so the orphan-tripwire test in spawn_test.go
+	// scopes its check to containers we created — and ignores any
+	// long-running operator-owned containers (e.g. the standing
+	// `lead`) that share the sextant.agent_uuid label.
+	cmd.Env = append(os.Environ(), "SEXTANT_TEST_RUN_LABEL="+testRunLabel())
 	if err := cmd.Start(); err != nil {
 		cancel()
 		_ = logFile.Close()

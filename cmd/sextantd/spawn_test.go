@@ -278,27 +278,30 @@ func waitForLifecycleStarted(t *testing.T, ch <-chan client.Message, agentID uui
 }
 
 // TestNoOrphanContainersAfterTestSuite is a guardrail: after every
-// other test in this package runs, no container with the
-// sextant.agent_uuid label may remain. The check is a Cleanup
-// registered at test start so it runs at package teardown.
-//
-// This won't catch every misbehavior (e.g. a test that *creates* a
-// container without registering the label), but for the M11 happy
-// path it's the simplest tripwire.
+// other test in this package runs, no container we spawned remains.
+// Scoping by `sextant.agent_uuid` alone matches *any* sextant agent
+// — including an operator-owned long-running daemon (e.g. the
+// standing `lead`) that predates the test suite. We narrow the filter
+// to `sextant.test_run=<testRunLabel>` (set by startDaemonHarness via
+// SEXTANT_TEST_RUN_LABEL → spawnRuntime.testRunLabel →
+// handlers.SpawnDeps.TestRunLabel → LabelTestRun on every spawn) so
+// the tripwire only catches containers this `go test` process
+// created. Production containers never carry sextant.test_run.
 func TestNoOrphanContainersAfterTestSuite(t *testing.T) {
 	// Skip cleanly when docker isn't available — same gate the
 	// acceptance test uses.
 	dockerBin := requireDocker(t)
 	out, err := exec.Command(dockerBin, "ps", "-a", //nolint:gosec // test-controlled args
 		"--filter", "label="+handlers.LabelAgentUUID,
+		"--filter", "label="+handlers.LabelTestRun+"="+testRunLabel(),
 		"--format", "{{.Names}} ({{.ID}})").Output()
 	if err != nil {
 		t.Fatalf("docker ps: %v", err)
 	}
 	leftover := strings.TrimSpace(string(out))
 	if leftover != "" {
-		t.Errorf("orphan containers detected with %s label after suite:\n%s",
-			handlers.LabelAgentUUID, leftover)
+		t.Errorf("orphan containers detected with %s=%s after suite:\n%s",
+			handlers.LabelTestRun, testRunLabel(), leftover)
 	}
 }
 
