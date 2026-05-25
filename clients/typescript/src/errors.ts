@@ -35,6 +35,31 @@ export class KVKeyNotFoundError extends Error {
 }
 
 /**
+ * Thrown by `Client.updateKV` when the CAS check fails — another
+ * writer mutated the key between the caller's read of `revision` and
+ * this update. nats-server signals this with JetStream API err_code
+ * 10071 ("wrong last sequence"); we surface it as a typed error so
+ * callers can decide to retry-read-merge or give up.
+ *
+ * Mirrors the err_code surface; there's no Go-side counterpart to
+ * mirror today (the Go client's KV-CAS path lands when the first Go
+ * consumer needs it).
+ */
+export class KVCASConflictError extends Error {
+  override readonly name = "KVCASConflictError";
+
+  constructor(
+    public readonly bucket: string,
+    public readonly key: string,
+    public readonly expectedRevision: bigint,
+  ) {
+    super(
+      `client: kv CAS conflict: ${bucket}/${key} (expected revision ${expectedRevision})`,
+    );
+  }
+}
+
+/**
  * Thrown by `Client.rpc` when the per-call timeout elapses without a
  * terminal reply. Distinct from a server-side `RPCError { code: "timeout" }`
  * — that surfaces as a structured `RPCError` with code `"timeout"`.

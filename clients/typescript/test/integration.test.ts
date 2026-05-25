@@ -15,6 +15,7 @@ import {
   Client,
   KIND_AGENT_FRAME,
   KIND_RPC_RESPONSE,
+  KVCASConflictError,
   KVKeyNotFoundError,
   RPCError,
   RPCTimeoutError,
@@ -269,6 +270,56 @@ describe("kv", () => {
     await expect(client.getKV(bucket, `missing-${randomUUID()}`)).rejects.toBeInstanceOf(
       KVKeyNotFoundError,
     );
+  }, 30_000);
+
+  it("CAS update succeeds when revision matches, rejects on conflict", async () => {
+    const bucket = "ui_state";
+    const key = `cas-${randomUUID()}`;
+    const v1 = new TextEncoder().encode("v1");
+    const v2 = new TextEncoder().encode("v2");
+    const v3 = new TextEncoder().encode("v3");
+
+    // Seed the key, capture the revision the CAS update will check.
+    await client.putKV(bucket, key, v1);
+    const entry = await client.getKVEntry(bucket, key);
+    expect(entry.revision).toBeGreaterThan(0n);
+
+    // Race: a concurrent writer (here, an unconditional putKV) bumps
+    // the revision before our CAS update fires. The stale-revision
+    // updateKV must reject with KVCASConflictError, not silently
+    // clobber.
+    await client.putKV(bucket, key, v2);
+
+    let conflict: KVCASConflictError | undefined;
+    try {
+      await client.updateKV(bucket, key, v3, entry.revision);
+    } catch (err) {
+      conflict = err as KVCASConflictError;
+    }
+    expect(conflict).toBeInstanceOf(KVCASConflictError);
+    expect(conflict?.bucket).toBe(bucket);
+    expect(conflict?.key).toBe(key);
+    expect(conflict?.expectedRevision).toBe(entry.revision);
+
+    // The value the CAS update tried to write must NOT have landed.
+    const after = new TextDecoder().decode(await client.getKV(bucket, key));
+    expect(after).toBe("v2");
+
+    // Re-read + retry round-trip: fresh revision, CAS now succeeds.
+    const fresh = await client.getKVEntry(bucket, key);
+    const newRev = await client.updateKV(bucket, key, v3, fresh.revision);
+    expect(newRev).toBeGreaterThan(fresh.revision);
+    const final = new TextDecoder().decode(await client.getKV(bucket, key));
+    expect(final).toBe("v3");
+  }, 30_000);
+
+  it("updateKV rejects revisions <= 0", async () => {
+    const bucket = "ui_state";
+    const key = `cas-zero-${randomUUID()}`;
+    await client.putKV(bucket, key, new TextEncoder().encode("seed"));
+    await expect(
+      client.updateKV(bucket, key, new TextEncoder().encode("x"), 0n),
+    ).rejects.toThrow(/expectedRevision must be > 0/);
   }, 30_000);
 
   it("emits updates on watchKV", async () => {

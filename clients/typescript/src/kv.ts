@@ -9,7 +9,23 @@
 import type { KV, KvEntry } from "nats";
 
 import type { Client, StopRegistration } from "./client.js";
-import { KVKeyNotFoundError } from "./errors.js";
+import { KVCASConflictError, KVKeyNotFoundError } from "./errors.js";
+
+/**
+ * One read of a KV key with its current JetStream revision attached.
+ * Returned by `getKVEntry`; the revision feeds back into `updateKV`
+ * for CAS semantics.
+ */
+export interface KVEntryWithRevision {
+  /** Bucket the read came from. */
+  bucket: string;
+  /** Key the read came from. */
+  key: string;
+  /** Raw value bytes. */
+  value: Uint8Array;
+  /** JetStream stream sequence of this revision. Pass to updateKV. */
+  revision: bigint;
+}
 
 /** Operation that produced a KV update. */
 export type KVOp = "put" | "delete" | "purge";
@@ -58,8 +74,23 @@ export async function getKV(
   bucket: string,
   key: string,
 ): Promise<Uint8Array> {
+  const entry = await getKVEntry(client, bucket, key);
+  return entry.value;
+}
+
+/**
+ * Read `key` AND its current JetStream revision. The revision feeds
+ * `updateKV` for compare-and-set semantics. Throws
+ * `KVKeyNotFoundError` when the key is absent or has been deleted /
+ * purged.
+ */
+export async function getKVEntry(
+  client: Client,
+  bucket: string,
+  key: string,
+): Promise<KVEntryWithRevision> {
   client.ensureOpen();
-  if (!bucket || !key) throw new Error("client: getKV requires bucket and key");
+  if (!bucket || !key) throw new Error("client: getKVEntry requires bucket and key");
   let kv: KV;
   try {
     kv = await openBucket(client, bucket);
@@ -74,7 +105,75 @@ export async function getKV(
   if (entry.operation === "DEL" || entry.operation === "PURGE") {
     throw new KVKeyNotFoundError(bucket, key);
   }
-  return entry.value;
+  return {
+    bucket,
+    key,
+    value: entry.value,
+    revision: BigInt(entry.revision),
+  };
+}
+
+/**
+ * Compare-and-set write of `key` in `bucket`. Succeeds only when
+ * `key`'s current revision matches `expectedRevision`; otherwise
+ * throws `KVCASConflictError`. nats-server signals the conflict with
+ * JetStream API err_code 10071 ("wrong last sequence"); other
+ * failures bubble through as-is.
+ *
+ * Returns the new revision on success. Callers typically chain a
+ * `getKVEntry` → mutate → `updateKV` round-trip; on conflict, re-read
+ * and retry once (further conflicts past one retry usually indicate
+ * a hot-key write storm worth surfacing to the operator rather than
+ * looping).
+ */
+export async function updateKV(
+  client: Client,
+  bucket: string,
+  key: string,
+  value: Uint8Array,
+  expectedRevision: bigint,
+): Promise<bigint> {
+  client.ensureOpen();
+  if (!bucket || !key) throw new Error("client: updateKV requires bucket and key");
+  if (expectedRevision <= 0n) {
+    throw new Error("client: updateKV expectedRevision must be > 0");
+  }
+  const kv = await openBucket(client, bucket);
+  // nats.js KV.update accepts a number, not a bigint, for the version.
+  // JetStream sequences are uint64, so we cap at Number.MAX_SAFE_INTEGER
+  // (2^53-1); revisions beyond that are a real-world impossibility for
+  // a single bucket but the explicit check turns silent truncation
+  // into a clear error.
+  if (expectedRevision > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(
+      `client: updateKV expectedRevision ${expectedRevision} exceeds Number.MAX_SAFE_INTEGER`,
+    );
+  }
+  try {
+    const newRev = await kv.update(key, value, Number(expectedRevision));
+    return BigInt(newRev);
+  } catch (err) {
+    if (isCASConflict(err)) {
+      throw new KVCASConflictError(bucket, key, expectedRevision);
+    }
+    throw err;
+  }
+}
+
+/**
+ * `true` when `err` is the nats-server "wrong last sequence" rejection
+ * — that's the only signal we use to distinguish a CAS conflict from
+ * an unrelated put failure (network, ACL, etc.). The matching surface
+ * is either the structured `api_error.err_code === 10071` (server-side
+ * JetStream error) or the substring "wrong last sequence" in the
+ * message (defensive fallback for any wrapping the client adds).
+ */
+function isCASConflict(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const obj = err as { api_error?: { err_code?: number }; message?: unknown };
+  if (obj.api_error && obj.api_error.err_code === 10071) return true;
+  const msg = typeof obj.message === "string" ? obj.message : String(err);
+  return /wrong last sequence/i.test(msg);
 }
 
 /**
