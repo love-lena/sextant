@@ -46,6 +46,7 @@ import {
   KIND_AGENT_FRAME,
   KIND_HEARTBEAT,
   KIND_LIFECYCLE,
+  KVCASConflictError,
   newEnvelope,
   type Client,
   type ClientConfig,
@@ -316,8 +317,16 @@ function extractPrompt(payload: unknown): InboxPrompt | null {
 
 /**
  * Persist the SDK-issued session_id to the agent_definitions KV entry
- * so subsequent spawns resume the session. Best-effort: any decode /
- * write failure is logged and the sidecar continues.
+ * so subsequent spawns resume the session.
+ *
+ * Uses compare-and-set against the revision returned by getKVEntry to
+ * close the read-modify-write race with restart_agent or any other
+ * concurrent definition writer. On a CAS conflict (10071 / "wrong last
+ * sequence") we re-read once and retry; a second conflict logs +
+ * gives up — the next prompt's persist will pick up the fresh
+ * revision and try again. Other failures (decode, network) are also
+ * best-effort: the published session_id on every agent_frame is the
+ * durable source of truth.
  */
 async function persistSessionID(
   client: Client,
@@ -325,31 +334,46 @@ async function persistSessionID(
   sessionId: string,
 ): Promise<void> {
   if (!sessionId) return;
-  try {
-    const raw = await client.getKV(AGENT_DEFINITIONS_BUCKET, env.agentUuid);
-    const def = JSON.parse(new TextDecoder().decode(raw)) as Record<string, unknown>;
-    const runtime = (def["runtime"] as Record<string, unknown> | undefined) ?? {};
-    const existing = typeof runtime["session_id"] === "string" ? (runtime["session_id"] as string) : "";
-    if (existing === sessionId) {
+  const maxAttempts = 2;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const entry = await client.getKVEntry(AGENT_DEFINITIONS_BUCKET, env.agentUuid);
+      const def = JSON.parse(new TextDecoder().decode(entry.value)) as Record<string, unknown>;
+      const runtime = (def["runtime"] as Record<string, unknown> | undefined) ?? {};
+      const existing = typeof runtime["session_id"] === "string" ? (runtime["session_id"] as string) : "";
+      if (existing === sessionId) {
+        return;
+      }
+      runtime["session_id"] = sessionId;
+      def["runtime"] = runtime;
+      const currentVersion =
+        typeof def["version"] === "number" ? (def["version"] as number) : 0;
+      def["version"] = currentVersion + 1;
+      def["updated_at"] = new Date().toISOString().replace(/Z$/, "000Z");
+      const enc = new TextEncoder().encode(JSON.stringify(def));
+      await client.updateKV(AGENT_DEFINITIONS_BUCKET, env.agentUuid, enc, entry.revision);
+      log("info", "session_id persisted", {
+        sessionId,
+        revision: String(entry.revision),
+        attempt,
+      });
+      return;
+    } catch (err) {
+      if (err instanceof KVCASConflictError && attempt < maxAttempts) {
+        log("info", "session_id persist CAS conflict; retrying", {
+          sessionId,
+          expectedRevision: String(err.expectedRevision),
+          attempt,
+        });
+        continue;
+      }
+      log("warn", "session_id persist failed", {
+        sessionId,
+        attempt,
+        err: err instanceof Error ? err.message : String(err),
+      });
       return;
     }
-    runtime["session_id"] = sessionId;
-    def["runtime"] = runtime;
-    const currentVersion =
-      typeof def["version"] === "number" ? (def["version"] as number) : 0;
-    def["version"] = currentVersion + 1;
-    def["updated_at"] = new Date().toISOString().replace(
-      /Z$/,
-      "000Z",
-    );
-    const enc = new TextEncoder().encode(JSON.stringify(def));
-    await client.putKV(AGENT_DEFINITIONS_BUCKET, env.agentUuid, enc);
-    log("info", "session_id persisted", { sessionId });
-  } catch (err) {
-    log("warn", "session_id persist failed", {
-      sessionId,
-      err: err instanceof Error ? err.message : String(err),
-    });
   }
 }
 
@@ -370,9 +394,24 @@ interface PromptDriver {
 }
 
 /**
- * Mock driver — emits a canned `assistant_text` frame echoing the
- * prompt back, then `lifecycle.turn_ended`. Used by tests that
- * exercise the bus integration without an Anthropic API call.
+ * Mock driver — emits a canned event sequence that exercises every
+ * frame_kind the real SDK driver publishes, so cmd/sextantd's
+ * integration test covers the full bus contract without an Anthropic
+ * API call. The sequence mirrors what the SDK actually produces for a
+ * one-tool-call turn:
+ *
+ *   1. `system_note`    — `subtype: "init"` (mirrors SDKSystemMessage init).
+ *   2. `assistant_text` — body.text echoes `ack: <prompt>`.
+ *   3. `tool_call`      — tool_name=`mock_echo`, body.input={prompt}.
+ *   4. `tool_result`    — body.result=<echoed prompt>, is_error=false.
+ *   5. `lifecycle.turn_ended` — no reason on success, reason="error"
+ *      when the prompt content starts with `error:` (the error-path
+ *      test's trigger).
+ *
+ * The error trigger is intentionally prompt-driven (not env-driven) so
+ * one running sidecar can exercise both the success and error paths
+ * across two prompts — the alternative (spawning two sidecars) doubles
+ * test wall-clock for no signal.
  *
  * The mock honours `SEXTANT_SESSION_ID` for the first turn (so the
  * persistence test can verify the runtime.session_id round-trip) and
@@ -383,10 +422,42 @@ function newMockDriver(client: Client, env: SidecarEnv, incarnationId: string): 
   let sessionId = env.sessionId ?? `mock-session-${incarnationId}`;
   return {
     async runTurn(prompt: InboxPrompt): Promise<{ sessionId?: string }> {
-      const text = `ack: ${prompt.content}`;
+      const isError = prompt.content.startsWith("error:");
       try {
-        await publishFrame(client, env, "assistant_text", { text }, { sessionId });
-        await publishLifecycle(client, env, incarnationId, "turn_ended");
+        await publishFrame(client, env, "system_note", { subtype: "init" }, { sessionId });
+        if (isError) {
+          const message = `mock_error: ${prompt.content.slice("error:".length).trim()}`;
+          await publishFrame(client, env, "error", { message }, { sessionId });
+          await publishLifecycle(client, env, incarnationId, "turn_ended", "error");
+        } else {
+          const text = `ack: ${prompt.content}`;
+          await publishFrame(
+            client,
+            env,
+            "assistant_text",
+            { text },
+            { sessionId },
+          );
+          await publishFrame(
+            client,
+            env,
+            "tool_call",
+            { input: { prompt: prompt.content }, id: "mock-tool-1" },
+            { sessionId, toolName: "mock_echo" },
+          );
+          await publishFrame(
+            client,
+            env,
+            "tool_result",
+            {
+              result: prompt.content,
+              is_error: false,
+              tool_use_id: "mock-tool-1",
+            },
+            { sessionId, toolName: "mock_echo" },
+          );
+          await publishLifecycle(client, env, incarnationId, "turn_ended");
+        }
       } catch (err) {
         log("error", "mock driver publish failed", {
           err: err instanceof Error ? err.message : String(err),
