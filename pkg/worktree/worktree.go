@@ -322,12 +322,22 @@ func (m *Manager) Merge(ctx context.Context, name, target string) (MergeResult, 
 	if target == "" {
 		target = "main"
 	}
-	info, err := m.Get(ctx, name)
-	if err != nil {
+	// Pre-lock probe so we fail fast on an unknown name without
+	// taking the lock. The state read here is advisory only —
+	// between this Get and the lock acquire another caller may have
+	// completed a merge of the same worktree, so we re-Get under
+	// the lock below before relying on Status.
+	if _, err := m.Get(ctx, name); err != nil {
 		return MergeResult{}, err
 	}
 
-	release, err := AcquireMergeLock(ctx, m.cfg.Locks, m.cfg.HolderID, m.cfg.MergeLockTTL, m.cfg.Now)
+	// Acquire the merge lock with bounded wait. `conventions/git-
+	// workflow.md` §"Merging" step 1 says "Acquire locks.merge (or
+	// wait)" — a Merge call by an agent that loses the race to a
+	// peer should park, not error. The wait is bounded by one TTL;
+	// past that the existing holder is treated as stale and
+	// reclaimed by AcquireMergeLock itself.
+	release, err := acquireMergeLockWithWait(ctx, m.cfg.Locks, m.cfg.HolderID, m.cfg.MergeLockTTL, m.cfg.Now)
 	if err != nil {
 		return MergeResult{}, err
 	}
@@ -335,6 +345,20 @@ func (m *Manager) Merge(ctx context.Context, name, target string) (MergeResult, 
 	// before returning the result avoids holding it across the audit
 	// envelope writer in the RPC handler.
 	defer func() { _ = release() }()
+
+	// Re-Get under the lock. Closes the TOCTOU window between the
+	// pre-lock probe and the lock acquire: another caller could have
+	// merged the same worktree between our probe and our lock-grab.
+	// If the current Status is `merged`, we no-op (idempotent); any
+	// other unexpected status falls through to the merge attempt
+	// (git will report a conflict / no-op as appropriate).
+	info, err := m.Get(ctx, name)
+	if err != nil {
+		return MergeResult{}, err
+	}
+	if info.Status == sextantproto.WorktreeStatusMerged {
+		return MergeResult{OK: true, Branch: info.Branch, Target: target}, nil
+	}
 
 	// Mark the source worktree as merging while we hold the lock.
 	info.Status = sextantproto.WorktreeStatusMerging

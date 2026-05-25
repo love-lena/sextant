@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -161,7 +162,10 @@ func buildManager(t *testing.T) (*worktree.Manager, *fakeKV, *fakeKV, string) {
 		Registry:      reg,
 		Locks:         locks,
 		HolderID:      "test-holder",
-		MergeLockTTL:  2 * time.Second,
+		// TTL needs to comfortably exceed two serial git-merge
+		// operations on a cold cache (TestMergeIsSerializedByLock
+		// waits up to one TTL for the second merge to acquire).
+		MergeLockTTL: 30 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -445,6 +449,145 @@ func TestAcquireMergeLockBasic(t *testing.T) {
 		t.Fatalf("Acquire after release: %v", err)
 	}
 	_ = rel2()
+}
+
+// TestMergeIsSerializedByLock proves the load-bearing claim from
+// `specs/architecture.md` §11: worktree_merge serializes through
+// `locks.merge`. Two concurrent Merge() calls on distinct
+// worktrees against the same target must not overlap their
+// lock-holding windows. We observe the lock directly via the
+// shared `locks` KV: while either Merge goroutine is mid-flight,
+// an external AcquireMergeLock against the same bucket must
+// return ErrLockHeld. If both merges proceeded without taking
+// the lock, every external acquire would succeed.
+//
+// Both merges land cleanly at the end; the test doesn't pin an
+// order — what matters is that mutual exclusion is honored.
+func TestMergeIsSerializedByLock(t *testing.T) {
+	m, _, locks, _ := buildManager(t)
+	ctx := context.Background()
+
+	infoA, err := m.Create(ctx, "feat-serial-a-001", "main", uuid.Nil)
+	if err != nil {
+		t.Fatalf("Create A: %v", err)
+	}
+	infoB, err := m.Create(ctx, "feat-serial-b-001", "main", uuid.Nil)
+	if err != nil {
+		t.Fatalf("Create B: %v", err)
+	}
+	// Commit one distinct file on each worktree so the merges
+	// produce observable side-effects.
+	for _, w := range []struct {
+		path, file, content string
+	}{
+		{infoA.Path, "a.txt", "alpha\n"},
+		{infoB.Path, "b.txt", "beta\n"},
+	} {
+		if err := os.WriteFile(filepath.Join(w.path, w.file), []byte(w.content), 0o600); err != nil {
+			t.Fatalf("write %s: %v", w.file, err)
+		}
+		runOrFail(t, w.path, "git", "config", "user.email", "test@example.com")
+		runOrFail(t, w.path, "git", "config", "user.name", "tester")
+		runOrFail(t, w.path, "git", "add", w.file)
+		runOrFail(t, w.path, "git", "commit", "-m", "add "+w.file)
+	}
+
+	type result struct {
+		who string
+		res worktree.MergeResult
+		err error
+	}
+	resCh := make(chan result, 2)
+	go func() {
+		r, err := m.Merge(ctx, "feat-serial-a-001", "main")
+		resCh <- result{"a", r, err}
+	}()
+	go func() {
+		r, err := m.Merge(ctx, "feat-serial-b-001", "main")
+		resCh <- result{"b", r, err}
+	}()
+
+	// While either Merge is in flight it must hold the lock. Poll
+	// the `locks` bucket directly: a non-empty `merge` key proves
+	// somebody has the lock. We require at least one external
+	// observation of the lock-held state — if neither Merge ever
+	// held the lock the bucket would be empty throughout.
+	//
+	// Run the polling loop in its own goroutine so we don't race
+	// the merge completions. The merges hold the lock for hundreds
+	// of milliseconds (real git work) so a 5ms poll gives us tens
+	// of observation chances per merge.
+	pollDone := make(chan struct{})
+	stopPoll := make(chan struct{})
+	var sawHeld atomic.Bool
+	var externalLockErrs atomic.Int32
+	go func() {
+		defer close(pollDone)
+		for {
+			select {
+			case <-stopPoll:
+				return
+			default:
+			}
+			if _, err := locks.Get(ctx, worktree.MergeLockKey); err == nil {
+				sawHeld.Store(true)
+				// Assert an external AcquireMergeLock against the
+				// same bucket fails with ErrLockHeld — strongest
+				// evidence the lock is functional, not a bystander
+				// record. Count failures so the test can assert
+				// at least one happened.
+				_, lockErr := worktree.AcquireMergeLock(ctx, locks, "external-prober", time.Second, time.Now)
+				if errors.Is(lockErr, worktree.ErrLockHeld) {
+					externalLockErrs.Add(1)
+				}
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+
+	// Both merges eventually complete. Either order is fine; both
+	// must report OK=true.
+	got := map[string]result{}
+	for i := 0; i < 2; i++ {
+		select {
+		case r := <-resCh:
+			got[r.who] = r
+		case <-time.After(30 * time.Second):
+			close(stopPoll)
+			<-pollDone
+			t.Fatalf("merge goroutine did not finish (have %d/2: %v)", len(got), got)
+		}
+	}
+	close(stopPoll)
+	<-pollDone
+
+	if !sawHeld.Load() {
+		t.Error("locks.merge was never populated; Merge did not hold the lock")
+	}
+	if externalLockErrs.Load() == 0 {
+		t.Error("external AcquireMergeLock never returned ErrLockHeld while a Merge was in flight; lock is not functional")
+	}
+	for _, who := range []string{"a", "b"} {
+		r := got[who]
+		if r.err != nil {
+			t.Errorf("merge %s error: %v", who, r.err)
+		}
+		if !r.res.OK {
+			t.Errorf("merge %s OK=false (conflicts=%v)", who, r.res.Conflicts)
+		}
+	}
+
+	// Post-conditions: the lock is released and both merges left no
+	// stale merge worktrees behind.
+	if _, err := locks.Get(ctx, worktree.MergeLockKey); err == nil {
+		t.Error("locks.merge still set after both merges completed")
+	}
+	entries, _ := os.ReadDir(filepath.Dir(infoA.Path))
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".merge-") {
+			t.Errorf("stale merge worktree leftover: %s", e.Name())
+		}
+	}
 }
 
 func TestAcquireMergeLockTTLExpiry(t *testing.T) {
