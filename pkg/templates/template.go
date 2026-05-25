@@ -31,6 +31,16 @@ type Template struct {
 	InitialPrompt     string            `toml:"initial_prompt" json:"initial_prompt,omitempty"`
 	Model             string            `toml:"model" json:"model"`
 	PermissionCeiling string            `toml:"permission_ceiling" json:"permission_ceiling,omitempty"`
+	// ClaudeSeed is an optional host path that the spawn handler
+	// bind-mounts read-only into the container at /home/agent/.claude.
+	// Use it to pre-load operator-curated CLAUDE.md, custom slash
+	// commands, hooks, or settings.json for the agent class. Tilde
+	// (`~/`) is expanded against os.UserHomeDir at validation time.
+	// When empty, the spawn handler leaves /home/agent/.claude as the
+	// default per-agent empty named volume.
+	// See specs/architecture.md §11b and
+	// plans/issues/feat-template-claude-seeding.md.
+	ClaudeSeed string `toml:"claude_seed" json:"claude_seed,omitempty"`
 }
 
 // Validate asserts the invariants the spawn handler relies on: a name,
@@ -53,7 +63,43 @@ func (t Template) Validate() error {
 	default:
 		return fmt.Errorf("templates: permission_ceiling must be \"auto\" or \"plan\" (template %q, got %q)", t.Name, t.PermissionCeiling)
 	}
+	if t.ClaudeSeed != "" {
+		expanded, err := ExpandClaudeSeed(t.ClaudeSeed)
+		if err != nil {
+			return fmt.Errorf("templates: claude_seed (template %q): %w", t.Name, err)
+		}
+		info, err := os.Stat(expanded)
+		if err != nil {
+			return fmt.Errorf("templates: claude_seed %q (template %q): %w", expanded, t.Name, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("templates: claude_seed %q (template %q) is not a directory", expanded, t.Name)
+		}
+	}
 	return nil
+}
+
+// ExpandClaudeSeed resolves a template's claude_seed field to an
+// absolute on-host path. A leading `~/` (or bare `~`) expands to the
+// invoking user's home directory via os.UserHomeDir; every other path
+// is returned as-is. Splitting the expansion from Validate lets the
+// spawn handler reuse the same logic when assembling the bind-mount
+// without re-implementing the rule.
+func ExpandClaudeSeed(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve home dir: %w", err)
+		}
+		if path == "~" {
+			return home, nil
+		}
+		return filepath.Join(home, path[2:]), nil
+	}
+	return path, nil
 }
 
 // LoadFromFile reads a single TOML file from path and returns the parsed
