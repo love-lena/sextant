@@ -334,11 +334,18 @@ func TestSpawnAgentHappyPath(t *testing.T) {
 		"SEXTANT_AGENT_UUID", "SEXTANT_AGENT_NAME", "SEXTANT_INCARNATION_ID",
 		"SEXTANT_HOST_ID", "SEXTANT_NATS_URL", "SEXTANT_NATS_USER",
 		"SEXTANT_NATS_PASSWORD", "SEXTANT_JWT", "SEXTANT_MCP_URL",
+		"SEXTANT_MODEL",
 	}
 	for _, k := range mustEnv {
 		if spec.Env[k] == "" {
 			t.Errorf("env %s is empty: %v", k, spec.Env)
 		}
+	}
+	// SEXTANT_MODEL falls through to the spawn-handler default when the
+	// template doesn't set one. The default mirrors specs/architecture.md
+	// §11b and the sidecar's own fallback.
+	if got := spec.Env["SEXTANT_MODEL"]; got != handlers.DefaultModel {
+		t.Errorf("env SEXTANT_MODEL = %q, want %q", got, handlers.DefaultModel)
 	}
 	if spec.Labels[handlers.LabelAgentUUID] != resp.AgentID.String() {
 		t.Errorf("LabelAgentUUID = %q", spec.Labels[handlers.LabelAgentUUID])
