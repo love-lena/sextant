@@ -46,6 +46,7 @@ export {
 } from "./envelope.js";
 export {
   ClientClosedError,
+  KVCASConflictError,
   KVKeyNotFoundError,
   RPCError,
   RPCTimeoutError,
@@ -53,7 +54,7 @@ export {
 export type { Message, SubscribeOptions } from "./subscribe.js";
 export type { RPCOptions } from "./rpc.js";
 export type { QueryFilter } from "./query.js";
-export type { KVOp, KVUpdate } from "./kv.js";
+export type { KVEntryWithRevision, KVOp, KVUpdate } from "./kv.js";
 
 // Re-export the generated wire types so callers don't have to dig into
 // the internal path.

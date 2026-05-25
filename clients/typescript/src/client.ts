@@ -20,7 +20,15 @@ import { subscribe, subscribeFromSeq, type SubscribeOptions, type Message } from
 import { publish } from "./publish.js";
 import { rpc, type RPCOptions } from "./rpc.js";
 import { query, type QueryFilter } from "./query.js";
-import { getKV, putKV, watchKV, type KVUpdate } from "./kv.js";
+import {
+  getKV,
+  getKVEntry,
+  putKV,
+  updateKV,
+  watchKV,
+  type KVEntryWithRevision,
+  type KVUpdate,
+} from "./kv.js";
 import type { Envelope } from "./types.generated.js";
 
 /** Options on the `connect` / `connectWithConfig` entry points. */
@@ -182,8 +190,25 @@ export class Client {
     return getKV(this, bucket, key);
   }
 
+  async getKVEntry(bucket: string, key: string): Promise<KVEntryWithRevision> {
+    return getKVEntry(this, bucket, key);
+  }
+
   async putKV(bucket: string, key: string, value: Uint8Array): Promise<void> {
     return putKV(this, bucket, key, value);
+  }
+
+  /**
+   * Compare-and-set write. Throws `KVCASConflictError` when another
+   * writer raced ahead of us.
+   */
+  async updateKV(
+    bucket: string,
+    key: string,
+    value: Uint8Array,
+    expectedRevision: bigint,
+  ): Promise<bigint> {
+    return updateKV(this, bucket, key, value, expectedRevision);
   }
 
   /**
