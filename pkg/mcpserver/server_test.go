@@ -378,9 +378,42 @@ func TestListToolsAdvertisesCatalog(t *testing.T) {
 	}
 }
 
-// TestNotImplementedToolReturnsError makes sure M11-stubbed tools
-// surface a clean tool error rather than crashing.
-func TestNotImplementedToolReturnsError(t *testing.T) {
+// TestGetMetricToolReturnsNotImplemented covers the M10-stub
+// fallthrough path that's still in place for tools whose body lands
+// later (get_metric ships post-M11 when on-demand telemetry lands).
+func TestGetMetricToolReturnsNotImplemented(t *testing.T) {
+	natsSrv := bootedNATS(t)
+	ca := freshCA(t)
+	srv, _ := startServer(t, natsSrv, ca)
+	token, _ := issueJWT(t, ca, []string{mcpserver.CapReadMetrics})
+	session := httpMCPClient(t, srv, token)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: mcpserver.ToolGetMetric,
+		Arguments: map[string]any{
+			"name": "agents.active",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected error result; got success")
+	}
+	body := parseToolError(t, res)
+	if body["code"] != sextantproto.ErrCodeNotImplemented {
+		t.Errorf("error code = %v, want %s", body["code"], sextantproto.ErrCodeNotImplemented)
+	}
+}
+
+// TestSpawnAgentToolWithoutBackendErrors is the M11 surface assertion:
+// the tool is wired to the real spawn handler, but if the server was
+// built without SpawnDeps the dispatcher surfaces a clean internal
+// error rather than crashing. The daemon always populates SpawnDeps;
+// the test holds tests that build a bare server accountable.
+func TestSpawnAgentToolWithoutBackendErrors(t *testing.T) {
 	natsSrv := bootedNATS(t)
 	ca := freshCA(t)
 	srv, _ := startServer(t, natsSrv, ca)
@@ -403,8 +436,8 @@ func TestNotImplementedToolReturnsError(t *testing.T) {
 		t.Fatalf("expected error result; got success")
 	}
 	body := parseToolError(t, res)
-	if body["code"] != sextantproto.ErrCodeNotImplemented {
-		t.Errorf("error code = %v, want %s", body["code"], sextantproto.ErrCodeNotImplemented)
+	if body["code"] != sextantproto.ErrCodeInternal {
+		t.Errorf("error code = %v, want %s", body["code"], sextantproto.ErrCodeInternal)
 	}
 }
 

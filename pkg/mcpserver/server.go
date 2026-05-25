@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	mcpauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/nats-io/nats.go"
@@ -23,6 +24,7 @@ import (
 	"github.com/love-lena/sextant-initial/pkg/rpc"
 	"github.com/love-lena/sextant-initial/pkg/rpc/handlers"
 	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+	"github.com/love-lena/sextant-initial/pkg/templates"
 )
 
 // toolError is the structured error a tool handler returns to the
@@ -74,8 +76,34 @@ type Config struct {
 	// Optional in tests that only exercise send_message.
 	QueryDB handlers.QueryHistoryDB
 
+	// SpawnDeps wires the spawn_agent / kill_agent / prompt_agent tool
+	// implementations to the real RPC handlers. Optional: when nil the
+	// three tools fall back to the M10 NotImplemented stub so older
+	// callers don't crash. The daemon (M11+) always populates this.
+	SpawnDeps *SpawnDeps
+
 	// Logger receives diagnostic messages. Defaults to log.Default.
 	Logger *log.Logger
+}
+
+// SpawnDeps bundles the dependencies the spawn_agent / kill_agent /
+// prompt_agent tools need. It mirrors handlers.SpawnDeps + KillDeps +
+// PromptDeps so callers wire one struct; the MCP server unpacks it into
+// per-handler shapes internally.
+type SpawnDeps struct {
+	Definitions  handlers.AgentMutableKV
+	Incarnations handlers.AgentMutableKV
+	Templates    templates.KV
+	Containers   handlers.ContainerRunner
+	CA           *authjwt.CA
+	History      handlers.HistoryWriter
+	WorkspaceDir string
+	HostID       string
+	NATSURL      string
+	NATSUser     string
+	NATSPassword string
+	MCPURL       string
+	Issuer       string
 }
 
 // Server is the in-process MCP server. One Server per daemon. Build
@@ -531,18 +559,18 @@ func (s *Server) registerTools() {
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        ToolSpawnAgent,
-		Description: "Spawn a new agent from a template. (M10: stubbed; real impl lands in M11.)",
-	}, wrapHandler(s, ToolSpawnAgent, s.handleNotImplemented))
+		Description: "Spawn a new agent from a template; returns the new agent UUID.",
+	}, wrapHandler(s, ToolSpawnAgent, s.handleSpawnAgent))
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        ToolKillAgent,
-		Description: "Kill a running agent. (M10: stubbed; real impl lands in M11.)",
-	}, wrapHandler(s, ToolKillAgent, s.handleNotImplemented))
+		Description: "Stop a running agent's container and flip its definition back to defined.",
+	}, wrapHandler(s, ToolKillAgent, s.handleKillAgent))
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        ToolPromptAgent,
-		Description: "Send a prompt to an agent's inbox and wait for ack. (M10: stubbed; real impl lands in M11.)",
-	}, wrapHandler(s, ToolPromptAgent, s.handleNotImplemented))
+		Description: "Publish a prompt to an agent's inbox subject (agents.<uuid>.inbox).",
+	}, wrapHandler(s, ToolPromptAgent, s.handlePromptAgent))
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        ToolEmitEvent,
@@ -799,6 +827,84 @@ func (s *Server) handleNotImplemented(_ context.Context, _ Caller, _ any) (any, 
 	return nil, fmtErrf(sextantproto.ErrCodeNotImplemented, "tool ships in M11 when spawn flow lands")
 }
 
+// handleSpawnAgent re-uses the RPC spawn handler so the wire shapes
+// (envelope + RPCResponse) match the operator NATS path byte-for-byte.
+// Returns the raw result map for the MCP client.
+func (s *Server) handleSpawnAgent(ctx context.Context, _ Caller, in SpawnAgentArgs) (any, error) {
+	if s.cfg.SpawnDeps == nil {
+		return nil, fmtErrf(sextantproto.ErrCodeInternal, "spawn backend not configured")
+	}
+	raw, err := json.Marshal(sextantproto.SpawnAgentRequest{
+		Name:     in.Name,
+		Template: in.Template,
+	})
+	if err != nil {
+		return nil, fmtErrf(sextantproto.ErrCodeInternal, "marshal: %v", err)
+	}
+	env := sextantproto.NewEnvelope(sextantproto.KindRPCRequest, s.cfg.From, raw)
+	return runRPCAsTool(ctx, handlers.NewSpawnAgent(handlers.SpawnDeps{
+		Definitions:   s.cfg.SpawnDeps.Definitions,
+		Incarnations:  s.cfg.SpawnDeps.Incarnations,
+		Templates:     s.cfg.SpawnDeps.Templates,
+		Containers:    s.cfg.SpawnDeps.Containers,
+		CA:            s.cfg.SpawnDeps.CA,
+		History:       s.cfg.SpawnDeps.History,
+		WorkspaceRoot: s.cfg.SpawnDeps.WorkspaceDir,
+		HostID:        s.cfg.SpawnDeps.HostID,
+		NATSURL:       s.cfg.SpawnDeps.NATSURL,
+		NATSUser:      s.cfg.SpawnDeps.NATSUser,
+		NATSPassword:  s.cfg.SpawnDeps.NATSPassword,
+		MCPURL:        s.cfg.SpawnDeps.MCPURL,
+		Issuer:        s.cfg.SpawnDeps.Issuer,
+	}), env)
+}
+
+func (s *Server) handleKillAgent(ctx context.Context, _ Caller, in KillAgentArgs) (any, error) {
+	if s.cfg.SpawnDeps == nil {
+		return nil, fmtErrf(sextantproto.ErrCodeInternal, "spawn backend not configured")
+	}
+	id, err := uuidFromString(in.AgentID)
+	if err != nil {
+		return nil, fmtErrf(sextantproto.ErrCodeBadRequest, "agent_id: %v", err)
+	}
+	raw, err := json.Marshal(sextantproto.KillAgentRequest{
+		AgentID:      id,
+		GraceSeconds: in.GraceSeconds,
+	})
+	if err != nil {
+		return nil, fmtErrf(sextantproto.ErrCodeInternal, "marshal: %v", err)
+	}
+	env := sextantproto.NewEnvelope(sextantproto.KindRPCRequest, s.cfg.From, raw)
+	return runRPCAsTool(ctx, handlers.NewKillAgent(handlers.KillDeps{
+		Definitions:  s.cfg.SpawnDeps.Definitions,
+		Incarnations: s.cfg.SpawnDeps.Incarnations,
+		Containers:   s.cfg.SpawnDeps.Containers,
+	}), env)
+}
+
+func (s *Server) handlePromptAgent(ctx context.Context, _ Caller, in PromptAgentArgs) (any, error) {
+	if s.cfg.SpawnDeps == nil {
+		return nil, fmtErrf(sextantproto.ErrCodeInternal, "spawn backend not configured")
+	}
+	id, err := uuidFromString(in.AgentID)
+	if err != nil {
+		return nil, fmtErrf(sextantproto.ErrCodeBadRequest, "agent_id: %v", err)
+	}
+	raw, err := json.Marshal(sextantproto.PromptAgentRequest{
+		AgentID: id,
+		Content: in.Content,
+	})
+	if err != nil {
+		return nil, fmtErrf(sextantproto.ErrCodeInternal, "marshal: %v", err)
+	}
+	env := sextantproto.NewEnvelope(sextantproto.KindRPCRequest, s.cfg.From, raw)
+	return runRPCAsTool(ctx, handlers.NewPromptAgent(handlers.PromptDeps{
+		Definitions: s.cfg.SpawnDeps.Definitions,
+		NATS:        s.cfg.NATS,
+		From:        s.cfg.From,
+	}), env)
+}
+
 // runRPCAsTool runs an rpc.Handler synchronously and unmarshals its
 // terminal emit into a generic map[string]any so the MCP layer can
 // re-marshal it into structured tool output. Errors from the handler
@@ -832,6 +938,16 @@ func runRPCAsTool(ctx context.Context, h rpc.Handler, env sextantproto.Envelope)
 		out = map[string]any{}
 	}
 	return out, nil
+}
+
+// uuidFromString parses s into a uuid.UUID, returning a structured
+// bad_request error compatible with the dispatcher when s is malformed.
+func uuidFromString(s string) (uuid.UUID, error) {
+	id, err := uuid.Parse(s)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return id, nil
 }
 
 // publishEnvelope wraps payload in a sextantproto.Envelope tagged with
