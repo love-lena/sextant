@@ -90,11 +90,21 @@ ts-build: ts-install
 	cd $(TS_DIR) && $(NPM) run build
 
 ## build — compile every command under cmd/.
+#
+# GIT_SHA captures the workspace HEAD at build time and gets baked into
+# pkg/version.GitSHA via -ldflags. `sextant doctor` reads this back to detect
+# stale installed binaries (issue: feat-doctor-stale-binary-detection). The
+# `?=` lets CI / packagers override (e.g. set to the source tarball's SHA).
+# Falls back to empty when not in a git checkout — doctor treats empty as
+# "skip the staleness check" rather than an error.
+GIT_SHA ?= $(shell git rev-parse HEAD 2>/dev/null)
+BUILD_LDFLAGS := -X github.com/love-lena/sextant-initial/pkg/version.GitSHA=$(GIT_SHA)
+
 build: $(BIN_DIR)
 	@if [ -z "$(CMDS)" ]; then echo "no cmds to build yet"; exit 0; fi
 	@for cmd in $(CMDS); do \
 	  echo ">> build $$cmd"; \
-	  $(GO) build -o $(BIN_DIR)/$$cmd ./cmd/$$cmd || exit 1; \
+	  $(GO) build -ldflags "$(BUILD_LDFLAGS)" -o $(BIN_DIR)/$$cmd ./cmd/$$cmd || exit 1; \
 	done
 
 $(BIN_DIR):

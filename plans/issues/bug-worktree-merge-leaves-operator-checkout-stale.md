@@ -1,10 +1,28 @@
 ---
 title: worktree_merge advances main but operator's main checkout's working tree lags HEAD
-status: open
+status: resolved
 priority: P3
 created_at: 2026-05-25T01:34-07:00
+resolved_at: 2026-05-25T00:00-07:00
 labels: [bug, worktree, operator-workflow]
 discovered_in: first two sextant-driven dispatches (dev-3, dev-4)
+resolution: |
+  Bundled with [[feat-doctor-stale-binary-detection]] as paired
+  operator-checkout-drift detection (Option B from this file's "Proposed
+  fix" section).
+
+  `sextant doctor` gained a `working-tree` check that runs
+  `git diff --name-only HEAD` in `cfg.Worktree.RepoRoot`. Clean tree
+  emits `pass`; any drift emits `warn` with detail
+  `<n> files differ from HEAD; run `git checkout HEAD -- .` to sync`,
+  giving the operator both the diagnosis and the recovery command in one
+  row. Silently skipped when `repo_root` is empty or the path isn't a
+  git checkout. Covered by `TestDoctorFlagsWorkingTreeDrift` and the
+  clean-tree guard test in `cmd/sextant/doctor_test.go`.
+
+  Option A (CLI-wrapper auto-sync) remains the right move once there's
+  a `sextant worktree` CLI surface; Option C (daemon-pushed sync) is
+  still M13-follow-on.
 ---
 
 ## Summary
