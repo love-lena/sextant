@@ -557,6 +557,7 @@ permission_ceiling = "auto"
 **Mount classes**: declared names that sextantd resolves to actual container mounts at spawn time. Initial classes:
 - `worktree` → the agent's git worktree → `/workspace`
 - `secrets` → the per-template subset of `~/.config/sextant/secrets/` → read-only mount
+- `ssh` → the host's `~/.ssh` directory (resolved via `os.UserHomeDir`) → `/home/agent/.ssh` **read-only**. Opt-in only; default templates do **not** include it. Use when the agent class is trusted to use the operator's SSH identity for `git push` to GitHub. See `plans/issues/feat-container-ssh-passthrough.md`. Unknown values in `mounts` fail template validation at load time so a typo like `"shh"` surfaces immediately rather than silently producing an agent missing the intended mount.
 
 **Open sub-decisions** (defer):
 - Template versioning — do we track template hashes per incarnation for forensics? Lean yes via `agent_definitions_history` table.

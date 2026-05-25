@@ -795,6 +795,114 @@ func TestSpawnAgentWritesGitConfigMount(t *testing.T) {
 	}
 }
 
+// TestSpawnAgentMountsSSHReadOnlyWhenTemplateOptsIn pins the
+// feat-container-ssh-passthrough fix: a template that lists "ssh" in
+// its `mounts` field must cause the spawn handler to add a read-only
+// bind mount of the host's ~/.ssh at /home/agent/.ssh inside the
+// container. The mount must be ReadOnly so a misbehaving agent can't
+// rewrite or exfiltrate the operator's private keys back to the host.
+func TestSpawnAgentMountsSSHReadOnlyWhenTemplateOptsIn(t *testing.T) {
+	deps, _, _, runner, _ := buildDeps(t)
+
+	tplJSON, err := json.Marshal(map[string]any{
+		"name":        "with-ssh",
+		"image":       "sextant-sidecar:latest",
+		"permissions": []string{"read.agents", "control.prompt"},
+		"mounts":      []string{"worktree", "ssh"},
+		"model":       "claude-opus-4-7[1m]",
+	})
+	if err != nil {
+		t.Fatalf("marshal template: %v", err)
+	}
+	tplKV := &fakeTemplatesKV{}
+	if _, err := tplKV.Put(context.Background(), "with-ssh", tplJSON); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+	deps.Templates = tplKV
+
+	h := handlers.NewSpawnAgent(deps)
+	cap := &captureEmit{}
+	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+		Name: "alpha", Template: "with-ssh",
+	}), cap.emit()); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if cap.resp.Error != nil {
+		t.Fatalf("Error = %+v", cap.resp.Error)
+	}
+	if len(runner.specs) != 1 {
+		t.Fatalf("runner.specs = %d, want 1", len(runner.specs))
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+	wantHost := home + "/.ssh"
+
+	var sshMount *containermgr.MountSpec
+	for i, m := range runner.specs[0].Mounts {
+		if m.ContainerPath == "/home/agent/.ssh" {
+			sshMount = &runner.specs[0].Mounts[i]
+			break
+		}
+	}
+	if sshMount == nil {
+		var summary []string
+		for _, m := range runner.specs[0].Mounts {
+			summary = append(summary, m.HostPath+"->"+m.ContainerPath)
+		}
+		t.Fatalf("no ssh mount; mounts = %v", summary)
+	}
+	if sshMount.HostPath != wantHost {
+		t.Errorf("ssh HostPath = %q, want %q", sshMount.HostPath, wantHost)
+	}
+	if !sshMount.ReadOnly {
+		t.Error("ssh mount must be ReadOnly")
+	}
+}
+
+// TestSpawnAgentOmitsSSHMountWhenTemplateDoesntOptIn confirms the spawn
+// handler does NOT attach the ~/.ssh bind mount unless the template
+// lists "ssh" in mounts. The default template doesn't include it, so a
+// stock spawn must leave the container without access to the operator's
+// SSH keys.
+func TestSpawnAgentOmitsSSHMountWhenTemplateDoesntOptIn(t *testing.T) {
+	deps, _, _, runner, _ := buildDeps(t)
+
+	h := handlers.NewSpawnAgent(deps)
+	cap := &captureEmit{}
+	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+		Name: "alpha", Template: "default",
+	}), cap.emit()); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if cap.resp.Error != nil {
+		t.Fatalf("Error = %+v", cap.resp.Error)
+	}
+
+	for _, m := range runner.specs[0].Mounts {
+		if m.ContainerPath == "/home/agent/.ssh" {
+			t.Errorf("unexpected ssh mount on default-template spawn: %+v", m)
+		}
+	}
+}
+
+// TestSSHMountWorks is the integration-shaped acceptance test from
+// plans/issues/feat-container-ssh-passthrough.md. It actually exec's
+// `ssh -T git@github.com` inside a spawned container to confirm the
+// operator's keys reach the agent. Gated behind SEXTANT_INTEGRATION_SSH
+// because it talks to GitHub and requires a real Docker daemon + the
+// sidecar image — neither is available on every developer laptop. Set
+// SEXTANT_INTEGRATION_SSH=1 and have ~/.ssh wired for github.com to
+// run it locally.
+func TestSSHMountWorks(t *testing.T) {
+	if os.Getenv("SEXTANT_INTEGRATION_SSH") != "1" {
+		t.Skip("set SEXTANT_INTEGRATION_SSH=1 to exercise the real ~/.ssh → container passthrough")
+	}
+	t.Skip("integration harness not yet wired; see plans/issues/feat-container-ssh-passthrough.md acceptance section")
+}
+
 // TestPermissionCeilingToSDKMode_Auto asserts that a template with
 // permission_ceiling = "auto" injects SEXTANT_PERMISSION_MODE=acceptEdits
 // into the container env. This is the default sextant ceiling; the sidecar
