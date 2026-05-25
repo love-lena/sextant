@@ -69,6 +69,12 @@ Reviewers (lead agent, or a dedicated review agent) inspect the diff via `worktr
 - Worktrees idle > 30 days → deleted
 - Build caches (`~/go/pkg/mod`, `~/.cache/go-build`) shared across worktrees via mounted volumes — avoids per-worktree rebuilds of deps
 
+The pruner that enforces the above is **opt-in and safe-by-default**:
+
+- `sextant worktree prune` defaults to dry-run. Pass `--apply` to act.
+- The daemon-side periodic ticker is off by default. Set `[worktree] auto_prune = true` in `sextantd.toml` to enable hands-off cleanup. Verify with `sextant worktree prune` (dry-run) first.
+- Directories on disk without a corresponding entry in the worktrees KV registry ("orphans") are NEVER deleted automatically. The operator must pass `--orphan-delete` to opt into removing them. This protects operator-curated dirs that happen to live in `worktrees_root` but were created outside sextant.
+
 ## Open
 
 - Branch naming for spec-only changes vs code: same scheme, just `spec-` prefix?

@@ -73,11 +73,18 @@ func (s ShipperConfig) AutoSuperviseEnabled() bool {
 //     the spec in conventions/git-workflow.md "Disk hygiene".
 //   - ArchiveRoot is where archived worktrees land. Zero / omitted
 //     falls back to <data_dir>/worktree-archive.
+//   - AutoPrune gates the daemon-side periodic ticker. Default false:
+//     the pruner exists as an operator-driven verb (`sextant worktree
+//     prune --apply`) but does NOT auto-fire. Set to true in
+//     sextantd.toml to enable the ticker for hands-off cleanup; do
+//     this only after verifying via dry-run that the policy won't
+//     archive/delete worktrees you still want.
 type WorktreeConfig struct {
 	RepoRoot      string   `toml:"repo_root"`
 	WorktreesRoot string   `toml:"worktrees_root"`
 	PruneInterval Duration `toml:"prune_interval"`
 	ArchiveRoot   string   `toml:"archive_root"`
+	AutoPrune     bool     `toml:"auto_prune"`
 }
 
 // DefaultPruneInterval is how often the daemon ticks the worktree

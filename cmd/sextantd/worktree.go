@@ -47,6 +47,7 @@ type worktreeRuntime struct {
 	// disabled. The ticker goroutine stops when stopPrune is closed.
 	pruner        *worktree.Pruner
 	pruneInterval time.Duration
+	autoPrune     bool
 	nc            *nats.Conn
 	from          sextantproto.Address
 
@@ -135,8 +136,8 @@ func (d *daemon) buildWorktreeRuntime(ctx context.Context, nc *nats.Conn) (*work
 		pruneInterval = sextantd.DefaultPruneInterval
 	}
 
-	log.Printf("sextantd: worktree manager ready (repo=%s worktrees_root=%s archive=%s prune_interval=%s)",
-		repoRoot, d.cfg.Worktree.WorktreesRoot, archiveRoot, pruneInterval)
+	log.Printf("sextantd: worktree manager ready (repo=%s worktrees_root=%s archive=%s prune_interval=%s auto_prune=%v)",
+		repoRoot, d.cfg.Worktree.WorktreesRoot, archiveRoot, pruneInterval, d.cfg.Worktree.AutoPrune)
 	return &worktreeRuntime{
 		mgr:           mgr,
 		registryKV:    regKV,
@@ -145,6 +146,7 @@ func (d *daemon) buildWorktreeRuntime(ctx context.Context, nc *nats.Conn) (*work
 		worktreesDir:  d.cfg.Worktree.WorktreesRoot,
 		pruner:        pruner,
 		pruneInterval: pruneInterval,
+		autoPrune:     d.cfg.Worktree.AutoPrune,
 		nc:            nc,
 		from:          from,
 		stopPrune:     make(chan struct{}),
@@ -167,12 +169,23 @@ func (r *worktreeRuntime) startPruneLoop(ctx context.Context) error {
 		return nil
 	}
 	// Subscribe to the control subject FIRST so the CLI verb works
-	// even if the ticker is mid-sleep.
+	// even if the ticker is mid-sleep — and so operator-driven prune
+	// works regardless of auto_prune.
 	sub, err := r.nc.Subscribe(sextantd.ControlWorktreePruneSubject, r.handlePruneRequest)
 	if err != nil {
 		return fmt.Errorf("worktree: subscribe %s: %w", sextantd.ControlWorktreePruneSubject, err)
 	}
 	r.pruneSub = sub
+
+	// The auto-fire ticker is OFF by default. The CLI verb stays
+	// available either way — operators drive `sextant worktree prune
+	// --apply` when they want a sweep. To enable hands-off cleanup,
+	// set `[worktree] auto_prune = true` in sextantd.toml after
+	// verifying a dry-run won't kill anything you still want.
+	if !r.autoPrune {
+		log.Printf("sextantd: worktree pruner ticker disabled (auto_prune=false); use `sextant worktree prune --apply` to run on demand")
+		return nil
+	}
 
 	r.pruneWG.Add(1)
 	go r.pruneTickerLoop(ctx)
@@ -224,7 +237,10 @@ func (r *worktreeRuntime) handlePruneRequest(msg *nats.Msg) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	report, err := r.pruner.Run(ctx, worktree.PruneRunOptions{DryRun: req.DryRun})
+	report, err := r.pruner.Run(ctx, worktree.PruneRunOptions{
+		DryRun:            req.DryRun,
+		AllowOrphanDelete: req.AllowOrphanDelete,
+	})
 	if err != nil {
 		r.respondPrune(msg, sextantd.WorktreePruneResponse{Error: err.Error(), DryRun: req.DryRun})
 		return

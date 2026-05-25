@@ -19,8 +19,14 @@ const ControlWorktreePruneSubject = "sextant.control.worktree_prune"
 
 // WorktreePruneRequest is the inbound payload. DryRun=true reports
 // what would happen without performing any disk or KV mutation.
+// AllowOrphanDelete lets the caller opt into deleting on-disk
+// directories that have no KV entry; false (default) skips them
+// even when old enough to qualify for archive — so an operator
+// can't accidentally nuke directories the daemon doesn't know
+// about.
 type WorktreePruneRequest struct {
-	DryRun bool `json:"dry_run,omitempty"`
+	DryRun            bool `json:"dry_run,omitempty"`
+	AllowOrphanDelete bool `json:"allow_orphan_delete,omitempty"`
 }
 
 // WorktreePruneResponse is the outbound payload. Mirrors
