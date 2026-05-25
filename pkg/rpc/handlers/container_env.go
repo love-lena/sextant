@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/base64"
 	"os"
 
 	"github.com/google/uuid"
@@ -36,6 +37,13 @@ type containerEnvInput struct {
 	// only sets this when --preserve-session is true; spawn sets it
 	// from def.Runtime.SessionID iff a prior session was recorded.
 	SessionID string
+	// InitialPrompt, when non-empty, becomes SEXTANT_INITIAL_PROMPT
+	// (base64-encoded — see buildContainerEnv). The sidecar decodes
+	// it and passes it to the SDK as `systemPrompt` so the template's
+	// charter is included on every turn (persistent context, not a
+	// one-shot first user message). See
+	// plans/issues/bug-initial-prompt-not-forwarded-to-sdk.md.
+	InitialPrompt string
 	// EnvOverlay is applied last and can override any of the well-
 	// known SEXTANT_* keys. Spawn passes tpl.Env; restart passes
 	// def.Sandbox.Env (which is cloned from tpl.Env at spawn time).
@@ -65,6 +73,14 @@ func buildContainerEnv(in containerEnvInput) map[string]string {
 	}
 	if in.SessionID != "" {
 		env["SEXTANT_SESSION_ID"] = in.SessionID
+	}
+	if in.InitialPrompt != "" {
+		// Base64-encode so multi-line prompts (TOML allows triple-quoted
+		// strings, charters often span paragraphs) survive the env-var
+		// transport without us having to think about quoting or newline
+		// escaping at any container-runtime layer. The sidecar decodes
+		// in src/index.ts::readEnv.
+		env["SEXTANT_INITIAL_PROMPT"] = base64.StdEncoding.EncodeToString([]byte(in.InitialPrompt))
 	}
 	// EnvOverlay applied last so a template's `env` block *can*
 	// override any of the well-known SEXTANT_* vars. Production

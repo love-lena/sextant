@@ -340,6 +340,7 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 			PermissionMode: permissionCeilingToSDKMode(tpl.PermissionCeiling),
 			APIKey:         hostAPIKey(),
 			SessionID:      sessionID,
+			InitialPrompt:  tpl.InitialPrompt,
 			EnvOverlay:     tpl.Env,
 		})
 

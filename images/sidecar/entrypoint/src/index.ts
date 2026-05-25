@@ -52,6 +52,7 @@ import {
 } from "@sextant/client";
 
 import { classifyTool } from "./classifier.js";
+import { decodeInitialPrompt } from "./env.js";
 import { publishLifecycle as publishLifecycleEnvelope } from "./lifecycle.js";
 
 /** Bucket where AgentDefinition records live. Mirrors handlers.AgentDefinitionsBucket. */
@@ -84,6 +85,14 @@ interface SidecarEnv {
   model: string;
   /** SDK permissionMode derived from template permission_ceiling at spawn time. */
   permissionMode: string;
+  /**
+   * Template-declared `initial_prompt` (decoded from
+   * `SEXTANT_INITIAL_PROMPT`, which sextantd injects base64-encoded).
+   * Passed to the SDK as `systemPrompt` so the charter is included on
+   * every turn — not a one-shot first user message. Undefined when the
+   * template omits the field.
+   */
+  initialPrompt: string | undefined;
 }
 
 /** Spec: §"Env vars". `SEXTANT_*` namespace, set by sextantd at spawn. */
@@ -110,6 +119,7 @@ function readEnv(): SidecarEnv {
     mcpUrl: process.env["SEXTANT_MCP_URL"] || undefined,
     model: process.env["SEXTANT_MODEL"] || DEFAULT_MODEL,
     permissionMode: resolvePermissionMode(process.env["SEXTANT_PERMISSION_MODE"]),
+    initialPrompt: decodeInitialPrompt(process.env["SEXTANT_INITIAL_PROMPT"]),
   };
 }
 
@@ -522,6 +532,15 @@ function newSDKDriver(
         // Always load them so simple "what tools do you have" prompts
         // see them immediately.
       };
+      if (env.initialPrompt) {
+        // Pass the template's `initial_prompt` as the SDK's
+        // `systemPrompt`. The SDK supports `string | string[] | preset`;
+        // a plain string installs it as a custom system prompt that the
+        // model sees on every turn — the "persistent charter" semantic
+        // the issue calls out, not a one-shot first user message. See
+        // plans/issues/bug-initial-prompt-not-forwarded-to-sdk.md.
+        sdkOpts["systemPrompt"] = env.initialPrompt;
+      }
       if (resumeId) {
         sdkOpts["resume"] = resumeId;
       }
@@ -874,6 +893,21 @@ async function run(driverMode: DriverMode): Promise<void> {
     driver: driverMode,
     resumeSessionId: env.sessionId ?? null,
   });
+
+  // Surface the resolved initial_prompt so operators can verify the
+  // wiring from the template through SEXTANT_INITIAL_PROMPT into the
+  // SDK's systemPrompt landed. First 80 chars + total length only —
+  // charters can be long, and we don't want to dump a full charter to
+  // the journal on every spawn. See
+  // plans/issues/bug-initial-prompt-not-forwarded-to-sdk.md.
+  if (env.initialPrompt) {
+    log("info", "initial_prompt loaded", {
+      length: env.initialPrompt.length,
+      preview: env.initialPrompt.slice(0, 80),
+    });
+  } else {
+    log("info", "initial_prompt not set");
+  }
 
   const client = await connectWithConfig(config);
   log("info", "nats connected");

@@ -1,8 +1,9 @@
 ---
 title: Template `initial_prompt` is persisted to KV but never reaches the SDK — sidecar ignores it
-status: open
+status: fixed
 priority: P2
 created_at: 2026-05-25T14:45-07:00
+fixed_in: a39c6ade910441465f06778491fb3d0c604441b8
 labels: [bug, sidecar, sdk-wireup, template]
 discovered_in: assistant-agent first-run smoke
 ---

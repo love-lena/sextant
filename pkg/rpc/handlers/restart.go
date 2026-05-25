@@ -171,6 +171,7 @@ func NewRestartAgent(deps RestartDeps) rpc.Handler {
 			PermissionMode: permissionCeilingToSDKMode(def.Runtime.PermissionCeil),
 			APIKey:         hostAPIKey(),
 			SessionID:      sessionID,
+			InitialPrompt:  def.Runtime.InitialPrompt,
 			EnvOverlay:     def.Sandbox.Env,
 		})
 		labels := map[string]string{
