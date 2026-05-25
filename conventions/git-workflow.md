@@ -41,14 +41,17 @@ Branches are created from `main`. Long-lived feature branches are discouraged; p
 
 ## Merging
 
-Merges into `main` are serialized via the `locks.merge` NATS KV key (bucket `locks`, key `merge`, TTL 5 min). Only one merge at a time prevents conflicts from cascading.
+Merges into `main` are serialized via the `locks.merge` NATS KV key (bucket `locks`, key `merge`, TTL 5 min). Only one merge at a time prevents conflicts from cascading. The lock value is the holder's UUID/host + a unix-nano timestamp so a crashed holder is identifiable in `worktree_list` output and `audit.worktree_merge` envelopes.
 
-Merge flow (via the `worktree_merge` MCP tool):
-1. Acquire `locks.merge` (or wait)
-2. Fast-forward `main` to the merge base, then attempt fast-forward merge
-3. If conflicts: release lock, return conflict report → becomes a user-input request (§4a)
-4. If clean: merge, push (or just commit, depending on deployment), release lock
-5. Worktree is now safe to destroy or kept for follow-up work
+Merge flow (via the `worktree_merge` MCP tool — see `specs/architecture.md` §11 "Merge strategy" for the rationale):
+1. Acquire `locks.merge` (or wait).
+2. Create a transient merge worktree at `<WorktreesRoot>/.merge-<target>-<short-rand>/` on the target branch (replacing any stale `.merge-*` left from a crashed prior merge).
+3. Run `git merge --no-ff <branch>` in the transient worktree.
+4. On conflict: `git merge --abort`, tear down the transient worktree, release the lock, return a conflict report → becomes a user-input request (§4a). The source worktree is unchanged.
+5. On clean merge: tear down the transient worktree (`git worktree remove`), update the source worktree's KV entry to `status=merged`, release the lock.
+6. Source worktree is now safe to destroy or kept for follow-up work.
+
+The operator's main checkout (typically `/Users/lena/dev/sextant-initial/`) is never touched during a merge — the dedicated transient worktree owns the merge commit, and the target ref advances in the shared `.git` database.
 
 Reviewers (lead agent, or a dedicated review agent) inspect the diff via `worktree_diff` before approving a merge. Merge without review is technically allowed but capability-gated.
 
