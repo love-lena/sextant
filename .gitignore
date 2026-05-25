@@ -37,3 +37,6 @@ shipper-buffer/
 # Node / TypeScript (clients/typescript/, etc.)
 node_modules/
 *.tsbuildinfo
+
+# Claude harness state
+.claude/

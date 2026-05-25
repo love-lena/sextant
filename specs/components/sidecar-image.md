@@ -68,10 +68,10 @@ Responsibilities:
 
 M9 ships the image and a *scaffolded* entrypoint that satisfies the image-build acceptance and proves the env-var contract. The full responsibility set above lands progressively:
 
-- **JWT-authenticated NATS connection** lands at M11 (M8's TS client only supports password auth; the JWT/credsPath path is explicitly NotYetSupported). For M9, if `SEXTANT_OPERATOR_USER`/`SEXTANT_OPERATOR_PASSWORD` are set, the entrypoint dials NATS via password auth; if only `SEXTANT_JWT` is set, it logs the M11 gap and stays in a no-NATS heartbeat loop.
-- **MCP connection** is not opened by the M9 entrypoint (M10 ships the MCP server; M11 wires the sidecar to it).
-- **Claude Code SDK invocation** lands at M11. M9 ships a `lifecycle.started` publish + 5-second heartbeat publish loop and a clean `lifecycle.ended` on SIGTERM. That is sufficient to prove the image+entrypoint integration; the SDK loop is bolted on without changing the surrounding contract.
-- The M9 entrypoint exits with a clear error if neither operator credentials nor a JWT env var are present, listing what M11 will add.
+- **JWT-authenticated NATS connection** is deferred (see `specs/components/nats.md` §"Config"). M11 sidecars connect to NATS via `SEXTANT_NATS_USER`/`SEXTANT_NATS_PASSWORD` (operator credentials forwarded into the container at spawn). The JWT (`SEXTANT_JWT`) is consumed only by the MCP transport, where capability checks are real (M10).
+- **MCP connection** is opened by the M10 entrypoint over Streamable HTTP at `SEXTANT_MCP_URL`, presenting `SEXTANT_JWT` as the Bearer token. The MCP server verifies the JWT against the M5 CA and enforces per-tool capability checks.
+- **Claude Code SDK invocation** lands post-Phase-1 (M16+). M9–M11 ship a `lifecycle.started` publish + 5-second heartbeat publish loop and a clean `lifecycle.ended` on SIGTERM. That is sufficient to prove the image+entrypoint integration; the SDK loop is bolted on without changing the surrounding contract.
+- The entrypoint exits with a clear error if required NATS credentials are missing.
 
 ## Volume mounts (set by sextantd at spawn)
 
@@ -88,11 +88,12 @@ M9 ships the image and a *scaffolded* entrypoint that satisfies the image-build 
 - `SEXTANT_AGENT_UUID`
 - `SEXTANT_AGENT_NAME`
 - `SEXTANT_NATS_URL`
-- `SEXTANT_JWT` (M11+; for M9 the entrypoint accepts but does not yet use it — see "M9 scope" above)
+- `SEXTANT_JWT` — per-incarnation JWT signed by the M5 CA. Consumed by the **MCP** transport (Bearer token); see `specs/components/sextantd.md` §"MCP server" and `architecture.md` §9c. Not consumed by NATS at M11 — see `specs/components/nats.md` §"Config" for the per-agent NATS auth deferral.
+- `SEXTANT_NATS_USER`, `SEXTANT_NATS_PASSWORD` (M11+) — operator NATS credentials, set by sextantd at spawn so the sidecar can connect to NATS. This is the explicit M11 stop-gap for per-agent NATS authentication; the eventual per-incarnation NATS-user promotion drops these in favor of the JWT being consumed directly by NATS. Documented in `specs/components/nats.md` §"Config".
 - `SEXTANT_SESSION_ID` (optional; if set, sidecar starts SDK with `--resume`)
 - `SEXTANT_MCP_URL` (M11+ — sidecar wires MCP)
 - `SEXTANT_HOST_ID`
-- `SEXTANT_OPERATOR_USER`, `SEXTANT_OPERATOR_PASSWORD` (M9-only: lets test runs/the M9 smoke connect over the operator password path while M11's JWT path is still under construction; not set by sextantd at spawn from M11 onwards)
+- `SEXTANT_INCARNATION_ID` (M11+) — sidecar uses this as the lifecycle/heartbeat `incarnation_id` so envelopes match the KV record sextantd wrote. If unset (older spawns, tests) the sidecar generates a UUID and that becomes the de-facto incarnation ID for the run.
 
 Plus any per-agent credentials declared in the agent definition.
 

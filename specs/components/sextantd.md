@@ -84,6 +84,23 @@ Uses the Docker SDK for Go (`github.com/docker/docker/client`). Creates containe
 - Resource limits: CPU/memory caps from agent definition
 - Labels: `sextant.agent_uuid`, `sextant.agent_name`, `sextant.host_id` for discovery + cleanup
 
+### M11 spawn flow
+
+1. **Validate**: assert the requested `name` is unique among non-archived agents in the `agent_definitions` KV bucket.
+2. **Resolve template**: look up the requested template in the `templates` KV bucket (seeded from `~/.config/sextant/templates/` on `sextant init`).
+3. **Build AgentDefinition**: fresh UUID; runtime config from template; sandbox image from template; tool allowlist from template's `permissions`; host_pin from request or "local"; lifecycle = `defined`; version = 1.
+4. **Persist definition**: `agent_definitions.<uuid>` KV entry.
+5. **Append history**: write the initial row into the ClickHouse `agent_definitions_history` table.
+6. **Issue JWT**: per-incarnation JWT signed by the M5 CA carrying the template's `permissions` as the `sxt_caps` claim, with `sub = <agent_uuid>` and `sxt_inc = <incarnation_id>`. Lifetime = 24h (configurable later).
+7. **Build container spec**: image from template, env vars per `specs/components/sidecar-image.md` §"Env vars", workspace mount per the §"Container management" entry above. M11 uses a temporary `/tmp/sextant/spawn/<incarnation_id>` directory as the workspace mount; real git worktrees land in M14.
+8. **Start container**: via the Docker SDK with labels `sextant.agent_uuid`, `sextant.agent_name`, `sextant.host_id`, `sextant.incarnation_id`.
+9. **Persist incarnation**: `agent_incarnations.<incarnation_id>` KV entry with `state = starting`, container ID, started_at.
+10. **Promote definition lifecycle to `running`** (version bumps to 2) and re-write the KV entry.
+
+### Shutdown — running incarnations
+
+On graceful sextantd shutdown (SIGTERM), every running incarnation receives a Docker `stop` with the per-template grace period (default 10s, falling back to a SIGKILL after the deadline). The corresponding `agent_incarnations.<incarnation_id>` KV entry is updated with `state = exited` and `ended_at` set. Agent definitions stay at `running` so the next sextantd boot can reconcile (Phase-1 takes the simple route: incarnations are not auto-restarted on reboot; the operator re-spawns).
+
 ## Control socket
 
 Sextantd opens a Unix domain socket at `~/.local/share/sextant/sextantd.sock` (mode `0600`, owned by the operator's Unix user). The socket is the trust boundary for operator-only control surfaces that bypass NATS — primarily liveness probing today and proper RPC dispatch from M7 onward.
