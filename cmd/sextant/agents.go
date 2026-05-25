@@ -226,17 +226,18 @@ func runAgentsShow(ctx context.Context, args []string) error {
 		return err
 	}
 	if len(rest) != 1 {
-		return errUserUsage("sextant agents show <agent_uuid>")
-	}
-	id, err := uuid.Parse(rest[0])
-	if err != nil {
-		return errUserUsage(fmt.Sprintf("agent_uuid: %v", err))
+		return errUserUsage("sextant agents show <agent>")
 	}
 	cli, _, err := connectAgent(ctx, opts.configDir)
 	if err != nil {
 		return err
 	}
 	defer cli.Close() //nolint:errcheck // best-effort close
+
+	id, err := resolveAgentRef(ctx, cli, rest[0])
+	if err != nil {
+		return errUserUsage(fmt.Sprintf("agent: %v", err))
+	}
 
 	var resp sextantproto.GetAgentStatusResponse
 	if err := cli.RPC(ctx, rpc.VerbGetAgentStatus, sextantproto.GetAgentStatusRequest{AgentID: id}, &resp); err != nil {
@@ -316,7 +317,7 @@ func runAgentsKill(ctx context.Context, args []string) error {
 	}
 	defer cli.Close() //nolint:errcheck // best-effort close
 
-	id, err := resolveAgentID(ctx, cli, rest[0])
+	id, err := resolveAgentRef(ctx, cli, rest[0])
 	if err != nil {
 		return errUserUsage(fmt.Sprintf("agent: %v", err))
 	}
@@ -370,17 +371,18 @@ func runAgentsRestart(ctx context.Context, args []string) error {
 		return err
 	}
 	if len(rest) != 1 {
-		return errUserUsage("sextant agents restart <agent_uuid> [--preserve-session]")
-	}
-	id, err := uuid.Parse(rest[0])
-	if err != nil {
-		return errUserUsage(fmt.Sprintf("agent_uuid: %v", err))
+		return errUserUsage("sextant agents restart <agent> [--preserve-session]")
 	}
 	cli, _, err := connectAgent(ctx, opts.configDir)
 	if err != nil {
 		return err
 	}
 	defer cli.Close() //nolint:errcheck // best-effort close
+
+	id, err := resolveAgentRef(ctx, cli, rest[0])
+	if err != nil {
+		return errUserUsage(fmt.Sprintf("agent: %v", err))
+	}
 
 	req := sextantproto.RestartAgentRequest{
 		AgentID:         id,
@@ -438,7 +440,7 @@ func runAgentsArchive(ctx context.Context, args []string) error {
 	if len(rest) != 1 {
 		return errUserUsage("sextant agents archive <agent> | --all-dead")
 	}
-	id, err := resolveAgentID(ctx, cli, rest[0])
+	id, err := resolveAgentRef(ctx, cli, rest[0])
 	if err != nil {
 		return errUserUsage(fmt.Sprintf("agent: %v", err))
 	}
@@ -512,30 +514,48 @@ func runAgentsArchiveAllDead(ctx context.Context, cli *client.Client, opts commo
 	return nil
 }
 
-// resolveAgentID accepts either a UUID string or an agent name. When
+// resolveAgentRef accepts either a UUID string or an agent name. When
 // `ref` parses as a UUID we use it directly; otherwise we look the name
 // up via list_agents (filtering out archived entries, since their names
 // are released and may legally collide with a freshly-spawned
 // non-archived agent). Returns the matching UUID, or an error if zero
 // or multiple non-archived agents share the name.
 //
-// Existing verbs (kill, restart, show, prompt) historically required a
-// UUID; the new verbs accept either form so an operator who just
-// spawned `agent-foo` can `archive agent-foo` without copy-pasting the
-// UUID from `list`. This helper centralizes the resolution so all
-// verbs that adopt the name-or-UUID surface stay consistent.
-func resolveAgentID(ctx context.Context, cli *client.Client, ref string) (uuid.UUID, error) {
+// Wired into every `agents <verb>` that takes an `<agent>` positional
+// arg (list, show, kill, restart, archive, prompt) so the surface is
+// uniform — operators can pass either UUID or name to any verb. This
+// fixes bug-name-resolution-inconsistent-across-agents-verbs.md:
+// pre-fix, only `archive` accepted names while `prompt`/`show`/etc.
+// errored with `invalid UUID length`.
+//
+// The actual matching/disambiguation lives in resolveAgentRefWithLister
+// so tests can drive it without spinning up a NATS server.
+func resolveAgentRef(ctx context.Context, cli *client.Client, ref string) (uuid.UUID, error) {
+	return resolveAgentRefWithLister(ref, func() ([]sextantproto.AgentSummary, error) {
+		listCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		var resp sextantproto.ListAgentsResponse
+		if err := cli.RPC(listCtx, rpc.VerbListAgents, sextantproto.ListAgentsRequest{}, &resp); err != nil {
+			return nil, fmt.Errorf("list_agents: %w", err)
+		}
+		return resp.Agents, nil
+	})
+}
+
+// resolveAgentRefWithLister is the side-effect-free core of
+// resolveAgentRef. Callers inject `lister` to supply the agent inventory
+// — the prod wiring calls list_agents over NATS; tests pass a closure
+// returning a hand-built slice.
+func resolveAgentRefWithLister(ref string, lister func() ([]sextantproto.AgentSummary, error)) (uuid.UUID, error) {
 	if id, err := uuid.Parse(ref); err == nil {
 		return id, nil
 	}
-	listCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	var resp sextantproto.ListAgentsResponse
-	if err := cli.RPC(listCtx, rpc.VerbListAgents, sextantproto.ListAgentsRequest{}, &resp); err != nil {
-		return uuid.Nil, fmt.Errorf("list_agents: %w", err)
+	agents, err := lister()
+	if err != nil {
+		return uuid.Nil, err
 	}
 	var matches []sextantproto.AgentSummary
-	for _, a := range resp.Agents {
+	for _, a := range agents {
 		if a.Name == ref && a.Lifecycle != string(sextantproto.LifecycleArchived) {
 			matches = append(matches, a)
 		}
@@ -564,17 +584,18 @@ func runAgentsPrompt(ctx context.Context, args []string) error {
 		return err
 	}
 	if len(rest) != 2 {
-		return errUserUsage(`sextant agents prompt <agent_uuid> "<text>"`)
-	}
-	id, err := uuid.Parse(rest[0])
-	if err != nil {
-		return errUserUsage(fmt.Sprintf("agent_uuid: %v", err))
+		return errUserUsage(`sextant agents prompt <agent> "<text>"`)
 	}
 	cli, _, err := connectAgent(ctx, opts.configDir)
 	if err != nil {
 		return err
 	}
 	defer cli.Close() //nolint:errcheck // best-effort close
+
+	id, err := resolveAgentRef(ctx, cli, rest[0])
+	if err != nil {
+		return errUserUsage(fmt.Sprintf("agent: %v", err))
+	}
 
 	req := sextantproto.PromptAgentRequest{
 		AgentID: id,
