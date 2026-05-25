@@ -112,3 +112,41 @@ type TimeRange struct {
 type QueryHistoryResponse struct {
 	Events []Envelope `json:"events"`
 }
+
+// SpawnAgentRequest is the spawn_agent request payload. See
+// specs/protocols/rpc-catalog.md §"Agent lifecycle" for the canonical
+// shape; DefinitionOverrides is reserved for post-M11 work and ignored
+// today.
+type SpawnAgentRequest struct {
+	Name                string         `json:"name"`
+	Template            string         `json:"template"`
+	HostPin             string         `json:"host_pin,omitempty"`
+	DefinitionOverrides map[string]any `json:"definition_overrides,omitempty"`
+}
+
+// SpawnAgentResponse is the spawn_agent reply payload.
+type SpawnAgentResponse struct {
+	AgentID uuid.UUID `json:"agent_id"`
+}
+
+// KillAgentRequest is the kill_agent request payload.
+type KillAgentRequest struct {
+	AgentID      uuid.UUID `json:"agent_id"`
+	GraceSeconds int       `json:"grace_seconds,omitempty"`
+}
+
+// KillAgentResponse is the kill_agent reply payload.
+type KillAgentResponse struct {
+	OK bool `json:"ok"`
+}
+
+// PromptAgentRequest is the prompt_agent request payload.
+type PromptAgentRequest struct {
+	AgentID uuid.UUID `json:"agent_id"`
+	Content string    `json:"content"`
+}
+
+// PromptAgentResponse is the prompt_agent reply payload.
+type PromptAgentResponse struct {
+	OK bool `json:"ok"`
+}
