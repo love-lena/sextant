@@ -23,6 +23,7 @@ import (
 	"github.com/love-lena/sextant-initial/pkg/authjwt"
 	"github.com/love-lena/sextant-initial/pkg/rpc"
 	"github.com/love-lena/sextant-initial/pkg/rpc/handlers"
+	"github.com/love-lena/sextant-initial/pkg/sextantd"
 	"github.com/love-lena/sextant-initial/pkg/sextantproto"
 	"github.com/love-lena/sextant-initial/pkg/templates"
 )
@@ -637,6 +638,15 @@ func (s *Server) registerTools() {
 		Name:        ToolWorktreeDiff,
 		Description: "Show the diff of a worktree against a target branch (default main).",
 	}, wrapHandler(s, ToolWorktreeDiff, s.handleWorktreeDiff))
+
+	// M16: templates_reload. Calls into the same NATS control subject
+	// the operator CLI uses (sextant.control.templates_reload) so a
+	// CLI-driven reload and an agent-driven reload are byte-for-byte
+	// identical paths on the daemon side.
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        ToolTemplatesReload,
+		Description: "Re-scan the daemon's templates dir and push every *.toml into NATS KV. Returns the count synced.",
+	}, wrapHandler(s, ToolTemplatesReload, s.handleTemplatesReload))
 }
 
 // dispatchHandler is the per-tool signature after argument decoding.
@@ -1092,6 +1102,31 @@ func (s *Server) handleWorktreeDiff(ctx context.Context, _ Caller, in WorktreeDi
 	}
 	env := sextantproto.NewEnvelope(sextantproto.KindRPCRequest, s.cfg.From, raw)
 	return runRPCAsTool(ctx, handlers.NewWorktreeDiff(handlers.WorktreeDeps{Manager: mgr}), env)
+}
+
+// handleTemplatesReload forwards the request to the daemon's
+// sextant.control.templates_reload subject. We round-trip through NATS
+// rather than calling templates.SyncDirToKV directly so the MCP path
+// and the CLI path share one canonical reload site — preserving
+// "single-source semantics" for the audit/log lines SyncDirToKV
+// produces.
+func (s *Server) handleTemplatesReload(ctx context.Context, _ Caller, _ TemplatesReloadArgs) (any, error) {
+	reqRaw, err := json.Marshal(sextantd.TemplatesReloadRequest{})
+	if err != nil {
+		return nil, fmtErrf(sextantproto.ErrCodeInternal, "marshal: %v", err)
+	}
+	msg, err := s.cfg.NATS.RequestWithContext(ctx, sextantd.ControlTemplatesReloadSubject, reqRaw)
+	if err != nil {
+		return nil, fmtErrf(sextantproto.ErrCodeInternal, "templates_reload request: %v", err)
+	}
+	var resp sextantd.TemplatesReloadResponse
+	if err := json.Unmarshal(msg.Data, &resp); err != nil {
+		return nil, fmtErrf(sextantproto.ErrCodeInternal, "decode response: %v", err)
+	}
+	if resp.Error != "" {
+		return nil, fmtErrf(sextantproto.ErrCodeInternal, "%s", resp.Error)
+	}
+	return TemplatesReloadResult{Count: resp.Count}, nil
 }
 
 // runRPCAsTool runs an rpc.Handler synchronously and unmarshals its
