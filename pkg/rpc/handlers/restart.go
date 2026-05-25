@@ -197,6 +197,18 @@ func NewRestartAgent(deps RestartDeps) rpc.Handler {
 		if err := putJSON(ctx, deps.Incarnations, newIncID.String(), newInc); err != nil {
 			//nolint:contextcheck // rollback intentionally uses a fresh ctx — the request ctx may already be canceled
 			rollbackBackgroundStop(deps.Containers, container.ID)
+			// Step 2 already marked the old incarnation as exited;
+			// step 4 succeeded but its container has now been stopped
+			// by the rollback above. There are zero live incarnations
+			// behind this AgentDefinition, so the lifecycle must flip
+			// back to defined — otherwise list_agents lies ("running"
+			// with no container) and the operator's recovery path is
+			// unclear. Use the same shape step-4's rollback uses so
+			// both partial-failure points converge on the same state.
+			def.Lifecycle = sextantproto.LifecycleDefined
+			def.Version++
+			def.UpdatedAt = sextantproto.AtTimestamp(deps.Now().UTC())
+			_ = putJSON(ctx, deps.Definitions, def.UUID.String(), def)
 			return emitErr(emit, sextantproto.ErrCodeInternal,
 				fmt.Sprintf("persist new incarnation: %v", err))
 		}
