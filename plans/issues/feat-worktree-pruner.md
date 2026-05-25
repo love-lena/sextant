@@ -5,7 +5,7 @@ priority: P3
 created_at: 2026-05-25T14:53-07:00
 labels: [feature, worktree, daemon, cleanup]
 discovered_in: post-overnight disk inspection
-fixed_in: TBD
+fixed_in: f0781e1071afb3fb5ea920caad7478a4a7214808
 ---
 
 ## Summary
