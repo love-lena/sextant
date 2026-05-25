@@ -27,9 +27,16 @@ Verbs:
   list                                List known agents.
   show <agent>                        Detailed status for one agent.
   spawn <name> --template T           Create + start a new agent.
-  kill <agent> [--grace 10s]          Stop a running agent.
+  kill <agent> [--grace 10s] [--archive]
+                                      Stop a running agent. --archive flips
+                                      lifecycle to archived after the kill
+                                      so the agent's name is reusable.
   restart <agent> [--preserve-session]
                                       Restart a running agent in place.
+  archive <agent>                     Mark the agent archived so its name
+                                      is released. --all-dead archives
+                                      every agent currently in lifecycle
+                                      "defined" (bulk cleanup).
   prompt <agent> "<text>"             Send a prompt to an agent's inbox.
 
 Every verb supports --json for machine-parseable output. Use
@@ -59,6 +66,8 @@ func runAgents(ctx context.Context, args []string) error {
 		return runAgentsKill(ctx, rest)
 	case "restart":
 		return runAgentsRestart(ctx, rest)
+	case "archive":
+		return runAgentsArchive(ctx, rest)
 	case "prompt":
 		return runAgentsPrompt(ctx, rest)
 	case "-h", "--help", "help":
@@ -281,27 +290,36 @@ func runAgentsSpawn(ctx context.Context, args []string) error {
 	return nil
 }
 
-// runAgentsKill — `sextant agents kill <agent>`.
+// runAgentsKill — `sextant agents kill <agent> [--archive]`.
+//
+// The `--archive` flag pairs the kill with an archive_agent RPC against
+// the same UUID so the agent's name is released back into the
+// uniqueness pool immediately. Without it the agent stays in
+// lifecycle=defined and its name remains claimed — see
+// plans/issues/bug-kill-doesnt-release-name.md.
 func runAgentsKill(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("sextant agents kill", flag.ContinueOnError)
 	var grace time.Duration
+	var archive bool
 	fs.DurationVar(&grace, "grace", 10*time.Second, "graceful stop deadline before SIGKILL")
+	fs.BoolVar(&archive, "archive", false, "archive the agent after the kill so its name is reusable")
 	opts, rest, err := parseCommonOpts(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(rest) != 1 {
-		return errUserUsage("sextant agents kill <agent_uuid>")
-	}
-	id, err := uuid.Parse(rest[0])
-	if err != nil {
-		return errUserUsage(fmt.Sprintf("agent_uuid: %v", err))
+		return errUserUsage("sextant agents kill <agent>")
 	}
 	cli, _, err := connectAgent(ctx, opts.configDir)
 	if err != nil {
 		return err
 	}
 	defer cli.Close() //nolint:errcheck // best-effort close
+
+	id, err := resolveAgentID(ctx, cli, rest[0])
+	if err != nil {
+		return errUserUsage(fmt.Sprintf("agent: %v", err))
+	}
 
 	req := sextantproto.KillAgentRequest{
 		AgentID:      id,
@@ -312,6 +330,24 @@ func runAgentsKill(ctx context.Context, args []string) error {
 	var resp sextantproto.KillAgentResponse
 	if err := cli.RPC(rpcCtx, rpc.VerbKillAgent, req, &resp); err != nil {
 		return fmt.Errorf("kill_agent: %w", err)
+	}
+	if archive {
+		// Best-effort archive: a failure here doesn't undo the kill, so
+		// we surface it as a wrapped error rather than panicking. The
+		// caller can re-run `sextant agents archive` if this leg
+		// stumbles.
+		archiveCtx, cancelArchive := context.WithTimeout(ctx, 60*time.Second)
+		var archiveResp sextantproto.ArchiveAgentResponse
+		archiveErr := cli.RPC(archiveCtx, rpc.VerbArchiveAgent,
+			sextantproto.ArchiveAgentRequest{AgentID: id},
+			&archiveResp)
+		cancelArchive()
+		if archiveErr != nil {
+			return fmt.Errorf("kill ok but archive failed: %w", archiveErr)
+		}
+		if !archiveResp.OK {
+			return fmt.Errorf("kill ok but archive returned ok=false")
+		}
 	}
 	if opts.asJSON {
 		return writeJSON(os.Stdout, resp)
@@ -367,6 +403,159 @@ func runAgentsRestart(ctx context.Context, args []string) error {
 	return nil
 }
 
+// runAgentsArchive — `sextant agents archive <agent> | --all-dead`.
+//
+// Archive flips the agent's lifecycle to "archived", the only state per
+// architecture.md §2 that releases the agent's name back into the
+// uniqueness pool. Without this verb, an agent killed via
+// `sextant agents kill` stays in lifecycle=defined forever and its name
+// is permanently claimed; see
+// plans/issues/feat-agents-archive-cli-verb.md.
+//
+// `--all-dead` archives every agent currently in lifecycle "defined" in
+// one call so an operator can clean up after a smoke run without
+// listing UUIDs by hand.
+func runAgentsArchive(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("sextant agents archive", flag.ContinueOnError)
+	var allDead bool
+	fs.BoolVar(&allDead, "all-dead", false, "archive every agent currently in lifecycle defined")
+	opts, rest, err := parseCommonOpts(fs, args)
+	if err != nil {
+		return err
+	}
+	cli, _, err := connectAgent(ctx, opts.configDir)
+	if err != nil {
+		return err
+	}
+	defer cli.Close() //nolint:errcheck // best-effort close
+
+	if allDead {
+		if len(rest) != 0 {
+			return errUserUsage("sextant agents archive --all-dead takes no positional args")
+		}
+		return runAgentsArchiveAllDead(ctx, cli, opts)
+	}
+	if len(rest) != 1 {
+		return errUserUsage("sextant agents archive <agent> | --all-dead")
+	}
+	id, err := resolveAgentID(ctx, cli, rest[0])
+	if err != nil {
+		return errUserUsage(fmt.Sprintf("agent: %v", err))
+	}
+
+	rpcCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	var resp sextantproto.ArchiveAgentResponse
+	if err := cli.RPC(rpcCtx, rpc.VerbArchiveAgent,
+		sextantproto.ArchiveAgentRequest{AgentID: id}, &resp); err != nil {
+		return fmt.Errorf("archive_agent: %w", err)
+	}
+	if opts.asJSON {
+		return writeJSON(os.Stdout, resp)
+	}
+	if resp.OK {
+		println(os.Stdout, "ok")
+	} else {
+		println(os.Stdout, "not ok")
+	}
+	return nil
+}
+
+// runAgentsArchiveAllDead lists every agent in lifecycle=defined and
+// issues an archive_agent RPC for each. Failures on individual agents
+// are logged but don't abort the loop — the bulk cleanup is meant to
+// run after a smoke test where some entries may already be in odd
+// states.
+func runAgentsArchiveAllDead(ctx context.Context, cli *client.Client, opts commonOpts) error {
+	var listResp sextantproto.ListAgentsResponse
+	listCtx, listCancel := context.WithTimeout(ctx, 30*time.Second)
+	err := cli.RPC(listCtx, rpc.VerbListAgents, sextantproto.ListAgentsRequest{
+		Filter: &sextantproto.ListAgentsFilter{Lifecycle: string(sextantproto.LifecycleDefined)},
+	}, &listResp)
+	listCancel()
+	if err != nil {
+		return fmt.Errorf("list_agents: %w", err)
+	}
+	type result struct {
+		UUID  uuid.UUID `json:"uuid"`
+		Name  string    `json:"name"`
+		OK    bool      `json:"ok"`
+		Error string    `json:"error,omitempty"`
+	}
+	out := make([]result, 0, len(listResp.Agents))
+	for _, a := range listResp.Agents {
+		archCtx, archCancel := context.WithTimeout(ctx, 60*time.Second)
+		var archResp sextantproto.ArchiveAgentResponse
+		archErr := cli.RPC(archCtx, rpc.VerbArchiveAgent,
+			sextantproto.ArchiveAgentRequest{AgentID: a.UUID}, &archResp)
+		archCancel()
+		r := result{UUID: a.UUID, Name: a.Name, OK: archErr == nil && archResp.OK}
+		if archErr != nil {
+			r.Error = archErr.Error()
+		}
+		out = append(out, r)
+	}
+	if opts.asJSON {
+		return writeJSON(os.Stdout, out)
+	}
+	if len(out) == 0 {
+		println(os.Stdout, "no defined agents to archive")
+		return nil
+	}
+	for _, r := range out {
+		if r.OK {
+			printf(os.Stdout, "archived %s (%s)\n", r.Name, r.UUID)
+		} else {
+			printf(os.Stdout, "FAILED  %s (%s): %s\n", r.Name, r.UUID, r.Error)
+		}
+	}
+	return nil
+}
+
+// resolveAgentID accepts either a UUID string or an agent name. When
+// `ref` parses as a UUID we use it directly; otherwise we look the name
+// up via list_agents (filtering out archived entries, since their names
+// are released and may legally collide with a freshly-spawned
+// non-archived agent). Returns the matching UUID, or an error if zero
+// or multiple non-archived agents share the name.
+//
+// Existing verbs (kill, restart, show, prompt) historically required a
+// UUID; the new verbs accept either form so an operator who just
+// spawned `agent-foo` can `archive agent-foo` without copy-pasting the
+// UUID from `list`. This helper centralizes the resolution so all
+// verbs that adopt the name-or-UUID surface stay consistent.
+func resolveAgentID(ctx context.Context, cli *client.Client, ref string) (uuid.UUID, error) {
+	if id, err := uuid.Parse(ref); err == nil {
+		return id, nil
+	}
+	listCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	var resp sextantproto.ListAgentsResponse
+	if err := cli.RPC(listCtx, rpc.VerbListAgents, sextantproto.ListAgentsRequest{}, &resp); err != nil {
+		return uuid.Nil, fmt.Errorf("list_agents: %w", err)
+	}
+	var matches []sextantproto.AgentSummary
+	for _, a := range resp.Agents {
+		if a.Name == ref && a.Lifecycle != string(sextantproto.LifecycleArchived) {
+			matches = append(matches, a)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return uuid.Nil, fmt.Errorf("no non-archived agent named %q", ref)
+	case 1:
+		return matches[0].UUID, nil
+	default:
+		// Shouldn't happen under the uniqueness invariant, but surface
+		// the ambiguity instead of picking arbitrarily.
+		uuids := make([]string, 0, len(matches))
+		for _, m := range matches {
+			uuids = append(uuids, m.UUID.String())
+		}
+		return uuid.Nil, fmt.Errorf("multiple non-archived agents named %q: %s", ref, strings.Join(uuids, ", "))
+	}
+}
+
 // runAgentsPrompt — `sextant agents prompt <agent> "<text>"`.
 func runAgentsPrompt(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("sextant agents prompt", flag.ContinueOnError)
@@ -416,7 +605,7 @@ func writeJSON(w io.Writer, v any) error {
 
 // ensureNotEmpty is a tiny helper for usage-error reporting.
 //
-//nolint:unused // reserved for future verbs (`agents archive`, etc.)
+//nolint:unused // reserved for future verbs
 func ensureNotEmpty(label, v string) error {
 	if strings.TrimSpace(v) == "" {
 		return errors.New(label + " is required")

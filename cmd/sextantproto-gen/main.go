@@ -77,6 +77,8 @@ func main() {
 		{"kill_agent_response", &sextantproto.KillAgentResponse{}},
 		{"prompt_agent_request", &sextantproto.PromptAgentRequest{}},
 		{"prompt_agent_response", &sextantproto.PromptAgentResponse{}},
+		{"archive_agent_request", &sextantproto.ArchiveAgentRequest{}},
+		{"archive_agent_response", &sextantproto.ArchiveAgentResponse{}},
 		// M12 verb payloads.
 		{"restart_agent_request", &sextantproto.RestartAgentRequest{}},
 		{"restart_agent_response", &sextantproto.RestartAgentResponse{}},
