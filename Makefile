@@ -14,7 +14,7 @@ BIN_DIR := bin
 TS_DIR := clients/typescript
 
 # Binaries built by `make build`. New cmd/<name> dirs land here as milestones add them.
-CMDS := sextant sextantd sextant-shipper sextant-natsboot sextant-clickhouseboot sextant-client-demo
+CMDS := sextant sextantd sextant-shipper sextant-natsboot sextant-clickhouseboot sextant-client-demo sextant-tui-agents
 
 .PHONY: all fmt lint lint-go lint-nilaway lint-ts test test-go test-ts build clean tidy install-tools \
         ts-install ts-codegen ts-lint ts-test ts-build \
