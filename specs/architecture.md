@@ -534,13 +534,15 @@ permissions = [                        # cap allowlist (subset of operator's cap
 ]
 env = { KEY = "value" }                # env vars injected into the container
 mounts = ["worktree"]                  # named mount classes (worktree | secrets | ...)
-initial_prompt = ""                    # optional first prompt on spawn
+initial_prompt = ""                    # optional persistent charter; passed to the SDK as systemPrompt on every turn
 model = "claude-opus-4-7[1m]"          # model id passed to Claude SDK
 permission_ceiling = "auto"            # max permission mode (locked to "auto")
 claude_seed = "~/.config/sextant/assistant-claude"  # optional; host dir bind-mounted ro at /home/agent/.claude
 ```
 
 **`claude_seed`** (optional): when set, sextantd resolves the path (`~/` expands via `os.UserHomeDir`) and bind-mounts the directory **read-only** into the container at `/home/agent/.claude`, replacing the default empty per-agent volume. Use it to pre-load operator-curated CLAUDE.md, slash commands, hooks, or `settings.json` for the agent class. Missing or non-directory paths fail template validation at load time. Two-way sync (operator edits → agent, agent writes → host) is intentionally out of scope; the agent's writes stay container-local. See `plans/issues/feat-template-claude-seeding.md`.
+
+**`initial_prompt`** (optional): persistent context, **not** a one-shot first user message. sextantd base64-encodes the field, injects it as `SEXTANT_INITIAL_PROMPT`, and the sidecar passes the decoded string to the Claude Agent SDK as `systemPrompt` — so the model sees it on every turn for the lifetime of the incarnation (and the next spawn of the same agent, since the field is part of the persisted `AgentDefinition`). Use it for charter / role / preferences that should steer every reply; for one-shot greetings or seeding, just send a regular prompt. See `plans/issues/bug-initial-prompt-not-forwarded-to-sdk.md`.
 
 **Default template**: `default.toml` ships with `sextant init`. Contents:
 
