@@ -76,6 +76,15 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 	}
 	// New process group so we can SIGINT the whole tree on Stop.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// exec.CommandContext's default Cancel callback calls
+	// cmd.Process.Kill, which SIGKILLs only the leader pid. nats-server
+	// currently has no children, but we mirror clickhouseboot here so
+	// any future helper process in the same group can't slip through
+	// the ctx-cancel path (the same leak vector 2903609 fixed for the
+	// explicit Stop path).
+	cmd.Cancel = func() error {
+		return signalProcessGroup(cmd, syscall.SIGKILL)
+	}
 
 	if err := cmd.Start(); err != nil {
 		if logFile != nil {
