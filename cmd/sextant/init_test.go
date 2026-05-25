@@ -5,6 +5,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/love-lena/sextant-initial/pkg/authjwt"
@@ -175,3 +177,40 @@ func TestInitRejectsHalfInstalledCA(t *testing.T) {
 
 func isDir(st os.FileInfo) bool  { return st.IsDir() }
 func isFile(st os.FileInfo) bool { return !st.IsDir() }
+
+// TestInitOutputMentionsMakeInstallOnMacOS asserts that `sextant init` ends with
+// a note steering operators to `make install`. Plain `cp bin/* ~/.local/bin/`
+// stamps com.apple.provenance onto the destination, and Gatekeeper SIGKILLs
+// the resulting binary on invocation (exit 137, no stderr). The note only
+// appears on darwin; Linux installs are unaffected.
+//
+// Issue: docs-install-via-make-install-not-cp
+func TestInitOutputMentionsMakeInstallOnMacOS(t *testing.T) {
+	opts := tempInitOpts(t)
+	var buf bytes.Buffer
+	if err := doInit(context.Background(), &buf, opts); err != nil {
+		t.Fatalf("doInit: %v", err)
+	}
+
+	out := buf.String()
+	const needle = "make install"
+	const gatekeeper = "Gatekeeper"
+
+	if runtime.GOOS == "darwin" {
+		if !strings.Contains(out, needle) {
+			t.Errorf("darwin: expected init output to mention %q, got:\n%s", needle, out)
+		}
+		if !strings.Contains(out, gatekeeper) {
+			t.Errorf("darwin: expected init output to mention %q, got:\n%s", gatekeeper, out)
+		}
+		return
+	}
+
+	// Non-darwin: the note is irrelevant and should NOT appear.
+	if strings.Contains(out, needle) {
+		t.Errorf("%s: did not expect %q in init output, got:\n%s", runtime.GOOS, needle, out)
+	}
+	if strings.Contains(out, gatekeeper) {
+		t.Errorf("%s: did not expect %q in init output, got:\n%s", runtime.GOOS, gatekeeper, out)
+	}
+}

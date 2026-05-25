@@ -4,6 +4,27 @@ The first considered implementation of sextant — a Go-based control plane for 
 
 > **Note on naming**: this is "initial" (v1). The earlier experimental version is "pilot" (v0), located in the `sextant` repo. Initial is a clean ground-up implementation informed by what pilot taught us — no code carryover from pilot, and the design has been considered top-to-bottom in [`specs/architecture.md`](specs/architecture.md).
 
+## Install
+
+```bash
+git clone git@github.com:love-lena/sextant-initial.git
+cd sextant-initial
+make install            # NOT `cp bin/* ~/.local/bin/`; cp triggers macOS
+                        # Gatekeeper SIGKILL (exit 137, silent kill).
+                        # PREFIX overridable: `sudo make install PREFIX=/usr/local`
+sextant init
+sextantd &
+```
+
+> **macOS gotcha — do not use plain `cp`.** `cp bin/sextant ~/.local/bin/` stamps
+> the `com.apple.provenance` xattr onto the destination, and Gatekeeper SIGKILLs
+> the resulting binary on invocation (exit code 137, **no stderr message**). The
+> failure looks like the binary itself is broken. `make install` invokes
+> `/usr/bin/install` which writes a clean file, sidestepping the xattr entirely.
+> Linux is unaffected. Cross-reference: `plans/issues/docs-install-via-make-install-not-cp.md`.
+
+`make uninstall` removes every installed binary from `$PREFIX/bin`.
+
 ## What's in this repo
 
 Right now: **specifications, plans, and conventions only**. No code yet. This repo is built in two phases.
