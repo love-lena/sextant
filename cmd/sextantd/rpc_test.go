@@ -17,7 +17,25 @@ import (
 // rpcClient builds a pkg/client.Client against the running daemon's
 // NATS listener. It reads the operator creds the daemon was started
 // with so the password is the same one the daemon's NATS authorizes.
+//
+// Before returning, it polls list_agents until the RPC server is
+// dispatching: the daemon writes its control-socket greeting at step
+// 4 of Start() but doesn't register RPC verbs until steps 8-11, so a
+// test that races straight into spawn_agent can hit an unknown_verb
+// reply against the early dispatcher window. We poll list_agents
+// (always-registered) to confirm the RPC surface is alive.
 func rpcClient(t *testing.T, h *daemonHarness) *client.Client {
+	t.Helper()
+	cli := rpcClientWithoutWait(t, h)
+	if err := waitForRPCReady(cli, 30*time.Second); err != nil {
+		t.Fatalf("waitForRPCReady: %v\n--- daemon log ---\n%s", err, h.tail(t))
+	}
+	return cli
+}
+
+// rpcClientWithoutWait is rpcClient without the readiness poll.
+// Tests that *want* to see the unknown-verb error use this.
+func rpcClientWithoutWait(t *testing.T, h *daemonHarness) *client.Client {
 	t.Helper()
 	rt, err := sextantd.ReadRuntimeInfo(h.cfg.Paths.RuntimeFile)
 	if err != nil {
@@ -45,6 +63,49 @@ func rpcClient(t *testing.T, h *daemonHarness) *client.Client {
 		connCancel()
 	})
 	return cli
+}
+
+// waitForRPCReady polls list_agents + spawn_agent registration until
+// the verbs that the spawn flow needs are wired. We send list_agents
+// (the simplest of the always-registered verbs); the catch is that
+// list_agents is registered in registerInitialVerbs, which runs in
+// startRPC — that runs strictly before registerLifecycleVerbs, so a
+// list_agents success doesn't yet imply spawn_agent is wired. We then
+// send a spawn_agent against a deliberately bad payload (empty name)
+// and assert the reply is bad_request, not unknown_verb.
+func waitForRPCReady(cli *client.Client, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		probeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err := cli.RPC(probeCtx, rpc.VerbSpawnAgent,
+			sextantproto.SpawnAgentRequest{}, // intentionally empty: handler emits bad_request
+			nil,
+		)
+		cancel()
+		// We expect a structured error from the handler (bad_request
+		// because Name is empty). Any structured RPCError counts as
+		// "RPC up". An unknown_verb error means the handler isn't
+		// registered yet; keep polling.
+		var rerr *client.RPCError
+		if err == nil {
+			return nil
+		}
+		if errors.As(err, &rerr) {
+			if rerr.Code == sextantproto.ErrCodeUnknownVerb {
+				lastErr = err
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+			return nil
+		}
+		lastErr = err
+		time.Sleep(100 * time.Millisecond)
+	}
+	if lastErr == nil {
+		lastErr = errors.New("timed out without seeing rpc")
+	}
+	return lastErr
 }
 
 // TestDaemonListAgentsReturnsEmpty is the M7 acceptance test for

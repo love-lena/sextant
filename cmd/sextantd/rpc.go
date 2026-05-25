@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/nats-io/nats.go"
@@ -80,6 +81,14 @@ func (d *daemon) startRPC(ctx context.Context) (*rpcRuntime, error) {
 			Kind: sextantproto.AddressDaemon,
 			ID:   fmt.Sprintf("daemon-%d", d.startedAt.UnixNano()),
 		},
+		// Bump the per-handler cap so the M11/M12 verbs that drive
+		// Docker (spawn_agent, kill_agent, restart_agent, exec_in_container)
+		// have headroom. The spec's 10s default is the *client-side*
+		// timeout; the server-side SLA can be looser without surprising
+		// callers since the client unsubscribes at its own deadline.
+		// Picking 120s: covers a cold sidecar-image pull on a slow CI
+		// host without going wildly over budget.
+		HandlerTimeout: 120 * time.Second,
 	})
 	if err != nil {
 		_ = chConn.Close()

@@ -25,10 +25,7 @@ import (
 type RestartDeps struct {
 	Definitions   AgentMutableKV
 	Incarnations  AgentMutableKV
-	Containers    interface {
-		ContainerRunner
-		ContainerExecRunner
-	}
+	Containers    ContainerRunner
 	CA            *authjwt.CA
 	WorkspaceRoot string
 	HostID        string
@@ -198,11 +195,8 @@ func NewRestartAgent(deps RestartDeps) rpc.Handler {
 			State:         sextantproto.IncarnationStarting,
 		}
 		if err := putJSON(ctx, deps.Incarnations, newIncID.String(), newInc); err != nil {
-			// Container is up but we can't record it — stop it so we
-			// don't leak.
-			rbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			_ = deps.Containers.Stop(rbCtx, container.ID, 5*time.Second)
-			cancel()
+			//nolint:contextcheck // rollback intentionally uses a fresh ctx — the request ctx may already be canceled
+			rollbackBackgroundStop(deps.Containers, container.ID)
 			return emitErr(emit, sextantproto.ErrCodeInternal,
 				fmt.Sprintf("persist new incarnation: %v", err))
 		}
@@ -214,13 +208,8 @@ func NewRestartAgent(deps RestartDeps) rpc.Handler {
 		def.Version++
 		def.UpdatedAt = sextantproto.AtTimestamp(deps.Now().UTC())
 		if err := putJSON(ctx, deps.Definitions, def.UUID.String(), def); err != nil {
-			// Definition KV write failed — try to roll back the new
-			// incarnation/container so we don't leave a running
-			// container with no "running" definition.
-			rbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			_ = deps.Containers.Stop(rbCtx, container.ID, 5*time.Second)
-			_ = deps.Incarnations.Delete(rbCtx, newIncID.String())
-			cancel()
+			//nolint:contextcheck // rollback intentionally uses a fresh ctx — see comment above
+			rollbackBackgroundStopAndDelete(deps.Containers, deps.Incarnations, container.ID, newIncID.String())
 			return emitErr(emit, sextantproto.ErrCodeInternal,
 				fmt.Sprintf("flip lifecycle to running: %v", err))
 		}
@@ -233,4 +222,22 @@ func NewRestartAgent(deps RestartDeps) rpc.Handler {
 		}
 		return emitOK(emit, sextantproto.RestartAgentResponse{AgentID: def.UUID, OK: true})
 	}
+}
+
+// rollbackBackgroundStop force-stops a container on a fresh background
+// ctx. The request ctx may already be canceled by the time rollback
+// runs, so we detach. Best-effort: errors are swallowed.
+func rollbackBackgroundStop(c ContainerRunner, id string) {
+	rbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = c.Stop(rbCtx, id, 5*time.Second)
+}
+
+// rollbackBackgroundStopAndDelete is rollbackBackgroundStop + delete
+// the supplied incarnation KV key. Same fresh-ctx semantics.
+func rollbackBackgroundStopAndDelete(c ContainerRunner, incs AgentMutableKV, id, incKey string) {
+	rbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = c.Stop(rbCtx, id, 5*time.Second)
+	_ = incs.Delete(rbCtx, incKey)
 }

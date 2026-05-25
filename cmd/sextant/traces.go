@@ -110,7 +110,10 @@ func renderSpanTree(w io.Writer, spans []sextantproto.TraceSpan) error {
 		top := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		printSpan(w, top.span, top.depth)
-		kids := children[top.span.SpanID]
+		kids, ok := children[top.span.SpanID]
+		if !ok {
+			continue
+		}
 		for i := len(kids) - 1; i >= 0; i-- {
 			stack = append(stack, frame{span: kids[i], depth: top.depth + 1})
 		}
