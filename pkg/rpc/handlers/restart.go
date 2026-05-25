@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -50,10 +50,11 @@ type RestartDeps struct {
 //     flip lifecycle back to running.
 //  6. Reply with the agent UUID + ok=true.
 //
-// PreserveSession is recorded but has no effect today — M12 ships no
-// session-continuity machinery (no driver loop). The flag is accepted
-// for forward-compat so a future restart-with-session handler doesn't
-// have to break the wire shape.
+// When args.PreserveSession is true and the definition has a
+// previously-recorded SDK session id, the new container inherits
+// SEXTANT_SESSION_ID so the sidecar's first turn resumes the prior
+// Claude conversation rather than starting fresh. See
+// [[bug-restart-preserve-session-noop]].
 //
 // Rollback: if step 4 fails after step 2 succeeded, the agent is left
 // in lifecycle=defined with no live container. That's the same state
@@ -138,20 +139,40 @@ func NewRestartAgent(deps RestartDeps) rpc.Handler {
 				fmt.Sprintf("ensure workspace: %v", err))
 		}
 
-		envVars := map[string]string{
-			"SEXTANT_AGENT_UUID":     def.UUID.String(),
-			"SEXTANT_AGENT_NAME":     def.Name,
-			"SEXTANT_INCARNATION_ID": newIncID.String(),
-			"SEXTANT_HOST_ID":        deps.HostID,
-			"SEXTANT_NATS_URL":       deps.NATSURL,
-			"SEXTANT_NATS_USER":      deps.NATSUser,
-			"SEXTANT_NATS_PASSWORD":  deps.NATSPassword,
-			"SEXTANT_JWT":            jwt,
-			"SEXTANT_MCP_URL":        deps.MCPURL,
+		// Env is assembled by the same buildContainerEnv helper the spawn
+		// path uses so the two can't drift on the well-known SEXTANT_*
+		// keys. The pre-helper restart path silently dropped
+		// ANTHROPIC_API_KEY, SEXTANT_MODEL, SEXTANT_PERMISSION_MODE, and
+		// SEXTANT_SESSION_ID — see [[bug-restart-no-api-key-forwarding]]
+		// and [[bug-restart-preserve-session-noop]].
+		model := def.Runtime.Model
+		if strings.TrimSpace(model) == "" {
+			model = DefaultModel
 		}
-		for k, v := range def.Sandbox.Env {
-			envVars[k] = v
+		// Only forward the session id when the operator asked us to
+		// preserve it; otherwise the restart starts a fresh SDK session
+		// and the next sidecar turn writes a new session id back into
+		// def.Runtime.SessionID via CAS.
+		var sessionID string
+		if args.PreserveSession && def.Runtime.SessionID != nil {
+			sessionID = *def.Runtime.SessionID
 		}
+		envVars := buildContainerEnv(containerEnvInput{
+			AgentUUID:      def.UUID,
+			AgentName:      def.Name,
+			IncarnationID:  newIncID,
+			HostID:         deps.HostID,
+			NATSURL:        deps.NATSURL,
+			NATSUser:       deps.NATSUser,
+			NATSPassword:   deps.NATSPassword,
+			JWT:            jwt,
+			MCPURL:         deps.MCPURL,
+			Model:          model,
+			PermissionMode: permissionCeilingToSDKMode(def.Runtime.PermissionCeil),
+			APIKey:         hostAPIKey(),
+			SessionID:      sessionID,
+			EnvOverlay:     def.Sandbox.Env,
+		})
 		labels := map[string]string{
 			LabelAgentUUID:     def.UUID.String(),
 			LabelAgentName:     def.Name,
@@ -213,9 +234,10 @@ func NewRestartAgent(deps RestartDeps) rpc.Handler {
 				fmt.Sprintf("persist new incarnation: %v", err))
 		}
 
-		// 6. Bump the definition version. preserve_session is reserved
-		// for future use; we record the request flag in details for
-		// audit but otherwise the spec says no behavior change today.
+		// 6. Bump the definition version. SEXTANT_SESSION_ID was
+		// forwarded above when args.PreserveSession is true; the
+		// sidecar's session-id capture path persists any new session id
+		// it observes back onto def.Runtime.SessionID via CAS.
 		def.Lifecycle = sextantproto.LifecycleRunning
 		def.Version++
 		def.UpdatedAt = sextantproto.AtTimestamp(deps.Now().UTC())
@@ -226,12 +248,6 @@ func NewRestartAgent(deps RestartDeps) rpc.Handler {
 				fmt.Sprintf("flip lifecycle to running: %v", err))
 		}
 
-		// PreserveSession is accepted but ignored. Log to stderr so
-		// the operator notices the no-op semantics rather than wondering
-		// why session state vanished.
-		if args.PreserveSession {
-			fmt.Fprintf(os.Stderr, "restart_agent: preserve_session=true requested but ignored (no driver loop in phase 1)\n")
-		}
 		return emitOK(emit, sextantproto.RestartAgentResponse{AgentID: def.UUID, OK: true})
 	}
 }
