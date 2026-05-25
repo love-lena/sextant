@@ -157,6 +157,27 @@ export interface Envelope {
 }
 /**
  * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "ExecInContainerRequest".
+ */
+export interface ExecInContainerRequest {
+  agent_id: UUID;
+  cmd: string[];
+  workdir?: string;
+  env?: {
+    [k: string]: string | undefined;
+  };
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "ExecInContainerResponse".
+ */
+export interface ExecInContainerResponse {
+  stdout: string;
+  stderr: string;
+  exit_code: number;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
  * via the `definition` "GetAgentStatusRequest".
  */
 export interface GetAgentStatusRequest {
@@ -258,6 +279,31 @@ export interface ListAgentsResponse {
 }
 /**
  * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "ListDirRequest".
+ */
+export interface ListDirRequest {
+  agent_id: UUID;
+  path: string;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "ListDirEntry".
+ */
+export interface ListDirEntry {
+  name: string;
+  is_dir: boolean;
+  size?: number;
+  mode?: string;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "ListDirResponse".
+ */
+export interface ListDirResponse {
+  entries: ListDirEntry[];
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
  * via the `definition` "LogRecord".
  */
 export interface LogRecord {
@@ -316,6 +362,53 @@ export interface PromptAgentResponse {
 }
 /**
  * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "QueryAuditFilter".
+ */
+export interface QueryAuditFilter {
+  actor?: string;
+  action?: string;
+  agent_uuid?: UUID;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "QueryAuditRequest".
+ */
+export interface QueryAuditRequest {
+  filter: QueryAuditFilter;
+  time_range: TimeRange;
+  limit?: number;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "TimeRange".
+ */
+export interface TimeRange {
+  since?: string;
+  until?: string;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "QueryAuditResponse".
+ */
+export interface QueryAuditResponse {
+  rows: QueryAuditRow[];
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "QueryAuditRow".
+ */
+export interface QueryAuditRow {
+  id: UUID;
+  ts: string;
+  actor: string;
+  agent_uuid: UUID;
+  action: string;
+  capability_required: string;
+  result: string;
+  payload: string;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
  * via the `definition` "QueryHistoryFilter".
  */
 export interface QueryHistoryFilter {
@@ -335,18 +428,43 @@ export interface QueryHistoryRequest {
 }
 /**
  * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
- * via the `definition` "TimeRange".
- */
-export interface TimeRange {
-  since?: string;
-  until?: string;
-}
-/**
- * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
  * via the `definition` "QueryHistoryResponse".
  */
 export interface QueryHistoryResponse {
   events: Envelope[];
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "QueryTraceRequest".
+ */
+export interface QueryTraceRequest {
+  trace_id: string;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "QueryTraceResponse".
+ */
+export interface QueryTraceResponse {
+  spans: TraceSpan[];
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "TraceSpan".
+ */
+export interface TraceSpan {
+  trace_id: string;
+  span_id: string;
+  parent_span_id?: string;
+  span_name: string;
+  span_kind: string;
+  service_name: string;
+  timestamp: string;
+  duration_nanos: number;
+  status_code?: string;
+  status_message?: string;
+  attributes?: {
+    [k: string]: string | undefined;
+  };
 }
 /**
  * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
@@ -363,6 +481,22 @@ export interface ReadFileRequest {
 export interface ReadFileResponse {
   content: string;
   content_type: string;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "RestartAgentRequest".
+ */
+export interface RestartAgentRequest {
+  agent_id: UUID;
+  preserve_session?: boolean;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "RestartAgentResponse".
+ */
+export interface RestartAgentResponse {
+  agent_id: UUID;
+  ok: boolean;
 }
 /**
  * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
@@ -457,6 +591,24 @@ export interface SpawnAgentResponse {
 }
 /**
  * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "StatRequest".
+ */
+export interface StatRequest {
+  agent_id: UUID;
+  path: string;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "StatResponse".
+ */
+export interface StatResponse {
+  name: string;
+  size: number;
+  mode: string;
+  is_dir: boolean;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
  * via the `definition` "UserInputRequestPayload".
  */
 export interface UserInputRequestPayload {
@@ -479,4 +631,93 @@ export interface UserInputResponsePayload {
   decision: string;
   answer?: string;
   escalate_to?: string;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "WorktreeCreateRequest".
+ */
+export interface WorktreeCreateRequest {
+  name: string;
+  base_branch?: string;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "WorktreeCreateResponse".
+ */
+export interface WorktreeCreateResponse {
+  worktree: WorktreeInfo;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "WorktreeInfo".
+ */
+export interface WorktreeInfo {
+  name: string;
+  path: string;
+  branch: string;
+  base_branch: string;
+  owning_agent?: UUID;
+  status: string;
+  created_at: string;
+  last_activity: string;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "WorktreeDestroyRequest".
+ */
+export interface WorktreeDestroyRequest {
+  name: string;
+  force?: boolean;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "WorktreeDestroyResponse".
+ */
+export interface WorktreeDestroyResponse {
+  ok: boolean;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "WorktreeDiffRequest".
+ */
+export interface WorktreeDiffRequest {
+  name: string;
+  against?: string;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "WorktreeDiffResponse".
+ */
+export interface WorktreeDiffResponse {
+  diff: string;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "WorktreeListRequest".
+ */
+export interface WorktreeListRequest {}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "WorktreeListResponse".
+ */
+export interface WorktreeListResponse {
+  worktrees: WorktreeInfo[];
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "WorktreeMergeRequest".
+ */
+export interface WorktreeMergeRequest {
+  name: string;
+  target?: string;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "WorktreeMergeResponse".
+ */
+export interface WorktreeMergeResponse {
+  ok: boolean;
+  branch?: string;
+  target?: string;
+  conflicts?: string[];
 }

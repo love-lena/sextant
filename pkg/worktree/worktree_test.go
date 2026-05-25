@@ -119,7 +119,7 @@ func initRepo(t *testing.T) string {
 
 func runOrFail(t *testing.T, dir, name string, args ...string) {
 	t.Helper()
-	cmd := exec.Command(name, args...)
+	cmd := exec.Command(name, args...) //nolint:gosec // test-controlled args
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -129,7 +129,7 @@ func runOrFail(t *testing.T, dir, name string, args ...string) {
 
 func runCapture(t *testing.T, dir, name string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command(name, args...)
+	cmd := exec.Command(name, args...) //nolint:gosec // test-controlled args
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.Output()
@@ -173,7 +173,7 @@ func buildManager(t *testing.T) (*worktree.Manager, *fakeKV, *fakeKV, string) {
 		entries, _ := os.ReadDir(worktreesRoot)
 		for _, e := range entries {
 			path := filepath.Join(worktreesRoot, e.Name())
-			cmd := exec.Command("git", "worktree", "remove", "--force", path)
+			cmd := exec.Command("git", "worktree", "remove", "--force", path) //nolint:gosec // test-controlled args
 			cmd.Dir = repo
 			_ = cmd.Run()
 		}
@@ -193,12 +193,12 @@ func TestValidateName(t *testing.T) {
 		{"fix-clickhouse-migration-003", true},
 		{"spec-nats-component-001", true},
 		{"feat-x-001", true},
-		{"feat-001", false},                  // missing desc
-		{"feature-bus-routing-001", false},   // wrong kind
-		{"feat-Bus-Routing-001", false},      // uppercase
-		{"feat-bus-routing-1", false},        // seq not 3 digits
-		{"feat-bus-routing-0001", false},     // seq 4 digits
-		{"FEAT-bus-routing-001", false},      // uppercase kind
+		{"feat-001", false},                   // missing desc
+		{"feature-bus-routing-001", false},    // wrong kind
+		{"feat-Bus-Routing-001", false},       // uppercase
+		{"feat-bus-routing-1", false},         // seq not 3 digits
+		{"feat-bus-routing-0001", false},      // seq 4 digits
+		{"FEAT-bus-routing-001", false},       // uppercase kind
 		{"feat-bus-routing-001-extra", false}, // trailing
 	}
 	for _, c := range cases {

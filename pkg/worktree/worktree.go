@@ -363,9 +363,12 @@ func (m *Manager) Merge(ctx context.Context, name, target string) (MergeResult, 
 		m.markStatus(ctx, info, sextantproto.WorktreeStatusActive)
 		return MergeResult{}, fmt.Errorf("worktree: create merge worktree: %w", err)
 	}
-	// Always tear down the merge worktree.
+	// Always tear down the merge worktree. cleanup intentionally uses
+	// a fresh background ctx so a canceled request still releases the
+	// transient worktree.
+	//nolint:contextcheck // cleanup intentionally uses background ctx
 	defer func() {
-		_ = runGit(context.Background(), m.cfg.RepoRoot, "worktree", "remove", "--force", mergeDir) //nolint:contextcheck // cleanup outlives ctx
+		_ = runGit(context.Background(), m.cfg.RepoRoot, "worktree", "remove", "--force", mergeDir)
 	}()
 
 	// Configure a minimal git identity in the merge worktree so

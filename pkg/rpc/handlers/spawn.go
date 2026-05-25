@@ -75,13 +75,13 @@ type SpawnDeps struct {
 	// WorkspaceRoot. The spawn-time worktree is named per
 	// specs/architecture.md §11 "Worktree naming" via
 	// worktree.SpawnWorktreeName.
-	Worktree      WorktreeProvider
-	HostID        string
-	NATSURL       string
-	NATSUser      string
-	NATSPassword  string
-	MCPURL        string
-	Issuer        string
+	Worktree     WorktreeProvider
+	HostID       string
+	NATSURL      string
+	NATSUser     string
+	NATSPassword string
+	MCPURL       string
+	Issuer       string
 	// TestRunLabel, when non-empty, stamps sextant.test_run=<value> on
 	// every spawned container. Used by tests to scope cleanup. Empty in
 	// production.
@@ -490,6 +490,8 @@ func ensureWorkspaceDir(root, agentUUID string) (string, error) {
 // never declared the mount, and templates that do declare it but
 // land on a daemon where worktree.repo_root is unset (M14
 // transitional state).
+//
+//nolint:contextcheck // rollback closure intentionally uses background ctx so a canceled request still cleans up
 func materializeWorkspace(ctx context.Context, deps SpawnDeps, tpl templates.Template, agentUUID uuid.UUID) (string, func(), error) {
 	if wantsWorktreeMount(tpl) && deps.Worktree != nil {
 		name := SpawnWorktreeName(tpl.Name, agentUUID)
@@ -498,7 +500,6 @@ func materializeWorkspace(ctx context.Context, deps SpawnDeps, tpl templates.Tem
 			return "", nil, fmt.Errorf("worktree.Create %s: %w", name, err)
 		}
 		cleanup := func() {
-			//nolint:contextcheck // rollback closure intentionally outlives the request ctx
 			rbCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			_ = deps.Worktree.Destroy(rbCtx, info.Name, true)

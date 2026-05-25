@@ -94,6 +94,7 @@ func AcquireMergeLock(
 	// the key already exists, inspect the existing value — when its TTL
 	// has elapsed, force-delete + retry once. After that, give up.
 	if _, err := kv.Create(ctx, MergeLockKey, raw); err == nil {
+		//nolint:contextcheck // release closure uses its own background ctx so a canceled caller doesn't strand the lock
 		return mkRelease(kv), nil
 	} else if !isAlreadyExists(err) {
 		return nil, fmt.Errorf("worktree: create lock: %w", err)
@@ -125,6 +126,7 @@ func AcquireMergeLock(
 		}
 		return nil, fmt.Errorf("worktree: re-create lock after stale cleanup: %w", retryErr)
 	}
+	//nolint:contextcheck // release closure uses its own background ctx so a canceled caller doesn't strand the lock
 	return mkRelease(kv), nil
 }
 
