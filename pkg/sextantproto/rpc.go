@@ -44,4 +44,7 @@ const (
 	// whose body lands in a later milestone. Stable string so clients
 	// can pattern-match without reading the message.
 	ErrCodeNotImplemented = "not_implemented"
+	// ErrCodeNotFound is the M14 worktree "no such name" error code.
+	// Generic on purpose so non-agent resources reuse it.
+	ErrCodeNotFound = "not_found"
 )

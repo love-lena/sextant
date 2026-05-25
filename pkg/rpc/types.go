@@ -23,6 +23,10 @@ func CapFor(verb string) string {
 		return "control.restart"
 	case VerbPromptAgent:
 		return "control.prompt"
+	case VerbWorktreeCreate, VerbWorktreeDestroy, VerbWorktreeMerge:
+		return "control.worktree"
+	case VerbWorktreeList, VerbWorktreeDiff:
+		return "read.worktrees"
 	default:
 		return ""
 	}
@@ -47,6 +51,13 @@ const (
 	VerbExecInContainer = "exec_in_container"
 	VerbQueryAudit      = "query_audit"
 	VerbQueryTrace      = "query_trace"
+	// M14 worktree verbs. Real implementations land in
+	// pkg/rpc/handlers/worktree.go.
+	VerbWorktreeCreate  = "worktree_create"
+	VerbWorktreeDestroy = "worktree_destroy"
+	VerbWorktreeList    = "worktree_list"
+	VerbWorktreeMerge   = "worktree_merge"
+	VerbWorktreeDiff    = "worktree_diff"
 )
 
 // QueryHistoryDefaultLimit is the row cap when the request omits Limit.
