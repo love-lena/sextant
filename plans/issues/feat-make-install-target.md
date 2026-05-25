@@ -1,8 +1,10 @@
 ---
 title: Add `make install` / `make uninstall` targets to Makefile
-status: open
+status: resolved
 priority: P3
 created_at: 2026-05-24T23:18-07:00
+resolved_at: 2026-05-25T01:16-07:00
+resolution: Added `install` (depends on `build`) and `uninstall` targets to Makefile with overridable `PREFIX ?= $(HOME)/.local`; both iterate `$(CMDS)`.
 labels: [feature, build, ergonomics]
 discovered_in: operator installation flow
 ---
