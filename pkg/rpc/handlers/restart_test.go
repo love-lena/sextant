@@ -196,6 +196,222 @@ func TestRestartAgentRollsBackLifecycleOnIncarnationPersistFailure(t *testing.T)
 	}
 }
 
+// TestRestartForwardsAPIKey pins [[bug-restart-no-api-key-forwarding]]:
+// the restart handler must forward ANTHROPIC_API_KEY from the daemon's
+// own env into the new container's env, the same way spawn does. Pre-
+// fix, the restart path silently dropped it and the freshly-restarted
+// sidecar would fail its next prompt with "Not logged in".
+//
+// Mirrors the issue's acceptance criterion in a unit-test shape:
+// instead of `docker exec env | grep ANTHROPIC` we inspect the spec
+// the handler hands to ContainerRunner.Run.
+func TestRestartForwardsAPIKey(t *testing.T) {
+	const apiKey = "sk-ant-restart-forwarding-test"
+	t.Setenv("ANTHROPIC_API_KEY", apiKey)
+
+	deps, defs, incs, runner, _ := buildDeps(t)
+	spawnH := handlers.NewSpawnAgent(deps)
+	cap := &captureEmit{}
+	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+		Name: "alpha", Template: "default",
+	}), cap.emit()); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if cap.resp.Error != nil {
+		t.Fatalf("spawn error: %+v", cap.resp.Error)
+	}
+	var spawnResp sextantproto.SpawnAgentResponse
+	if err := json.Unmarshal(cap.resp.Result, &spawnResp); err != nil {
+		t.Fatalf("decode spawn: %v", err)
+	}
+
+	// Sanity: the spawn already forwarded it (regression guard so a
+	// future refactor that loses the spawn-side forwarding fails here
+	// too, not just in TestSpawnAgentHappyPath).
+	if got := runner.specs[0].Env["ANTHROPIC_API_KEY"]; got != apiKey {
+		t.Fatalf("spawn ANTHROPIC_API_KEY = %q, want %q", got, apiKey)
+	}
+
+	restartH := handlers.NewRestartAgent(handlers.RestartDeps{
+		Definitions:   defs,
+		Incarnations:  incs,
+		Containers:    runner,
+		CA:            deps.CA,
+		WorkspaceRoot: deps.WorkspaceRoot,
+		HostID:        deps.HostID,
+		NATSURL:       deps.NATSURL,
+		NATSUser:      deps.NATSUser,
+		NATSPassword:  deps.NATSPassword,
+		MCPURL:        deps.MCPURL,
+		Issuer:        deps.Issuer,
+	})
+	rcap := &captureEmit{}
+	if err := restartH(context.Background(), makeReq(t, sextantproto.RestartAgentRequest{
+		AgentID:         spawnResp.AgentID,
+		PreserveSession: true,
+	}), rcap.emit()); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if rcap.resp.Error != nil {
+		t.Fatalf("restart error: %+v", rcap.resp.Error)
+	}
+
+	// runner.specs[0] is the spawn; runner.specs[1] is the restart.
+	if len(runner.specs) != 2 {
+		t.Fatalf("runner.specs = %d, want 2 (spawn + restart)", len(runner.specs))
+	}
+	restartSpec := runner.specs[1]
+	if got := restartSpec.Env["ANTHROPIC_API_KEY"]; got != apiKey {
+		t.Errorf("restart ANTHROPIC_API_KEY = %q, want %q", got, apiKey)
+	}
+	// The other env vars the issue's wire-up commit added (SEXTANT_MODEL,
+	// SEXTANT_PERMISSION_MODE) must flow through restart too — otherwise
+	// the sidecar falls back to its own defaults and we lose the
+	// per-template settings. Cheap to assert here while we're already
+	// inspecting the spec.
+	if got := restartSpec.Env["SEXTANT_MODEL"]; got == "" {
+		t.Errorf("restart SEXTANT_MODEL is empty; env = %v", restartSpec.Env)
+	}
+	if got := restartSpec.Env["SEXTANT_PERMISSION_MODE"]; got != "acceptEdits" {
+		t.Errorf("restart SEXTANT_PERMISSION_MODE = %q, want %q (default for unset/auto ceiling)",
+			got, "acceptEdits")
+	}
+}
+
+// TestRestartPreservesSession pins [[bug-restart-preserve-session-noop]]:
+// when --preserve-session is true and the definition has a recorded
+// SDK session id, the restart handler must inject SEXTANT_SESSION_ID
+// into the new container so the sidecar resumes the prior Claude
+// conversation. Pre-fix, the flag was logged-and-ignored.
+//
+// The issue's acceptance flow ("prompt → kill → restart → prompt and
+// look for '42'") requires a live SDK; we substitute the on-the-wire
+// effect of that flow: seed def.Runtime.SessionID directly in KV as
+// the sidecar would have via CAS, then assert the restart spec's env
+// carries that exact id.
+func TestRestartPreservesSession(t *testing.T) {
+	const sessionID = "sess_01HXYZRESTARTPRESERVES"
+
+	deps, defs, incs, runner, _ := buildDeps(t)
+	spawnH := handlers.NewSpawnAgent(deps)
+	cap := &captureEmit{}
+	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+		Name: "alpha", Template: "default",
+	}), cap.emit()); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if cap.resp.Error != nil {
+		t.Fatalf("spawn error: %+v", cap.resp.Error)
+	}
+	var spawnResp sextantproto.SpawnAgentResponse
+	if err := json.Unmarshal(cap.resp.Result, &spawnResp); err != nil {
+		t.Fatalf("decode spawn: %v", err)
+	}
+
+	// Simulate the sidecar's "first turn captured a session id and
+	// persisted it via CAS" step: load the def, set SessionID, write
+	// back. The unit-test version of the issue's repro `sextant agents
+	// prompt smoke "remember 42"` flow.
+	defEntry, err := defs.Get(context.Background(), spawnResp.AgentID.String())
+	if err != nil {
+		t.Fatalf("get def: %v", err)
+	}
+	var def sextantproto.AgentDefinition
+	if err := json.Unmarshal(defEntry.Value(), &def); err != nil {
+		t.Fatalf("decode def: %v", err)
+	}
+	sid := sessionID
+	def.Runtime.SessionID = &sid
+	raw, _ := json.Marshal(def)
+	if _, err := defs.Put(context.Background(), def.UUID.String(), raw); err != nil {
+		t.Fatalf("put def: %v", err)
+	}
+
+	restartH := handlers.NewRestartAgent(handlers.RestartDeps{
+		Definitions:   defs,
+		Incarnations:  incs,
+		Containers:    runner,
+		CA:            deps.CA,
+		WorkspaceRoot: deps.WorkspaceRoot,
+		HostID:        deps.HostID,
+		NATSURL:       deps.NATSURL,
+		NATSUser:      deps.NATSUser,
+		NATSPassword:  deps.NATSPassword,
+		MCPURL:        deps.MCPURL,
+		Issuer:        deps.Issuer,
+	})
+
+	// Case 1: --preserve-session true → SEXTANT_SESSION_ID carries through.
+	rcap := &captureEmit{}
+	if err := restartH(context.Background(), makeReq(t, sextantproto.RestartAgentRequest{
+		AgentID:         spawnResp.AgentID,
+		PreserveSession: true,
+	}), rcap.emit()); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if rcap.resp.Error != nil {
+		t.Fatalf("restart error: %+v", rcap.resp.Error)
+	}
+	if len(runner.specs) < 2 {
+		t.Fatalf("runner.specs = %d, want at least 2 (spawn + restart)", len(runner.specs))
+	}
+	if got := runner.specs[1].Env["SEXTANT_SESSION_ID"]; got != sessionID {
+		t.Errorf("preserve-session=true: SEXTANT_SESSION_ID = %q, want %q", got, sessionID)
+	}
+
+	// Case 2: --preserve-session false → SEXTANT_SESSION_ID must NOT be
+	// set, otherwise the flag has no behavioral difference and the bug
+	// is half-fixed. We need a fresh agent + def-with-SessionID for
+	// this leg because the previous restart bumped lifecycle to running
+	// and recovering the def shape is more bookkeeping than a second
+	// agent buys us.
+	cap2 := &captureEmit{}
+	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+		Name: "beta", Template: "default",
+	}), cap2.emit()); err != nil {
+		t.Fatalf("second spawn: %v", err)
+	}
+	if cap2.resp.Error != nil {
+		t.Fatalf("second spawn error: %+v", cap2.resp.Error)
+	}
+	var spawnResp2 sextantproto.SpawnAgentResponse
+	if err := json.Unmarshal(cap2.resp.Result, &spawnResp2); err != nil {
+		t.Fatalf("decode second spawn: %v", err)
+	}
+	defEntry2, err := defs.Get(context.Background(), spawnResp2.AgentID.String())
+	if err != nil {
+		t.Fatalf("get def2: %v", err)
+	}
+	var def2 sextantproto.AgentDefinition
+	if err := json.Unmarshal(defEntry2.Value(), &def2); err != nil {
+		t.Fatalf("decode def2: %v", err)
+	}
+	sid2 := sessionID
+	def2.Runtime.SessionID = &sid2
+	raw2, _ := json.Marshal(def2)
+	if _, err := defs.Put(context.Background(), def2.UUID.String(), raw2); err != nil {
+		t.Fatalf("put def2: %v", err)
+	}
+
+	specsBefore := len(runner.specs)
+	rcap2 := &captureEmit{}
+	if err := restartH(context.Background(), makeReq(t, sextantproto.RestartAgentRequest{
+		AgentID:         spawnResp2.AgentID,
+		PreserveSession: false,
+	}), rcap2.emit()); err != nil {
+		t.Fatalf("restart (no-preserve): %v", err)
+	}
+	if rcap2.resp.Error != nil {
+		t.Fatalf("restart (no-preserve) error: %+v", rcap2.resp.Error)
+	}
+	if len(runner.specs) != specsBefore+1 {
+		t.Fatalf("runner.specs grew by %d, want 1", len(runner.specs)-specsBefore)
+	}
+	if got, ok := runner.specs[specsBefore].Env["SEXTANT_SESSION_ID"]; ok {
+		t.Errorf("preserve-session=false: SEXTANT_SESSION_ID set to %q, want unset", got)
+	}
+}
+
 // TestRestartAgentUnknownAgentReturnsNotFound proves the handler's
 // 404 path: an agent_not_found error when the definition isn't in KV.
 func TestRestartAgentUnknownAgentReturnsNotFound(t *testing.T) {
