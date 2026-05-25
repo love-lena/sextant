@@ -1,8 +1,9 @@
 ---
 title: claude_seed read-only bind-mount breaks SDK session persistence — multi-turn conversations fail
-status: open
+status: fixed
 priority: P1
 created_at: 2026-05-25T14:23-07:00
+fixed_in: f7f5ef9
 labels: [bug, template, sidecar, agent-memory, sessions]
 discovered_in: first assistant-agent daily-drive setup
 ---
