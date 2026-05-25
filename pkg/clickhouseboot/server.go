@@ -197,8 +197,14 @@ func (s *Server) Stop(ctx context.Context) error {
 	default:
 	}
 
-	if err := s.cmd.Process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		return fmt.Errorf("clickhouseboot: SIGTERM: %w", err)
+	// SIGTERM the whole process group, not just the leader.
+	// clickhouse-server forks an internal worker that stays in the
+	// leader's process group; signaling only the leader leaves the
+	// worker behind as a PPID=1 orphan. Setpgid:true at Start time
+	// makes the leader its own group, so the negative-pid kill
+	// reaches every descendant in one syscall.
+	if err := signalProcessGroup(s.cmd, syscall.SIGTERM); err != nil {
+		return fmt.Errorf("clickhouseboot: SIGTERM pgroup: %w", err)
 	}
 
 	timeout := s.cfg.ShutdownTimeout
@@ -207,19 +213,47 @@ func (s *Server) Stop(ctx context.Context) error {
 	}
 	select {
 	case <-s.waitDone:
+		// SIGKILL the group on the success path too — Wait reaps the
+		// leader, but a misbehaving worker that ignored SIGTERM would
+		// still be running. Best-effort; ESRCH is normal here.
+		_ = signalProcessGroup(s.cmd, syscall.SIGKILL)
 		s.closeLog()
 		return classifyExit(s.cachedWaitErr())
 	case <-time.After(timeout):
-		_ = s.cmd.Process.Kill()
+		_ = signalProcessGroup(s.cmd, syscall.SIGKILL)
 		<-s.waitDone
 		s.closeLog()
 		return fmt.Errorf("clickhouseboot: did not stop within %s; sent SIGKILL", timeout)
 	case <-ctx.Done():
-		_ = s.cmd.Process.Kill()
+		_ = signalProcessGroup(s.cmd, syscall.SIGKILL)
 		<-s.waitDone
 		s.closeLog()
 		return ctx.Err()
 	}
+}
+
+// signalProcessGroup sends sig to every process in the process group
+// led by cmd's leader. Requires Setpgid:true at Start time so the
+// leader's PGID equals its PID; we then signal -PID per POSIX
+// convention. ESRCH (group already gone) folds to nil.
+func signalProcessGroup(cmd *exec.Cmd, sig syscall.Signal) error {
+	if cmd == nil || cmd.Process == nil {
+		return nil
+	}
+	pid := cmd.Process.Pid
+	if pid <= 0 {
+		return nil
+	}
+	if err := syscall.Kill(-pid, sig); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		if errors.Is(err, os.ErrProcessDone) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // Done returns a channel that closes when the underlying

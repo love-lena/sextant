@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -188,8 +189,24 @@ func startDaemonHarness(t *testing.T) *daemonHarness {
 
 	h := &daemonHarness{cfg: cfg, cmd: cmd, logFile: logFile, ctx: ctx, cancel: cancel}
 	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
-		_, _ = cmd.Process.Wait()
+		// Graceful shutdown first: the daemon's SIGINT handler is what
+		// actually drives Stop() on NATS + ClickHouse. A bare
+		// cmd.Process.Kill() here would skip that, leaving the
+		// subprocesses as PPID=1 orphans across every harness test.
+		// Only fall back to SIGKILL if SIGINT doesn't unblock Wait
+		// within a generous grace window.
+		_ = cmd.Process.Signal(syscall.SIGINT)
+		done := make(chan struct{})
+		go func() {
+			_, _ = cmd.Process.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			_ = cmd.Process.Kill()
+			<-done
+		}
 		_ = logFile.Close()
 		cancel()
 	})

@@ -179,10 +179,14 @@ func (s *Server) Stop(ctx context.Context) error {
 	default:
 	}
 
-	// SIGINT for graceful shutdown — NATS server flushes JetStream
-	// state and removes its lock file when it sees it.
-	if err := s.cmd.Process.Signal(syscall.SIGINT); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		return fmt.Errorf("natsboot: SIGINT: %w", err)
+	// SIGINT the whole process group, not just the leader. nats-server
+	// flushes JetStream state on SIGINT and removes its lock file. The
+	// group signal also catches any helpers nats-server spawned in
+	// the same group (currently none, but the helper guards against
+	// future drift). Setpgid:true at Start time makes the leader its
+	// own group leader; -pid means "process group" per POSIX.
+	if err := signalProcessGroup(s.cmd, syscall.SIGINT); err != nil {
+		return fmt.Errorf("natsboot: SIGINT pgroup: %w", err)
 	}
 
 	timeout := s.cfg.ShutdownTimeout
@@ -192,19 +196,48 @@ func (s *Server) Stop(ctx context.Context) error {
 
 	select {
 	case <-s.waitDone:
+		// Best-effort SIGKILL the group on the success path too —
+		// Wait reaps the leader, but any worker that ignored SIGINT
+		// would still be running. ESRCH is normal once everyone's
+		// gone; signalProcessGroup folds it to nil.
+		_ = signalProcessGroup(s.cmd, syscall.SIGKILL)
 		s.closeLog()
 		return classifyExit(s.cachedWaitErr())
 	case <-time.After(timeout):
-		_ = s.cmd.Process.Kill()
+		_ = signalProcessGroup(s.cmd, syscall.SIGKILL)
 		<-s.waitDone
 		s.closeLog()
 		return fmt.Errorf("natsboot: nats-server did not stop within %s; sent SIGKILL", timeout)
 	case <-ctx.Done():
-		_ = s.cmd.Process.Kill()
+		_ = signalProcessGroup(s.cmd, syscall.SIGKILL)
 		<-s.waitDone
 		s.closeLog()
 		return ctx.Err()
 	}
+}
+
+// signalProcessGroup sends sig to every process in the process group
+// led by cmd's leader. Requires Setpgid:true at Start time so the
+// leader's PGID equals its PID; we then signal -PID per POSIX
+// convention. ESRCH (group already gone) folds to nil.
+func signalProcessGroup(cmd *exec.Cmd, sig syscall.Signal) error {
+	if cmd == nil || cmd.Process == nil {
+		return nil
+	}
+	pid := cmd.Process.Pid
+	if pid <= 0 {
+		return nil
+	}
+	if err := syscall.Kill(-pid, sig); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		if errors.Is(err, os.ErrProcessDone) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // Done returns a channel that closes when the underlying nats-server

@@ -124,10 +124,41 @@ export async function startNATS(spec: HarnessSpec = {}): Promise<HarnessHandle> 
   await writeFile(configPath, conf, "utf8");
 
   const binary = spec.binary ?? "nats-server";
+  // detached:true puts nats-server in its own process group; process.kill
+  // with the negative leader PID then reaches the whole tree (matches
+  // pkg/natsboot.signalProcessGroup behavior on the Go side).
+  // We intentionally do NOT call proc.unref() — that would let Node
+  // exit while nats-server keeps running, leaving an orphan whenever
+  // a test runner crashes before stop() runs. Letting Node block on
+  // the child is what makes the safety-net handler below load-bearing
+  // instead of just decorative.
   const proc: ChildProcessWithoutNullStreams = spawn(binary, ["-c", configPath, "-js"], {
     stdio: ["ignore", "pipe", "pipe"],
+    detached: true,
   });
-  proc.unref();
+
+  // Safety net: kill nats-server on Node exit even if stop() never
+  // runs (vitest worker pool kill, uncaughtException, SIGINT to Node,
+  // etc.). process.on('exit') fires synchronously after normal exit
+  // and most failure paths; it does not fire on SIGKILL of Node, but
+  // that case is unrecoverable for any in-process supervisor anyway.
+  const safetyNetKill = (): void => {
+    if (proc.pid !== undefined && !proc.killed) {
+      try {
+        process.kill(-proc.pid, "SIGKILL");
+      } catch {
+        // ESRCH = already gone, also any other error is best-effort.
+      }
+    }
+  };
+  process.on("exit", safetyNetKill);
+  const sigOnce = (sig: NodeJS.Signals): void => {
+    safetyNetKill();
+    process.exit(1);
+  };
+  process.once("SIGINT", sigOnce);
+  process.once("SIGTERM", sigOnce);
+  process.once("SIGHUP", sigOnce);
 
   let stderrBuf = "";
   proc.stderr.on("data", (b: Buffer) => {
@@ -150,14 +181,32 @@ export async function startNATS(spec: HarnessSpec = {}): Promise<HarnessHandle> 
   const url = `nats://127.0.0.1:${port}`;
 
   const stop = async (): Promise<void> => {
-    if (!proc.killed) {
-      proc.kill("SIGTERM");
+    // Remove the safety-net handlers before we tear down ourselves —
+    // running them after stop() would just be wasted work.
+    process.off("exit", safetyNetKill);
+    process.off("SIGINT", sigOnce);
+    process.off("SIGTERM", sigOnce);
+    process.off("SIGHUP", sigOnce);
+
+    if (!proc.killed && proc.pid !== undefined) {
+      // Signal the whole process group, not just the leader. SIGINT
+      // gives nats-server a chance to flush JetStream + remove its
+      // lock file; SIGKILL as the fallback for hung shutdown.
+      try {
+        process.kill(-proc.pid, "SIGINT");
+      } catch {
+        // already gone
+      }
       const stopped = await Promise.race([
         exitPromise,
         new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 5_000)),
       ]);
       if (stopped === "timeout") {
-        proc.kill("SIGKILL");
+        try {
+          process.kill(-proc.pid, "SIGKILL");
+        } catch {
+          // already gone
+        }
         await exitPromise;
       }
     }
