@@ -54,11 +54,12 @@ There are two binaries: `sextant` (operator CLI) and `sextantd` (daemon). Both l
 3. Start NATS subprocess; wait for ready
 4. Start ClickHouse subprocess; wait for ready; apply migrations
 5. Start shipper subprocess; wait for ready
-6. Register supervisor heartbeat
-7. Start MCP server
-8. Start RPC server
-9. Restore agent state from NATS KV (any agents in `running` state get reconciled)
-10. Signal ready; enter supervision loop
+6. Sync templates from `~/.config/sextant/templates/*.toml` into the `templates` NATS KV bucket (M11+). The spawn handler resolves templates by name from KV, so the directory and the bucket must agree at boot. Idempotent — re-writing a key with the same value is a no-op.
+7. Register supervisor heartbeat
+8. Start MCP server
+9. Start RPC server
+10. Restore agent state from NATS KV (any agents in `running` state get reconciled)
+11. Signal ready; enter supervision loop
 
 ## Supervision loop
 
@@ -91,8 +92,8 @@ Uses the Docker SDK for Go (`github.com/docker/docker/client`). Creates containe
 3. **Build AgentDefinition**: fresh UUID; runtime config from template; sandbox image from template; tool allowlist from template's `permissions`; host_pin from request or "local"; lifecycle = `defined`; version = 1.
 4. **Persist definition**: `agent_definitions.<uuid>` KV entry.
 5. **Append history**: write the initial row into the ClickHouse `agent_definitions_history` table.
-6. **Issue JWT**: per-incarnation JWT signed by the M5 CA carrying the template's `permissions` as the `sxt_caps` claim, with `sub = <agent_uuid>` and `sxt_inc = <incarnation_id>`. Lifetime = 24h (configurable later).
-7. **Build container spec**: image from template, env vars per `specs/components/sidecar-image.md` §"Env vars", workspace mount per the §"Container management" entry above. M11 uses a temporary `/tmp/sextant/spawn/<incarnation_id>` directory as the workspace mount; real git worktrees land in M14.
+6. **Issue JWT**: per-incarnation JWT signed by the M5 CA carrying the template's `permissions` as the `sxt_caps` claim, with `sub = <agent_uuid>` and `sxt_inc = <incarnation_id>`. Lifetime pinned at 24h for M11 (the value lives in `pkg/rpc/handlers.SpawnJWTLifetime`; bump there and re-test). M16's self-update flow promotes this to a configurable knob once a real consumer needs longer-lived tokens.
+7. **Build container spec**: image from template, env vars per `specs/components/sidecar-image.md` §"Env vars", workspace mount per the §"Container management" entry above. M11 uses a per-agent stop-gap workspace at `~/.local/share/sextant/spawn-workspaces/<agent_uuid>/` (mkdir'd on demand by the spawn handler); real git worktrees land in M14. The directory is intentionally per-agent (not per-incarnation) so a restart preserves whatever the previous incarnation wrote.
 8. **Start container**: via the Docker SDK with labels `sextant.agent_uuid`, `sextant.agent_name`, `sextant.host_id`, `sextant.incarnation_id`.
 9. **Persist incarnation**: `agent_incarnations.<incarnation_id>` KV entry with `state = starting`, container ID, started_at.
 10. **Promote definition lifecycle to `running`** (version bumps to 2) and re-write the KV entry.
@@ -100,6 +101,8 @@ Uses the Docker SDK for Go (`github.com/docker/docker/client`). Creates containe
 ### Shutdown — running incarnations
 
 On graceful sextantd shutdown (SIGTERM), every running incarnation receives a Docker `stop` with the per-template grace period (default 10s, falling back to a SIGKILL after the deadline). The corresponding `agent_incarnations.<incarnation_id>` KV entry is updated with `state = exited` and `ended_at` set. Agent definitions stay at `running` so the next sextantd boot can reconcile (Phase-1 takes the simple route: incarnations are not auto-restarted on reboot; the operator re-spawns).
+
+The daemon enumerates live incarnations by listing the `agent_incarnations` KV bucket and stopping every entry whose `state` is `starting` or `ready` and `container_id` is non-empty. Stop ordering: containers first, then MCP/RPC/supervisors. The intent is that containers can no longer reach the bus or MCP before we tear those substrates down — otherwise a sidecar's last heartbeat blocks NATS shutdown.
 
 ## Control socket
 
@@ -209,6 +212,7 @@ password = "<32-byte URL-safe random>"
 | `~/.local/share/sextant/sextantd.sock` | `0600` | Daemon control socket |
 | `~/.local/share/sextant/sextantd-mcp.sock` | `0600` | MCP server stdio socket (operator-only, M10) |
 | `~/.local/share/sextant/runtime.json` | `0600` | Live runtime details (ports, pid) |
+| `~/.local/share/sextant/spawn-workspaces/` | `0750` | M11 stop-gap workspace mounts (`<agent_uuid>/` per agent); replaced by git worktrees in M14 |
 
 ## Supervision details
 
