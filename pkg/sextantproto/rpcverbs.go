@@ -140,6 +140,23 @@ type KillAgentResponse struct {
 	OK bool `json:"ok"`
 }
 
+// ArchiveAgentRequest is the archive_agent request payload. Archiving
+// transitions the agent's lifecycle to "archived" — the only state per
+// architecture.md §2 that releases the agent's name back into the
+// uniqueness pool. When the agent has a live incarnation, the handler
+// stops the container first (mirroring kill_agent) so the operator
+// doesn't have to issue a kill+archive pair to clean up. Archiving an
+// already-archived agent is a no-op success.
+type ArchiveAgentRequest struct {
+	AgentID      uuid.UUID `json:"agent_id"`
+	GraceSeconds int       `json:"grace_seconds,omitempty"`
+}
+
+// ArchiveAgentResponse is the archive_agent reply payload.
+type ArchiveAgentResponse struct {
+	OK bool `json:"ok"`
+}
+
 // PromptAgentRequest is the prompt_agent request payload.
 type PromptAgentRequest struct {
 	AgentID uuid.UUID `json:"agent_id"`

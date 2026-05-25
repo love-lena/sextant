@@ -23,6 +23,8 @@ func CapFor(verb string) string {
 		return "control.restart"
 	case VerbPromptAgent:
 		return "control.prompt"
+	case VerbArchiveAgent:
+		return "control.archive"
 	case VerbWorktreeCreate, VerbWorktreeDestroy, VerbWorktreeMerge:
 		return "control.worktree"
 	case VerbWorktreeList, VerbWorktreeDiff:
@@ -40,9 +42,10 @@ const (
 	VerbQueryHistory   = "query_history"
 	// M11 agent-lifecycle verbs. Real implementations land in
 	// pkg/rpc/handlers/{spawn,kill,prompt}.go.
-	VerbSpawnAgent  = "spawn_agent"
-	VerbKillAgent   = "kill_agent"
-	VerbPromptAgent = "prompt_agent"
+	VerbSpawnAgent   = "spawn_agent"
+	VerbKillAgent    = "kill_agent"
+	VerbPromptAgent  = "prompt_agent"
+	VerbArchiveAgent = "archive_agent"
 	// M12 verbs. Real implementations land in
 	// pkg/rpc/handlers/{restart,files,exec,query_audit,query_trace}.go.
 	VerbRestartAgent    = "restart_agent"

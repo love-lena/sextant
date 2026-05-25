@@ -1,11 +1,42 @@
 ---
 title: Add `sextant agents archive` CLI verb (M12 gap)
-status: open
+status: resolved
 priority: P2
 created_at: 2026-05-24T23:18-07:00
+resolved_at: 2026-05-25T00:00-07:00
 labels: [feature, cli, lifecycle]
 discovered_in: phase-1 smoke verification
+resolved_by: feat-lead-f2db6f38-001 (bundle with [[bug-kill-doesnt-release-name]])
 ---
+
+## Resolution
+
+Bundle fix landed on branch `feat-lead-f2db6f38-001`. The catalog gap
+is closed end-to-end:
+
+- **RPC handler**: `pkg/rpc/handlers/archive.go` (`NewArchiveAgent`).
+  Registered as verb `archive_agent` with capability `control.archive`
+  in `pkg/rpc/types.go`. Stops a live container first (mirroring
+  `kill_agent`) so an operator archiving a running agent doesn't have
+  to pair the call. Idempotent on already-archived agents.
+- **CLI verb**: `sextant agents archive <agent>` accepts either UUID
+  or name (resolved via `list_agents`). `--all-dead` archives every
+  agent currently in lifecycle=defined in one shot.
+- **MCP tool**: `archive_agent` added to the tool catalog
+  (`pkg/mcpserver/tools.go`, `pkg/mcpserver/server.go`). The agent's
+  tool list now advertises it; `CapForTool(ToolArchiveAgent)` returns
+  `control.archive`.
+- **`kill --archive` flag**: convenience pairing for the common case
+  ([[bug-kill-doesnt-release-name]] Option A).
+- **JSON schemas**: regenerated via `go run ./cmd/sextantproto-gen`;
+  `archive_agent_request.json` + `archive_agent_response.json` now
+  ship under `pkg/sextantproto/schemas/` for the TypeScript client.
+
+Pinned by `TestArchiveAgentReleasesName`,
+`TestArchiveAgentOnRunningAgentStopsContainer`,
+`TestArchiveAgentIdempotent`, `TestArchiveAgentUnknownReturnsNotFound`,
+`TestKillWithArchiveFlag`, and `TestArchiveAllDead` in
+`pkg/rpc/handlers/archive_test.go`.
 
 ## Summary
 

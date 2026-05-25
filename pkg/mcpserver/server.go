@@ -593,6 +593,11 @@ func (s *Server) registerTools() {
 	}, wrapHandler(s, ToolKillAgent, s.handleKillAgent))
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        ToolArchiveAgent,
+		Description: "Archive an agent so its name is released and re-usable. Stops the live container first if one is running.",
+	}, wrapHandler(s, ToolArchiveAgent, s.handleArchiveAgent))
+
+	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        ToolPromptAgent,
 		Description: "Publish a prompt to an agent's inbox subject (agents.<uuid>.inbox).",
 	}, wrapHandler(s, ToolPromptAgent, s.handlePromptAgent))
@@ -945,6 +950,30 @@ func (s *Server) handleKillAgent(ctx context.Context, _ Caller, in KillAgentArgs
 	}
 	env := sextantproto.NewEnvelope(sextantproto.KindRPCRequest, s.cfg.From, raw)
 	return runRPCAsTool(ctx, handlers.NewKillAgent(handlers.KillDeps{
+		Definitions:  deps.Definitions,
+		Incarnations: deps.Incarnations,
+		Containers:   deps.Containers,
+	}), env)
+}
+
+func (s *Server) handleArchiveAgent(ctx context.Context, _ Caller, in ArchiveAgentArgs) (any, error) {
+	deps := s.spawnDepsSnapshot()
+	if deps == nil {
+		return nil, fmtErrf(sextantproto.ErrCodeInternal, "spawn backend not configured")
+	}
+	id, err := uuidFromString(in.AgentID)
+	if err != nil {
+		return nil, fmtErrf(sextantproto.ErrCodeBadRequest, "agent_id: %v", err)
+	}
+	raw, err := json.Marshal(sextantproto.ArchiveAgentRequest{
+		AgentID:      id,
+		GraceSeconds: in.GraceSeconds,
+	})
+	if err != nil {
+		return nil, fmtErrf(sextantproto.ErrCodeInternal, "marshal: %v", err)
+	}
+	env := sextantproto.NewEnvelope(sextantproto.KindRPCRequest, s.cfg.From, raw)
+	return runRPCAsTool(ctx, handlers.NewArchiveAgent(handlers.ArchiveDeps{
 		Definitions:  deps.Definitions,
 		Incarnations: deps.Incarnations,
 		Containers:   deps.Containers,
