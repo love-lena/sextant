@@ -82,6 +82,16 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 		cmd.Stderr = f
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// exec.CommandContext's default Cancel callback calls
+	// cmd.Process.Kill, which SIGKILLs only the leader pid — the same
+	// leak vector 2903609 fixed for the explicit Stop path. clickhouse
+	// forks a watchdog child that lives in the leader's process group;
+	// if ctx is canceled (e.g. daemon shutdown via main ctx cancel),
+	// the default Cancel orphans that child as PPID=1. Override Cancel
+	// to signal the whole process group instead.
+	cmd.Cancel = func() error {
+		return signalProcessGroup(cmd, syscall.SIGKILL)
+	}
 
 	if err := cmd.Start(); err != nil {
 		if logFile != nil {

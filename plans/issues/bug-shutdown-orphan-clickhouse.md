@@ -1,10 +1,38 @@
 ---
 title: sextantd graceful shutdown leaves clickhouse-server orphan
-status: open
+status: resolved
 priority: P1
 created_at: 2026-05-24T23:18-07:00
+resolved_at: 2026-05-25T00:00-07:00
 labels: [bug, supervisor, shutdown, clickhouse]
 discovered_in: phase-1 smoke run (reproduced 3+ times)
+resolution: >
+  Root cause: cmd/sextantd/main.go canceled the daemon ctx in the
+  signal handler before invoking d.Shutdown(). exec.CommandContext's
+  default Cancel callback (cmd.Process.Kill) SIGKILLs only the leader
+  pid, which is exactly the leak vector 2903609 fixed for the
+  supervisor.Stop path — ClickHouse's watchdog child stays in the
+  leader's process group, so SIGKILL-to-leader-only orphans it as
+  PPID=1. By the time main.go got around to d.Shutdown(), the
+  supervisor's srv.Stop fast path observed waitDone already closed
+  and never called signalProcessGroup. NATS dies cleanly because it
+  has no children to orphan.
+
+  Fix (three parts):
+   1. cmd/sextantd/main.go: signal handler closes shutdownCh instead
+      of canceling ctx. Main goroutine drives d.Shutdown() to
+      completion under shutdown_timeout, then cancels ctx as final
+      cleanup. The supervisor's signalProcessGroup → cmd.Wait →
+      SIGKILL escalation now runs while the subprocesses are still
+      alive.
+   2. pkg/clickhouseboot/server.go and pkg/natsboot/server.go: set
+      cmd.Cancel to signalProcessGroup(SIGKILL). Defense in depth so
+      any future ctx-cancel path also kills the whole group, not
+      just the leader.
+   3. cmd/sextantd/shutdown_test.go: new regression
+      TestSextantdShutdownKillsClickHouse — start daemon, SIGTERM,
+      assert pgrep -f <data-dir>/config.xml returns zero matches
+      within shutdown_timeout + 1s.
 ---
 
 ## Summary
