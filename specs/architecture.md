@@ -501,7 +501,7 @@ Limitations accepted for M14:
 **Worktree naming**:
 
 - **Operator/agent-created worktrees**: `<kind>-<short-description>-<seq>` per `conventions/git-workflow.md` (`kind` ∈ `feat | fix | refactor | docs | test | chore | spec`).
-- **Agent-spawn worktrees** (the worktree created automatically when a template's `mounts` includes `worktree`): `<template_name>-<short_uuid>-001`, where `<short_uuid>` is the first 8 chars of the agent's UUID. Stable per agent; not in the `<kind>-<desc>-<seq>` form because the spawn flow has no task context yet. The agent can later create its own task-shaped worktree via the MCP tool and switch its work to it.
+- **Agent-spawn worktrees** (the worktree created automatically when a template's `mounts` includes `worktree`): `feat-<template_name>-<short_uuid>-001`, where `<short_uuid>` is the first 8 chars of the agent's UUID. The `feat-` prefix is fixed so the name validates against the `<kind>-<desc>-<seq>` rule applied uniformly by `worktree.ValidateName` — agent-spawn worktrees are stored in the same KV with the same naming gate as operator-driven ones, just with a deterministic kind. Stable per agent; the agent can later create its own task-shaped worktree via the MCP tool and switch its work to it.
 
 **MCP tools** (§9c control category):
 - `worktree_create(name, base_branch)` → path
