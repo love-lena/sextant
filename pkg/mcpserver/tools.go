@@ -16,6 +16,7 @@ const (
 	CapReadWorktrees   = "read.worktrees"
 	CapControlSpawn    = "control.spawn"
 	CapControlKill     = "control.kill"
+	CapControlArchive  = "control.archive"
 	CapControlPrompt   = "control.prompt"
 	CapControlWorktree = "control.worktree"
 	CapEmitEvent       = "emit_event"
@@ -33,6 +34,7 @@ const (
 	ToolQueryAudit      = "query_audit"
 	ToolSpawnAgent      = "spawn_agent"
 	ToolKillAgent       = "kill_agent"
+	ToolArchiveAgent    = "archive_agent"
 	ToolPromptAgent     = "prompt_agent"
 	ToolEmitEvent       = "emit_event"
 	ToolGetMetric       = "get_metric"
@@ -55,6 +57,7 @@ func AllTools() []string {
 		ToolQueryAudit,
 		ToolSpawnAgent,
 		ToolKillAgent,
+		ToolArchiveAgent,
 		ToolPromptAgent,
 		ToolEmitEvent,
 		ToolGetMetric,
@@ -84,6 +87,8 @@ func CapForTool(tool string) string {
 		return CapControlSpawn
 	case ToolKillAgent:
 		return CapControlKill
+	case ToolArchiveAgent:
+		return CapControlArchive
 	case ToolPromptAgent:
 		return CapControlPrompt
 	case ToolEmitEvent:
@@ -150,6 +155,16 @@ type SpawnAgentArgs struct {
 type KillAgentArgs struct {
 	AgentID      string `json:"agent_id" jsonschema:"Agent UUID to kill"`
 	GraceSeconds int    `json:"grace_seconds,omitempty" jsonschema:"Seconds to wait before SIGKILL (default 10)"`
+}
+
+// ArchiveAgentArgs is the argument shape for archive_agent. Archiving
+// transitions the agent's lifecycle to "archived" — the only state per
+// architecture.md §2 that releases the agent's name. The handler also
+// stops any live incarnation (mirroring kill_agent) so an agent caller
+// archiving its own child doesn't have to pair the call with a kill.
+type ArchiveAgentArgs struct {
+	AgentID      string `json:"agent_id" jsonschema:"Agent UUID to archive"`
+	GraceSeconds int    `json:"grace_seconds,omitempty" jsonschema:"Seconds to wait before SIGKILL if a live container exists (default 10)"`
 }
 
 // PromptAgentArgs is the argument shape for prompt_agent (M11 stub).

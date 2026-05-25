@@ -49,8 +49,9 @@ func TestCapForToolKnownTools(t *testing.T) {
 		ToolAgentStatus: CapReadAgents,
 		ToolQueryAudit:  CapReadHistory,
 		ToolSpawnAgent:  CapControlSpawn,
-		ToolKillAgent:   CapControlKill,
-		ToolPromptAgent: CapControlPrompt,
+		ToolKillAgent:    CapControlKill,
+		ToolArchiveAgent: CapControlArchive,
+		ToolPromptAgent:  CapControlPrompt,
 		ToolEmitEvent:   CapEmitEvent,
 		ToolGetMetric:   CapReadMetrics,
 	}
