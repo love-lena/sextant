@@ -4,7 +4,7 @@
 
 Subscribe to NATS subjects, write to ClickHouse. At-least-once delivery; ClickHouse tables use `ReplacingMergeTree` so re-deliveries of the same `id` collapse on background merge (or via `FINAL` queries). See `specs/components/clickhouse.md`.
 
-Lives as either a separate process (`cmd/sextant-shipper/`) or a goroutine inside sextantd. **Lean: separate process** for failure isolation — a shipper crash shouldn't take down sextantd. M6 ships the separate process; sextantd does **not** spawn it. The operator runs `sextant-shipper` manually (or via a separate launchd/systemd unit). Supervisor-loop wire-up is deferred to a later milestone (M7+ when the control surface lands).
+Lives as either a separate process (`cmd/sextant-shipper/`) or a goroutine inside sextantd. **Lean: separate process** for failure isolation — a shipper crash shouldn't take down sextantd. The shipper is its own binary (`cmd/sextant-shipper/`). From the feat-shipper-auto-supervise change onward, sextantd auto-supervises it via `pkg/shipperboot` (default `[shipper] auto_supervise = true` in `sextantd.toml`); the operator opts out with `auto_supervise = false` and runs `sextant-shipper` standalone under launchd/systemd. Same supervisor.Policy as NATS/ClickHouse: exponential backoff, quarantine after 5 consecutive failures.
 
 See `architecture.md` §8 (observability) and §3-layer data architecture for context.
 
@@ -103,6 +103,12 @@ Default: time-based or size-based, whichever first — every 100 ms OR 1000 even
 
 One goroutine per table for the flush+drain loop. Inserts and BoltDB drains for a given table never race. Subject-pattern consumers feed into a shared mailbox; the per-table flushers pull from per-table buffers.
 
+## Wire-up to sextantd
+
+Implemented in `pkg/shipperboot` (exec + process-group lifecycle, mirroring `pkg/natsboot` and `pkg/clickhouseboot`). sextantd's startup sequence (specs/components/sextantd.md §"Startup sequence" step 5) spawns the shipper after NATS + ClickHouse are healthy, passing `--config <shipper.toml>` and `--runtime-file <runtime.json>` so the shipper picks up the daemon-allocated NATS / ClickHouse ports. Shutdown reverses the order: shipper first, then ClickHouse, then NATS — same SIGTERM → SIGKILL process-group escalation as the other supervised units.
+
+Binary resolution prefers a sibling of the running sextantd binary (the `go install` and Makefile both drop them in $GOBIN), with a PATH fallback for development shells. Operators that prefer external supervision set `[shipper] auto_supervise = false` in `sextantd.toml`; the daemon then boots without a shipper and the operator runs `sextant-shipper` directly.
+
 ## Open
 
-- Wire-up to sextantd's supervisor loop — deferred to M7+.
+(none — wire-up landed; see feat-shipper-auto-supervise.)

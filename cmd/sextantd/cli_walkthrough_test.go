@@ -191,20 +191,37 @@ auditScan:
 		t.Fatalf("audit.rpc spawn envelope never observed on audit.>")
 	}
 
-	// Also exercise the query_audit RPC against the (empty) audit
-	// table to prove the verb is wired through the daemon. The table
-	// will be empty without the shipper — that's expected and not a
-	// failure mode for this test.
+	// Exercise the query_audit RPC and assert it returns non-empty
+	// rows. Pre-feat-shipper-auto-supervise the audit table would be
+	// empty (operator hadn't started the shipper), but with sextantd
+	// now auto-supervising sextant-shipper (Shipper.AutoSupervise=true
+	// by default) the rpc.spawn_agent envelope we already saw on
+	// audit.> must land in ClickHouse within the shipper's flush
+	// interval. Poll up to 15s so the assertion tolerates a slow first
+	// shipper batch.
 	var auditResp sextantproto.QueryAuditResponse
-	queryCtx, queryCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer queryCancel()
-	if err := cli.RPC(queryCtx, rpc.VerbQueryAudit, sextantproto.QueryAuditRequest{
-		Limit: 10,
-	}, &auditResp); err != nil {
-		t.Fatalf("query_audit RPC: %v", err)
-	}
-	if auditResp.Rows == nil {
-		t.Error("query_audit returned nil Rows (spec says always non-nil)")
+	queryDeadline := time.Now().Add(15 * time.Second)
+	for {
+		queryCtx, queryCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := cli.RPC(queryCtx, rpc.VerbQueryAudit, sextantproto.QueryAuditRequest{
+			Limit: 50,
+		}, &auditResp)
+		queryCancel()
+		if err != nil {
+			t.Fatalf("query_audit RPC: %v", err)
+		}
+		if auditResp.Rows == nil {
+			t.Fatal("query_audit returned nil Rows (spec says always non-nil)")
+		}
+		if len(auditResp.Rows) > 0 {
+			t.Logf("query_audit rows=%d (shipper landed the envelope)", len(auditResp.Rows))
+			break
+		}
+		if !time.Now().Before(queryDeadline) {
+			t.Fatalf("query_audit returned 0 rows after 15s; expected the spawn envelope to be shipped\n--- daemon log ---\n%s",
+				h.tail(t))
+		}
+		time.Sleep(250 * time.Millisecond)
 	}
 }
 

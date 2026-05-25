@@ -110,6 +110,58 @@ func TestOperatorCredsRoundtrip(t *testing.T) {
 	}
 }
 
+func TestShipperConfigDefaultAutoSupervise(t *testing.T) {
+	cfg := DefaultConfig("/cfg", "/data")
+	if cfg.Shipper.AutoSupervise == nil || !*cfg.Shipper.AutoSupervise {
+		t.Errorf("DefaultConfig: Shipper.AutoSupervise should be *true, got %v", cfg.Shipper.AutoSupervise)
+	}
+	if cfg.Shipper.ConfigPath != "/cfg/shipper.toml" {
+		t.Errorf("Shipper.ConfigPath = %s, want /cfg/shipper.toml", cfg.Shipper.ConfigPath)
+	}
+}
+
+func TestShipperConfigAutoSuperviseExplicitFalseSurvivesRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	cfgDir := filepath.Join(dir, "cfg")
+	dataDir := filepath.Join(dir, "data")
+	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	in := DefaultConfig(cfgDir, dataDir)
+	off := false
+	in.Shipper.AutoSupervise = &off
+	path := filepath.Join(cfgDir, "sextantd.toml")
+	if err := SaveConfig(path, in); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	out, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if out.Shipper.AutoSupervise == nil || *out.Shipper.AutoSupervise {
+		t.Errorf("AutoSupervise should round-trip as *false, got %v", out.Shipper.AutoSupervise)
+	}
+	if out.Shipper.AutoSuperviseEnabled() {
+		t.Errorf("AutoSuperviseEnabled() should be false")
+	}
+}
+
+func TestShipperConfigResolveDefaultsAutoSupervise(t *testing.T) {
+	// A sextantd.toml with no [shipper] block (Shipper.AutoSupervise=nil)
+	// must resolve to AutoSuperviseEnabled()=true. This guards the
+	// upgrade path for operators with pre-feat-shipper-auto-supervise
+	// sextantd.toml on disk.
+	cfg := DefaultConfig("/cfg", "/data")
+	cfg.Shipper.AutoSupervise = nil
+	out, err := cfg.Resolve()
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !out.Shipper.AutoSuperviseEnabled() {
+		t.Errorf("Resolve should default AutoSupervise to true when omitted")
+	}
+}
+
 func TestRuntimeInfoRoundtrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "runtime.json")

@@ -6,6 +6,7 @@ import (
 
 	"github.com/love-lena/sextant-initial/pkg/clickhouseboot"
 	"github.com/love-lena/sextant-initial/pkg/natsboot"
+	"github.com/love-lena/sextant-initial/pkg/shipperboot"
 )
 
 // natsProcess adapts a natsboot.Server to the supervisor.Process
@@ -52,6 +53,28 @@ func (p *clickhouseProcess) Wait() error {
 }
 
 func (p *clickhouseProcess) Stop(ctx context.Context) error {
+	return p.srv.Stop(ctx)
+}
+
+// shipperProcess adapts a shipperboot.Server to supervisor.Process.
+// Same pattern as natsProcess / clickhouseProcess.
+type shipperProcess struct {
+	srv *shipperboot.Server
+}
+
+func newShipperProcess(srv *shipperboot.Server) *shipperProcess {
+	return &shipperProcess{srv: srv}
+}
+
+func (p *shipperProcess) Wait() error {
+	<-p.srv.Done()
+	if err := p.srv.ExitErr(); err != nil {
+		return err
+	}
+	return errSubprocessExited
+}
+
+func (p *shipperProcess) Stop(ctx context.Context) error {
 	return p.srv.Stop(ctx)
 }
 
