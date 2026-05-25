@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/love-lena/sextant-initial/pkg/sextantproto/exec-in-container-response",
+  "$ref": "#/$defs/ExecInContainerResponse",
+  "$defs": {
+    "ExecInContainerResponse": {
+      "properties": {
+        "stdout": {
+          "type": "string"
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "stdout",
+        "stderr",
+        "exit_code"
+      ]
+    }
+  }
+}

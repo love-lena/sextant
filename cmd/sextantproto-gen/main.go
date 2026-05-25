@@ -77,6 +77,19 @@ func main() {
 		{"kill_agent_response", &sextantproto.KillAgentResponse{}},
 		{"prompt_agent_request", &sextantproto.PromptAgentRequest{}},
 		{"prompt_agent_response", &sextantproto.PromptAgentResponse{}},
+		// M12 verb payloads.
+		{"restart_agent_request", &sextantproto.RestartAgentRequest{}},
+		{"restart_agent_response", &sextantproto.RestartAgentResponse{}},
+		{"list_dir_request", &sextantproto.ListDirRequest{}},
+		{"list_dir_response", &sextantproto.ListDirResponse{}},
+		{"stat_request", &sextantproto.StatRequest{}},
+		{"stat_response", &sextantproto.StatResponse{}},
+		{"exec_in_container_request", &sextantproto.ExecInContainerRequest{}},
+		{"exec_in_container_response", &sextantproto.ExecInContainerResponse{}},
+		{"query_audit_request", &sextantproto.QueryAuditRequest{}},
+		{"query_audit_response", &sextantproto.QueryAuditResponse{}},
+		{"query_trace_request", &sextantproto.QueryTraceRequest{}},
+		{"query_trace_response", &sextantproto.QueryTraceResponse{}},
 	}
 
 	for _, e := range entries {

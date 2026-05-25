@@ -116,10 +116,11 @@ func TestDaemonQueryHistoryEmptyTable(t *testing.T) {
 	}
 }
 
-// TestDaemonReadFileReturnsNotImplemented pins the M7 stub contract —
-// the verb is registered (so unknown-verb fires nothing) but the body
-// is intentionally not implemented until M11+.
-func TestDaemonReadFileReturnsNotImplemented(t *testing.T) {
+// TestDaemonReadFileUnknownAgent pins the M12 contract for read_file:
+// the verb is wired through the container backend, so calling it
+// against an unknown agent surfaces a structured agent_not_found
+// error rather than the M7-era not_implemented stub.
+func TestDaemonReadFileUnknownAgent(t *testing.T) {
 	h := startDaemonHarness(t)
 	cli := rpcClient(t, h)
 
@@ -130,13 +131,13 @@ func TestDaemonReadFileReturnsNotImplemented(t *testing.T) {
 		nil,
 	)
 	if err == nil {
-		t.Fatal("read_file (M7 stub) must error")
+		t.Fatal("read_file against unknown agent must error")
 	}
 	var rerr *client.RPCError
 	if !errors.As(err, &rerr) {
 		t.Fatalf("err = %v, want *client.RPCError", err)
 	}
-	if rerr.Code != sextantproto.ErrCodeNotImplemented {
-		t.Fatalf("Code = %q, want %q", rerr.Code, sextantproto.ErrCodeNotImplemented)
+	if rerr.Code != sextantproto.ErrCodeAgentNotFound {
+		t.Fatalf("Code = %q, want %q", rerr.Code, sextantproto.ErrCodeAgentNotFound)
 	}
 }

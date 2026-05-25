@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/love-lena/sextant-initial/pkg/sextantproto/query-audit-request",
+  "$ref": "#/$defs/QueryAuditRequest",
+  "$defs": {
+    "QueryAuditFilter": {
+      "properties": {
+        "actor": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string"
+        },
+        "agent_uuid": {
+          "$ref": "#/$defs/UUID"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "QueryAuditRequest": {
+      "properties": {
+        "filter": {
+          "$ref": "#/$defs/QueryAuditFilter"
+        },
+        "time_range": {
+          "$ref": "#/$defs/TimeRange"
+        },
+        "limit": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "filter",
+        "time_range"
+      ]
+    },
+    "TimeRange": {
+      "properties": {
+        "since": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "until": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "UUID": {
+      "items": {
+        "type": "integer"
+      },
+      "type": "array",
+      "maxItems": 16,
+      "minItems": 16
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/love-lena/sextant-initial/pkg/sextantproto/query-trace-request",
+  "$ref": "#/$defs/QueryTraceRequest",
+  "$defs": {
+    "QueryTraceRequest": {
+      "properties": {
+        "trace_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "trace_id"
+      ]
+    }
+  }
+}

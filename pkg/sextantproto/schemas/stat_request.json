@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/love-lena/sextant-initial/pkg/sextantproto/stat-request",
+  "$ref": "#/$defs/StatRequest",
+  "$defs": {
+    "StatRequest": {
+      "properties": {
+        "agent_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "agent_id",
+        "path"
+      ]
+    },
+    "UUID": {
+      "items": {
+        "type": "integer"
+      },
+      "type": "array",
+      "maxItems": 16,
+      "minItems": 16
+    }
+  }
+}

@@ -207,7 +207,10 @@ func TestGetAgentStatusRejectsZeroUUID(t *testing.T) {
 }
 
 func TestReadFileStubReturnsNotImplemented(t *testing.T) {
-	h := handlers.NewReadFile()
+	// NewReadFileStub is kept for callers that want a fast stub without
+	// wiring the M12 container-exec backend. The real NewReadFile (with
+	// FilesDeps) is exercised in files_test.go.
+	h := handlers.NewReadFileStub()
 	cap := &captureEmit{}
 	req := makeReq(t, sextantproto.ReadFileRequest{AgentID: uuid.New(), Path: "/etc/hosts"})
 	if err := h(context.Background(), req, cap.emit()); err != nil {

@@ -127,13 +127,14 @@ func NewGetAgentStatus(kv AgentKV) rpc.Handler {
 	}
 }
 
-// NewReadFile returns the M7 stub handler for the read_file verb.
-// Real implementation lands in M11 when container management is in
-// scope.
-func NewReadFile() rpc.Handler {
+// NewReadFileStub returns the M7-era stub handler for the read_file
+// verb. M12 ships a real implementation (NewReadFile) in files.go —
+// the stub is kept for tests that need a fast NotImplemented response
+// without spinning up a container backend.
+func NewReadFileStub() rpc.Handler {
 	return func(_ context.Context, _ sextantproto.Envelope, emit func(sextantproto.RPCResponse)) error {
 		return emitErr(emit, sextantproto.ErrCodeNotImplemented,
-			"read_file ships in M11+ when container management lands")
+			"read_file stub: deps not configured")
 	}
 }
 

@@ -9,14 +9,18 @@ func CapFor(verb string) string {
 	switch verb {
 	case VerbListAgents, VerbGetAgentStatus:
 		return "read.agents"
-	case VerbQueryHistory:
+	case VerbQueryHistory, VerbQueryAudit, VerbQueryTrace:
 		return "read.history"
-	case VerbReadFile:
+	case VerbReadFile, VerbListDir, VerbStat:
 		return "read.container_files"
+	case VerbExecInContainer:
+		return "control.exec"
 	case VerbSpawnAgent:
 		return "control.spawn"
 	case VerbKillAgent:
 		return "control.kill"
+	case VerbRestartAgent:
+		return "control.restart"
 	case VerbPromptAgent:
 		return "control.prompt"
 	default:
@@ -35,6 +39,14 @@ const (
 	VerbSpawnAgent  = "spawn_agent"
 	VerbKillAgent   = "kill_agent"
 	VerbPromptAgent = "prompt_agent"
+	// M12 verbs. Real implementations land in
+	// pkg/rpc/handlers/{restart,files,exec,query_audit,query_trace}.go.
+	VerbRestartAgent    = "restart_agent"
+	VerbListDir         = "list_dir"
+	VerbStat            = "stat"
+	VerbExecInContainer = "exec_in_container"
+	VerbQueryAudit      = "query_audit"
+	VerbQueryTrace      = "query_trace"
 )
 
 // QueryHistoryDefaultLimit is the row cap when the request omits Limit.
