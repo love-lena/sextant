@@ -24,7 +24,13 @@ func mainErr() int {
 	defer cancel()
 
 	if err := run(ctx, os.Args[1:]); err != nil {
-		printf(os.Stderr, "sextant: %v\n", err)
+		// `sextant exec` writes its own stdout/stderr verbatim; we
+		// shouldn't add a "sextant: command exited with code N" line on
+		// top — that would make shell pipelines noisy.
+		var ec *exitCodeError
+		if !errors.As(err, &ec) {
+			printf(os.Stderr, "sextant: %v\n", err)
+		}
 		return exitCodeFor(err)
 	}
 	return exitOK
@@ -43,11 +49,23 @@ func run(ctx context.Context, args []string) error {
 		return runDoctor(ctx, rest)
 	case "agents":
 		return runAgents(ctx, rest)
+	case "conversation":
+		return runConversation(ctx, rest)
+	case "pending":
+		return runPending(ctx, rest)
+	case "files":
+		return runFiles(ctx, rest)
+	case "exec":
+		return runExec(ctx, rest)
+	case "audit":
+		return runAudit(ctx, rest)
+	case "traces":
+		return runTraces(ctx, rest)
 	case "-h", "--help", "help":
 		printUsage(os.Stdout)
 		return nil
 	case "--version", "version":
-		fmt.Println("sextant initial (M11)")
+		fmt.Println("sextant initial (M12)")
 		return nil
 	default:
 		printUsage(os.Stderr)
@@ -59,11 +77,17 @@ func printUsage(w *os.File) {
 	println(w, `usage: sextant <subcommand> [args...]
 
 Subcommands:
-  init     First-run setup: CA + config + data dirs + default template.
-  doctor   Health diagnostics for sextantd, NATS, ClickHouse, config.
-  agents   Agent operations (list|show|spawn|kill|prompt).
-  help     Print this message.
-  version  Print the sextant version.
+  init          First-run setup: CA + config + data dirs + default template.
+  doctor        Health diagnostics for sextantd, NATS, ClickHouse, config.
+  agents        Agent operations (list|show|spawn|kill|restart|prompt).
+  conversation  Stream agent frames in human-readable form.
+  pending       List/answer/defer/escalate user-input requests.
+  files         Read/list/tail files in an agent's container.
+  exec          Run a command in an agent's container.
+  audit         Query or tail the audit log.
+  traces        Render a distributed trace by trace_id.
+  help          Print this message.
+  version       Print the sextant version.
 
 Run "sextant <subcommand> --help" for per-subcommand flags.`)
 }
@@ -84,6 +108,13 @@ func errUserUsage(msg string) error { return usageError(msg) }
 func exitCodeFor(err error) int {
 	if err == nil {
 		return exitOK
+	}
+	// `sextant exec` surfaces the container exec's exit code via
+	// exitCodeError so shell pipelines see the same exit status they
+	// would running the command directly.
+	var ec *exitCodeError
+	if errors.As(err, &ec) {
+		return ec.code
 	}
 	var ue usageError
 	if errors.As(err, &ue) {
