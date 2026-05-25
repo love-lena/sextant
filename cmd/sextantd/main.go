@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 
 	"github.com/love-lena/sextant-initial/pkg/sextantd"
@@ -53,9 +54,18 @@ func run() error {
 		return fmt.Errorf("load config %s: %w", cfgPath, err)
 	}
 
-	// Signal handling: SIGTERM/SIGINT cancel the daemon ctx for graceful
-	// shutdown; SIGHUP and SIGUSR2 are forwarded to the daemon for
-	// log-and-noop handling (M5).
+	// Signal handling: SIGTERM/SIGINT trigger the daemon's graceful
+	// shutdown sequence (supervisor.Stop → signalProcessGroup → wait on
+	// cmd.Wait with SIGKILL escalation). We deliberately do NOT cancel
+	// the main ctx on signal — exec.CommandContext's default Cancel
+	// callback sends SIGKILL only to the leader pid, which orphans
+	// ClickHouse's watchdog child (the same leak vector 2903609 fixed
+	// for the supervisor.Stop path). Instead we close shutdownCh, drive
+	// d.Shutdown() to completion under its own ShutdownTimeout, and
+	// only then cancel ctx as final cleanup.
+	//
+	// SIGHUP and SIGUSR2 are forwarded to the daemon for log-and-noop
+	// handling (M5).
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -68,8 +78,12 @@ func run() error {
 		return err
 	}
 
-	// Signal forwarder. SIGTERM/SIGINT call Shutdown; SIGHUP and SIGUSR2
-	// just log (per specs/components/sextantd.md §"Signal handling").
+	shutdownCh := make(chan struct{})
+	var shutdownOnce sync.Once
+	triggerShutdown := func() {
+		shutdownOnce.Do(func() { close(shutdownCh) })
+	}
+
 	go func() {
 		for {
 			select {
@@ -77,7 +91,7 @@ func run() error {
 				switch sig {
 				case syscall.SIGTERM, syscall.SIGINT:
 					log.Printf("sextantd: %s received, beginning graceful shutdown", sig)
-					cancel()
+					triggerShutdown()
 					return
 				case syscall.SIGHUP:
 					log.Println("sextantd: SIGHUP received — re-read not yet implemented (M5)")
@@ -95,20 +109,25 @@ func run() error {
 	}
 
 	// Block until either:
-	//   - ctx is canceled (signal handler called cancel)
+	//   - a signal arrived (shutdownCh closed)
 	//   - a supervised unit fails terminally (d.Wait returns).
 	//
-	// Whichever fires first triggers Shutdown.
+	// Whichever fires first triggers Shutdown — and Shutdown completes
+	// (driving the supervisor's signalProcessGroup → cmd.Wait → SIGKILL
+	// escalation path) BEFORE we cancel ctx. Canceling ctx earlier would
+	// let exec.CommandContext's default cancel callback SIGKILL only the
+	// leader pid, orphaning ClickHouse's watchdog child.
 	waitCh := make(chan error, 1)
 	go func() { waitCh <- d.Wait() }()
 
 	var runErr error
 	select {
-	case <-ctx.Done():
+	case <-shutdownCh:
 	case runErr = <-waitCh:
 	}
 
 	shutdownErr := d.Shutdown()
+	cancel()
 	if runErr != nil && !errors.Is(runErr, context.Canceled) {
 		return fmt.Errorf("daemon exited: %w", runErr)
 	}
