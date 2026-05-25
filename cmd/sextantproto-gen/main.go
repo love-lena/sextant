@@ -71,6 +71,12 @@ func main() {
 		{"read_file_response", &sextantproto.ReadFileResponse{}},
 		{"query_history_request", &sextantproto.QueryHistoryRequest{}},
 		{"query_history_response", &sextantproto.QueryHistoryResponse{}},
+		{"spawn_agent_request", &sextantproto.SpawnAgentRequest{}},
+		{"spawn_agent_response", &sextantproto.SpawnAgentResponse{}},
+		{"kill_agent_request", &sextantproto.KillAgentRequest{}},
+		{"kill_agent_response", &sextantproto.KillAgentResponse{}},
+		{"prompt_agent_request", &sextantproto.PromptAgentRequest{}},
+		{"prompt_agent_response", &sextantproto.PromptAgentResponse{}},
 	}
 
 	for _, e := range entries {

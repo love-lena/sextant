@@ -121,6 +121,7 @@ func Streams(maxBytes int64) []StreamSpec {
 func KVBuckets() []KVSpec {
 	return []KVSpec{
 		{Bucket: "agent_definitions", History: 5, Description: "current agent definition per UUID; watchable"},
+		{Bucket: "agent_incarnations", History: 1, Description: "one entry per incarnation_id (M11+); live = ended_at == null"},
 		{Bucket: "templates", History: 1, Description: "agent templates seeded from ~/.config/sextant/templates/"},
 		{Bucket: "viz_specs", History: 1, Description: "visualization specs (post-M17)"},
 		{Bucket: "ui_state", History: 1, Description: "inter-UI coordination (per-operator-scoped keys)"},

@@ -43,6 +43,13 @@ func TestSchemasOnDisk(t *testing.T) {
 		"read_file_response.json":        false,
 		"query_history_request.json":     false,
 		"query_history_response.json":    false,
+		// M11 agent-lifecycle verb payloads.
+		"spawn_agent_request.json":   false,
+		"spawn_agent_response.json":  false,
+		"kill_agent_request.json":    false,
+		"kill_agent_response.json":   false,
+		"prompt_agent_request.json":  false,
+		"prompt_agent_response.json": false,
 	}
 	for _, e := range entries {
 		if e.IsDir() {

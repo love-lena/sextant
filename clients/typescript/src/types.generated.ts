@@ -197,6 +197,21 @@ export interface HeartbeatPayload {
 }
 /**
  * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "KillAgentRequest".
+ */
+export interface KillAgentRequest {
+  agent_id: UUID;
+  grace_seconds?: number;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "KillAgentResponse".
+ */
+export interface KillAgentResponse {
+  ok: boolean;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
  * via the `definition` "LifecyclePayload".
  */
 export interface LifecyclePayload {
@@ -283,6 +298,21 @@ export interface Metric {
   sum?: number;
   bucket_counts?: number[];
   explicit_bounds?: number[];
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "PromptAgentRequest".
+ */
+export interface PromptAgentRequest {
+  agent_id: UUID;
+  content: string;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "PromptAgentResponse".
+ */
+export interface PromptAgentResponse {
+  ok: boolean;
 }
 /**
  * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
@@ -407,6 +437,23 @@ export interface SpanLink {
   attributes?: {
     [k: string]: string | undefined;
   };
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "SpawnAgentRequest".
+ */
+export interface SpawnAgentRequest {
+  name: string;
+  template: string;
+  host_pin?: string;
+  definition_overrides?: {};
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "SpawnAgentResponse".
+ */
+export interface SpawnAgentResponse {
+  agent_id: UUID;
 }
 /**
  * This interface was referenced by `SextantProtoBundle`'s JSON-Schema

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/love-lena/sextant-initial/pkg/sextantproto/kill-agent-response",
+  "$ref": "#/$defs/KillAgentResponse",
+  "$defs": {
+    "KillAgentResponse": {
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "ok"
+      ]
+    }
+  }
+}
