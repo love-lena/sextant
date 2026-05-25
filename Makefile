@@ -14,10 +14,15 @@ BIN_DIR := bin
 TS_DIR := clients/typescript
 SIDECAR_DIR := images/sidecar/entrypoint
 
+# install / uninstall destination. Override PREFIX for system-wide installs,
+# e.g. `sudo make install PREFIX=/usr/local`.
+PREFIX ?= $(HOME)/.local
+INSTALL_DIR := $(PREFIX)/bin
+
 # Binaries built by `make build`. New cmd/<name> dirs land here as milestones add them.
 CMDS := sextant sextantd sextant-shipper sextant-natsboot sextant-clickhouseboot sextant-client-demo sextant-tui-agents
 
-.PHONY: all fmt lint lint-go lint-nilaway lint-ts lint-sidecar test test-go test-ts test-sidecar build clean tidy install-tools \
+.PHONY: all fmt lint lint-go lint-nilaway lint-ts lint-sidecar test test-go test-ts test-sidecar build clean tidy install install-tools uninstall \
         ts-install ts-codegen ts-lint ts-test ts-build \
         sidecar-install sidecar-image sidecar-image-test
 
@@ -94,6 +99,22 @@ build: $(BIN_DIR)
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
+
+## install — build then copy every $(CMDS) binary into $(INSTALL_DIR).
+## Override PREFIX for non-default destinations (default: $(HOME)/.local).
+install: build
+	@mkdir -p $(INSTALL_DIR)
+	@for cmd in $(CMDS); do \
+	  install -m 0755 $(BIN_DIR)/$$cmd $(INSTALL_DIR)/$$cmd; \
+	  echo ">> installed $(INSTALL_DIR)/$$cmd"; \
+	done
+
+## uninstall — remove every $(CMDS) binary from $(INSTALL_DIR).
+uninstall:
+	@for cmd in $(CMDS); do \
+	  rm -f $(INSTALL_DIR)/$$cmd; \
+	  echo ">> removed $(INSTALL_DIR)/$$cmd"; \
+	done
 
 ## tidy — go mod tidy.
 tidy:
