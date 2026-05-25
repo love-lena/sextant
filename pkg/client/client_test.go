@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -476,6 +478,202 @@ func TestSubscribeSurfacesMalformedEnvelopeError(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for malformed-envelope delivery")
+	}
+}
+
+// writeClientToml writes a client.toml at path pointing at natsURL with
+// inline operator user/password. Helper for the runtime-override tests
+// below.
+func writeClientToml(t *testing.T, path, natsURL, user, password string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", filepath.Dir(path), err)
+	}
+	body := fmt.Sprintf(`
+[nats]
+url = %q
+
+[operator]
+user = %q
+password = %q
+`, natsURL, user, password)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", path, err)
+	}
+}
+
+// writeRuntimeJSON writes a runtime.json at path with the given
+// nats_addr (host:port, no scheme — matching the sextantd shape).
+func writeRuntimeJSON(t *testing.T, path, natsAddr string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", filepath.Dir(path), err)
+	}
+	body := fmt.Sprintf(`{"nats_addr":%q,"clickhouse_tcp":"127.0.0.1:9000"}`, natsAddr)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", path, err)
+	}
+}
+
+// staleClientTomlAddr is the placeholder URL `sextant init` writes —
+// always wrong on a real install where sextantd picks an auto-allocated
+// port. The runtime-override tests use this as the "stale" URL: a
+// successful Connect proves the runtime.json override fired, since a
+// dial to this address would never reach the booted test server.
+const staleClientTomlAddr = "nats://127.0.0.1:14222"
+
+// TestConnectPrefersRuntimeJSONOverStaleClientToml is the load-bearing
+// acceptance for bug-clienttoml-stale-port-on-restart. Setup:
+//   - real nats-server booted on an auto-allocated port (the "live" port)
+//   - client.toml on disk points at a stale port that is NOT the server
+//   - runtime.json on disk points at the live port
+//
+// Connect must dial the live port (from runtime.json), not the stale
+// port (from client.toml). Before the fix, this test would hang on the
+// connect timeout.
+func TestConnectPrefersRuntimeJSONOverStaleClientToml(t *testing.T) {
+	srv := bootedServer(t)
+
+	// Redirect $HOME so DefaultConfigPath and DefaultRuntimePath both
+	// resolve under our tempdir. os.UserHomeDir respects HOME on Unix.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	clientTomlPath := filepath.Join(home, ".config", "sextant", "client.toml")
+	writeClientToml(t, clientTomlPath, staleClientTomlAddr, srv.OperatorUser(), srv.OperatorPassword())
+
+	runtimePath := filepath.Join(home, ".local", "share", "sextant", "runtime.json")
+	writeRuntimeJSON(t, runtimePath, srv.Address())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cli, err := client.Connect(ctx, "")
+	if err != nil {
+		t.Fatalf("Connect: %v (runtime.json override should have steered to the live port)", err)
+	}
+	defer cli.Close() //nolint:errcheck // best-effort close
+
+	// Sanity: the Client's recorded URL must be the live one — that's
+	// the field validateAndFill stamped, and what nats.Connect dialed.
+	if got, want := cli.Config().NATS.URL, srv.PublicURL(); got != want {
+		t.Fatalf("Client.Config().NATS.URL = %q, want %q (runtime.json override didn't apply)", got, want)
+	}
+
+	// And the connection is actually live.
+	if !cli.Conn().IsConnected() {
+		t.Fatal("Client connected but underlying *nats.Conn is not connected — runtime.json override returned a wrong address")
+	}
+}
+
+// TestConnectUsesClientTomlWhenRuntimeJSONAbsent — the no-daemon case.
+// runtime.json doesn't exist (e.g. operator running `sextant` before
+// `sextantd` ever started). Connect must fall back to client.toml's URL.
+// We point client.toml at the live server so the connect succeeds; if
+// the helper accidentally errored on the missing file, Connect would
+// fail.
+func TestConnectUsesClientTomlWhenRuntimeJSONAbsent(t *testing.T) {
+	srv := bootedServer(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// client.toml: live URL. runtime.json: NOT written.
+	clientTomlPath := filepath.Join(home, ".config", "sextant", "client.toml")
+	writeClientToml(t, clientTomlPath, srv.PublicURL(), srv.OperatorUser(), srv.OperatorPassword())
+
+	runtimePath := filepath.Join(home, ".local", "share", "sextant", "runtime.json")
+	if _, err := os.Stat(runtimePath); !os.IsNotExist(err) {
+		t.Fatalf("test setup: runtime.json should be absent, stat err=%v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cli, err := client.Connect(ctx, "")
+	if err != nil {
+		t.Fatalf("Connect: %v (should have used client.toml URL when runtime.json absent)", err)
+	}
+	defer cli.Close() //nolint:errcheck // best-effort close
+
+	if got, want := cli.Config().NATS.URL, srv.PublicURL(); got != want {
+		t.Fatalf("Client.Config().NATS.URL = %q, want %q (Connect didn't fall back to client.toml)", got, want)
+	}
+}
+
+// TestConnectFallsBackToClientTomlOnMalformedRuntimeJSON — the daemon
+// crashed mid-write or someone hand-edited runtime.json into nonsense.
+// Connect must NOT crash, NOT error; it must transparently fall back to
+// client.toml. This is the "don't make a degraded daemon worse" contract.
+func TestConnectFallsBackToClientTomlOnMalformedRuntimeJSON(t *testing.T) {
+	srv := bootedServer(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// client.toml: live URL (so the fallback dial succeeds).
+	clientTomlPath := filepath.Join(home, ".config", "sextant", "client.toml")
+	writeClientToml(t, clientTomlPath, srv.PublicURL(), srv.OperatorUser(), srv.OperatorPassword())
+
+	// runtime.json: garbage.
+	runtimePath := filepath.Join(home, ".local", "share", "sextant", "runtime.json")
+	if err := os.MkdirAll(filepath.Dir(runtimePath), 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(runtimePath, []byte("{half-written"), 0o600); err != nil {
+		t.Fatalf("WriteFile runtime: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cli, err := client.Connect(ctx, "")
+	if err != nil {
+		t.Fatalf("Connect: %v (malformed runtime.json must not propagate; expected silent fallback to client.toml)", err)
+	}
+	defer cli.Close() //nolint:errcheck // best-effort close
+
+	if got, want := cli.Config().NATS.URL, srv.PublicURL(); got != want {
+		t.Fatalf("Client.Config().NATS.URL = %q, want %q (Connect should have fallen back to client.toml)", got, want)
+	}
+}
+
+// TestConnectRuntimeJSONWinsOverDifferingClientToml is the "both
+// present, different ports" case. The point of Option B is that
+// runtime.json is authoritative whenever it parses cleanly, so a stale
+// client.toml never matters — even if it points at a port that would
+// connect to something else entirely.
+func TestConnectRuntimeJSONWinsOverDifferingClientToml(t *testing.T) {
+	srv := bootedServer(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Stale client.toml URL distinct from the live one.
+	clientTomlPath := filepath.Join(home, ".config", "sextant", "client.toml")
+	writeClientToml(t, clientTomlPath, staleClientTomlAddr, srv.OperatorUser(), srv.OperatorPassword())
+
+	// runtime.json points at the live server.
+	runtimePath := filepath.Join(home, ".local", "share", "sextant", "runtime.json")
+	writeRuntimeJSON(t, runtimePath, srv.Address())
+
+	// Sanity: confirm they disagree, so the test is meaningful.
+	if srv.PublicURL() == staleClientTomlAddr {
+		t.Fatalf("test setup invariant: live URL %q must differ from stale %q",
+			srv.PublicURL(), staleClientTomlAddr)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cli, err := client.Connect(ctx, "")
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer cli.Close() //nolint:errcheck // best-effort close
+
+	if got, want := cli.Config().NATS.URL, srv.PublicURL(); got != want {
+		t.Fatalf("Client.Config().NATS.URL = %q, want %q (runtime.json should have won over client.toml)", got, want)
 	}
 }
 

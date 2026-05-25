@@ -1,6 +1,7 @@
 package client
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -91,6 +92,50 @@ func DefaultConfigPath() (string, error) {
 		return "", fmt.Errorf("client: resolve home dir: %w", err)
 	}
 	return filepath.Join(home, ".config", "sextant", "client.toml"), nil
+}
+
+// DefaultRuntimePath returns the canonical runtime.json location written
+// by sextantd: ~/.local/share/sextant/runtime.json. This mirrors the
+// default in pkg/sextantd's DefaultPaths/DefaultConfig.
+//
+// Connect consults this file (if it exists and parses) for the live NATS
+// address, overriding the client.toml URL — which is a static placeholder
+// from `sextant init` and goes stale whenever the daemon binds an
+// auto-allocated port.
+func DefaultRuntimePath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("client: resolve home dir: %w", err)
+	}
+	return filepath.Join(home, ".local", "share", "sextant", "runtime.json"), nil
+}
+
+// runtimeInfo is the minimal subset of sextantd's runtime.json the
+// client needs. We mirror the field name (`nats_addr`) rather than
+// importing pkg/sextantd so this low-level library stays independent.
+// The shape matches pkg/sextantd.RuntimeInfo and pkg/shipper.RuntimeAddrs.
+type runtimeInfo struct {
+	NATSAddr string `json:"nats_addr"`
+}
+
+// readRuntimeNATSURL returns the live NATS URL recorded in runtime.json
+// at path, or ok=false when the file is absent / unreadable / unparsable
+// / has no nats_addr. Errors are intentionally swallowed: the caller
+// falls back to the static client.toml URL, which is a strict
+// improvement over the pre-fix behavior (always trusting the stale port).
+func readRuntimeNATSURL(path string) (url string, ok bool) {
+	raw, err := os.ReadFile(path) //nolint:gosec // operator-controlled path
+	if err != nil {
+		return "", false
+	}
+	var info runtimeInfo
+	if err := json.Unmarshal(raw, &info); err != nil {
+		return "", false
+	}
+	if info.NATSAddr == "" {
+		return "", false
+	}
+	return "nats://" + info.NATSAddr, true
 }
 
 // LoadConfig reads a TOML file from path, parses it, and fills defaults.

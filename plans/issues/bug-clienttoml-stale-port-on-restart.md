@@ -1,10 +1,11 @@
 ---
 title: client.toml NATS port hardcoded to 4222 — goes stale when sextantd auto-allocates a different port
-status: open
+status: fixed
 priority: P2
 created_at: 2026-05-25T14:53-07:00
 labels: [bug, cli, config, client-libraries]
 discovered_in: post-overnight daily-drive setup
+fixed_in: ee663f52397dcb4b95ddef3d2c5e86986a25d5f2
 ---
 
 ## Summary
