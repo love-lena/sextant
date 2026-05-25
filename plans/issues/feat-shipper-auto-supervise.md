@@ -1,10 +1,23 @@
 ---
 title: sextantd should auto-supervise sextant-shipper (M6 deferred work)
-status: open
+status: resolved
 priority: P3
 created_at: 2026-05-24T23:18-07:00
+resolved_at: 2026-05-25T00:00-07:00
 labels: [feature, supervisor, shipper]
 discovered_in: phase-1 smoke verification + post-wire-up
+resolution: |
+  Implemented via pkg/shipperboot (mirrors pkg/natsboot / pkg/clickhouseboot
+  process-group lifecycle). sextantd's startup sequence spawns sextant-shipper
+  after NATS+ClickHouse, passing --config and --runtime-file. Shutdown unwinds
+  in reverse-dependency order (shipper → ClickHouse → NATS). New
+  [shipper] auto_supervise=true (default) in sextantd.toml; auto_supervise=false
+  preserves the M6 standalone-operator behavior. Binary path resolves to the
+  sextantd binary's sibling first, then PATH. Specs updated in
+  sextantd.md §"Startup sequence" / §"Shutdown sequence" and shipper.md
+  §"Wire-up to sextantd". Tests: TestSextantdSupervisesShipper,
+  TestSextantdAutoSuperviseOff, and the M11 walkthrough now asserts
+  query_audit returns non-empty rows without manual shipper start.
 ---
 
 ## Summary
