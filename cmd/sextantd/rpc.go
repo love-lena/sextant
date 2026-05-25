@@ -171,6 +171,7 @@ func (r *rpcRuntime) registerLifecycleVerbs(ca *authjwt.CA, spawnRT *spawnRuntim
 		Definitions:  spawnDeps.Definitions,
 		Incarnations: spawnDeps.Incarnations,
 		Containers:   spawnDeps.Containers,
+		Volumes:      spawnDeps.Volumes,
 	})); err != nil {
 		return err
 	}
@@ -188,6 +189,8 @@ func (r *rpcRuntime) registerLifecycleVerbs(ca *authjwt.CA, spawnRT *spawnRuntim
 		Definitions:   spawnDeps.Definitions,
 		Incarnations:  spawnDeps.Incarnations,
 		Containers:    spawnRT.containers,
+		Volumes:       spawnRT.containers,
+		Templates:     spawnDeps.Templates,
 		CA:            ca,
 		WorkspaceRoot: spawnDeps.WorkspaceRoot,
 		HostID:        spawnDeps.HostID,

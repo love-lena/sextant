@@ -91,7 +91,15 @@ type SpawnDeps struct {
 	// Empty disables the gitdir mount (fallback workspaces don't need
 	// it, and tests that don't exercise the worktree path leave it
 	// empty).
-	RepoRoot     string
+	RepoRoot string
+	// Volumes, when non-nil, manages per-agent Docker named volumes
+	// (currently only the claude_seed copy-on-spawn volume). When nil,
+	// templates with claude_seed_mode = "copy-on-spawn" fall back to the
+	// legacy readonly-bind behavior so the spawn handler still works in
+	// pre-volume-aware test harnesses. Production wiring passes the
+	// containermgr.Manager (which satisfies both ContainerRunner and
+	// VolumeManager).
+	Volumes      VolumeManager
 	HostID       string
 	NATSURL      string
 	NATSUser     string
@@ -122,6 +130,16 @@ type WorktreeProvider interface {
 type ContainerRunner interface {
 	Run(ctx context.Context, spec containermgr.ContainerSpec) (*containermgr.Container, error)
 	Stop(ctx context.Context, id string, grace time.Duration) error
+}
+
+// VolumeManager is the subset of containermgr.Manager the spawn/archive
+// handlers use to manage per-agent named volumes (today: the
+// claude_seed copy-on-spawn volume). Defined here so tests can
+// substitute a fake without spinning a real docker daemon.
+type VolumeManager interface {
+	EnsureVolume(ctx context.Context, name string, labels map[string]string) (created bool, err error)
+	PopulateVolumeFromHostDir(ctx context.Context, volumeName, hostSrc, image string, cmd []string) error
+	RemoveVolume(ctx context.Context, name string, force bool) error
 }
 
 // NewSpawnAgent returns a Handler that implements `spawn_agent`.
@@ -384,26 +402,41 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 			ContainerPath: "/home/agent/.gitconfig",
 			ReadOnly:      true,
 		})
-		// Template-declared seed for /home/agent/.claude. When set,
-		// bind-mount the host directory read-only over the default
-		// per-agent empty volume so the agent boots with operator-
-		// curated CLAUDE.md / slash commands / settings.json visible.
-		// templates.Validate already confirmed the path exists and is
-		// a directory, but we re-expand here so a `~/`-prefixed value
-		// (resolved against the daemon-process's UserHomeDir) reaches
-		// containermgr as an absolute path. See
-		// plans/issues/feat-template-claude-seeding.md.
+		// Template-declared seed for /home/agent/.claude. Two modes:
+		//
+		//   - "copy-on-spawn" (default when claude_seed is set): create a
+		//     per-agent Docker named volume, populate it from the host
+		//     seed dir on first spawn (idempotent on subsequent spawns),
+		//     and mount it rw. This lets the Claude Agent SDK write its
+		//     session journal under /home/agent/.claude/projects/ — which
+		//     a readonly bind blocks. See
+		//     plans/issues/bug-claude-seed-readonly-breaks-session-persistence.md.
+		//
+		//   - "readonly-bind" (legacy opt-in): bind-mount the host dir
+		//     read-only. Suitable for one-shot agents that don't need
+		//     SDK state persistence; multi-turn conversation does not
+		//     work in this mode.
+		//
+		// templates.Validate already confirmed the path exists and is a
+		// directory; we re-expand here so a `~/`-prefixed value (resolved
+		// against the daemon-process's UserHomeDir) reaches containermgr
+		// as an absolute path.
 		if tpl.ClaudeSeed != "" {
 			seedPath, err := templates.ExpandClaudeSeed(tpl.ClaudeSeed)
 			if err != nil {
 				return emitErr(emit, sextantproto.ErrCodeInternal,
 					fmt.Sprintf("expand claude_seed: %v", err))
 			}
-			mounts = append(mounts, containermgr.MountSpec{
-				HostPath:      seedPath,
-				ContainerPath: "/home/agent/.claude",
-				ReadOnly:      true,
-			})
+			mode := tpl.ResolveClaudeSeedMode()
+			seedMount, seedCleanup, err := buildClaudeSeedMount(ctx, deps, mode, seedPath, agentUUID, tpl.Image)
+			if err != nil {
+				return emitErr(emit, sextantproto.ErrCodeInternal,
+					fmt.Sprintf("claude_seed (mode %q): %v", mode, err))
+			}
+			mounts = append(mounts, seedMount)
+			if seedCleanup != nil {
+				pushRollback(seedCleanup)
+			}
 		}
 
 		spec := containermgr.ContainerSpec{
@@ -664,6 +697,96 @@ func permissionCeilingToSDKMode(ceiling string) string {
 	default:
 		// Covers "auto", "" (unset), and any unrecognized value.
 		return "acceptEdits"
+	}
+}
+
+// ClaudeSeedVolumePrefix is the prefix for per-agent Docker named
+// volumes that back the claude_seed copy-on-spawn flow. The full volume
+// name is "<prefix><agent-uuid>". Stable per-agent so a
+// restart-with-preserve-session reattaches the same volume and the
+// SDK's session journal survives.
+const ClaudeSeedVolumePrefix = "sextant-claude-seed-"
+
+// ClaudeSeedVolumeName returns the canonical name of the per-agent
+// claude_seed volume. Exported so the archive handler can compute the
+// same name and delete the volume when an agent is archived.
+func ClaudeSeedVolumeName(agentUUID uuid.UUID) string {
+	return ClaudeSeedVolumePrefix + agentUUID.String()
+}
+
+// buildClaudeSeedMount returns the mount that should be appended to the
+// container spec for a template with claude_seed set. The returned
+// cleanup closure (nil for the readonly-bind mode) handles rollback —
+// for copy-on-spawn, this means deleting a newly-created volume if a
+// later step in the spawn fails. The cleanup is NOT registered for
+// volumes that already existed (a restart of an agent with a prior
+// session must not destroy that agent's working state on rollback).
+//
+// When deps.Volumes is nil and the mode is "copy-on-spawn", we fall
+// back to the readonly-bind behavior so the spawn handler still works
+// in test harnesses that didn't wire a volume manager. Production
+// always wires deps.Volumes.
+func buildClaudeSeedMount(ctx context.Context, deps SpawnDeps, mode, seedPath string, agentUUID uuid.UUID, image string) (containermgr.MountSpec, func(), error) {
+	switch mode {
+	case templates.ClaudeSeedModeReadonly:
+		// Legacy bind-mount. No rollback cleanup needed — bind mounts
+		// don't own host state.
+		return containermgr.MountSpec{
+			HostPath:      seedPath,
+			ContainerPath: "/home/agent/.claude",
+			ReadOnly:      true,
+		}, nil, nil
+	case templates.ClaudeSeedModeCopyOnSpawn, "":
+		if deps.Volumes == nil {
+			// No volume manager wired (unit-test fallback). Use the
+			// readonly bind so tests that don't care about the copy
+			// flow still get a deterministic mount shape.
+			return containermgr.MountSpec{
+				HostPath:      seedPath,
+				ContainerPath: "/home/agent/.claude",
+				ReadOnly:      true,
+			}, nil, nil
+		}
+		volName := ClaudeSeedVolumeName(agentUUID)
+		labels := map[string]string{
+			LabelAgentUUID: agentUUID.String(),
+			"sextant.kind": "claude-seed",
+		}
+		created, err := deps.Volumes.EnsureVolume(ctx, volName, labels)
+		if err != nil {
+			return containermgr.MountSpec{}, nil, fmt.Errorf("ensure volume %s: %w", volName, err)
+		}
+		if created {
+			// First spawn for this agent UUID. Populate from the host
+			// seed dir so the SDK boots with operator-curated content.
+			// We always use the sidecar image (whatever the template
+			// declares) for the populate one-shot — it's the image we
+			// know is already pulled.
+			if err := deps.Volumes.PopulateVolumeFromHostDir(ctx, volName, seedPath, image, nil); err != nil {
+				// Populate failed: tear down the half-created volume so
+				// the next spawn starts cleanly.
+				_ = deps.Volumes.RemoveVolume(context.Background(), volName, true) //nolint:contextcheck // rollback uses a fresh ctx
+				return containermgr.MountSpec{}, nil, fmt.Errorf("populate volume %s from %s: %w", volName, seedPath, err)
+			}
+		}
+		var cleanup func()
+		if created {
+			// Only roll back the volume when we created it. Re-attaching
+			// an existing volume is a no-op for the caller; deleting it
+			// would destroy the agent's accumulated state.
+			cleanup = func() {
+				rbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				_ = deps.Volumes.RemoveVolume(rbCtx, volName, true)
+			}
+		}
+		return containermgr.MountSpec{
+			VolumeName:    volName,
+			ContainerPath: "/home/agent/.claude",
+			ReadOnly:      false,
+		}, cleanup, nil
+	default:
+		return containermgr.MountSpec{}, nil, fmt.Errorf("unknown claude_seed_mode %q", mode)
 	}
 }
 
