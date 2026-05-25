@@ -28,6 +28,8 @@ Verbs:
   show <agent>                        Detailed status for one agent.
   spawn <name> --template T           Create + start a new agent.
   kill <agent> [--grace 10s]          Stop a running agent.
+  restart <agent> [--preserve-session]
+                                      Restart a running agent in place.
   prompt <agent> "<text>"             Send a prompt to an agent's inbox.
 
 Every verb supports --json for machine-parseable output. Use
@@ -55,6 +57,8 @@ func runAgents(ctx context.Context, args []string) error {
 		return runAgentsSpawn(ctx, rest)
 	case "kill":
 		return runAgentsKill(ctx, rest)
+	case "restart":
+		return runAgentsRestart(ctx, rest)
 	case "prompt":
 		return runAgentsPrompt(ctx, rest)
 	case "-h", "--help", "help":
@@ -314,6 +318,49 @@ func runAgentsKill(ctx context.Context, args []string) error {
 	}
 	if resp.OK {
 		println(os.Stdout, "ok")
+	} else {
+		println(os.Stdout, "not ok")
+	}
+	return nil
+}
+
+// runAgentsRestart — `sextant agents restart <agent> [--preserve-session]`.
+func runAgentsRestart(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("sextant agents restart", flag.ContinueOnError)
+	var preserve bool
+	fs.BoolVar(&preserve, "preserve-session", false, "preserve session state across the restart (reserved; no-op today)")
+	opts, rest, err := parseCommonOpts(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(rest) != 1 {
+		return errUserUsage("sextant agents restart <agent_uuid> [--preserve-session]")
+	}
+	id, err := uuid.Parse(rest[0])
+	if err != nil {
+		return errUserUsage(fmt.Sprintf("agent_uuid: %v", err))
+	}
+	cli, _, err := connectAgent(ctx, opts.configDir)
+	if err != nil {
+		return err
+	}
+	defer cli.Close() //nolint:errcheck // best-effort close
+
+	req := sextantproto.RestartAgentRequest{
+		AgentID:         id,
+		PreserveSession: preserve,
+	}
+	var resp sextantproto.RestartAgentResponse
+	rpcCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+	if err := cli.RPC(rpcCtx, rpc.VerbRestartAgent, req, &resp); err != nil {
+		return fmt.Errorf("restart_agent: %w", err)
+	}
+	if opts.asJSON {
+		return writeJSON(os.Stdout, resp)
+	}
+	if resp.OK {
+		printf(os.Stdout, "agent_id: %s\n", resp.AgentID)
 	} else {
 		println(os.Stdout, "not ok")
 	}
