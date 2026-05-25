@@ -65,10 +65,27 @@ func resolveLiveContainer(ctx context.Context, deps FilesDeps, agentID uuid.UUID
 	return inc.ContainerID, nil
 }
 
+// ReadFileMaxBytes is the upper bound on the file size read_file
+// will return. Larger files must be retrieved via read_file_stream
+// (deferred per specs/protocols/rpc-catalog.md "Open"). The cap
+// exists to keep one bad call from pushing past the NATS server's
+// max_payload (default 8 MiB) — picking 16 MiB here gives the
+// operator twice the headroom they'd get from a default NATS install
+// configured with a larger max_payload, while keeping the reject
+// message actionable.
+const ReadFileMaxBytes int64 = 16 * 1024 * 1024
+
 // NewReadFile returns the M12 real read_file handler. It reads via
 // `cat` inside the container — small files only (no streaming in
-// M12). Caps the response payload at 16 MiB so a misuse against a
-// large file doesn't push the NATS msg-size limit.
+// M12). Files larger than ReadFileMaxBytes are rejected with a
+// structured bad_request before any bytes leave the container; the
+// CLI surfaces the error and the operator's recovery path is
+// read_file_stream (TBD per the rpc-catalog spec).
+//
+// The size pre-check uses `stat -c %s`. Two RPCs to the container per
+// read_file is acceptable for a CLI verb; the alternative — pipe cat
+// through `head -c N` and detect truncation — gives weaker semantics
+// (partial content with no clear marker).
 func NewReadFile(deps FilesDeps) rpc.Handler {
 	return func(ctx context.Context, req sextantproto.Envelope, emit func(sextantproto.RPCResponse)) error {
 		var args sextantproto.ReadFileRequest
@@ -83,8 +100,38 @@ func NewReadFile(deps FilesDeps) rpc.Handler {
 		if rerr != nil {
 			return emitErr(emit, rerr.Code, rerr.Message)
 		}
-		// `cat` is the simplest portable file-read. The sidecar image is
-		// alpine-based so it ships with coreutils' cat at /bin/cat.
+
+		// 1. Stat the path first. Reject early if the file is too big.
+		// `stat -c %s` returns just the size in bytes; if the path
+		// doesn't exist stat exits non-zero and the stderr surfaces the
+		// reason.
+		statResult, err := deps.Containers.Exec(ctx, containerID, containermgr.ExecSpec{
+			Cmd: []string{"stat", "-c", "%s", args.Path},
+		})
+		if err != nil {
+			return emitErr(emit, sextantproto.ErrCodeInternal,
+				fmt.Sprintf("exec stat %s: %v", args.Path, err))
+		}
+		if statResult.ExitCode != 0 {
+			msg := strings.TrimSpace(string(statResult.Stderr))
+			if msg == "" {
+				msg = fmt.Sprintf("stat exited %d", statResult.ExitCode)
+			}
+			return emitErr(emit, sextantproto.ErrCodeBadRequest, msg)
+		}
+		size, parseErr := strconv.ParseInt(strings.TrimSpace(string(statResult.Stdout)), 10, 64)
+		if parseErr != nil {
+			return emitErr(emit, sextantproto.ErrCodeInternal,
+				fmt.Sprintf("parse file size %q: %v", statResult.Stdout, parseErr))
+		}
+		if size > ReadFileMaxBytes {
+			return emitErr(emit, sextantproto.ErrCodeBadRequest,
+				fmt.Sprintf("file %s is %d bytes; read_file cap is %d bytes — use read_file_stream (TBD)",
+					args.Path, size, ReadFileMaxBytes))
+		}
+
+		// 2. cat the bytes. `cat` is the simplest portable file-read;
+		// the sidecar image ships coreutils.
 		result, err := deps.Containers.Exec(ctx, containerID, containermgr.ExecSpec{
 			Cmd: []string{"cat", args.Path},
 		})
@@ -99,6 +146,13 @@ func NewReadFile(deps FilesDeps) rpc.Handler {
 				msg = fmt.Sprintf("cat exited %d", result.ExitCode)
 			}
 			return emitErr(emit, sextantproto.ErrCodeBadRequest, msg)
+		}
+		// Defense-in-depth: even if the file grew between stat and cat,
+		// truncate the response so we never publish past the cap on a
+		// race. The reject above is the operator-facing contract; this
+		// silent truncate is a safety net.
+		if int64(len(result.Stdout)) > ReadFileMaxBytes {
+			result.Stdout = result.Stdout[:ReadFileMaxBytes]
 		}
 		return emitOK(emit, sextantproto.ReadFileResponse{
 			Content:     result.Stdout,
