@@ -39,6 +39,15 @@ type DenyPattern =
   | { kind: "contains"; pattern: string; label: string }
   | { kind: "regex"; pattern: RegExp; label: string };
 
+// `rm -<flags>` where the flag block contains both `r` and `f` (any order,
+// possibly with other letters like `v`). Used as the leading fragment of the
+// anchored rm-rf path regexes below. The double lookahead enforces "has r"
+// AND "has f" without forcing either order, so `-rf`, `-fr`, `-rfv`, `-fvr`,
+// `-rvf`, `-vrf` all match while a benign `-v` alone does not.
+//
+// Reference: plans/issues/bug-classifier-rm-rf-too-broad.md
+const RM_RF_FLAGS = String.raw`\brm\s+-(?=[a-zA-Z]*r)(?=[a-zA-Z]*f)[a-zA-Z]+\s+`;
+
 const DENY_PATTERNS: DenyPattern[] = [
   // sudo — check first so "sudo rm -rf /etc" labels as sudo, not rm-rf-root.
   // Containers don't need sudo for in-workspace work; it also signals an
@@ -46,12 +55,28 @@ const DENY_PATTERNS: DenyPattern[] = [
   { kind: "regex", pattern: /\bsudo\s/, label: "sudo" },
   // Workspace nuke — check before the generic root pattern because
   // "/workspace" contains "/", and more-specific match is more informative.
-  { kind: "contains", pattern: "rm -rf /workspace", label: "rm-rf-workspace" },
-  // rm -rf home — check before root for the same reason
-  { kind: "contains", pattern: "rm -rf ~/", label: "rm-rf-home" },
-  { kind: "contains", pattern: "rm -rf ~", label: "rm-rf-home-bare" },
-  // rm -rf root — broad catch after the specific cases above
-  { kind: "contains", pattern: "rm -rf /", label: "rm-rf-root" },
+  // Anchored: only fires on `rm -rf /workspace` or `/workspace/...`, not on
+  // any command that happens to contain the substring.
+  {
+    kind: "regex",
+    pattern: new RegExp(RM_RF_FLAGS + String.raw`\/workspace(\s|\/|$)`),
+    label: "rm-rf-workspace",
+  },
+  // rm -rf home — `~`, `~/...`, `$HOME`, `$HOME/...`. Check before root.
+  {
+    kind: "regex",
+    pattern: new RegExp(RM_RF_FLAGS + String.raw`(~|\$HOME)(\s|\/|$)`),
+    label: "rm-rf-home",
+  },
+  // rm -rf root — `rm -rf /` or `rm -rf / <something>`. Anchored so that
+  // benign paths like `rm -rf /tmp/foo` or `rm -rf node_modules` fall
+  // through to allow. The trailing `(\s|$)` requires a space or end after
+  // the `/`, so `rm -rf /tmp` (which has `t` after `/`) does not match.
+  {
+    kind: "regex",
+    pattern: new RegExp(RM_RF_FLAGS + String.raw`\/(\s|$)`),
+    label: "rm-rf-root",
+  },
   // Disk wipe patterns
   { kind: "contains", pattern: "dd if=/dev/zero", label: "dd-zero" },
   { kind: "contains", pattern: "dd if=/dev/random", label: "dd-random" },
@@ -61,10 +86,15 @@ const DENY_PATTERNS: DenyPattern[] = [
   { kind: "contains", pattern: ":(){:|:&};:", label: "fork-bomb" },
   // curl/wget piped to shell — remote code execution via pipe
   // (the M3 ClickHouse incident pattern; agents needing binary installs
-  //  should ask the operator instead of self-installing)
+  //  should ask the operator instead of self-installing).
+  //
+  // `.*` (not `[^|]*`) so intermediate pipes like
+  //   `curl X | tee /tmp/log | bash`
+  // still match. Reference:
+  // plans/issues/bug-classifier-curl-multipipe-bypass.md
   {
     kind: "regex",
-    pattern: /\b(curl|wget)\b[^|]*\|\s*(bash|sh)\b/,
+    pattern: /\b(curl|wget)\b.*\|\s*(bash|sh)\b/,
     label: "curl-pipe-shell",
   },
 ];
