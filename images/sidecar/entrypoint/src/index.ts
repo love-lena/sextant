@@ -2,50 +2,62 @@
  * @sextant/sidecar — runtime entrypoint that boots inside every per-agent
  * container.
  *
- * Plan: plans/bootstrap.md#M11 (extends the M9/M10 entrypoint).
- * Spec: specs/components/sidecar-image.md §"Sidecar entrypoint",
- *       specs/components/sextantd.md §"MCP server".
+ * Plan: plans/phase1-complete.md (wire-up).
+ * Spec: specs/components/sidecar-image.md §"Sidecar entrypoint".
  *
- * M11 scope:
+ * Current scope:
  *
  *   - Read the env-var contract sextantd sets at spawn time:
  *     SEXTANT_AGENT_UUID, SEXTANT_AGENT_NAME, SEXTANT_HOST_ID,
  *     SEXTANT_INCARNATION_ID, SEXTANT_NATS_URL,
- *     SEXTANT_NATS_USER + SEXTANT_NATS_PASSWORD (M11 stop-gap; see
- *     specs/components/nats.md §"Agent path"), SEXTANT_JWT (used for
- *     MCP only), SEXTANT_MCP_URL.
+ *     SEXTANT_NATS_USER + SEXTANT_NATS_PASSWORD (M11 stop-gap),
+ *     SEXTANT_JWT (used for MCP only), SEXTANT_MCP_URL,
+ *     SEXTANT_MODEL, SEXTANT_SESSION_ID (optional).
  *   - Connect to NATS using the operator user/password sextantd
  *     forwards (Option B per the M11 NATS-auth decision).
- *   - Publish `lifecycle.started` with incarnation_id from env so the
- *     KV record sextantd wrote and the bus envelope reference the same
- *     incarnation.
+ *   - Publish `lifecycle.started` with incarnation_id from env.
  *   - Heartbeat every 5s.
- *   - Subscribe to `agents.<uuid>.inbox` and log every prompt
- *     received. The Claude SDK driver loop that *acts* on prompts
- *     lands post-Phase-1.
  *   - Connect to the sextantd MCP server over Streamable HTTP with
  *     `Authorization: Bearer ${SEXTANT_JWT}`. Best-effort.
- *   - Drain cleanly on SIGTERM/SIGINT: stop the inbox subscription,
- *     publish `lifecycle.ended`, close NATS + MCP.
+ *   - Subscribe to `agents.<uuid>.inbox`; on each prompt, drive the
+ *     Claude Agent SDK and stream events as `agent_frame` envelopes
+ *     to `agents.<uuid>.frames`. Publish `lifecycle.turn_ended` when
+ *     the turn completes (or fails). Persist the SDK-issued session_id
+ *     to NATS KV (`agent_definitions.<uuid>`) after the first turn so
+ *     subsequent spawns resume the same session.
+ *   - Concurrent prompts are serialized via an in-process queue.
+ *   - Drain cleanly on SIGTERM/SIGINT: stop accepting new prompts,
+ *     wait briefly for the in-flight turn, publish `lifecycle.ended`,
+ *     close NATS + MCP.
  *
- * The M9 SEXTANT_OPERATOR_USER/PASSWORD stop-gap is dropped in M11.
- * The MCP connection is best-effort: a missing `SEXTANT_JWT` or
- * `SEXTANT_MCP_URL` logs a warning and skips the connection rather
- * than failing the sidecar.
+ * Driver mode:
+ *   --driver=sdk   (default) — drive the real Claude Agent SDK.
+ *   --driver=mock  — emit canned events; used by tests that exercise
+ *                   the bus integration without an Anthropic API call.
  */
 
+import { query as sdkQuery, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Client as MCPClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 import {
   ADDRESS_AGENT,
   connectWithConfig,
+  KIND_AGENT_FRAME,
   KIND_HEARTBEAT,
   KIND_LIFECYCLE,
   newEnvelope,
   type Client,
   type ClientConfig,
 } from "@sextant/client";
+
+/** Bucket where AgentDefinition records live. Mirrors handlers.AgentDefinitionsBucket. */
+const AGENT_DEFINITIONS_BUCKET = "agent_definitions";
+
+/** Default model when neither env nor template provided one. Mirrors specs/architecture.md §11b. */
+const DEFAULT_MODEL = "claude-opus-4-7[1m]";
+
+type DriverMode = "sdk" | "mock";
 
 /**
  * Env vars consumed by the sidecar. The set sextantd promises to provide
@@ -59,12 +71,14 @@ interface SidecarEnv {
   natsUrl: string;
   natsUser: string;
   natsPassword: string;
-  /** Per-incarnation JWT issued by sextantd. Consumed by MCP only in M11. */
+  /** Per-incarnation JWT issued by sextantd. Consumed by MCP only. */
   jwt: string | undefined;
-  /** Optional — Claude SDK `--resume` (post-Phase-1). */
+  /** Optional — Claude SDK `resume` session id. */
   sessionId: string | undefined;
   /** Optional — MCP server URL. */
   mcpUrl: string | undefined;
+  /** Claude model identifier passed to the SDK. */
+  model: string;
 }
 
 /** Spec: §"Env vars". `SEXTANT_*` namespace, set by sextantd at spawn. */
@@ -89,14 +103,13 @@ function readEnv(): SidecarEnv {
     jwt: process.env["SEXTANT_JWT"] || undefined,
     sessionId: process.env["SEXTANT_SESSION_ID"] || undefined,
     mcpUrl: process.env["SEXTANT_MCP_URL"] || undefined,
+    model: process.env["SEXTANT_MODEL"] || DEFAULT_MODEL,
   };
 }
 
 /**
  * Build the NATS client config from env. M11 hand-off is per
- * specs/components/nats.md §"Agent path (M11 — stop-gap)": sidecars
- * use the operator user/password sextantd forwards. The JWT (env.jwt)
- * gates MCP only — NATS-side JWT auth is deferred.
+ * specs/components/nats.md §"Agent path (M11 — stop-gap)".
  */
 function buildConfig(env: SidecarEnv): ClientConfig {
   return {
@@ -126,23 +139,29 @@ function log(level: "info" | "warn" | "error", msg: string, extra?: Record<strin
   stream.write(`${JSON.stringify(line)}\n`);
 }
 
-/**
- * Publish a lifecycle envelope. Builds a fresh envelope every call so
- * each transition has its own trace/span IDs (the M11 SDK driver will
- * make these children of the SDK session span).
- */
 async function publishLifecycle(
   client: Client,
   env: SidecarEnv,
   incarnationId: string,
-  transition: "started" | "ended",
+  transition: "started" | "ended" | "turn_ended",
   reason?: string,
 ): Promise<void> {
+  const stateForTransition = (t: string): string => {
+    switch (t) {
+      case "started":
+        return "running";
+      case "ended":
+        return "ended";
+      default:
+        // turn_ended doesn't move the IncarnationState; report current.
+        return "running";
+    }
+  };
   const payload = {
     incarnation_id: incarnationId,
     agent_uuid: env.agentUuid,
     transition,
-    state: transition === "started" ? "running" : "ended",
+    state: stateForTransition(transition),
     ...(reason ? { reason } : {}),
   };
   const envelope = newEnvelope(
@@ -174,22 +193,36 @@ async function publishHeartbeat(
 }
 
 /**
- * Connect to the sextantd MCP server over Streamable HTTP, presenting
- * the per-incarnation JWT as a Bearer token. Calls `tools/list` once on
- * connect to confirm the server is reachable and capture the catalog
- * the agent can call.
- *
- * The connection persists for the lifetime of the sidecar — the M11 SDK
- * driver loop will reuse it to invoke tools. Today the result is logged
- * and the client is held in scope; the returned MCPClient is closed on
- * shutdown.
- *
- * Failure handling: any error (no URL configured, no JWT, server
- * unreachable, auth failed) is logged and `null` is returned. The
- * sidecar keeps running — the MCP path is non-essential for the
- * heartbeat/lifecycle loop.
+ * Publish one `agent_frame` envelope on `agents.<uuid>.frames`. The
+ * payload shape mirrors `pkg/sextantproto.AgentFramePayload`.
  */
-async function connectMCP(env: SidecarEnv): Promise<MCPClient | null> {
+async function publishFrame(
+  client: Client,
+  env: SidecarEnv,
+  frameKind: "assistant_text" | "tool_call" | "tool_result" | "system_note" | "error",
+  body: Record<string, unknown>,
+  extras: { toolName?: string; sessionId?: string } = {},
+): Promise<void> {
+  const payload: Record<string, unknown> = {
+    frame_kind: frameKind,
+    body,
+  };
+  if (extras.toolName) payload["tool_name"] = extras.toolName;
+  if (extras.sessionId) payload["session_id"] = extras.sessionId;
+  const envelope = newEnvelope(
+    KIND_AGENT_FRAME,
+    { kind: ADDRESS_AGENT, id: env.agentUuid, host: env.hostId },
+    payload,
+  );
+  await client.publish(`agents.${env.agentUuid}.frames`, envelope);
+}
+
+/**
+ * Connect to the sextantd MCP server over Streamable HTTP. Returns the
+ * connected client + the resolved URL, or null on any failure. The
+ * sidecar continues running if MCP is unavailable.
+ */
+async function connectMCP(env: SidecarEnv): Promise<{ client: MCPClient; url: string } | null> {
   if (!env.mcpUrl) {
     log("info", "SEXTANT_MCP_URL unset; skipping MCP connection");
     return null;
@@ -222,13 +255,8 @@ async function connectMCP(env: SidecarEnv): Promise<MCPClient | null> {
     },
   });
   const client = new MCPClient(
-    {
-      name: "@sextant/sidecar",
-      version: "0.1.0",
-    },
-    {
-      capabilities: {},
-    },
+    { name: "@sextant/sidecar", version: "0.1.0" },
+    { capabilities: {} },
   );
 
   try {
@@ -254,80 +282,345 @@ async function connectMCP(env: SidecarEnv): Promise<MCPClient | null> {
     });
   }
 
-  return client;
+  return { client, url: env.mcpUrl };
 }
 
-/** Heartbeat interval. Spec says "every N seconds"; pin at 5s for M9. */
+/** Heartbeat interval. Spec says "every N seconds"; pin at 5s. */
 const HEARTBEAT_INTERVAL_MS = 5_000;
 
-/**
- * Subscribe to the agent's inbox and log every prompt received. Runs
- * in the background for the lifetime of the sidecar; iterator
- * termination is driven by client.close() (the async iterator finishes
- * when the underlying NATS subscription is closed).
- *
- * Failure to read off the iterator is logged but does not abort the
- * sidecar — the heartbeat path is the contract that keeps sextantd
- * happy.
- */
-function startInboxLoop(client: Client, subject: string): void {
-  void (async (): Promise<void> => {
-    try {
-      for await (const msg of client.subscribe(subject)) {
-        if (msg.err) {
-          log("warn", "inbox: bad envelope", {
-            subject: msg.subject,
-            err: msg.err.message,
-          });
-          await msg.ack();
-          continue;
-        }
-        // The envelope is a sextant Envelope wrapping the prompt
-        // payload. Log the payload kind + size; the full body would
-        // bloat the log line.
-        const env = msg.envelope;
-        log("info", "inbox: prompt received", {
-          subject: msg.subject,
-          fromKind: env?.from.kind,
-          fromId: env?.from.id,
-          streamSeq: String(msg.streamSeq),
-          payloadSize: env ? JSON.stringify(env.payload).length : 0,
-        });
-        await msg.ack();
-      }
-    } catch (err) {
-      // ClientClosedError on shutdown — expected.
-      const message = err instanceof Error ? err.message : String(err);
-      if (!message.toLowerCase().includes("closed")) {
-        log("error", "inbox loop failed", { err: message });
-      }
-    }
-  })();
-}
+/** Shutdown grace for an in-flight turn. */
+const SHUTDOWN_TURN_WAIT_MS = 5_000;
 
-/**
- * Bound on how long shutdown will wait for an in-flight heartbeat tick
- * to settle before closing the NATS client. Heartbeat publishes go
- * through `nc.flush()` (see clients/typescript/src/publish.ts), so the
- * worst case is one round-trip; 2s leaves headroom without making
- * SIGTERM feel sluggish.
- */
+/** Shutdown grace for an in-flight heartbeat tick. */
 const SHUTDOWN_TICK_WAIT_MS = 2_000;
 
 /**
+ * Decoded inbox payload. The publisher (pkg/rpc/handlers/prompt.go) puts
+ * `{kind: "prompt", content, from}` inside the envelope payload.
+ */
+interface InboxPrompt {
+  content: string;
+  from?: string;
+}
+
+function extractPrompt(payload: unknown): InboxPrompt | null {
+  if (!payload || typeof payload !== "object") return null;
+  const obj = payload as Record<string, unknown>;
+  const kind = typeof obj["kind"] === "string" ? (obj["kind"] as string) : "";
+  if (kind && kind !== "prompt") return null;
+  const content = obj["content"];
+  if (typeof content !== "string" || content === "") return null;
+  const from = typeof obj["from"] === "string" ? (obj["from"] as string) : undefined;
+  return { content, from };
+}
+
+/**
+ * Persist the SDK-issued session_id to the agent_definitions KV entry
+ * so subsequent spawns resume the session. Best-effort: any decode /
+ * write failure is logged and the sidecar continues.
+ */
+async function persistSessionID(
+  client: Client,
+  env: SidecarEnv,
+  sessionId: string,
+): Promise<void> {
+  if (!sessionId) return;
+  try {
+    const raw = await client.getKV(AGENT_DEFINITIONS_BUCKET, env.agentUuid);
+    const def = JSON.parse(new TextDecoder().decode(raw)) as Record<string, unknown>;
+    const runtime = (def["runtime"] as Record<string, unknown> | undefined) ?? {};
+    const existing = typeof runtime["session_id"] === "string" ? (runtime["session_id"] as string) : "";
+    if (existing === sessionId) {
+      return;
+    }
+    runtime["session_id"] = sessionId;
+    def["runtime"] = runtime;
+    const currentVersion =
+      typeof def["version"] === "number" ? (def["version"] as number) : 0;
+    def["version"] = currentVersion + 1;
+    def["updated_at"] = new Date().toISOString().replace(
+      /Z$/,
+      "000Z",
+    );
+    const enc = new TextEncoder().encode(JSON.stringify(def));
+    await client.putKV(AGENT_DEFINITIONS_BUCKET, env.agentUuid, enc);
+    log("info", "session_id persisted", { sessionId });
+  } catch (err) {
+    log("warn", "session_id persist failed", {
+      sessionId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * A driver implementation knows how to handle one prompt. Both the
+ * real SDK driver and the mock driver implement this. The driver is
+ * responsible for publishing every frame and the terminating
+ * lifecycle.turn_ended envelope.
+ */
+interface PromptDriver {
+  /**
+   * Drive one turn. Implementations should not throw — errors should
+   * be surfaced as `agent_frame` (frame_kind=error) followed by
+   * `lifecycle.turn_ended` with reason="error". Returns the SDK
+   * session_id (when one was issued) so the caller can persist it.
+   */
+  runTurn(prompt: InboxPrompt): Promise<{ sessionId?: string }>;
+}
+
+/**
+ * Mock driver — emits a canned `assistant_text` frame echoing the
+ * prompt back, then `lifecycle.turn_ended`. Used by tests that
+ * exercise the bus integration without an Anthropic API call.
+ *
+ * The mock honours `SEXTANT_SESSION_ID` for the first turn (so the
+ * persistence test can verify the runtime.session_id round-trip) and
+ * mints a deterministic session_id (`mock-session-<incarnation>`)
+ * otherwise. Subsequent turns reuse the same id.
+ */
+function newMockDriver(client: Client, env: SidecarEnv, incarnationId: string): PromptDriver {
+  let sessionId = env.sessionId ?? `mock-session-${incarnationId}`;
+  return {
+    async runTurn(prompt: InboxPrompt): Promise<{ sessionId?: string }> {
+      const text = `ack: ${prompt.content}`;
+      try {
+        await publishFrame(client, env, "assistant_text", { text }, { sessionId });
+        await publishLifecycle(client, env, incarnationId, "turn_ended");
+      } catch (err) {
+        log("error", "mock driver publish failed", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return { sessionId };
+    },
+  };
+}
+
+/**
+ * Real SDK driver — invokes `query()` from `@anthropic-ai/claude-agent-sdk`,
+ * streams its events as `agent_frame` envelopes, and publishes
+ * `lifecycle.turn_ended` when the turn completes (success or error).
+ *
+ * Session resumption: `env.sessionId` (if non-empty) is passed as
+ * `options.resume`. The SDK then loads the prior conversation history.
+ * After the first turn we capture the SDK's `session_id` from any
+ * message that carries it; the caller persists it back to KV.
+ *
+ * MCP wiring: when SEXTANT_MCP_URL + SEXTANT_JWT are both set, the
+ * sextantd MCP server is advertised to the SDK as an HTTP MCP server
+ * named "sextant" so the agent can call sextant tools (spawn, prompt,
+ * worktree_*, etc.).
+ */
+function newSDKDriver(
+  client: Client,
+  env: SidecarEnv,
+  incarnationId: string,
+): PromptDriver {
+  let resumeId = env.sessionId;
+  return {
+    async runTurn(prompt: InboxPrompt): Promise<{ sessionId?: string }> {
+      let observedSessionId: string | undefined;
+      const errors: string[] = [];
+
+      const sdkOpts: Record<string, unknown> = {
+        model: env.model,
+        // SDK + MCP defer-loading interplay: without alwaysLoad the
+        // sextant tools land behind tool search, which costs a turn.
+        // Always load them so simple "what tools do you have" prompts
+        // see them immediately.
+      };
+      if (resumeId) {
+        sdkOpts["resume"] = resumeId;
+      }
+      if (env.mcpUrl && env.jwt) {
+        sdkOpts["mcpServers"] = {
+          sextant: {
+            type: "http",
+            url: env.mcpUrl,
+            headers: { Authorization: `Bearer ${env.jwt}` },
+            alwaysLoad: true,
+          },
+        };
+      }
+
+      try {
+        // The SDK supports `prompt` as either a string or an async
+        // iterable of user messages. We pass a string — one prompt,
+        // one query, one turn.
+        const iterator = sdkQuery({
+          prompt: prompt.content,
+          options: sdkOpts as never,
+        });
+        for await (const msg of iterator) {
+          observedSessionId = handleSDKMessage(msg, client, env, observedSessionId, errors);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log("error", "SDK driver failed", { err: message });
+        try {
+          await publishFrame(
+            client,
+            env,
+            "error",
+            { message },
+            { sessionId: observedSessionId },
+          );
+        } catch (pubErr) {
+          log("error", "error-frame publish failed", {
+            err: pubErr instanceof Error ? pubErr.message : String(pubErr),
+          });
+        }
+        try {
+          await publishLifecycle(client, env, incarnationId, "turn_ended", "error");
+        } catch (pubErr) {
+          log("error", "turn_ended publish failed", {
+            err: pubErr instanceof Error ? pubErr.message : String(pubErr),
+          });
+        }
+        return { sessionId: observedSessionId };
+      }
+
+      const turnReason = errors.length > 0 ? "error" : undefined;
+      try {
+        await publishLifecycle(client, env, incarnationId, "turn_ended", turnReason);
+      } catch (err) {
+        log("error", "turn_ended publish failed", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+      // Lock in the session id for subsequent prompts in this incarnation.
+      if (observedSessionId) {
+        resumeId = observedSessionId;
+      }
+      return { sessionId: observedSessionId };
+    },
+  };
+}
+
+/**
+ * Translate one SDK message into bus envelopes. Returns the running
+ * session_id (the SDK reports it on every message-bearing event). Each
+ * publish is fire-and-forget — a failure inside the loop is recorded
+ * via the `errors` array but does not abort streaming.
+ */
+function handleSDKMessage(
+  msg: SDKMessage,
+  client: Client,
+  env: SidecarEnv,
+  currentSessionId: string | undefined,
+  errors: string[],
+): string | undefined {
+  // Capture session id from any message that carries it.
+  let sessionId = currentSessionId;
+  if ("session_id" in msg && typeof msg.session_id === "string" && msg.session_id) {
+    sessionId = msg.session_id;
+  }
+
+  const publish = (
+    kind: "assistant_text" | "tool_call" | "tool_result" | "system_note" | "error",
+    body: Record<string, unknown>,
+    extras: { toolName?: string } = {},
+  ): void => {
+    publishFrame(client, env, kind, body, { ...extras, sessionId }).catch((err) => {
+      const m = err instanceof Error ? err.message : String(err);
+      errors.push(m);
+      log("error", "frame publish failed", { kind, err: m });
+    });
+  };
+
+  switch (msg.type) {
+    case "assistant": {
+      // BetaMessage.content is an array of content blocks. We project
+      // text blocks → assistant_text frames and tool_use blocks →
+      // tool_call frames so the bus has a normalized view.
+      const content = (msg.message as { content?: unknown }).content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (!block || typeof block !== "object") continue;
+          const b = block as Record<string, unknown>;
+          const blockType = typeof b["type"] === "string" ? (b["type"] as string) : "";
+          if (blockType === "text" && typeof b["text"] === "string") {
+            publish("assistant_text", { text: b["text"] as string });
+          } else if (blockType === "tool_use") {
+            const toolName = typeof b["name"] === "string" ? (b["name"] as string) : "";
+            publish(
+              "tool_call",
+              { input: b["input"] ?? {}, id: b["id"] ?? "" },
+              { toolName },
+            );
+          }
+        }
+      }
+      if (msg.error) {
+        publish("error", { message: `assistant_error: ${msg.error}` });
+        errors.push(msg.error);
+      }
+      return sessionId;
+    }
+    case "user": {
+      // User messages from the SDK carry tool_result blocks (the SDK
+      // synthesizes a user message wrapping the tool result before
+      // feeding it back to the model). Surface those as tool_result
+      // frames.
+      const content = (msg.message as { content?: unknown }).content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (!block || typeof block !== "object") continue;
+          const b = block as Record<string, unknown>;
+          if (b["type"] === "tool_result") {
+            publish(
+              "tool_result",
+              {
+                result: b["content"] ?? null,
+                is_error: Boolean(b["is_error"]),
+                tool_use_id: b["tool_use_id"] ?? "",
+              },
+            );
+          }
+        }
+      }
+      return sessionId;
+    }
+    case "result": {
+      // Terminal message for one turn. SDKResultError has is_error=true
+      // + an errors array; SDKResultSuccess carries the final assistant
+      // text in `result`. We surface errors but do NOT publish another
+      // assistant_text frame here — every chunk of model text already
+      // came through as an `assistant` message above.
+      const r = msg as { is_error?: boolean; errors?: string[]; subtype?: string };
+      if (r.is_error) {
+        const detail = (r.errors ?? []).join("; ") || (r.subtype ?? "unknown");
+        publish("error", { message: `sdk_result_error: ${detail}` });
+        errors.push(detail);
+      }
+      return sessionId;
+    }
+    case "system": {
+      // init / compact_boundary etc. Surface as a system_note so the
+      // bus has the full transcript without forcing every consumer
+      // to know the SDK schema.
+      const subtype = (msg as { subtype?: string }).subtype ?? "system";
+      publish("system_note", { subtype });
+      return sessionId;
+    }
+    default:
+      // Other event types (partial messages, hook events, etc.) are
+      // not forwarded — they're either redundant with the assistant
+      // event or out of scope for the initial wire-up.
+      return sessionId;
+  }
+}
+
+/**
  * Race `promise` against a timer. If the timer wins, returns `false`
- * and the promise keeps running in the background (its rejection — if
- * any — is swallowed). If the promise wins, returns `true`. Used in
- * shutdown to bound how long we'll wait for an in-flight heartbeat to
- * settle before tearing down the NATS client.
+ * and the promise keeps running in the background.
  */
 async function awaitOrTimeout(promise: Promise<unknown>, ms: number): Promise<boolean> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<false>((resolve) => {
     timer = setTimeout(() => resolve(false), ms);
   });
-  // Swallow promise rejection in the background path so an unhandled
-  // rejection doesn't fire after shutdown returns.
   const guarded = promise.then(
     () => true,
     () => true,
@@ -340,13 +633,119 @@ async function awaitOrTimeout(promise: Promise<unknown>, ms: number): Promise<bo
 }
 
 /**
- * Long-running mode. Connects, publishes `lifecycle.started`, loops on a
- * 5-second heartbeat, subscribes to the inbox subject for prompts, and
- * tears down cleanly on SIGTERM/SIGINT.
+ * Prompt queue. Serializes concurrent inbox prompts so the SDK sees
+ * one turn at a time. Pending prompts wait their turn; the queue is
+ * drained on shutdown after the current turn completes (bounded by
+ * SHUTDOWN_TURN_WAIT_MS).
  */
-async function run(): Promise<void> {
-  const env = readEnv();
+class PromptQueue {
+  private readonly pending: InboxPrompt[] = [];
+  private current: Promise<void> = Promise.resolve();
+  private running = true;
 
+  constructor(
+    private readonly driver: PromptDriver,
+    private readonly onSessionID: (id: string) => Promise<void>,
+  ) {}
+
+  enqueue(prompt: InboxPrompt): void {
+    if (!this.running) {
+      log("warn", "prompt arrived after shutdown; dropping", {
+        size: prompt.content.length,
+      });
+      return;
+    }
+    this.pending.push(prompt);
+    this.current = this.current.then(() => this.drain());
+  }
+
+  /** Wait for the in-flight turn (if any) up to ms milliseconds. */
+  async settle(ms: number): Promise<boolean> {
+    this.running = false;
+    return awaitOrTimeout(this.current, ms);
+  }
+
+  private async drain(): Promise<void> {
+    while (this.pending.length > 0) {
+      const next = this.pending.shift();
+      if (!next) break;
+      try {
+        const { sessionId } = await this.driver.runTurn(next);
+        if (sessionId) {
+          await this.onSessionID(sessionId);
+        }
+      } catch (err) {
+        // Drivers should not throw; treat as a fatal turn failure
+        // but keep the queue alive for the next prompt.
+        log("error", "driver runTurn threw", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+}
+
+/**
+ * Subscribe to the agent's inbox and feed every prompt into the queue.
+ * Runs in the background for the lifetime of the sidecar.
+ *
+ * `deliverAll` semantics close a small but real race: the test (or
+ * operator) sees `lifecycle.started` and immediately publishes a
+ * prompt, but the JetStream consumer for the inbox is created lazily
+ * the first time the iterator's `next()` is called — there's a sub-ms
+ * window where the prompt could land in the stream before the consumer
+ * exists, and a `deliver_policy: new` consumer would miss it. The
+ * inbox stream's 24h MaxAge bounds replay; JetStream's ack semantics
+ * prevent double-processing.
+ */
+function startInboxLoop(client: Client, subject: string, queue: PromptQueue): void {
+  void (async (): Promise<void> => {
+    try {
+      for await (const msg of client.subscribe(subject, { deliverAll: true })) {
+        if (msg.err) {
+          log("warn", "inbox: bad envelope", {
+            subject: msg.subject,
+            err: msg.err.message,
+          });
+          await msg.ack();
+          continue;
+        }
+        const env = msg.envelope;
+        const prompt = extractPrompt(env?.payload);
+        if (!prompt) {
+          log("warn", "inbox: payload not a prompt", {
+            subject: msg.subject,
+            streamSeq: String(msg.streamSeq),
+          });
+          await msg.ack();
+          continue;
+        }
+        log("info", "inbox: prompt queued", {
+          subject: msg.subject,
+          fromKind: env?.from.kind,
+          fromId: env?.from.id,
+          streamSeq: String(msg.streamSeq),
+          contentLen: prompt.content.length,
+        });
+        queue.enqueue(prompt);
+        await msg.ack();
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!message.toLowerCase().includes("closed")) {
+        log("error", "inbox loop failed", { err: message });
+      }
+    }
+  })();
+}
+
+/**
+ * Long-running mode. Connects, publishes lifecycle.started, subscribes
+ * to the inbox, drives the SDK on each prompt, and tears down cleanly
+ * on SIGTERM/SIGINT.
+ */
+async function run(driverMode: DriverMode): Promise<void> {
+  const env = readEnv();
   const config = buildConfig(env);
   const incarnationId = env.incarnationId;
   const startedAt = Date.now();
@@ -358,34 +757,32 @@ async function run(): Promise<void> {
     incarnationId,
     natsUrl: env.natsUrl,
     mcpUrl: env.mcpUrl ?? null,
+    model: env.model,
+    driver: driverMode,
+    resumeSessionId: env.sessionId ?? null,
   });
 
   const client = await connectWithConfig(config);
   log("info", "nats connected");
 
-  // M11: open the MCP client connection. Failure here logs but does
-  // not abort the sidecar — heartbeats/lifecycle remain the contract.
-  const mcpClient = await connectMCP(env);
+  const mcp = await connectMCP(env);
 
   await publishLifecycle(client, env, incarnationId, "started");
   log("info", "lifecycle.started published");
 
-  // Subscribe to the inbox so a prompt_agent call lands somewhere
-  // observable. The Claude SDK driver loop that *acts* on prompts is
-  // post-Phase-1; M11 logs them and ack's so the JetStream consumer
-  // doesn't redeliver.
-  const inboxSubject = `agents.${env.agentUuid}.inbox`;
-  startInboxLoop(client, inboxSubject);
+  const driver: PromptDriver =
+    driverMode === "mock"
+      ? newMockDriver(client, env, incarnationId)
+      : newSDKDriver(client, env, incarnationId);
 
-  // Heartbeat loop. setInterval keeps the event loop alive on its own.
-  //
-  // Shutdown ordering matters: clearInterval stops *future* ticks, but
-  // a tick that setInterval already dispatched may be mid-`publish`
-  // (awaiting flush) when SIGTERM arrives. If we closed the client
-  // before that publish settled, the heartbeat would throw
-  // ClientClosedError or silently drop. So we track the in-flight tick
-  // promise and await it (bounded by SHUTDOWN_TICK_WAIT_MS) before
-  // closing.
+  const queue = new PromptQueue(driver, async (sessionId) => {
+    await persistSessionID(client, env, sessionId);
+  });
+
+  const inboxSubject = `agents.${env.agentUuid}.inbox`;
+  startInboxLoop(client, inboxSubject, queue);
+
+  // Heartbeat loop. Same in-flight settle pattern as the M11 scaffold.
   let running = true;
   let currentTick: Promise<void> = Promise.resolve();
   const tick = async (): Promise<void> => {
@@ -402,18 +799,19 @@ async function run(): Promise<void> {
     currentTick = tick();
   }, HEARTBEAT_INTERVAL_MS);
 
-  // Shutdown sequence (order is load-bearing):
-  //   1. Flip `running` so any newly-fired ticks no-op.
-  //   2. clearInterval — no more ticks will be dispatched.
-  //   3. await currentTick (bounded) — the last in-flight publish.
-  //   4. publish lifecycle.ended.
-  //   5. client.close() — only now is it safe.
-  // Re-entrance guard via `running` means a second SIGTERM is a no-op.
   const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
     if (!running) return;
     running = false;
     clearInterval(heartbeat);
     log("info", "shutdown received", { signal });
+
+    // Wait for the in-flight turn (best-effort).
+    const drained = await queue.settle(SHUTDOWN_TURN_WAIT_MS);
+    if (!drained) {
+      log("warn", "turn did not settle within shutdown budget", {
+        budgetMs: SHUTDOWN_TURN_WAIT_MS,
+      });
+    }
 
     const settled = await awaitOrTimeout(currentTick, SHUTDOWN_TICK_WAIT_MS);
     if (!settled) {
@@ -430,9 +828,9 @@ async function run(): Promise<void> {
         err: err instanceof Error ? err.message : String(err),
       });
     }
-    if (mcpClient) {
+    if (mcp) {
       try {
-        await mcpClient.close();
+        await mcp.client.close();
       } catch (err) {
         log("error", "mcp client close failed", {
           err: err instanceof Error ? err.message : String(err),
@@ -458,16 +856,35 @@ async function run(): Promise<void> {
 }
 
 /**
- * CLI surface. Mostly `run` for production; `--help` and `--version`
- * for local introspection.
+ * Parse the `--driver=<mode>` flag from argv. Default: `sdk`.
+ */
+function parseDriverMode(argv: string[]): DriverMode {
+  for (const arg of argv) {
+    if (arg.startsWith("--driver=")) {
+      const v = arg.slice("--driver=".length);
+      if (v === "sdk" || v === "mock") return v;
+      throw new Error(`sextant-sidecar: --driver=${v} is invalid (sdk|mock)`);
+    }
+  }
+  // Also honour SEXTANT_DRIVER for tests that set it via env (the
+  // entrypoint.sh script doesn't forward argv beyond `run`).
+  const envDriver = process.env["SEXTANT_DRIVER"];
+  if (envDriver === "sdk" || envDriver === "mock") return envDriver;
+  return "sdk";
+}
+
+/**
+ * CLI surface.
  */
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const cmd = argv[0] ?? "run";
   switch (cmd) {
-    case "run":
-      await run();
+    case "run": {
+      const mode = parseDriverMode(argv.slice(1));
+      await run(mode);
       return;
+    }
     case "--help":
     case "-h":
     case "help":
@@ -475,27 +892,28 @@ async function main(): Promise<void> {
         [
           "sextant-sidecar — runtime that boots inside the per-agent container.",
           "",
-          "Usage: sextant-sidecar [run|help|version]",
+          "Usage: sextant-sidecar [run [--driver=sdk|mock] | help | version]",
           "",
           "Modes:",
-          "  run      Connect to NATS, publish lifecycle.started, heartbeat until SIGTERM (default).",
+          "  run      Connect to NATS, drive the Claude Agent SDK on each prompt.",
           "  help     Print this message.",
           "  version  Print the sidecar version.",
           "",
           "Required env vars (run mode):",
           "  SEXTANT_AGENT_UUID, SEXTANT_AGENT_NAME, SEXTANT_HOST_ID,",
           "  SEXTANT_INCARNATION_ID, SEXTANT_NATS_URL,",
-          "  SEXTANT_NATS_USER + SEXTANT_NATS_PASSWORD (M11 stop-gap; agents",
-          "  share the operator NATS creds per specs/components/nats.md).",
-          "  SEXTANT_JWT is required for the MCP path; SEXTANT_MCP_URL points",
-          "  at the sextantd MCP HTTP endpoint.",
+          "  SEXTANT_NATS_USER + SEXTANT_NATS_PASSWORD (M11 stop-gap),",
+          "  SEXTANT_MODEL (defaults to claude-opus-4-7[1m]).",
+          "  SEXTANT_JWT + SEXTANT_MCP_URL light up the MCP path.",
+          "  SEXTANT_SESSION_ID resumes a prior SDK session.",
+          "  SEXTANT_DRIVER=mock substitutes a canned-event driver.",
           "",
         ].join("\n"),
       );
       return;
     case "--version":
     case "version":
-      process.stdout.write("sextant-sidecar 0.1.0 (M11)\n");
+      process.stdout.write("sextant-sidecar 0.2.0 (SDK driver wire-up)\n");
       return;
     default:
       process.stderr.write(`sextant-sidecar: unknown command ${JSON.stringify(cmd)}\n`);
