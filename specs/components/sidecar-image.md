@@ -62,7 +62,7 @@ Responsibilities:
 5. Capture SDK events → publish as bus frames
 6. Subscribe to `agents.<uuid>.inbox` → forward prompts/commands to SDK
 7. Publish heartbeat to `agents.<uuid>.heartbeat` every N seconds
-8. On SDK exit: publish `lifecycle.session_ended` event with reason; container exits
+8. On SDK exit: publish `lifecycle.ended` event with reason; container exits (the `LifecycleEnded` constant in `pkg/sextantproto/payloads.go`; the entrypoint publishes this on SIGTERM / SIGINT, and `lifecycle.turn_ended` after each individual turn).
 
 ### Scope progression
 
