@@ -71,10 +71,60 @@ func parseCommonOpts(fs *flag.FlagSet, args []string) (commonOpts, []string, err
 	fs.StringVar(&o.configDir, "config-dir", "", "config directory (default ~/.config/sextant)")
 	fs.BoolVar(&o.asJSON, "json", false, "emit machine-parseable JSON")
 	fs.SetOutput(io.Discard)
+	// Go's stdlib flag stops at the first non-flag arg. The spec's verb
+	// shape is `sextant agents spawn <name> --template T`, so we
+	// shuffle every flag (and its value) to the front before parsing.
+	// reorderFlagsBeforePositional walks the registered FlagSet to know
+	// which flags expect a value vs. which are booleans.
+	args = reorderFlagsBeforePositional(fs, args)
 	if err := fs.Parse(args); err != nil {
 		return o, nil, errUserUsage(fmt.Sprintf("parse flags: %v", err))
 	}
 	return o, fs.Args(), nil
+}
+
+// reorderFlagsBeforePositional moves every flag (and its value when
+// the flag is not boolean) ahead of every positional arg so the stdlib
+// flag parser sees them all before stopping. Honors `--` to opt out.
+//
+// The fs is used to look up registered flags so bool flags don't
+// accidentally consume the next token as a value.
+func reorderFlagsBeforePositional(fs *flag.FlagSet, args []string) []string {
+	isBool := func(name string) bool {
+		f := fs.Lookup(name)
+		if f == nil {
+			return false
+		}
+		bf, ok := f.Value.(interface{ IsBoolFlag() bool })
+		return ok && bf.IsBoolFlag()
+	}
+	var flags, positional []string
+	i := 0
+	for i < len(args) {
+		a := args[i]
+		switch {
+		case a == "--":
+			positional = append(positional, args[i:]...)
+			i = len(args)
+		case strings.HasPrefix(a, "-") && a != "-":
+			flags = append(flags, a)
+			// "--foo=bar" → already self-contained.
+			// "--foo bar" → grab the next token unless --foo is a bool
+			// flag (in which case the next token is positional).
+			if !strings.Contains(a, "=") && i+1 < len(args) {
+				name := strings.TrimLeft(a, "-")
+				if !isBool(name) {
+					flags = append(flags, args[i+1])
+					i++
+				}
+			}
+			i++
+		default:
+			positional = append(positional, a)
+			i++
+		}
+	}
+	return append(flags, positional...)
 }
 
 // connectAgent builds a live pkg/client.Client against the running
