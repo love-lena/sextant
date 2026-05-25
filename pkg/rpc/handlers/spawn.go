@@ -256,9 +256,15 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 
 		// AutoRemove=true so a crashing sidecar can't leave a stopped
 		// container around. Stop() force-removes anyway as a safety net.
+		//
+		// Cmd points at the sidecar entrypoint script. The image's
+		// default CMD is /bin/bash (so the M9 smoke test stays
+		// interactive); spawning agents always overrides it to run the
+		// long-lived sidecar runtime.
 		spec := containermgr.ContainerSpec{
 			Name:       containerName(def.Name, incID),
 			Image:      tpl.Image,
+			Cmd:        []string{"/opt/sextant/sidecar/entrypoint.sh"},
 			Env:        envVars,
 			Mounts:     []containermgr.MountSpec{{HostPath: workspace, ContainerPath: WorkspaceMountPath}},
 			Labels:     labels,

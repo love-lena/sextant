@@ -240,10 +240,10 @@ func (m *Manager) Run(ctx context.Context, spec ContainerSpec) (*Container, erro
 		NetworkMode: container.NetworkMode(spec.NetworkMode),
 	}
 	if spec.Resources.MemoryMiB > 0 {
-		hostCfg.Resources.Memory = spec.Resources.MemoryMiB * 1024 * 1024
+		hostCfg.Memory = spec.Resources.MemoryMiB * 1024 * 1024
 	}
 	if spec.Resources.CPUShares > 0 {
-		hostCfg.Resources.CPUShares = spec.Resources.CPUShares
+		hostCfg.CPUShares = spec.Resources.CPUShares
 	}
 
 	netCfg := &network.NetworkingConfig{}
@@ -287,17 +287,32 @@ func (m *Manager) Stop(ctx context.Context, id string, grace time.Duration) erro
 		graceSecs = 10
 	}
 	if err := m.cli.ContainerStop(ctx, id, container.StopOptions{Timeout: &graceSecs}); err != nil {
-		if !isNotFound(err) {
+		if !isNotFound(err) && !isRemovalInProgress(err) {
 			return fmt.Errorf("%w: stop %s: %w", ErrDaemonUnavailable, id, err)
 		}
 	}
 	// Force-remove so an AutoRemove==false container doesn't stick around.
+	// With AutoRemove==true the Docker daemon may already be racing us
+	// to remove the container — both "removal in progress" and "no such
+	// container" are success states (the container is gone or will be).
 	if err := m.cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true}); err != nil {
-		if !isNotFound(err) {
+		if !isNotFound(err) && !isRemovalInProgress(err) {
 			return fmt.Errorf("%w: remove %s: %w", ErrDaemonUnavailable, id, err)
 		}
 	}
 	return nil
+}
+
+// isRemovalInProgress reports whether err is the Docker SDK's "removal
+// in progress" message. Surfaces when AutoRemove and an explicit Stop
+// race; treating it as success is correct because the post-state is
+// what we wanted.
+func isRemovalInProgress(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "removal of container") &&
+		strings.Contains(err.Error(), "is already in progress")
 }
 
 // Inspect returns the live info for a container.
@@ -423,13 +438,14 @@ func (m *Manager) Logs(ctx context.Context, id string, tail int) (string, error)
 }
 
 // isNotFound returns true for the Docker SDK's "no such container"
-// error. The SDK doesn't export a typed sentinel; we string-match the
-// stable substring that lives in errdefs.notFound.Error().
+// error. The SDK doesn't export a typed sentinel reachable from this
+// client version cleanly (cerrdefs is the v28+ home), so we string-
+// match the stable substring that lives in errdefs.notFound.Error().
 func isNotFound(err error) bool {
 	if err == nil {
 		return false
 	}
-	if client.IsErrNotFound(err) {
+	if client.IsErrNotFound(err) { //nolint:staticcheck // cerrdefs.IsNotFound isn't reachable on the pinned SDK version
 		return true
 	}
 	s := err.Error()
