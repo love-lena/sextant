@@ -9,35 +9,43 @@ package mcpserver
 // piggybacks on the existing read.* caps; control reuses the RPC verbs'
 // control.* caps; system gets two new caps (emit_event, read.metrics).
 const (
-	CapSendMessage   = "send_message"
-	CapBroadcast     = "broadcast"
-	CapReadAgents    = "read.agents"
-	CapReadHistory   = "read.history"
-	CapControlSpawn  = "control.spawn"
-	CapControlKill   = "control.kill"
-	CapControlPrompt = "control.prompt"
-	CapEmitEvent     = "emit_event"
-	CapReadMetrics   = "read.metrics"
+	CapSendMessage     = "send_message"
+	CapBroadcast       = "broadcast"
+	CapReadAgents      = "read.agents"
+	CapReadHistory     = "read.history"
+	CapReadWorktrees   = "read.worktrees"
+	CapControlSpawn    = "control.spawn"
+	CapControlKill     = "control.kill"
+	CapControlPrompt   = "control.prompt"
+	CapControlWorktree = "control.worktree"
+	CapEmitEvent       = "emit_event"
+	CapReadMetrics     = "read.metrics"
 )
 
 // Tool names. Re-used by the audit envelope (`audit.tool_call`) and by
 // the sidecar smoke tests so a typo doesn't get baked into the wire
 // format.
 const (
-	ToolSendMessage = "send_message"
-	ToolBroadcast   = "broadcast"
-	ToolListAgents  = "list_agents"
-	ToolAgentStatus = "agent_status"
-	ToolQueryAudit  = "query_audit"
-	ToolSpawnAgent  = "spawn_agent"
-	ToolKillAgent   = "kill_agent"
-	ToolPromptAgent = "prompt_agent"
-	ToolEmitEvent   = "emit_event"
-	ToolGetMetric   = "get_metric"
+	ToolSendMessage     = "send_message"
+	ToolBroadcast       = "broadcast"
+	ToolListAgents      = "list_agents"
+	ToolAgentStatus     = "agent_status"
+	ToolQueryAudit      = "query_audit"
+	ToolSpawnAgent      = "spawn_agent"
+	ToolKillAgent       = "kill_agent"
+	ToolPromptAgent     = "prompt_agent"
+	ToolEmitEvent       = "emit_event"
+	ToolGetMetric       = "get_metric"
+	ToolWorktreeCreate  = "worktree_create"
+	ToolWorktreeDestroy = "worktree_destroy"
+	ToolWorktreeList    = "worktree_list"
+	ToolWorktreeMerge   = "worktree_merge"
+	ToolWorktreeDiff    = "worktree_diff"
 )
 
-// AllTools returns the M10 tool catalog in catalog order. Stable order
-// matters for tools/list responses — tests pin against the slice.
+// AllTools returns the M10+M14 tool catalog in catalog order. Stable
+// order matters for tools/list responses — tests pin against the
+// slice.
 func AllTools() []string {
 	return []string{
 		ToolSendMessage,
@@ -50,6 +58,11 @@ func AllTools() []string {
 		ToolPromptAgent,
 		ToolEmitEvent,
 		ToolGetMetric,
+		ToolWorktreeCreate,
+		ToolWorktreeDestroy,
+		ToolWorktreeList,
+		ToolWorktreeMerge,
+		ToolWorktreeDiff,
 	}
 }
 
@@ -77,6 +90,10 @@ func CapForTool(tool string) string {
 		return CapEmitEvent
 	case ToolGetMetric:
 		return CapReadMetrics
+	case ToolWorktreeCreate, ToolWorktreeDestroy, ToolWorktreeMerge:
+		return CapControlWorktree
+	case ToolWorktreeList, ToolWorktreeDiff:
+		return CapReadWorktrees
 	default:
 		return ""
 	}
@@ -171,4 +188,34 @@ type BroadcastResult struct {
 type EmitEventResult struct {
 	OK      bool   `json:"ok"`
 	Subject string `json:"subject"`
+}
+
+// --- M14 worktree tool shapes -----------------------------------------------
+
+// WorktreeCreateArgs is the argument shape for worktree_create.
+type WorktreeCreateArgs struct {
+	Name       string `json:"name" jsonschema:"Worktree name (also the branch name); must match <kind>-<desc>-<seq>"`
+	BaseBranch string `json:"base_branch,omitempty" jsonschema:"Branch to fork from (default main)"`
+}
+
+// WorktreeDestroyArgs is the argument shape for worktree_destroy.
+type WorktreeDestroyArgs struct {
+	Name  string `json:"name" jsonschema:"Worktree name to destroy"`
+	Force bool   `json:"force,omitempty" jsonschema:"Operator override: destroy even when status != archived/merged"`
+}
+
+// WorktreeListArgs is the argument shape for worktree_list. Empty
+// today; reserved for future filtering.
+type WorktreeListArgs struct{}
+
+// WorktreeMergeArgs is the argument shape for worktree_merge.
+type WorktreeMergeArgs struct {
+	Name   string `json:"name" jsonschema:"Worktree name (branch is the same)"`
+	Target string `json:"target,omitempty" jsonschema:"Target branch (default main)"`
+}
+
+// WorktreeDiffArgs is the argument shape for worktree_diff.
+type WorktreeDiffArgs struct {
+	Name    string `json:"name" jsonschema:"Worktree name"`
+	Against string `json:"against,omitempty" jsonschema:"Branch to diff against (default main)"`
 }
