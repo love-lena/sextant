@@ -82,6 +82,9 @@ The entrypoint exits with a clear error if required NATS credentials are missing
 | `/home/agent/.cargo`, `/home/agent/.npm`, `/home/agent/.cache`, `/home/agent/.local/share` | per-agent named volumes | rw |
 | `/home/agent/.config/gh`, `/home/agent/.gitconfig` | per-agent or host-bind (declared per agent) | per-agent declaration |
 | `/run/sextant/nats.sock` | host's NATS socket | rw |
+| `/home/agent/.ssh` | host's `~/.ssh` directory (opt-in via template `mounts = [..., "ssh"]`) | **ro** |
+
+**SSH passthrough** is strictly opt-in. The default and lead templates do **not** declare the `ssh` mount class; only operators who trust an agent class enough to share their personal SSH identity should add `"ssh"` to that template's `mounts` field. When present, sextantd bind-mounts the host's `~/.ssh` (resolved via `os.UserHomeDir()`) read-only at `/home/agent/.ssh`, which is enough for the agent to run `ssh -T git@github.com` and `git push` over SSH without the keys being writable from inside the sandbox. See `plans/issues/feat-container-ssh-passthrough.md` and `architecture.md` §11b "Mount classes" for the full rationale.
 
 ## Env vars (set by sextantd at spawn)
 

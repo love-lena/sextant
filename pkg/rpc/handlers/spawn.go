@@ -403,6 +403,25 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 			ContainerPath: "/home/agent/.gitconfig",
 			ReadOnly:      true,
 		})
+		// Template-opt-in: bind-mount the host's ~/.ssh read-only at
+		// /home/agent/.ssh so the agent can authenticate to GitHub for
+		// `git push`. Only fires when the template lists "ssh" in
+		// `mounts` — defaults stay airtight. Read-only so a misbehaving
+		// agent can't rewrite the operator's keys. See
+		// plans/issues/feat-container-ssh-passthrough.md and
+		// specs/components/sidecar-image.md.
+		if wantsSSHMount(tpl) {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return emitErr(emit, sextantproto.ErrCodeInternal,
+					fmt.Sprintf("resolve home dir for ssh mount: %v", err))
+			}
+			mounts = append(mounts, containermgr.MountSpec{
+				HostPath:      filepath.Join(home, ".ssh"),
+				ContainerPath: "/home/agent/.ssh",
+				ReadOnly:      true,
+			})
+		}
 		// Template-declared seed for /home/agent/.claude. Two modes:
 		//
 		//   - "copy-on-spawn" (default when claude_seed is set): create a
@@ -644,7 +663,20 @@ func writeAgentGitConfig(root string, agentUUID uuid.UUID, agentName string) (st
 // §"Mount classes".
 func wantsWorktreeMount(tpl templates.Template) bool {
 	for _, m := range tpl.Mounts {
-		if m == "worktree" {
+		if m == templates.MountClassWorktree {
+			return true
+		}
+	}
+	return false
+}
+
+// wantsSSHMount returns true if the template opts into the host
+// ~/.ssh → /home/agent/.ssh read-only bind mount. Opt-in only: default
+// templates never list "ssh". See
+// plans/issues/feat-container-ssh-passthrough.md.
+func wantsSSHMount(tpl templates.Template) bool {
+	for _, m := range tpl.Mounts {
+		if m == templates.MountClassSSH {
 			return true
 		}
 	}
