@@ -1,0 +1,236 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+	"text/tabwriter"
+	"time"
+
+	"github.com/love-lena/sextant-initial/pkg/rpc"
+	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+)
+
+const worktreeUsage = `usage: sextant worktree <verb> [args...]
+
+Verbs:
+  list                                   List every worktree in the registry.
+  create <name> [--base main]            Create a new worktree on a fresh branch.
+  destroy <name> [--force]               Remove a worktree's dir + registry entry.
+  merge <name> [--target main]           Merge a worktree's branch into target.
+  diff <name> [--against main]           Show the diff against a target branch.
+
+Every verb supports --json for machine-parseable output. Use
+--config-dir to point at a non-default sextant install.
+
+Worktree names must match the <kind>-<short-description>-<seq> rule
+from conventions/git-workflow.md (kind ∈ feat|fix|refactor|docs|
+test|chore|spec, seq=NNN).`
+
+func runWorktree(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		_, _ = fmt.Fprintln(os.Stderr, worktreeUsage)
+		return errUserUsage("missing worktree verb")
+	}
+	verb, rest := args[0], args[1:]
+	switch verb {
+	case "list":
+		return runWorktreeList(ctx, rest)
+	case "create":
+		return runWorktreeCreate(ctx, rest)
+	case "destroy":
+		return runWorktreeDestroy(ctx, rest)
+	case "merge":
+		return runWorktreeMerge(ctx, rest)
+	case "diff":
+		return runWorktreeDiff(ctx, rest)
+	case "-h", "--help", "help":
+		_, _ = fmt.Fprintln(os.Stdout, worktreeUsage)
+		return nil
+	default:
+		_, _ = fmt.Fprintln(os.Stderr, worktreeUsage)
+		return errUserUsage(fmt.Sprintf("unknown worktree verb %q", verb))
+	}
+}
+
+// runWorktreeList — `sextant worktree list`.
+func runWorktreeList(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("sextant worktree list", flag.ContinueOnError)
+	opts, _, err := parseCommonOpts(fs, args)
+	if err != nil {
+		return err
+	}
+	cli, _, err := connectAgent(ctx, opts.configDir)
+	if err != nil {
+		return err
+	}
+	defer cli.Close() //nolint:errcheck // best-effort close
+
+	var resp sextantproto.WorktreeListResponse
+	if err := cli.RPC(ctx, rpc.VerbWorktreeList, sextantproto.WorktreeListRequest{}, &resp); err != nil {
+		return fmt.Errorf("worktree_list: %w", err)
+	}
+	if opts.asJSON {
+		return writeJSON(os.Stdout, resp)
+	}
+	if len(resp.Worktrees) == 0 {
+		println(os.Stdout, "no worktrees")
+		return nil
+	}
+	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
+	printf(tw, "NAME\tBRANCH\tBASE\tSTATUS\tCREATED\tPATH\n")
+	for _, w := range resp.Worktrees {
+		printf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			w.Name, w.Branch, w.BaseBranch, w.Status,
+			w.CreatedAt.Format(time.RFC3339), w.Path)
+	}
+	return tw.Flush()
+}
+
+// runWorktreeCreate — `sextant worktree create <name> [--base main]`.
+func runWorktreeCreate(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("sextant worktree create", flag.ContinueOnError)
+	var base string
+	fs.StringVar(&base, "base", "main", "base branch to fork from")
+	opts, rest, err := parseCommonOpts(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(rest) != 1 || strings.TrimSpace(rest[0]) == "" {
+		return errUserUsage("sextant worktree create <name> [--base main]")
+	}
+	cli, _, err := connectAgent(ctx, opts.configDir)
+	if err != nil {
+		return err
+	}
+	defer cli.Close() //nolint:errcheck // best-effort close
+
+	req := sextantproto.WorktreeCreateRequest{Name: rest[0], BaseBranch: base}
+	var resp sextantproto.WorktreeCreateResponse
+	rpcCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	if err := cli.RPC(rpcCtx, rpc.VerbWorktreeCreate, req, &resp); err != nil {
+		return fmt.Errorf("worktree_create: %w", err)
+	}
+	if opts.asJSON {
+		return writeJSON(os.Stdout, resp)
+	}
+	printf(os.Stdout, "name:   %s\n", resp.Worktree.Name)
+	printf(os.Stdout, "path:   %s\n", resp.Worktree.Path)
+	printf(os.Stdout, "branch: %s\n", resp.Worktree.Branch)
+	return nil
+}
+
+// runWorktreeDestroy — `sextant worktree destroy <name> [--force]`.
+func runWorktreeDestroy(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("sextant worktree destroy", flag.ContinueOnError)
+	var force bool
+	fs.BoolVar(&force, "force", false, "destroy even when status != archived/merged")
+	opts, rest, err := parseCommonOpts(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(rest) != 1 {
+		return errUserUsage("sextant worktree destroy <name> [--force]")
+	}
+	cli, _, err := connectAgent(ctx, opts.configDir)
+	if err != nil {
+		return err
+	}
+	defer cli.Close() //nolint:errcheck // best-effort close
+
+	req := sextantproto.WorktreeDestroyRequest{Name: rest[0], Force: force}
+	var resp sextantproto.WorktreeDestroyResponse
+	rpcCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	if err := cli.RPC(rpcCtx, rpc.VerbWorktreeDestroy, req, &resp); err != nil {
+		return fmt.Errorf("worktree_destroy: %w", err)
+	}
+	if opts.asJSON {
+		return writeJSON(os.Stdout, resp)
+	}
+	if resp.OK {
+		println(os.Stdout, "ok")
+	} else {
+		println(os.Stdout, "not ok")
+	}
+	return nil
+}
+
+// runWorktreeMerge — `sextant worktree merge <name> [--target main]`.
+func runWorktreeMerge(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("sextant worktree merge", flag.ContinueOnError)
+	var target string
+	fs.StringVar(&target, "target", "main", "target branch")
+	opts, rest, err := parseCommonOpts(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(rest) != 1 {
+		return errUserUsage("sextant worktree merge <name> [--target main]")
+	}
+	cli, _, err := connectAgent(ctx, opts.configDir)
+	if err != nil {
+		return err
+	}
+	defer cli.Close() //nolint:errcheck // best-effort close
+
+	req := sextantproto.WorktreeMergeRequest{Name: rest[0], Target: target}
+	var resp sextantproto.WorktreeMergeResponse
+	// Merge can take a while on a cold repo; bump the timeout.
+	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	if err := cli.RPC(rpcCtx, rpc.VerbWorktreeMerge, req, &resp); err != nil {
+		return fmt.Errorf("worktree_merge: %w", err)
+	}
+	if opts.asJSON {
+		return writeJSON(os.Stdout, resp)
+	}
+	if resp.OK {
+		printf(os.Stdout, "merged %s into %s\n", resp.Branch, resp.Target)
+		return nil
+	}
+	printf(os.Stdout, "merge conflict (%s into %s):\n", resp.Branch, resp.Target)
+	for _, f := range resp.Conflicts {
+		printf(os.Stdout, "  %s\n", f)
+	}
+	return errUserUsage("merge conflict")
+}
+
+// runWorktreeDiff — `sextant worktree diff <name> [--against main]`.
+func runWorktreeDiff(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("sextant worktree diff", flag.ContinueOnError)
+	var against string
+	fs.StringVar(&against, "against", "main", "branch to diff against")
+	opts, rest, err := parseCommonOpts(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(rest) != 1 {
+		return errUserUsage("sextant worktree diff <name> [--against main]")
+	}
+	cli, _, err := connectAgent(ctx, opts.configDir)
+	if err != nil {
+		return err
+	}
+	defer cli.Close() //nolint:errcheck // best-effort close
+
+	req := sextantproto.WorktreeDiffRequest{Name: rest[0], Against: against}
+	var resp sextantproto.WorktreeDiffResponse
+	rpcCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	if err := cli.RPC(rpcCtx, rpc.VerbWorktreeDiff, req, &resp); err != nil {
+		return fmt.Errorf("worktree_diff: %w", err)
+	}
+	if opts.asJSON {
+		return writeJSON(os.Stdout, resp)
+	}
+	_, _ = io.WriteString(os.Stdout, resp.Diff)
+	if !strings.HasSuffix(resp.Diff, "\n") {
+		_, _ = io.WriteString(os.Stdout, "\n")
+	}
+	return nil
+}
