@@ -18,6 +18,7 @@ import (
 	"github.com/love-lena/sextant-initial/pkg/rpc"
 	"github.com/love-lena/sextant-initial/pkg/sextantproto"
 	"github.com/love-lena/sextant-initial/pkg/templates"
+	"github.com/love-lena/sextant-initial/pkg/worktree"
 )
 
 // AgentIncarnationsBucket is the canonical KV bucket name for agent
@@ -97,33 +98,6 @@ type SpawnDeps struct {
 type WorktreeProvider interface {
 	Create(ctx context.Context, name, baseBranch string, owningAgent uuid.UUID) (sextantproto.WorktreeInfo, error)
 	Destroy(ctx context.Context, name string, force bool) error
-}
-
-// SpawnWorktreeName builds the agent-spawn-time worktree name. Pinned
-// to specs/architecture.md §11 "Worktree naming". Duplicated here so
-// callers don't have to import pkg/worktree for the name shape; the
-// canonical implementation lives in pkg/worktree.SpawnWorktreeName.
-func SpawnWorktreeName(templateName string, agentUUID uuid.UUID) string {
-	short := agentUUID.String()
-	if len(short) > 8 {
-		short = short[:8]
-	}
-	safe := strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			return r
-		case r >= 'A' && r <= 'Z':
-			return r + ('a' - 'A')
-		case r == '-' || r == '_':
-			return r
-		default:
-			return '-'
-		}
-	}, templateName)
-	if safe == "" {
-		safe = "agent"
-	}
-	return fmt.Sprintf("feat-%s-%s-001", safe, short)
 }
 
 // ContainerRunner is the subset of containermgr.Manager the handlers
@@ -494,7 +468,7 @@ func ensureWorkspaceDir(root, agentUUID string) (string, error) {
 //nolint:contextcheck // rollback closure intentionally uses background ctx so a canceled request still cleans up
 func materializeWorkspace(ctx context.Context, deps SpawnDeps, tpl templates.Template, agentUUID uuid.UUID) (string, func(), error) {
 	if wantsWorktreeMount(tpl) && deps.Worktree != nil {
-		name := SpawnWorktreeName(tpl.Name, agentUUID)
+		name := worktree.SpawnWorktreeName(tpl.Name, agentUUID)
 		info, err := deps.Worktree.Create(ctx, name, "main", agentUUID)
 		if err != nil {
 			return "", nil, fmt.Errorf("worktree.Create %s: %w", name, err)
