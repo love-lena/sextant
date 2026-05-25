@@ -25,6 +25,12 @@ import (
 // incarnation records. Mirrors pkg/natsboot/layout.go's row.
 const AgentIncarnationsBucket = "agent_incarnations"
 
+// DefaultModel is the Claude model identifier the spawn handler sets
+// on every agent whose template doesn't declare one. Mirrors the
+// default referenced in specs/architecture.md §11b and the sidecar's
+// own fallback.
+const DefaultModel = "claude-opus-4-7[1m]"
+
 // SpawnJWTLifetime is the per-incarnation JWT lifetime applied by the
 // M11 spawn handler. Spec calls for 24h. Bump alongside the
 // specs/components/sextantd.md §"M11 spawn flow" doc.
@@ -283,6 +289,10 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 
 		// 9. Container spec. Env mirrors specs/components/sidecar-image.md
 		// §"Env vars" exactly.
+		model := tpl.Model
+		if strings.TrimSpace(model) == "" {
+			model = DefaultModel
+		}
 		envVars := map[string]string{
 			"SEXTANT_AGENT_UUID":     agentUUID.String(),
 			"SEXTANT_AGENT_NAME":     def.Name,
@@ -293,7 +303,26 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 			"SEXTANT_NATS_PASSWORD":  deps.NATSPassword,
 			"SEXTANT_JWT":            jwt,
 			"SEXTANT_MCP_URL":        deps.MCPURL,
+			"SEXTANT_MODEL":          model,
 		}
+		// Forward the operator's Anthropic API key when sextantd has one
+		// in its own env. Falling back to "" means the SDK uses its
+		// default credential chain (e.g. the operator's `claude` CLI
+		// login on macOS). See README §"API key plumbing".
+		if apiKey := os.Getenv("ANTHROPIC_API_KEY"); apiKey != "" {
+			envVars["ANTHROPIC_API_KEY"] = apiKey
+		}
+		// Resume an existing SDK session when the definition has one
+		// recorded. The sidecar's first turn captures the SDK-issued
+		// session_id and writes it back to the definition, so the next
+		// spawn of the same agent picks up where we left off.
+		if def.Runtime.SessionID != nil && *def.Runtime.SessionID != "" {
+			envVars["SEXTANT_SESSION_ID"] = *def.Runtime.SessionID
+		}
+		// Drive the mock driver when the operator opted in (tests set
+		// this via the template's `env` block; production never does).
+		// tpl.Env is applied after the explicit set so a template *can*
+		// override any of the well-known SEXTANT_* vars.
 		for k, v := range tpl.Env {
 			envVars[k] = v
 		}
