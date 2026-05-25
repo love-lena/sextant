@@ -179,15 +179,49 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 			pin := hostPin
 			def.HostPin = &pin
 		}
+		// Rollback ledger: every step that produces a side-effect pushes
+		// its cleanup closure here. On any error before `committed` is
+		// flipped, the deferred rollback walks the ledger in LIFO order
+		// and undoes every step — workspace dir, KV entries, container,
+		// the lot. This replaces the per-step ad-hoc deletes that
+		// previously leaked the workspace and (on lifecycle-flip
+		// failure) left a running container with no `running`
+		// definition.
+		var (
+			committed bool
+			rollbacks []func()
+		)
+		pushRollback := func(fn func()) {
+			rollbacks = append(rollbacks, fn)
+		}
+		defer func() {
+			if committed {
+				return
+			}
+			// LIFO so cleanup mirrors the order operations were applied.
+			for i := len(rollbacks) - 1; i >= 0; i-- {
+				rollbacks[i]()
+			}
+		}()
+
 		if err := putJSON(ctx, deps.Definitions, agentUUID.String(), def); err != nil {
 			return emitErr(emit, sextantproto.ErrCodeInternal,
 				fmt.Sprintf("persist agent definition: %v", err))
 		}
+		//nolint:contextcheck // rollback closure intentionally outlives the request ctx — see fresh-background-ctx comment in the closure
+		pushRollback(func() {
+			// Use a fresh background ctx with a short timeout — the
+			// request ctx may already be canceled by the time we
+			// rollback. Same pattern for every cleanup below.
+			rbCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = deps.Definitions.Delete(rbCtx, agentUUID.String())
+		})
 
 		// 5. Append the initial agent_definitions_history row. Best-
 		// effort: a history-table failure shouldn't abort a spawn — it
-		// becomes an alertable event the operator can backfill. Log via
-		// the emit path is unwieldy; we surface via the audit trail.
+		// becomes an alertable event the operator can backfill. The
+		// history table is append-only so we don't try to roll it back.
 		if deps.History != nil {
 			if err := insertDefinitionHistory(ctx, deps.History, def, "spawn"); err != nil {
 				// Don't fail the spawn — log via stderr.
@@ -199,10 +233,12 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 		// 6. Materialize workspace.
 		workspace, err := ensureWorkspaceDir(deps.WorkspaceRoot, agentUUID.String())
 		if err != nil {
-			_ = deps.Definitions.Delete(ctx, agentUUID.String())
 			return emitErr(emit, sextantproto.ErrCodeInternal,
 				fmt.Sprintf("create workspace dir: %v", err))
 		}
+		pushRollback(func() {
+			_ = os.RemoveAll(workspace)
+		})
 
 		// 7+8. Build incarnation record (state=starting) + issue JWT.
 		inc := sextantproto.AgentIncarnation{
@@ -221,7 +257,6 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 			Issuer:        deps.Issuer,
 		})
 		if err != nil {
-			_ = deps.Definitions.Delete(ctx, agentUUID.String())
 			return emitErr(emit, sextantproto.ErrCodeInternal,
 				fmt.Sprintf("issue jwt: %v", err))
 		}
@@ -272,30 +307,39 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 		}
 		container, err := deps.Containers.Run(ctx, spec)
 		if err != nil {
-			_ = deps.Definitions.Delete(ctx, agentUUID.String())
 			return emitErr(emit, sextantproto.ErrCodeInternal,
 				fmt.Sprintf("start container: %v", err))
 		}
+		//nolint:contextcheck // rollback closure intentionally outlives the request ctx
+		pushRollback(func() {
+			rbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = deps.Containers.Stop(rbCtx, container.ID, 5*time.Second)
+		})
 		inc.ContainerID = container.ID
 
 		// 10. Persist the incarnation.
 		if err := putJSON(ctx, deps.Incarnations, incID.String(), inc); err != nil {
-			// Container is running but we failed to record it. Stop it
-			// so the spawn is fully reverted.
-			_ = deps.Containers.Stop(ctx, container.ID, 5*time.Second)
-			_ = deps.Definitions.Delete(ctx, agentUUID.String())
 			return emitErr(emit, sextantproto.ErrCodeInternal,
 				fmt.Sprintf("persist agent incarnation: %v", err))
 		}
+		//nolint:contextcheck // rollback closure intentionally outlives the request ctx
+		pushRollback(func() {
+			rbCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = deps.Incarnations.Delete(rbCtx, incID.String())
+		})
 
-		// 11. Flip definition lifecycle to running + bump version.
+		// 11. Flip definition lifecycle to running + bump version. This
+		// is the last side-effect before the success reply; a failure
+		// here means the KV is unhealthy *and* we still have a live
+		// container — so we must roll the whole spawn back rather than
+		// leave an inconsistent "definition=defined, container running"
+		// state in the bus.
 		def.Lifecycle = sextantproto.LifecycleRunning
 		def.Version = 2
 		def.UpdatedAt = sextantproto.AtTimestamp(deps.Now().UTC())
 		if err := putJSON(ctx, deps.Definitions, agentUUID.String(), def); err != nil {
-			// Don't try to roll back the container at this point —
-			// flipping lifecycle is the last write before reply; an
-			// error here means the KV is sad, not the container.
 			return emitErr(emit, sextantproto.ErrCodeInternal,
 				fmt.Sprintf("flip lifecycle to running: %v", err))
 		}
@@ -303,6 +347,7 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 			_ = insertDefinitionHistory(ctx, deps.History, def, "running")
 		}
 
+		committed = true
 		return emitOK(emit, sextantproto.SpawnAgentResponse{AgentID: agentUUID})
 	}
 }
