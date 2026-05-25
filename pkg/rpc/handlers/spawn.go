@@ -384,6 +384,27 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 			ContainerPath: "/home/agent/.gitconfig",
 			ReadOnly:      true,
 		})
+		// Template-declared seed for /home/agent/.claude. When set,
+		// bind-mount the host directory read-only over the default
+		// per-agent empty volume so the agent boots with operator-
+		// curated CLAUDE.md / slash commands / settings.json visible.
+		// templates.Validate already confirmed the path exists and is
+		// a directory, but we re-expand here so a `~/`-prefixed value
+		// (resolved against the daemon-process's UserHomeDir) reaches
+		// containermgr as an absolute path. See
+		// plans/issues/feat-template-claude-seeding.md.
+		if tpl.ClaudeSeed != "" {
+			seedPath, err := templates.ExpandClaudeSeed(tpl.ClaudeSeed)
+			if err != nil {
+				return emitErr(emit, sextantproto.ErrCodeInternal,
+					fmt.Sprintf("expand claude_seed: %v", err))
+			}
+			mounts = append(mounts, containermgr.MountSpec{
+				HostPath:      seedPath,
+				ContainerPath: "/home/agent/.claude",
+				ReadOnly:      true,
+			})
+		}
 
 		spec := containermgr.ContainerSpec{
 			Name:       containerName(def.Name, incID),

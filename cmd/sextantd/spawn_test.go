@@ -382,3 +382,102 @@ func loadOperatorCreds(t *testing.T, h *daemonHarness) sextantd.OperatorCreds {
 	}
 	return creds
 }
+
+// TestSpawnedContainerSeedsClaudeFromHostPath is the acceptance test
+// for plans/issues/feat-template-claude-seeding.md: when a template
+// carries `claude_seed = "<host dir>"`, a spawned container has the
+// directory's contents bind-mounted at /home/agent/.claude. Marker
+// file proves the read path; docker exec inside the container is the
+// observation point.
+//
+// Flow:
+//   - Create a host tempdir with stub CLAUDE.md containing
+//     "marker: spawn-seed-acceptance".
+//   - Run init in a fresh config dir; drop a `claude-seed-test.toml`
+//     template that points at the tempdir.
+//   - Boot the daemon at that config; spawn an agent against the
+//     template.
+//   - docker exec cat /home/agent/.claude/CLAUDE.md; grep the marker.
+func TestSpawnedContainerSeedsClaudeFromHostPath(t *testing.T) {
+	dockerBin := requireDocker(t)
+	requireSidecarImage(t, dockerBin)
+
+	// 1. Host seed dir + stub CLAUDE.md with the marker.
+	seedDir, err := os.MkdirTemp("", "claude-seed-test-")
+	if err != nil {
+		t.Fatalf("MkdirTemp seed: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(seedDir) })
+	const marker = "marker: spawn-seed-acceptance"
+	seedFile := filepath.Join(seedDir, "CLAUDE.md")
+	if err := os.WriteFile(seedFile, []byte(marker+"\n"), 0o600); err != nil {
+		t.Fatalf("write CLAUDE.md: %v", err)
+	}
+
+	// 2. Fresh init, then drop a template that points at the seed dir.
+	// We can't use startDaemonHarness directly because it boots the
+	// daemon immediately; the template must exist on disk before
+	// startup so the templates → KV sync picks it up.
+	configDir, _ := runInitForTest(t)
+	cfgPath := filepath.Join(configDir, "sextantd.toml")
+	cfg, err := sextantd.LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	cfg.Daemon.RestartBackoffInitial = sextantd.Duration(100 * time.Millisecond)
+	cfg.Daemon.RestartBackoffMax = sextantd.Duration(1 * time.Second)
+	cfg.MCP.HTTPPort = 0
+	if err := sextantd.SaveConfig(cfgPath, cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	tplBody := `name = "claude-seed-test"
+description = "Acceptance template for feat-template-claude-seeding."
+image = "sextant-sidecar:latest"
+permissions = ["read.agents", "control.prompt"]
+mounts = ["worktree"]
+model = "claude-opus-4-7[1m]"
+permission_ceiling = "auto"
+claude_seed = "` + seedDir + `"
+
+[env]
+SEXTANT_DRIVER = "mock"
+`
+	if err := os.WriteFile(
+		filepath.Join(cfg.Paths.TemplatesDir, "claude-seed-test.toml"),
+		[]byte(tplBody), 0o600,
+	); err != nil {
+		t.Fatalf("write claude-seed-test.toml: %v", err)
+	}
+
+	h := bootDaemonAtConfig(t, cfgPath)
+	cli := rpcClient(t, h)
+
+	// 3. Spawn.
+	spawnCtx, spawnCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer spawnCancel()
+	var spawnResp sextantproto.SpawnAgentResponse
+	if err := cli.RPC(spawnCtx, rpc.VerbSpawnAgent, sextantproto.SpawnAgentRequest{
+		Name:     "claude-seed-" + uuid.New().String()[:8],
+		Template: "claude-seed-test",
+	}, &spawnResp); err != nil {
+		t.Fatalf("spawn_agent: %v\n--- daemon log ---\n%s", err, h.tail(t))
+	}
+	agentID := spawnResp.AgentID
+	if agentID == uuid.Nil {
+		t.Fatal("spawn_agent returned zero UUID")
+	}
+	t.Cleanup(func() { forceRemoveByAgent(dockerBin, agentID) })
+
+	containerID := waitForContainer(t, dockerBin, agentID, 30*time.Second)
+
+	// 4. Cat the seed file inside the container; assert the marker is
+	// present. docker exec runs as `agent`; the bind is read-only but
+	// reads don't need write perms.
+	out := mustDockerExec(t, dockerBin, containerID,
+		"cat", "/home/agent/.claude/CLAUDE.md")
+	if !strings.Contains(out, marker) {
+		t.Errorf("CLAUDE.md inside container missing marker %q; got:\n%s", marker, out)
+	}
+
+	cleanUpAgent(t, cli, agentID)
+}
