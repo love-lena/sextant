@@ -307,52 +307,41 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 				fmt.Sprintf("issue jwt: %v", err))
 		}
 
-		// 9. Container spec. Env mirrors specs/components/sidecar-image.md
-		// §"Env vars" exactly.
+		// 9. Container spec. Env is assembled by buildContainerEnv so the
+		// spawn and restart paths can't drift on the well-known
+		// SEXTANT_* keys; the body of that helper mirrors
+		// specs/components/sidecar-image.md §"Env vars" exactly. See
+		// pkg/rpc/handlers/container_env.go.
 		model := tpl.Model
 		if strings.TrimSpace(model) == "" {
 			model = DefaultModel
 		}
-		envVars := map[string]string{
-			"SEXTANT_AGENT_UUID":     agentUUID.String(),
-			"SEXTANT_AGENT_NAME":     def.Name,
-			"SEXTANT_INCARNATION_ID": incID.String(),
-			"SEXTANT_HOST_ID":        hostID,
-			"SEXTANT_NATS_URL":       deps.NATSURL,
-			"SEXTANT_NATS_USER":      deps.NATSUser,
-			"SEXTANT_NATS_PASSWORD":  deps.NATSPassword,
-			"SEXTANT_JWT":            jwt,
-			"SEXTANT_MCP_URL":        deps.MCPURL,
-			"SEXTANT_MODEL":          model,
-		}
-		// SEXTANT_PERMISSION_MODE tells the sidecar which Claude Agent
-		// SDK permissionMode to use. Mapped from the template's
-		// permission_ceiling at spawn time so the sidecar never has to
-		// re-derive the mapping. "acceptEdits" is the default (maps from
-		// "auto" or unset). See plans/issues/bug-sidecar-doesnt-set-
-		// permission-mode.md.
-		envVars["SEXTANT_PERMISSION_MODE"] = permissionCeilingToSDKMode(tpl.PermissionCeiling)
-		// Forward the operator's Anthropic API key when sextantd has one
-		// in its own env. Falling back to "" means the SDK uses its
-		// default credential chain (e.g. the operator's `claude` CLI
-		// login on macOS). See README §"API key plumbing".
-		if apiKey := os.Getenv("ANTHROPIC_API_KEY"); apiKey != "" {
-			envVars["ANTHROPIC_API_KEY"] = apiKey
-		}
 		// Resume an existing SDK session when the definition has one
 		// recorded. The sidecar's first turn captures the SDK-issued
 		// session_id and writes it back to the definition, so the next
-		// spawn of the same agent picks up where we left off.
-		if def.Runtime.SessionID != nil && *def.Runtime.SessionID != "" {
-			envVars["SEXTANT_SESSION_ID"] = *def.Runtime.SessionID
+		// spawn of the same agent picks up where we left off. Restart
+		// only forwards the session id when --preserve-session is true,
+		// but spawn always does (a fresh definition has SessionID=nil).
+		var sessionID string
+		if def.Runtime.SessionID != nil {
+			sessionID = *def.Runtime.SessionID
 		}
-		// Drive the mock driver when the operator opted in (tests set
-		// this via the template's `env` block; production never does).
-		// tpl.Env is applied after the explicit set so a template *can*
-		// override any of the well-known SEXTANT_* vars.
-		for k, v := range tpl.Env {
-			envVars[k] = v
-		}
+		envVars := buildContainerEnv(containerEnvInput{
+			AgentUUID:      agentUUID,
+			AgentName:      def.Name,
+			IncarnationID:  incID,
+			HostID:         hostID,
+			NATSURL:        deps.NATSURL,
+			NATSUser:       deps.NATSUser,
+			NATSPassword:   deps.NATSPassword,
+			JWT:            jwt,
+			MCPURL:         deps.MCPURL,
+			Model:          model,
+			PermissionMode: permissionCeilingToSDKMode(tpl.PermissionCeiling),
+			APIKey:         hostAPIKey(),
+			SessionID:      sessionID,
+			EnvOverlay:     tpl.Env,
+		})
 
 		labels := map[string]string{
 			LabelAgentUUID:     agentUUID.String(),

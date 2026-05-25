@@ -1,10 +1,12 @@
 ---
 title: restart_agent --preserve-session flag is a no-op
-status: open
+status: resolved
 priority: P1
 created_at: 2026-05-24T23:18-07:00
+resolved_at: 2026-05-25T01:00-07:00
 labels: [bug, sdk-wireup, restart, session-continuity]
 discovered_in: post-wire-up code reading
+resolution: restart.go now reads def.Runtime.SessionID and passes it through SEXTANT_SESSION_ID when args.PreserveSession is true (via the shared buildContainerEnv helper); the obsolete "no effect today" comment is gone. TestRestartPreservesSession exercises both the preserve=true (forwarded) and preserve=false (not forwarded) branches. Shipped in the same commit as [[bug-restart-no-api-key-forwarding]].
 ---
 
 ## Summary
