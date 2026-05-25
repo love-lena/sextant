@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -326,6 +327,13 @@ func (s *Server) startHTTP() error {
 	return nil
 }
 
+// httpShutdownGrace bounds how long shutdownHTTP will wait for in-flight
+// HTTP requests to drain before forcibly closing the server. Streamable
+// HTTP keeps long-lived SSE streams open by design (the server's
+// WriteTimeout is 0), so a graceful Shutdown can otherwise block until
+// the client closes the stream — which on daemon shutdown is "never".
+const httpShutdownGrace = 5 * time.Second
+
 func (s *Server) shutdownHTTP(ctx context.Context) error {
 	s.mu.Lock()
 	httpSrv := s.httpServer
@@ -335,10 +343,22 @@ func (s *Server) shutdownHTTP(ctx context.Context) error {
 	if httpSrv == nil {
 		return nil
 	}
-	shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(ctx, httpShutdownGrace)
 	defer cancel()
-	if err := httpSrv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+	err := httpSrv.Shutdown(shutdownCtx)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("mcpserver: http shutdown: %w", err)
+	}
+	// Graceful Shutdown timed out — long-lived SSE streams are still
+	// holding the server open. Forcibly close every active connection
+	// so the daemon's shutdown actually completes; without this, the
+	// goroutines spawned by http.Serve leak past daemon exit.
+	s.logger.Printf("mcpserver: http graceful shutdown exceeded %s; forcing Close()", httpShutdownGrace)
+	if closeErr := httpSrv.Close(); closeErr != nil {
+		return fmt.Errorf("mcpserver: http force close after timeout: %w", closeErr)
 	}
 	return nil
 }
@@ -397,31 +417,75 @@ func (s *Server) acceptStdio(ctx context.Context) {
 	if ln == nil {
 		return
 	}
+	s.acceptLoop(ctx, ln.AcceptUnix, s.handleStdioConn)
+}
+
+// acceptLoop is acceptStdio's testable core. It drives the
+// accept→dispatch loop with bounded backoff on transient accept errors
+// so a one-off EMFILE/EAGAIN doesn't kill stdio service for the rest
+// of the daemon's lifetime.
+//
+// The accept function returns either (conn, nil) — caller-supplied
+// dispatch fires on conn — or (nil, err). If err is net.ErrClosed (or
+// ctx is canceled) the loop returns. Anything else is treated as
+// transient: log + sleep with exponential backoff (5ms → 1s cap) +
+// continue.
+func (s *Server) acceptLoop(
+	ctx context.Context,
+	accept func() (*net.UnixConn, error),
+	dispatch func(context.Context, *net.UnixConn),
+) {
+	var backoff time.Duration
+	const maxBackoff = time.Second
 	for {
-		c, err := ln.AcceptUnix()
+		c, err := accept()
 		if err != nil {
+			// Listener closed (shutdown) or context canceled — terminal.
 			if errors.Is(err, net.ErrClosed) || ctx.Err() != nil {
 				return
 			}
-			s.logger.Printf("mcpserver: stdio accept: %v", err)
-			return
+			// Transient: log, back off, retry. Killing the loop here
+			// would silently drop stdio service for the lifetime of the
+			// daemon on the first EMFILE/EAGAIN.
+			if backoff == 0 {
+				backoff = 5 * time.Millisecond
+			} else {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+			}
+			s.logger.Printf("mcpserver: stdio accept transient error (retry in %s): %v", backoff, err)
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return
+			}
+			continue
 		}
+		// Successful accept resets the backoff window.
+		backoff = 0
 		s.stdioWG.Add(1)
 		go func(conn *net.UnixConn) {
 			defer s.stdioWG.Done()
-			defer conn.Close() //nolint:errcheck // best-effort
-			t := &mcp.IOTransport{Reader: conn, Writer: nopCloserWC{conn}}
-			// Each accepted socket is its own MCP session. Run blocks
-			// until the client closes or ctx fires.
-			session, err := s.mcp.Connect(ctx, t, nil)
-			if err != nil {
-				s.logger.Printf("mcpserver: stdio connect: %v", err)
-				return
-			}
-			if err := session.Wait(); err != nil {
-				s.logger.Printf("mcpserver: stdio session: %v", err)
-			}
+			dispatch(ctx, conn)
 		}(c)
+	}
+}
+
+// handleStdioConn services one accepted Unix-socket connection as an
+// MCP stdio session. Extracted as a method so acceptLoop can be tested
+// against a synthetic dispatch func.
+func (s *Server) handleStdioConn(ctx context.Context, conn *net.UnixConn) {
+	defer conn.Close() //nolint:errcheck // best-effort
+	t := &mcp.IOTransport{Reader: conn, Writer: nopCloserWC{conn}}
+	session, err := s.mcp.Connect(ctx, t, nil)
+	if err != nil {
+		s.logger.Printf("mcpserver: stdio connect: %v", err)
+		return
+	}
+	if err := session.Wait(); err != nil {
+		s.logger.Printf("mcpserver: stdio session: %v", err)
 	}
 }
 
@@ -497,9 +561,10 @@ func (s *Server) registerTools() {
 type dispatchHandler[In any] func(ctx context.Context, caller Caller, in In) (any, error)
 
 // wrapHandler builds a ToolHandlerFor that enforces capability, calls
-// the typed handler, and emits the audit envelope. The dispatcher is
-// the single place tool error semantics are translated to MCP wire
-// shapes — handlers return toolError values, never CallToolResult.
+// the typed handler under panic recovery, and emits the audit envelope.
+// The dispatcher is the single place tool error semantics are translated
+// to MCP wire shapes — handlers return toolError values, never
+// CallToolResult.
 //
 // Free function (rather than a method on *Server) because Go does not
 // allow methods to declare additional type parameters; the server is
@@ -529,8 +594,10 @@ func wrapHandler[In any](s *Server, tool string, fn dispatchHandler[In]) mcp.Too
 			return toolErrorResult(err), nil, nil
 		}
 
-		// Dispatch.
-		out, err := fn(callerCtx, caller, in)
+		// Dispatch under panic recovery so a runaway tool handler can't
+		// crash the MCP server goroutine (which would take the daemon
+		// down via mcp.Server.Run).
+		out, err := runToolHandler(s, tool, callerCtx, caller, in, fn)
 		dur := time.Since(start).Milliseconds()
 		if err != nil {
 			var te toolError
@@ -557,6 +624,40 @@ func wrapHandler[In any](s *Server, tool string, fn dispatchHandler[In]) mcp.Too
 		})
 		return nil, out, nil
 	}
+}
+
+// runToolHandler invokes fn under a deferred recover so a handler panic
+// becomes a clean toolError{Code: internal, Details:{panic}} response
+// rather than killing the MCP server goroutine. The stack trace is
+// logged so the panic is still investigable.
+//
+// Symmetric to pkg/rpc/server.go's runHandler — same pattern, separate
+// codebase. Both servers must keep this guarantee: one bad handler
+// must not take the dispatcher down.
+func runToolHandler[In any](
+	s *Server,
+	tool string,
+	ctx context.Context,
+	caller Caller,
+	in In,
+	fn dispatchHandler[In],
+) (out any, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Printf("mcpserver: tool %q panic from caller %s (%s):\n%v\n%s",
+				tool, caller.ID(), caller.Kind, r, debug.Stack())
+			out = nil
+			err = toolError{
+				Code:    sextantproto.ErrCodeInternal,
+				Message: fmt.Sprintf("tool %q panicked: %v", tool, r),
+				Details: map[string]any{
+					"panic": fmt.Sprintf("%v", r),
+					"tool":  tool,
+				},
+			}
+		}
+	}()
+	return fn(ctx, caller, in)
 }
 
 // callerFromRequest builds the Caller for a tool invocation. HTTP
