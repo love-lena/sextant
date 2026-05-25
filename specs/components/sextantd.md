@@ -53,7 +53,7 @@ There are two binaries: `sextant` (operator CLI) and `sextantd` (daemon). Both l
 2. Verify CA keypair exists; refuse to start if not (operator must run `sextant init` first — the `sextant` binary is the one that creates the CA)
 3. Start NATS subprocess; wait for ready
 4. Start ClickHouse subprocess; wait for ready; apply migrations
-5. Start shipper subprocess; wait for ready
+5. Start `sextant-shipper` as a supervised subprocess (the NATS→ClickHouse pipeline). Default-on via `[shipper] auto_supervise = true`; operators that prefer launchd/systemd flip it off and run `sextant-shipper` standalone. Binary is resolved from the sextantd binary's directory first, then from PATH. The shipper reads `~/.config/sextant/shipper.toml` and discovers live NATS/ClickHouse addresses from `runtime.json`.
 6. Sync templates from `~/.config/sextant/templates/*.toml` into the `templates` NATS KV bucket (M11+). The spawn handler resolves templates by name from KV, so the directory and the bucket must agree at boot. Idempotent — re-writing a key with the same value is a no-op.
 7. Register supervisor heartbeat
 8. Start MCP server
@@ -67,6 +67,18 @@ There are two binaries: `sextant` (operator CLI) and `sextantd` (daemon). Both l
 - On unexpected exit: log + audit, restart with exponential backoff (1s, 2s, 4s, ..., cap 5min)
 - On 5 consecutive restart failures: enter quarantine — daemon emits a critical alert event and stops auto-restarting
 - Watch each agent container similarly; restart per agent's definition policy
+
+## Shutdown sequence
+
+Reverse-dependency order: tear consumers down before their substrate. The intent is that a process that's about to die never gets a chance to publish to a half-torn-down dependency.
+
+1. Stop running agent incarnations (Docker `stop`).
+2. Drain MCP server, then RPC server, then containermgr.
+3. `shipperSup.Stop(ctx)` — the shipper reads from NATS and writes to ClickHouse, so it goes before either substrate. Process-group SIGTERM → SIGKILL, mirroring NATS/ClickHouse.
+4. `chSup.Stop(ctx)` — process-group kill (the leader's watchdog child must die with it; see commit 6c05784).
+5. `natsSup.Stop(ctx)` — same pattern.
+6. Cancel the shared supervisor context, drain supervisor goroutines.
+7. Belt-and-suspenders: `stopShipperNow` → `stopClickHouseNow` → `stopNATSNow` to reap any subprocess the supervisor missed.
 
 ## Signal handling
 
@@ -170,6 +182,12 @@ log_file    = ""
 http_host    = "127.0.0.1"
 http_port    = 5172                                  # pinned default; see §"MCP server"
 stdio_socket = "~/.local/share/sextant/sextantd-mcp.sock"
+
+[shipper]
+auto_supervise = true                                 # default; false = run sextant-shipper standalone
+binary_path    = ""                                   # empty = sibling of sextantd binary, then PATH
+config_path    = "~/.config/sextant/shipper.toml"     # passed via --config
+log_file       = ""                                   # empty = /dev/null
 
 [paths]
 templates_dir = "~/.config/sextant/templates"
