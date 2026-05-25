@@ -172,7 +172,8 @@ func (r *spawnRuntime) asSpawnDeps(chConn driver.Conn) handlers.SpawnDeps {
 		Incarnations:  kvMutableAdapter{kv: r.incsKV},
 		Templates:     r.templatesKV,
 		Containers:    r.containers,
-		CA:            nil, // populated by callers (RPC fills it from d.ca; same handle).
+		Volumes:       r.containers, // *containermgr.Manager satisfies VolumeManager too
+		CA:            nil,          // populated by callers (RPC fills it from d.ca; same handle).
 		History:       hist,
 		WorkspaceRoot: r.workspaceDir,
 		Worktree:      r.worktree,
@@ -200,6 +201,7 @@ func (r *spawnRuntime) asMCPDeps(ca *authjwt.CA, chConn driver.Conn) *mcpserver.
 		Incarnations: kvMutableAdapter{kv: r.incsKV},
 		Templates:    r.templatesKV,
 		Containers:   r.containers,
+		Volumes:      r.containers, // *containermgr.Manager also satisfies VolumeManager
 		CA:           ca,
 		History:      hist,
 		WorkspaceDir: r.workspaceDir,

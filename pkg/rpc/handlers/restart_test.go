@@ -412,6 +412,123 @@ func TestRestartPreservesSession(t *testing.T) {
 	}
 }
 
+// TestRestartAgentReattachesClaudeSeedVolume pins the second half of
+// the bug-claude-seed-readonly-breaks-session-persistence fix: when
+// the spawned agent uses a copy-on-spawn claude_seed and a restart
+// re-spawns the container, the new container's spec must include the
+// same per-agent named-volume mount so the SDK's session journal under
+// /home/agent/.claude/projects survives the restart. Without this
+// re-attach the --preserve-session restart wires SEXTANT_SESSION_ID
+// into the new container but its `~/.claude` is fresh, so the SDK can't
+// find the journal and the resume 404s. Same root cause as the original
+// bug, different surface (restart vs first spawn).
+func TestRestartAgentReattachesClaudeSeedVolume(t *testing.T) {
+	deps, defs, incs, runner, _ := buildDeps(t)
+	vols := newFakeVolumeManager()
+	deps.Volumes = vols
+
+	// Re-seed the templates KV with a claude_seed template. The
+	// existing default template doesn't carry a seed.
+	seedDir := t.TempDir()
+	tplJSON, err := json.Marshal(map[string]any{
+		"name":        "seeded",
+		"image":       "sextant-sidecar:latest",
+		"permissions": []string{"read.agents", "control.prompt"},
+		"mounts":      []string{"worktree"},
+		"model":       "claude-opus-4-7[1m]",
+		"claude_seed": seedDir,
+	})
+	if err != nil {
+		t.Fatalf("marshal template: %v", err)
+	}
+	tplKV := &fakeTemplatesKV{}
+	if _, err := tplKV.Put(context.Background(), "seeded", tplJSON); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+	deps.Templates = tplKV
+
+	spawnH := handlers.NewSpawnAgent(deps)
+	cap := &captureEmit{}
+	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+		Name: "alpha", Template: "seeded",
+	}), cap.emit()); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if cap.resp.Error != nil {
+		t.Fatalf("spawn error: %+v", cap.resp.Error)
+	}
+	var spawnResp sextantproto.SpawnAgentResponse
+	if err := json.Unmarshal(cap.resp.Result, &spawnResp); err != nil {
+		t.Fatalf("decode spawn: %v", err)
+	}
+	wantVol := handlers.ClaudeSeedVolumeName(spawnResp.AgentID)
+
+	restartH := handlers.NewRestartAgent(handlers.RestartDeps{
+		Definitions:   defs,
+		Incarnations:  incs,
+		Containers:    runner,
+		Volumes:       vols,
+		Templates:     tplKV,
+		CA:            deps.CA,
+		WorkspaceRoot: deps.WorkspaceRoot,
+		HostID:        deps.HostID,
+		NATSURL:       deps.NATSURL,
+		NATSUser:      deps.NATSUser,
+		NATSPassword:  deps.NATSPassword,
+		MCPURL:        deps.MCPURL,
+		Issuer:        deps.Issuer,
+	})
+	rcap := &captureEmit{}
+	if err := restartH(context.Background(), makeReq(t, sextantproto.RestartAgentRequest{
+		AgentID:         spawnResp.AgentID,
+		PreserveSession: true,
+	}), rcap.emit()); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if rcap.resp.Error != nil {
+		t.Fatalf("restart error: %+v", rcap.resp.Error)
+	}
+
+	// Restart should issue exactly ONE container Run after the spawn's
+	// own Run — we want to inspect the restart spec, not the spawn spec.
+	if len(runner.specs) < 2 {
+		t.Fatalf("expected at least 2 container specs (spawn + restart); got %d", len(runner.specs))
+	}
+	restartSpec := runner.specs[len(runner.specs)-1]
+
+	// The restart spec must include the same /home/agent/.claude mount
+	// pointing at the agent's named volume — that's the mechanism by
+	// which the SDK's session journal survives. Without it the
+	// preserved SEXTANT_SESSION_ID points at a journal the new
+	// container can't see.
+	var found bool
+	for _, m := range restartSpec.Mounts {
+		if m.ContainerPath == "/home/agent/.claude" && m.VolumeName == wantVol {
+			found = true
+			if m.ReadOnly {
+				t.Error("restart re-attached seed volume must be rw, not ro")
+			}
+			break
+		}
+	}
+	if !found {
+		var summary []string
+		for _, m := range restartSpec.Mounts {
+			summary = append(summary, m.HostPath+m.VolumeName+"->"+m.ContainerPath)
+		}
+		t.Errorf("restart spec missing /home/agent/.claude volume mount for %s; mounts = %v", wantVol, summary)
+	}
+
+	// EnsureVolume was called twice (spawn + restart) on the same name,
+	// but Populate must have run only once (idempotent on second call).
+	vols.mu.Lock()
+	popCount := len(vols.populate)
+	vols.mu.Unlock()
+	if popCount != 1 {
+		t.Errorf("populate count = %d, want 1 (restart must reattach, not repopulate)", popCount)
+	}
+}
+
 // TestRestartAgentUnknownAgentReturnsNotFound proves the handler's
 // 404 path: an agent_not_found error when the definition isn't in KV.
 func TestRestartAgentUnknownAgentReturnsNotFound(t *testing.T) {

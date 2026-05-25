@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,7 +23,13 @@ type ArchiveDeps struct {
 	Definitions  AgentMutableKV
 	Incarnations AgentMutableKV
 	Containers   ContainerRunner
-	Now          func() time.Time
+	// Volumes, when non-nil, lets the archive handler clean up the
+	// per-agent claude_seed copy-on-spawn volume. Best-effort: a
+	// volume-remove failure is logged but does not abort the archive.
+	// When nil (test harnesses without a volume manager) the cleanup
+	// step is silently skipped.
+	Volumes VolumeManager
+	Now     func() time.Time
 }
 
 // NewArchiveAgent returns a Handler for the archive_agent verb. Flow:
@@ -118,6 +125,20 @@ func NewArchiveAgent(deps ArchiveDeps) rpc.Handler {
 		if err := putJSON(ctx, deps.Definitions, args.AgentID.String(), def); err != nil {
 			return emitErr(emit, sextantproto.ErrCodeInternal,
 				fmt.Sprintf("flip lifecycle to archived: %v", err))
+		}
+		// 6. Clean up per-agent volumes (claude_seed copy-on-spawn).
+		// Best-effort: the archive succeeded; failing to delete the
+		// volume becomes an operator chore, not a spawn-blocking error.
+		// We unconditionally attempt the remove — RemoveVolume is
+		// idempotent on "no such volume" so an agent that never had a
+		// claude_seed volume gets a cheap no-op.
+		if deps.Volumes != nil {
+			volName := ClaudeSeedVolumeName(args.AgentID)
+			if err := deps.Volumes.RemoveVolume(ctx, volName, true); err != nil {
+				// Log via stderr — matches the pattern in spawn.go's
+				// history-insert failure path.
+				fmt.Fprintf(os.Stderr, "archive_agent: remove volume %s: %v\n", volName, err)
+			}
 		}
 		return emitOK(emit, sextantproto.ArchiveAgentResponse{OK: true})
 	}
