@@ -78,6 +78,12 @@ type daemon struct {
 	// in that case, just without the worktree surface.
 	worktreeRT *worktreeRuntime
 
+	// controlRT owns the lightweight control subscriptions
+	// (sextant.control.*). M16 ships one: templates_reload. Built after
+	// the spawn runtime exists (we need the templates KV) and torn down
+	// in doShutdown.
+	controlRT *controlRuntime
+
 	shutdownOnce sync.Once
 	shutdownErr  error
 }
@@ -351,6 +357,27 @@ func (d *daemon) Start(ctx context.Context) error {
 		mcpRT.server.SetWorktree(worktreeRT.mgr)
 	}
 
+	// 14. Lightweight control subscriptions (sextant.control.*). Mounts
+	// onto the RPC server's operator NATS conn so the daemon only opens
+	// one NATS connection for the operator surface.
+	controlRT, err := d.startControl(rpcRT.nc, spawnRT.templatesKV)
+	if err != nil {
+		_ = spawnRT.containers.Close()
+		_ = rpcRT.stopRPC()
+		_ = mcpRT.stop(ctx)
+		if d.supCancel != nil {
+			d.supCancel()
+		}
+		d.closeSocket()
+		_ = sextantd.RemoveRuntimeInfo(d.cfg.Paths.RuntimeFile)
+		_ = d.stopClickHouseNow(ctx)
+		_ = d.stopNATSNow(ctx)
+		return fmt.Errorf("start control: %w", err)
+	}
+	d.mu.Lock()
+	d.controlRT = controlRT
+	d.mu.Unlock()
+
 	log.Printf("sextantd: ready (nats=%s clickhouse=%s control=%s rpc=sextant.rpc.* mcp=%s)",
 		natsSrv.Address(), chSrv.TCPAddress(), d.cfg.Daemon.ControlSocket, mcpRT.server.HTTPURL())
 	return nil
@@ -404,7 +431,14 @@ func (d *daemon) doShutdown() error {
 	d.rpcRT = nil
 	spawnRT := d.spawnRT
 	d.spawnRT = nil
+	controlRT := d.controlRT
+	d.controlRT = nil
 	d.mu.Unlock()
+	if controlRT != nil {
+		if err := controlRT.stop(); err != nil {
+			errs = append(errs, fmt.Errorf("control stop: %w", err))
+		}
+	}
 	if mcpRT != nil {
 		if err := mcpRT.stop(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("mcp stop: %w", err))

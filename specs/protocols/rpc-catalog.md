@@ -111,6 +111,7 @@ The MCP server (`specs/components/sextantd.md` §"MCP server") exposes a separat
 | `prompt_agent` | `control.prompt` |
 | `emit_event` | `emit_event` |
 | `get_metric` | `read.metrics` |
+| `templates_reload` | `control.templates` |
 
 ## Wire semantics
 

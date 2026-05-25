@@ -21,6 +21,12 @@ const (
 	CapControlWorktree = "control.worktree"
 	CapEmitEvent       = "emit_event"
 	CapReadMetrics     = "read.metrics"
+	// CapControlTemplates is the cap required to invoke templates_reload.
+	// Same pattern as the other control.* caps — a separate string lets
+	// operators grant template-management without granting full
+	// control.spawn / control.kill on agents that need to refresh
+	// templates as part of their workflow.
+	CapControlTemplates = "control.templates"
 )
 
 // Tool names. Re-used by the audit envelope (`audit.tool_call`) and by
@@ -43,6 +49,7 @@ const (
 	ToolWorktreeList    = "worktree_list"
 	ToolWorktreeMerge   = "worktree_merge"
 	ToolWorktreeDiff    = "worktree_diff"
+	ToolTemplatesReload = "templates_reload"
 )
 
 // AllTools returns the M10+M14 tool catalog in catalog order. Stable
@@ -66,6 +73,7 @@ func AllTools() []string {
 		ToolWorktreeList,
 		ToolWorktreeMerge,
 		ToolWorktreeDiff,
+		ToolTemplatesReload,
 	}
 }
 
@@ -99,6 +107,8 @@ func CapForTool(tool string) string {
 		return CapControlWorktree
 	case ToolWorktreeList, ToolWorktreeDiff:
 		return CapReadWorktrees
+	case ToolTemplatesReload:
+		return CapControlTemplates
 	default:
 		return ""
 	}
@@ -233,4 +243,18 @@ type WorktreeMergeArgs struct {
 type WorktreeDiffArgs struct {
 	Name    string `json:"name" jsonschema:"Worktree name"`
 	Against string `json:"against,omitempty" jsonschema:"Branch to diff against (default main)"`
+}
+
+// TemplatesReloadArgs is the argument shape for templates_reload. Empty
+// today; the daemon's templates dir is configured server-side via
+// `paths.templates_dir`. Keep the struct so the MCP SDK derives a
+// non-nil schema and a future revision can add fields without breaking
+// the wire.
+type TemplatesReloadArgs struct{}
+
+// TemplatesReloadResult is the success shape returned by
+// templates_reload. Count is the number of *.toml files SyncDirToKV
+// pushed into the templates KV bucket.
+type TemplatesReloadResult struct {
+	Count int `json:"count"`
 }
