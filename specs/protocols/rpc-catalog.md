@@ -46,7 +46,7 @@ This document is the catalog; per-verb detailed specs may live in companion file
 | `list_dir` | `{ agent_id, path }` | `{ entries: DirEntry[] }` | `read.container_files` |
 | `stat` | `{ agent_id, path }` | `{ meta }` | `read.container_files` |
 | `read_file_stream` | `{ agent_id, path, follow }` | streaming response | `read.container_files` |
-| `exec_in_container` | `{ agent_id, cmd, args[] }` | `{ stdout, stderr, exit_code }` | `control.exec` (operator-level) |
+| `exec_in_container` | `{ agent_id, cmd: string[], workdir?, env? }` | `{ stdout, stderr, exit_code }` | `control.exec` (operator-level) |
 
 ### On-demand telemetry
 
