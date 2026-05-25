@@ -308,7 +308,7 @@ func (d *daemon) Start(ctx context.Context) error {
 		return fmt.Errorf("build worktree runtime: %w", err)
 	}
 	if worktreeRT != nil {
-		spawnRT.setWorktree(worktreeRT.mgr)
+		spawnRT.setWorktree(worktreeRT.mgr, worktreeRT.repoRoot)
 	}
 	d.mu.Lock()
 	d.spawnRT = spawnRT

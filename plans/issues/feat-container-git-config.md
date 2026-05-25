@@ -1,10 +1,12 @@
 ---
 title: Containers don't have git user.name/user.email — agent commits will fail
-status: open
+status: resolved
 priority: P2
 created_at: 2026-05-24T23:18-07:00
+resolved_at: 2026-05-25T00:00-07:00
 labels: [feature, container, sidecar, git]
 discovered_in: pre-flight gap analysis
+resolution: Per-spawn temp file under WorkspaceRoot (`gitconfig-<agent-uuid>`), bind-mounted read-only into the container at `/home/agent/.gitconfig`. Identity is `sextant <agent-name>` / `<agent-uuid>@sextant.local`. Rollback ledger removes the file on any spawn failure. Acceptance covered by TestSpawnedContainerHasGitConfig (real docker exec) + the unit tests TestSpawnAgentWritesGitConfigMount and TestSpawnAgentRollsBackGitConfigOnContainerFailure.
 ---
 
 ## Summary

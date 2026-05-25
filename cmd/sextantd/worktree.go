@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -36,6 +37,18 @@ func (d *daemon) buildWorktreeRuntime(ctx context.Context, nc *nats.Conn) (*work
 		return nil, nil
 	}
 
+	// Resolve symlinks in the repo root so the value we hand to the
+	// spawn handler matches what git writes into the worktree's `.git`
+	// pointer file (git always resolves to canonical paths). On macOS
+	// /var is a symlink to /private/var, so without this the spawn-
+	// side gitdir bind mount lands on the wrong path and `git status`
+	// inside the container errors with "not a git repository". See
+	// plans/issues/bug-worktree-gitdir-unreachable-in-container.md.
+	repoRoot := d.cfg.Worktree.RepoRoot
+	if resolved, err := filepath.EvalSymlinks(repoRoot); err == nil {
+		repoRoot = resolved
+	}
+
 	js, err := jetstream.New(nc)
 	if err != nil {
 		return nil, fmt.Errorf("worktree: jetstream: %w", err)
@@ -50,7 +63,7 @@ func (d *daemon) buildWorktreeRuntime(ctx context.Context, nc *nats.Conn) (*work
 	}
 
 	mgr, err := worktree.New(worktree.Config{
-		RepoRoot:      d.cfg.Worktree.RepoRoot,
+		RepoRoot:      repoRoot,
 		WorktreesRoot: d.cfg.Worktree.WorktreesRoot,
 		Registry:      kvMutableAdapter{kv: regKV},
 		Locks:         lockKVAdapter{kv: locksKV},
@@ -62,12 +75,12 @@ func (d *daemon) buildWorktreeRuntime(ctx context.Context, nc *nats.Conn) (*work
 		return nil, fmt.Errorf("worktree: build manager: %w", err)
 	}
 	log.Printf("sextantd: worktree manager ready (repo=%s worktrees_root=%s)",
-		d.cfg.Worktree.RepoRoot, d.cfg.Worktree.WorktreesRoot)
+		repoRoot, d.cfg.Worktree.WorktreesRoot)
 	return &worktreeRuntime{
 		mgr:          mgr,
 		registryKV:   regKV,
 		locksKV:      locksKV,
-		repoRoot:     d.cfg.Worktree.RepoRoot,
+		repoRoot:     repoRoot,
 		worktreesDir: d.cfg.Worktree.WorktreesRoot,
 	}, nil
 }

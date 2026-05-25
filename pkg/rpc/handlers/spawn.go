@@ -82,7 +82,16 @@ type SpawnDeps struct {
 	// WorkspaceRoot. The spawn-time worktree is named per
 	// specs/architecture.md §11 "Worktree naming" via
 	// worktree.SpawnWorktreeName.
-	Worktree     WorktreeProvider
+	Worktree WorktreeProvider
+	// RepoRoot is the host path of the main repository (the same
+	// value the worktree manager uses as its RepoRoot). When set and
+	// the spawn materializes a worktree, the spawn handler bind-mounts
+	// <RepoRoot>/.git into the container at the same path so the
+	// worktree's `.git` pointer file resolves inside the container.
+	// Empty disables the gitdir mount (fallback workspaces don't need
+	// it, and tests that don't exercise the worktree path leave it
+	// empty).
+	RepoRoot     string
 	HostID       string
 	NATSURL      string
 	NATSUser     string
@@ -259,12 +268,23 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 		// wired, create a per-incarnation worktree and mount that.
 		// Otherwise, fall back to the M11 stop-gap dir under
 		// WorkspaceRoot.
-		workspace, workspaceCleanup, err := materializeWorkspace(ctx, deps, tpl, agentUUID)
+		workspace, usingWorktree, workspaceCleanup, err := materializeWorkspace(ctx, deps, tpl, agentUUID)
 		if err != nil {
 			return emitErr(emit, sextantproto.ErrCodeInternal,
 				fmt.Sprintf("create workspace: %v", err))
 		}
 		pushRollback(workspaceCleanup)
+
+		// 6a. Per-spawn gitconfig file. Bind-mounted into the container
+		// at /home/agent/.gitconfig so the agent has a usable git
+		// identity for commits. See plans/issues/feat-container-git-
+		// config.md.
+		gitconfigPath, gitconfigCleanup, err := writeAgentGitConfig(deps.WorkspaceRoot, agentUUID, args.Name)
+		if err != nil {
+			return emitErr(emit, sextantproto.ErrCodeInternal,
+				fmt.Sprintf("write gitconfig: %v", err))
+		}
+		pushRollback(gitconfigCleanup)
 
 		// 7+8. Build incarnation record (state=starting) + issue JWT.
 		inc := sextantproto.AgentIncarnation{
@@ -345,12 +365,36 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 		// default CMD is /bin/bash (so the M9 smoke test stays
 		// interactive); spawning agents always overrides it to run the
 		// long-lived sidecar runtime.
+		mounts := []containermgr.MountSpec{
+			{HostPath: workspace, ContainerPath: WorkspaceMountPath},
+		}
+		// When the workspace is a worktree, the worktree's `.git` is a
+		// pointer file that names <RepoRoot>/.git/worktrees/<branch>
+		// using the host's absolute path. We must expose that exact
+		// path inside the container so git operations resolve. Mount
+		// rw because `git commit` writes blobs into <RepoRoot>/.git/
+		// objects (worktrees share the main repo's object store) and
+		// refs into <RepoRoot>/.git/worktrees/<branch>/. See
+		// plans/issues/bug-worktree-gitdir-unreachable-in-container.md.
+		if usingWorktree && deps.RepoRoot != "" {
+			gitdir := filepath.Join(deps.RepoRoot, ".git")
+			mounts = append(mounts, containermgr.MountSpec{
+				HostPath:      gitdir,
+				ContainerPath: gitdir,
+			})
+		}
+		mounts = append(mounts, containermgr.MountSpec{
+			HostPath:      gitconfigPath,
+			ContainerPath: "/home/agent/.gitconfig",
+			ReadOnly:      true,
+		})
+
 		spec := containermgr.ContainerSpec{
 			Name:       containerName(def.Name, incID),
 			Image:      tpl.Image,
 			Cmd:        []string{"/opt/sextant/sidecar/entrypoint.sh"},
 			Env:        envVars,
-			Mounts:     []containermgr.MountSpec{{HostPath: workspace, ContainerPath: WorkspaceMountPath}},
+			Mounts:     mounts,
 			Labels:     labels,
 			AutoRemove: true,
 		}
@@ -480,14 +524,16 @@ func ensureWorkspaceDir(root, agentUUID string) (string, error) {
 
 // materializeWorkspace decides whether to create a per-incarnation
 // worktree or fall back to the M11 stop-gap dir, and returns the
-// resolved on-host path + a cleanup closure for the rollback ledger.
+// resolved on-host path + a "is a worktree" flag + a cleanup closure
+// for the rollback ledger.
 //
 // Rules:
 //
 //   - Template lists "worktree" in mounts AND deps.Worktree non-nil →
 //     create a worktree via worktree.Create; cleanup removes the
-//     worktree.
+//     worktree. usingWorktree=true.
 //   - Otherwise → ensureWorkspaceDir; cleanup os.RemoveAll's the dir.
+//     usingWorktree=false.
 //
 // The fallback path covers two scenarios: M11-style templates that
 // never declared the mount, and templates that do declare it but
@@ -495,26 +541,49 @@ func ensureWorkspaceDir(root, agentUUID string) (string, error) {
 // transitional state).
 //
 //nolint:contextcheck // rollback closure intentionally uses background ctx so a canceled request still cleans up
-func materializeWorkspace(ctx context.Context, deps SpawnDeps, tpl templates.Template, agentUUID uuid.UUID) (string, func(), error) {
+func materializeWorkspace(ctx context.Context, deps SpawnDeps, tpl templates.Template, agentUUID uuid.UUID) (string, bool, func(), error) {
 	if wantsWorktreeMount(tpl) && deps.Worktree != nil {
 		name := worktree.SpawnWorktreeName(tpl.Name, agentUUID)
 		info, err := deps.Worktree.Create(ctx, name, "main", agentUUID)
 		if err != nil {
-			return "", nil, fmt.Errorf("worktree.Create %s: %w", name, err)
+			return "", false, nil, fmt.Errorf("worktree.Create %s: %w", name, err)
 		}
 		cleanup := func() {
 			rbCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			_ = deps.Worktree.Destroy(rbCtx, info.Name, true)
 		}
-		return info.Path, cleanup, nil
+		return info.Path, true, cleanup, nil
 	}
 	path, err := ensureWorkspaceDir(deps.WorkspaceRoot, agentUUID.String())
 	if err != nil {
-		return "", nil, err
+		return "", false, nil, err
 	}
 	cleanup := func() {
 		_ = os.RemoveAll(path)
+	}
+	return path, false, cleanup, nil
+}
+
+// writeAgentGitConfig stages a per-spawn gitconfig file under root and
+// returns its path + a cleanup closure that removes the file. The body
+// matches plans/issues/feat-container-git-config.md: name = "sextant
+// <agent-name>", email = "<uuid>@sextant.local", init.defaultBranch =
+// main. The file is intentionally mode 0o644 (and bind-mounted
+// read-only into the container) so the agent can read it but not
+// rewrite the identity from inside the sandbox.
+func writeAgentGitConfig(root string, agentUUID uuid.UUID, agentName string) (string, func(), error) {
+	if root == "" {
+		return "", nil, fmt.Errorf("workspace root is empty")
+	}
+	path := filepath.Join(root, "gitconfig-"+agentUUID.String())
+	body := fmt.Sprintf("[user]\n\tname = sextant %s\n\temail = %s@sextant.local\n[init]\n\tdefaultBranch = main\n",
+		agentName, agentUUID)
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil { //nolint:gosec // bind-mounted ro into container; 0o644 lets the in-container uid read it
+		return "", nil, fmt.Errorf("write gitconfig %s: %w", path, err)
+	}
+	cleanup := func() {
+		_ = os.Remove(path)
 	}
 	return path, cleanup, nil
 }

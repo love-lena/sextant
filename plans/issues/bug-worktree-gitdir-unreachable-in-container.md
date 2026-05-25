@@ -1,10 +1,12 @@
 ---
 title: Worktree's .git pointer file references a host path that doesn't exist inside the container — agent git ops fail
-status: open
+status: resolved
 priority: P1
 created_at: 2026-05-24T23:58-07:00
+resolved_at: 2026-05-25T00:00-07:00
 labels: [bug, worktree, container, sidecar, m14]
 discovered_in: first sextant-driven dispatch attempt
+resolution: Option A — read-write bind mount of <RepoRoot>/.git at the same path in every worktree-mount spawn. Daemon canonicalises the repo root (filepath.EvalSymlinks) so the mount source matches the canonical path git writes into the worktree's .git pointer file (macOS /var → /private/var). Acceptance covered by TestSpawnedContainerCanGitCommit. RW (not RO) because git worktrees share <RepoRoot>/.git/objects with the main repo, so commits must write blobs there — the "only worktrees/<branch> writable" sketch in the original issue isn't compatible with how git worktrees actually store data.
 ---
 
 ## Summary

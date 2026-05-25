@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -618,5 +619,213 @@ func TestKillAgentUnknownAgentReturnsNotFound(t *testing.T) {
 	}
 	if cap.resp.Error == nil || cap.resp.Error.Code != sextantproto.ErrCodeAgentNotFound {
 		t.Fatalf("Error = %+v", cap.resp.Error)
+	}
+}
+
+// stubWorktreeProvider is a minimal handlers.WorktreeProvider for spawn
+// tests that exercise the worktree branch of materializeWorkspace. It
+// returns whatever path/branch the test pre-loaded; Destroy is a no-op
+// that records the names it received.
+type stubWorktreeProvider struct {
+	path     string
+	branch   string
+	created  []string
+	destroys []string
+}
+
+func (s *stubWorktreeProvider) Create(_ context.Context, name, baseBranch string, owning uuid.UUID) (sextantproto.WorktreeInfo, error) {
+	_ = baseBranch
+	_ = owning
+	s.created = append(s.created, name)
+	return sextantproto.WorktreeInfo{
+		Name:       name,
+		Path:       s.path,
+		Branch:     s.branch,
+		BaseBranch: "main",
+		Status:     sextantproto.WorktreeStatusActive,
+	}, nil
+}
+
+func (s *stubWorktreeProvider) Destroy(_ context.Context, name string, _ bool) error {
+	s.destroys = append(s.destroys, name)
+	return nil
+}
+
+// TestSpawnAgentMountsHostGitDirForWorktreeAgents pins the bug-worktree-
+// gitdir-unreachable-in-container fix: when a worktree is the workspace
+// and the daemon knows the host repo root, the spawn handler must add a
+// bind mount of <RepoRoot>/.git at the same path so the worktree's .git
+// pointer file resolves inside the container.
+func TestSpawnAgentMountsHostGitDirForWorktreeAgents(t *testing.T) {
+	deps, _, _, runner, _ := buildDeps(t)
+
+	// Pretend the operator's repo lives here. We don't run real git; we
+	// just need the path string to flow through to the container spec.
+	repoRoot := t.TempDir()
+	if err := os.MkdirAll(repoRoot+"/.git", 0o750); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	deps.RepoRoot = repoRoot
+
+	wt := &stubWorktreeProvider{
+		path:   repoRoot + "/../worktrees/feat-default-deadbeef-001",
+		branch: "feat-default-deadbeef-001",
+	}
+	deps.Worktree = wt
+
+	h := handlers.NewSpawnAgent(deps)
+	cap := &captureEmit{}
+	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+		Name: "alpha", Template: "default",
+	}), cap.emit()); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if cap.resp.Error != nil {
+		t.Fatalf("Error = %+v", cap.resp.Error)
+	}
+	if len(runner.specs) != 1 {
+		t.Fatalf("runner.specs = %d, want 1", len(runner.specs))
+	}
+	spec := runner.specs[0]
+
+	gitDirHost := repoRoot + "/.git"
+	var found bool
+	for _, m := range spec.Mounts {
+		if m.HostPath == gitDirHost && m.ContainerPath == gitDirHost {
+			found = true
+			break
+		}
+	}
+	if !found {
+		var summary []string
+		for _, m := range spec.Mounts {
+			summary = append(summary, m.HostPath+"->"+m.ContainerPath)
+		}
+		t.Errorf("no bind mount of %s at the same path; mounts = %v", gitDirHost, summary)
+	}
+}
+
+// TestSpawnAgentSkipsGitDirMountWhenNoWorktree confirms the spawn
+// handler does NOT add the .git mount when the agent isn't running in a
+// worktree (e.g. the M11 stop-gap workspace). The mount is only useful
+// when a worktree's .git pointer file references the host gitdir.
+func TestSpawnAgentSkipsGitDirMountWhenNoWorktree(t *testing.T) {
+	deps, _, _, runner, _ := buildDeps(t)
+	repoRoot := t.TempDir()
+	if err := os.MkdirAll(repoRoot+"/.git", 0o750); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	deps.RepoRoot = repoRoot
+	// deps.Worktree intentionally nil — fallback workspace path fires.
+
+	h := handlers.NewSpawnAgent(deps)
+	cap := &captureEmit{}
+	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+		Name: "alpha", Template: "default",
+	}), cap.emit()); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if cap.resp.Error != nil {
+		t.Fatalf("Error = %+v", cap.resp.Error)
+	}
+
+	gitDirHost := repoRoot + "/.git"
+	for _, m := range runner.specs[0].Mounts {
+		if m.HostPath == gitDirHost {
+			t.Errorf("unexpected .git mount on non-worktree spawn: %+v", m)
+		}
+	}
+}
+
+// TestSpawnAgentWritesGitConfigMount pins the feat-container-git-config
+// fix: every spawn must mount a per-agent gitconfig file into the
+// container at /home/agent/.gitconfig. The host file contents must
+// include the agent name and UUID so commits land with a meaningful
+// identity.
+func TestSpawnAgentWritesGitConfigMount(t *testing.T) {
+	deps, _, _, runner, _ := buildDeps(t)
+
+	h := handlers.NewSpawnAgent(deps)
+	cap := &captureEmit{}
+	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+		Name: "alpha", Template: "default",
+	}), cap.emit()); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if cap.resp.Error != nil {
+		t.Fatalf("Error = %+v", cap.resp.Error)
+	}
+
+	var resp sextantproto.SpawnAgentResponse
+	if err := json.Unmarshal(cap.resp.Result, &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	spec := runner.specs[0]
+	var gitconfig *containermgr.MountSpec
+	for i := range spec.Mounts {
+		if spec.Mounts[i].ContainerPath == "/home/agent/.gitconfig" {
+			gitconfig = &spec.Mounts[i]
+			break
+		}
+	}
+	if gitconfig == nil {
+		var summary []string
+		for _, m := range spec.Mounts {
+			summary = append(summary, m.HostPath+"->"+m.ContainerPath)
+		}
+		t.Fatalf("no gitconfig mount; mounts = %v", summary)
+	}
+	if !gitconfig.ReadOnly {
+		t.Errorf("gitconfig mount must be ReadOnly")
+	}
+	body, err := os.ReadFile(gitconfig.HostPath)
+	if err != nil {
+		t.Fatalf("read gitconfig host file %s: %v", gitconfig.HostPath, err)
+	}
+	text := string(body)
+	if !strings.Contains(text, "alpha") {
+		t.Errorf("gitconfig missing agent name: %q", text)
+	}
+	if !strings.Contains(text, resp.AgentID.String()) {
+		t.Errorf("gitconfig missing agent UUID: %q", text)
+	}
+	if !strings.Contains(text, "@sextant.local") {
+		t.Errorf("gitconfig email domain missing: %q", text)
+	}
+}
+
+// TestSpawnAgentRollsBackGitConfigOnContainerFailure confirms the
+// gitconfig temp file is cleaned up by the rollback ledger when the
+// container fails to start.
+func TestSpawnAgentRollsBackGitConfigOnContainerFailure(t *testing.T) {
+	deps, _, _, runner, _ := buildDeps(t)
+	runner.runErr = errors.New("dockerd is asleep")
+
+	h := handlers.NewSpawnAgent(deps)
+	cap := &captureEmit{}
+	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+		Name: "alpha", Template: "default",
+	}), cap.emit()); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if cap.resp.Error == nil {
+		t.Fatal("expected container-failure error")
+	}
+
+	// Workspace root must be empty — the gitconfig temp lives under
+	// (or alongside) deps.WorkspaceRoot, and any leftover here is a
+	// rollback bug.
+	entries, err := os.ReadDir(deps.WorkspaceRoot)
+	if err != nil {
+		t.Fatalf("ReadDir root: %v", err)
+	}
+	if len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("workspace root has %d leftover entry/entries after rollback: %v",
+			len(entries), names)
 	}
 }
