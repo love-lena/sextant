@@ -54,6 +54,12 @@ First-run setup. Idempotent — re-running detects existing state and skips.
 
 Subscribe to `agents.<uuid>.frames` and print frames in human-readable form. `--tail` exits on session-end lifecycle; otherwise streams forever.
 
+### `sextant ask <agent> "<text>" [--timeout 60s] [--json]`
+
+Synchronous one-shot: subscribe to `agents.<uuid>.frames` + `agents.<uuid>.lifecycle`, publish a prompt via `prompt_agent`, then stream the agent's reply inline until the next `lifecycle transition=turn_ended` (or `transition=ended`) for that agent. Exits 0 on a clean turn finish; exits non-zero with a clear "timeout waiting for turn_ended" message on `--timeout` expiry. `--timeout` defaults to 60s. `<agent>` accepts a name or a UUID (same resolution as `sextant agents archive`). `--json` swaps to NDJSON output, same shape as `sextant conversation --json`.
+
+Use this for daily-drive assistant chats where the two-pane `sextant conversation ... &` + `sextant agents prompt ...` workflow is overkill. The verb subscribes BEFORE publishing the prompt so the first frame can't be missed.
+
 ### `sextant pending`
 
 Lists user-input requests across all agents. Sub-verbs:
