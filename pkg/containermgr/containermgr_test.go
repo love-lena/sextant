@@ -27,7 +27,7 @@ func requireDocker(t *testing.T) {
 	if path == "" {
 		t.Skip("no Docker socket detected (OrbStack / Docker Desktop not running)")
 	}
-	if st, err := os.Stat(path); err != nil || st.Mode()&os.ModeSocket == 0 {
+	if st, err := os.Stat(path); err != nil || st.Mode()&os.ModeSocket == 0 { //nolint:gosec // path is from controlled env or detection
 		t.Skipf("docker socket %s missing or not a socket", path)
 	}
 }

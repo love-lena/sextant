@@ -25,6 +25,9 @@ require_env() {
 require_env SEXTANT_AGENT_UUID
 require_env SEXTANT_AGENT_NAME
 require_env SEXTANT_HOST_ID
+require_env SEXTANT_INCARNATION_ID
 require_env SEXTANT_NATS_URL
+require_env SEXTANT_NATS_USER
+require_env SEXTANT_NATS_PASSWORD
 
 exec node /opt/sextant/sidecar/dist/index.js run

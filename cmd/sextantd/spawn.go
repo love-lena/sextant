@@ -73,7 +73,9 @@ func (d *daemon) buildSpawnRuntime(ctx context.Context, nc *nats.Conn, agentDefs
 	}
 	log.Printf("sextantd: synced %d template(s) from %s into KV", len(synced), d.cfg.Paths.TemplatesDir)
 
-	mgr, err := containermgr.New(containermgr.Config{})
+	// containermgr.New issues a Ping under a short timeout it manages
+	// internally; the parent ctx is irrelevant to it.
+	mgr, err := containermgr.New(containermgr.Config{}) //nolint:contextcheck // see comment
 	if err != nil {
 		return nil, fmt.Errorf("containermgr: %w", err)
 	}

@@ -140,9 +140,9 @@ func runAgentsList(ctx context.Context, args []string) error {
 		return nil
 	}
 	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "UUID\tNAME\tTEMPLATE\tLIFECYCLE\tVERSION\tUPDATED")
+	printf(tw, "UUID\tNAME\tTEMPLATE\tLIFECYCLE\tVERSION\tUPDATED\n")
 	for _, a := range resp.Agents {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\n",
+		printf(tw, "%s\t%s\t%s\t%s\t%d\t%s\n",
 			a.UUID, a.Name, a.Template, a.Lifecycle, a.Version,
 			a.UpdatedAt.Format(time.RFC3339))
 	}
