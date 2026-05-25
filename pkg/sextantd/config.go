@@ -68,10 +68,24 @@ func (s ShipperConfig) AutoSuperviseEnabled() bool {
 //     ~/.local/share/sextant/worktrees/). The operator may override to
 //     match the conventions/git-workflow.md default
 //     ~/dev/sextant-worktrees/.
+//   - PruneInterval is how often the pruner tick fires inside sextantd.
+//     Zero / omitted falls back to DefaultPruneInterval (6h) — matches
+//     the spec in conventions/git-workflow.md "Disk hygiene".
+//   - ArchiveRoot is where archived worktrees land. Zero / omitted
+//     falls back to <data_dir>/worktree-archive.
 type WorktreeConfig struct {
-	RepoRoot      string `toml:"repo_root"`
-	WorktreesRoot string `toml:"worktrees_root"`
+	RepoRoot      string   `toml:"repo_root"`
+	WorktreesRoot string   `toml:"worktrees_root"`
+	PruneInterval Duration `toml:"prune_interval"`
+	ArchiveRoot   string   `toml:"archive_root"`
 }
+
+// DefaultPruneInterval is how often the daemon ticks the worktree
+// pruner. The spec doesn't pin a number; 6h is a balance between
+// "catch idle worktrees within a day" and "don't churn the disk
+// every few minutes". Operators can override via [worktree]
+// prune_interval = "..." in sextantd.toml.
+const DefaultPruneInterval = 6 * time.Hour
 
 // DaemonConfig governs the daemon process itself.
 type DaemonConfig struct {
@@ -209,6 +223,8 @@ func DefaultConfig(configDir, dataDir string) Config {
 			// checkout exists.
 			RepoRoot:      "",
 			WorktreesRoot: filepath.Join(dataDir, "worktrees"),
+			PruneInterval: Duration(DefaultPruneInterval),
+			ArchiveRoot:   filepath.Join(dataDir, "worktree-archive"),
 		},
 	}
 }
@@ -312,6 +328,16 @@ func (c Config) Resolve() (Config, error) {
 		out.Shipper.ConfigPath = filepath.Join(out.Paths.ConfigDir, "shipper.toml")
 	}
 
+	// Worktree-pruner defaults: zero/omitted interval falls back to the
+	// canonical 6h spec, archive root falls back to
+	// <data_dir>/worktree-archive when DataDir is known.
+	if out.Worktree.PruneInterval.AsDuration() <= 0 {
+		out.Worktree.PruneInterval = Duration(DefaultPruneInterval)
+	}
+	if out.Worktree.ArchiveRoot == "" && out.Paths.DataDir != "" {
+		out.Worktree.ArchiveRoot = filepath.Join(out.Paths.DataDir, "worktree-archive")
+	}
+
 	pathFields := []*string{
 		&out.Daemon.ControlSocket,
 		&out.CA.KeyPath, &out.CA.PubPath,
@@ -321,7 +347,7 @@ func (c Config) Resolve() (Config, error) {
 		&out.Shipper.BinaryPath, &out.Shipper.ConfigPath, &out.Shipper.LogFile,
 		&out.Paths.TemplatesDir, &out.Paths.ClientConfig, &out.Paths.RuntimeFile,
 		&out.Paths.ConfigDir, &out.Paths.DataDir,
-		&out.Worktree.RepoRoot, &out.Worktree.WorktreesRoot,
+		&out.Worktree.RepoRoot, &out.Worktree.WorktreesRoot, &out.Worktree.ArchiveRoot,
 	}
 	for _, p := range pathFields {
 		if *p == "" {
