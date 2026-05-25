@@ -57,10 +57,14 @@ Subscribe to `agents.<uuid>.frames` and print frames in human-readable form. `--
 
 Lists user-input requests across all agents. Sub-verbs:
 
-- `sextant pending list` — show queue
+- `sextant pending list [--since 1h]` — show queue
 - `sextant pending answer <request_id> "<answer>"` — answer one
 - `sextant pending defer <request_id>` — defer to operator
 - `sextant pending escalate <request_id> --to <agent>` — escalate
+
+**`pending list` implementation (M12)**: subscribe to `user_input.requests.>` with `DeliverAll` for a bounded snapshot of the `user_input` JetStream stream (default retention 30 days, see `pkg/natsboot/layout.go`), then collect every request envelope that does not have a matching `user_input.responses.<request_id>` envelope in the same snapshot. Returns the unanswered queue. The `--since` flag clamps the lookback window. Streaming-live mode is deferred — M12 ships the snapshot form.
+
+The pending answer/defer/escalate verbs publish `kind=user_input_response` envelopes on `user_input.responses.<request_id>` with the appropriate `decision` field per `sextantproto.UserInputResponsePayload`.
 
 ### `sextant files <verb>`
 
@@ -76,10 +80,12 @@ Run command inside agent's container. Capability-gated (operator-level). Audited
 
 ### `sextant audit <verb>`
 
-| Verb | Purpose |
-|---|---|
-| `query [--since 1h] [--agent X] [--action spawn]` | Filter audit log |
-| `tail [--filter ...]` | Live audit stream |
+| Verb | Purpose | RPC |
+|---|---|---|
+| `query [--since 1h] [--actor X] [--action spawn]` | Filter audit log | `query_audit` |
+| `tail [--filter ...]` | Live audit stream | NATS subscribe on `audit.>` |
+
+`query_audit` is a dedicated RPC verb (not `query_history`): it targets the ClickHouse `audit` table directly so the column shape matches `pkg/shipper/mapping.go::AuditRow` (actor, action, capability_required, result, payload) rather than the generic envelope shape. Pinned for M12; the M10 MCP tool `query_audit` switches to this new verb so both surfaces share one backend.
 
 ### `sextant traces show <trace_id>`
 

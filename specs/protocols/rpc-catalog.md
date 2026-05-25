@@ -25,6 +25,8 @@ This document is the catalog; per-verb detailed specs may live in companion file
 | `get_agent_status` | `{ agent_id: UUID }` | `{ status: AgentStatus }` | `read.agents` |
 | `get_session_summary` | `{ agent_id: UUID }` | `{ session: SessionSummary }` | `read.agents` |
 | `query_history` | `{ filter: QueryFilter, time_range: TimeRange }` | `{ events: Envelope[] }` | `read.history` |
+| `query_audit` | `{ filter: AuditFilter, time_range: TimeRange }` | `{ rows: AuditRow[] }` | `read.history` |
+| `query_trace` | `{ trace_id: string }` | `{ spans: TraceSpan[] }` | `read.history` |
 
 ### Agent lifecycle
 
@@ -313,8 +315,136 @@ type QueryHistoryResponse struct {
 
 The handler queries the ClickHouse `events` table; rows are reconstructed into `Envelope` values (Subject is dropped — it is not an envelope field). Wildcard matching on `subject` is intentionally NOT supported in M7 — the filter is exact match; wildcard support lands when a real consumer needs it.
 
+## Verb payloads — M12 additions
+
+These extend the M7 set. Pinned for M12 (CLI surface).
+
+### `restart_agent`
+
+```go
+type RestartAgentRequest struct {
+    AgentID         uuid.UUID `json:"agent_id"`
+    PreserveSession bool      `json:"preserve_session,omitempty"`
+}
+type RestartAgentResponse struct {
+    AgentID uuid.UUID `json:"agent_id"` // same UUID; new incarnation behind it
+    OK      bool      `json:"ok"`
+}
+```
+
+The handler kills the current incarnation (if any), then spawns a fresh one against the same `AgentDefinition`. `PreserveSession` is recorded for future use — M12 doesn't yet persist session state across incarnations, so the flag is accepted but has no effect today.
+
+### `read_file` / `list_dir` / `stat` / `exec_in_container`
+
+```go
+type ReadFileRequest struct {
+    AgentID uuid.UUID `json:"agent_id"`
+    Path    string    `json:"path"`
+}
+type ReadFileResponse struct {
+    Content     []byte `json:"content"`      // base64 on the wire
+    ContentType string `json:"content_type"` // sniffed MIME
+}
+
+type ListDirRequest struct {
+    AgentID uuid.UUID `json:"agent_id"`
+    Path    string    `json:"path"`
+}
+type ListDirEntry struct {
+    Name  string `json:"name"`
+    IsDir bool   `json:"is_dir"`
+    Size  int64  `json:"size,omitempty"`
+    Mode  string `json:"mode,omitempty"`
+}
+type ListDirResponse struct {
+    Entries []ListDirEntry `json:"entries"`
+}
+
+type StatRequest struct {
+    AgentID uuid.UUID `json:"agent_id"`
+    Path    string    `json:"path"`
+}
+type StatResponse struct {
+    Name  string `json:"name"`
+    Size  int64  `json:"size"`
+    Mode  string `json:"mode"`
+    IsDir bool   `json:"is_dir"`
+}
+
+type ExecInContainerRequest struct {
+    AgentID uuid.UUID `json:"agent_id"`
+    Cmd     []string  `json:"cmd"` // first element is the executable
+    Workdir string    `json:"workdir,omitempty"`
+    Env     map[string]string `json:"env,omitempty"`
+}
+type ExecInContainerResponse struct {
+    Stdout   string `json:"stdout"`
+    Stderr   string `json:"stderr"`
+    ExitCode int    `json:"exit_code"`
+}
+```
+
+All four execute via `docker exec` against the live incarnation's container. `read_file_stream` is deferred to a follow-up — M12 ships `files tail` by polling `read_file` on a small interval (file end detection by size comparison).
+
+### `query_audit`
+
+```go
+type QueryAuditRequest struct {
+    Filter    QueryAuditFilter `json:"filter"`
+    TimeRange TimeRange        `json:"time_range"`
+    Limit     int              `json:"limit,omitempty"`
+}
+type QueryAuditFilter struct {
+    Actor     string    `json:"actor,omitempty"`
+    Action    string    `json:"action,omitempty"`
+    AgentUUID uuid.UUID `json:"agent_uuid,omitempty"`
+}
+type QueryAuditRow struct {
+    ID                 uuid.UUID `json:"id"`
+    Ts                 time.Time `json:"ts"`
+    Actor              string    `json:"actor"`
+    AgentUUID          uuid.UUID `json:"agent_uuid"`
+    Action             string    `json:"action"`
+    CapabilityRequired string    `json:"capability_required"`
+    Result             string    `json:"result"`
+    Payload            string    `json:"payload"` // raw JSON string
+}
+type QueryAuditResponse struct {
+    Rows []QueryAuditRow `json:"rows"`
+}
+```
+
+Limit defaults to `QueryHistoryDefaultLimit` (1000) and is capped at `QueryHistoryMaxLimit` (10000). Matches the existing `query_history` clamps so operators can predict the surface across both verbs.
+
+### `query_trace`
+
+```go
+type QueryTraceRequest struct {
+    TraceID string `json:"trace_id"`
+}
+type TraceSpan struct {
+    TraceID       string            `json:"trace_id"`
+    SpanID        string            `json:"span_id"`
+    ParentSpanID  string            `json:"parent_span_id,omitempty"`
+    SpanName      string            `json:"span_name"`
+    SpanKind      string            `json:"span_kind"`
+    ServiceName   string            `json:"service_name"`
+    Timestamp     time.Time         `json:"timestamp"`
+    DurationNanos int64             `json:"duration_nanos"`
+    StatusCode    string            `json:"status_code,omitempty"`
+    StatusMessage string            `json:"status_message,omitempty"`
+    Attributes    map[string]string `json:"attributes,omitempty"`
+}
+type QueryTraceResponse struct {
+    Spans []TraceSpan `json:"spans"` // ordered by Timestamp ASC
+}
+```
+
+Returns every span in `telemetry_traces` with the supplied TraceId. The CLI's `traces show` projects these into a tree by ParentSpanID.
+
 ## Open
 
-- Per-verb detailed schemas (request/response struct fields) — keep here until they grow large enough to warrant own files. The four M7 verbs are pinned in the section above.
+- Per-verb detailed schemas (request/response struct fields) — keep here until they grow large enough to warrant own files. The four M7 verbs are pinned in the section above; M12 adds the file/exec/audit/trace verbs in the section above this one.
 - Capability grant/revoke at runtime — out of scope for initial; JWTs are immutable per incarnation
 - Wildcard subject filtering in `query_history` — deferred; M7 ships exact-match only
+- Streaming `read_file_stream` — deferred to a follow-up; M12 ships `files tail` as a poll loop over `read_file`.
