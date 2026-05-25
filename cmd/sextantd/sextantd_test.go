@@ -89,6 +89,24 @@ permission_ceiling = "auto"
 		[]byte(defaultTpl), 0o600); err != nil {
 		return err
 	}
+	// mock-driver template — the SDK driver integration test uses this
+	// so the container's entrypoint runs --driver=mock and emits a
+	// canned assistant_text + turn_ended pair without an API call.
+	mockTpl := `name = "mock-driver"
+description = "Sidecar SDK driver test template (mock mode, no API call)."
+image = "sextant-sidecar:latest"
+permissions = ["read.agents", "control.prompt"]
+mounts = ["worktree"]
+model = "claude-opus-4-7[1m]"
+permission_ceiling = "auto"
+
+[env]
+SEXTANT_DRIVER = "mock"
+`
+	if err := os.WriteFile(filepath.Join(cfg.Paths.TemplatesDir, "mock-driver.toml"),
+		[]byte(mockTpl), 0o600); err != nil {
+		return err
+	}
 	// CA.
 	privPEM, pubPEM, err := makeCA()
 	if err != nil {
