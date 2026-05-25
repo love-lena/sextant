@@ -3,6 +3,7 @@ package handlers_test
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -74,7 +75,9 @@ func TestReadFileRoundTripsContent(t *testing.T) {
 
 	want := []byte("hello, world\n")
 	runner := &stubExec{responses: map[string]containermgr.ExecResult{
-		"cat /workspace/note.txt": {Stdout: want, ExitCode: 0},
+		// M12 read_file does a size pre-check via stat, then cat.
+		"stat -c %s /workspace/note.txt": {Stdout: []byte("13\n"), ExitCode: 0},
+		"cat /workspace/note.txt":        {Stdout: want, ExitCode: 0},
 	}}
 	h := handlers.NewReadFile(handlers.FilesDeps{
 		Definitions:  defs,
@@ -108,8 +111,13 @@ func TestReadFileMissingFileReturnsBadRequest(t *testing.T) {
 	agentID := uuid.New()
 	seedAgent(t, defs, incs, agentID, "ctr-123")
 
+	// stat returns the canonical error on a missing path; read_file
+	// rejects up-front before it ever touches cat.
 	runner := &stubExec{responses: map[string]containermgr.ExecResult{
-		"cat /nope.txt": {Stderr: []byte("cat: /nope.txt: No such file or directory\n"), ExitCode: 1},
+		"stat -c %s /nope.txt": {
+			Stderr:   []byte("stat: cannot statx '/nope.txt': No such file or directory\n"),
+			ExitCode: 1,
+		},
 	}}
 	h := handlers.NewReadFile(handlers.FilesDeps{
 		Definitions:  defs,
@@ -130,6 +138,102 @@ func TestReadFileMissingFileReturnsBadRequest(t *testing.T) {
 	}
 	if !strings.Contains(cap.resp.Error.Message, "No such file") {
 		t.Errorf("Message = %q, want stderr passthrough", cap.resp.Error.Message)
+	}
+}
+
+// TestReadFileRejectsFileLargerThanCap pins the M12 size-cap fix.
+// Pre-fix the handler claimed a 16 MiB cap in its docstring but
+// returned cat's stdout unconstrained — a 50 MiB file would have
+// blown past NATS max_payload silently. Post-fix the size pre-check
+// rejects with a structured bad_request before any bytes leave the
+// container.
+func TestReadFileRejectsFileLargerThanCap(t *testing.T) {
+	defs := newFakeMutableKV()
+	incs := newFakeMutableKV()
+	agentID := uuid.New()
+	seedAgent(t, defs, incs, agentID, "ctr-123")
+
+	// 50 MiB file — well past the 16 MiB cap.
+	const oversize = 50 * 1024 * 1024
+	runner := &stubExec{responses: map[string]containermgr.ExecResult{
+		"stat -c %s /workspace/huge.bin": {
+			Stdout:   []byte(strconv.FormatInt(oversize, 10) + "\n"),
+			ExitCode: 0,
+		},
+		// If the handler ignored the cap and called cat, this would
+		// return 50 MiB of zeroes. The test asserts cat is NEVER called
+		// by checking lastSpec.Cmd[0] after the handler runs.
+		"cat /workspace/huge.bin": {
+			Stdout:   make([]byte, oversize),
+			ExitCode: 0,
+		},
+	}}
+	h := handlers.NewReadFile(handlers.FilesDeps{
+		Definitions:  defs,
+		Incarnations: incs,
+		Containers:   runner,
+	})
+	cap := &captureEmit{}
+	if err := h(context.Background(), makeReq(t, sextantproto.ReadFileRequest{
+		AgentID: agentID, Path: "/workspace/huge.bin",
+	}), cap.emit()); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if cap.resp.Error == nil {
+		t.Fatal("expected an error for oversized file")
+	}
+	if cap.resp.Error.Code != sextantproto.ErrCodeBadRequest {
+		t.Errorf("Code = %q, want bad_request", cap.resp.Error.Code)
+	}
+	if !strings.Contains(cap.resp.Error.Message, "cap") {
+		t.Errorf("Message = %q, want the cap rationale", cap.resp.Error.Message)
+	}
+	if !strings.Contains(cap.resp.Error.Message, "read_file_stream") {
+		t.Errorf("Message = %q, should point at read_file_stream", cap.resp.Error.Message)
+	}
+	// Critical: the handler must not have invoked cat. We assert via
+	// the runner's lastSpec recording the most recent Exec call —
+	// it should still be the stat call.
+	runner.mu.Lock()
+	last := runner.lastSpec.Cmd
+	runner.mu.Unlock()
+	if len(last) == 0 || last[0] != "stat" {
+		t.Errorf("last exec = %v, want stat (cat must not have been invoked for an oversize file)", last)
+	}
+}
+
+// TestReadFileAcceptsFileAtCap confirms the boundary: a file exactly
+// at ReadFileMaxBytes is accepted.
+func TestReadFileAcceptsFileAtCap(t *testing.T) {
+	defs := newFakeMutableKV()
+	incs := newFakeMutableKV()
+	agentID := uuid.New()
+	seedAgent(t, defs, incs, agentID, "ctr-123")
+
+	atCap := handlers.ReadFileMaxBytes
+	runner := &stubExec{responses: map[string]containermgr.ExecResult{
+		"stat -c %s /workspace/right-at-cap.bin": {
+			Stdout:   []byte(strconv.FormatInt(atCap, 10) + "\n"),
+			ExitCode: 0,
+		},
+		"cat /workspace/right-at-cap.bin": {
+			Stdout:   make([]byte, atCap),
+			ExitCode: 0,
+		},
+	}}
+	h := handlers.NewReadFile(handlers.FilesDeps{
+		Definitions:  defs,
+		Incarnations: incs,
+		Containers:   runner,
+	})
+	cap := &captureEmit{}
+	if err := h(context.Background(), makeReq(t, sextantproto.ReadFileRequest{
+		AgentID: agentID, Path: "/workspace/right-at-cap.bin",
+	}), cap.emit()); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if cap.resp.Error != nil {
+		t.Fatalf("Error = %+v (a file exactly at the cap must be accepted)", cap.resp.Error)
 	}
 }
 
