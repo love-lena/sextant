@@ -21,6 +21,23 @@ type Config struct {
 	ClickHouse ClickHouseConfig `toml:"clickhouse"`
 	MCP        MCPConfig        `toml:"mcp"`
 	Paths      PathsConfig      `toml:"paths"`
+	Worktree   WorktreeConfig   `toml:"worktree"`
+}
+
+// WorktreeConfig governs the M14 worktree manager.
+//
+//   - RepoRoot is the main worktree path (the operator's checked-out
+//     repository). When empty, the daemon skips wiring the worktree
+//     surface; this is the M14 transitional state where the daemon
+//     may run pre-checkout.
+//   - WorktreesRoot is the parent directory where per-task worktrees
+//     land. Default: <data_dir>/worktrees (i.e.
+//     ~/.local/share/sextant/worktrees/). The operator may override to
+//     match the conventions/git-workflow.md default
+//     ~/dev/sextant-worktrees/.
+type WorktreeConfig struct {
+	RepoRoot      string `toml:"repo_root"`
+	WorktreesRoot string `toml:"worktrees_root"`
 }
 
 // DaemonConfig governs the daemon process itself.
@@ -149,6 +166,13 @@ func DefaultConfig(configDir, dataDir string) Config {
 			DataDir:      dataDir,
 			ConfigDir:    configDir,
 		},
+		Worktree: WorktreeConfig{
+			// RepoRoot is intentionally empty in the default — see
+			// WorktreeConfig docs. The operator sets it when their
+			// checkout exists.
+			RepoRoot:      "",
+			WorktreesRoot: filepath.Join(dataDir, "worktrees"),
+		},
 	}
 }
 
@@ -245,6 +269,7 @@ func (c Config) Resolve() (Config, error) {
 		&out.MCP.StdioSocket,
 		&out.Paths.TemplatesDir, &out.Paths.ClientConfig, &out.Paths.RuntimeFile,
 		&out.Paths.ConfigDir, &out.Paths.DataDir,
+		&out.Worktree.RepoRoot, &out.Worktree.WorktreesRoot,
 	}
 	for _, p := range pathFields {
 		if *p == "" {

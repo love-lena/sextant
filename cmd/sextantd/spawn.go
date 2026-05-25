@@ -42,6 +42,11 @@ type spawnRuntime struct {
 	mcpURL       string
 	issuer       string
 	workspaceDir string
+
+	// worktree, when non-nil, is the M14 provider passed through to
+	// handlers.SpawnDeps.Worktree. The daemon sets this after the
+	// worktree runtime is built; nil when worktree.repo_root is unset.
+	worktree handlers.WorktreeProvider
 }
 
 // buildSpawnRuntime opens the KV buckets, the docker client, and
@@ -131,6 +136,13 @@ func (r *spawnRuntime) setMCPURL(addr string) {
 	r.mcpURL = sidecarMCPURL(addr)
 }
 
+// setWorktree installs the M14 worktree provider. Called by the
+// daemon after the worktree runtime is built (see worktree.go); nil
+// is allowed when the worktree surface is disabled.
+func (r *spawnRuntime) setWorktree(p handlers.WorktreeProvider) {
+	r.worktree = p
+}
+
 // asSpawnDeps adapts the runtime into the dep bag the handlers expect.
 // chConn is the ClickHouse driver.Conn we attach as the history
 // writer; nil disables the history-row insert path (handler logs and
@@ -148,6 +160,7 @@ func (r *spawnRuntime) asSpawnDeps(chConn driver.Conn) handlers.SpawnDeps {
 		CA:            nil, // populated by callers (RPC fills it from d.ca; same handle).
 		History:       hist,
 		WorkspaceRoot: r.workspaceDir,
+		Worktree:      r.worktree,
 		HostID:        r.hostID,
 		NATSURL:       r.natsURL,
 		NATSUser:      r.natsUser,
@@ -173,6 +186,7 @@ func (r *spawnRuntime) asMCPDeps(ca *authjwt.CA, chConn driver.Conn) *mcpserver.
 		CA:           ca,
 		History:      hist,
 		WorkspaceDir: r.workspaceDir,
+		Worktree:     r.worktree,
 		HostID:       r.hostID,
 		NATSURL:      r.natsURL,
 		NATSUser:     r.natsUser,

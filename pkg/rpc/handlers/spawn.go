@@ -68,6 +68,14 @@ type SpawnDeps struct {
 	CA            *authjwt.CA
 	History       HistoryWriter
 	WorkspaceRoot string
+	// Worktree, when non-nil, is used to materialize the /workspace
+	// mount for templates whose `mounts` field includes "worktree".
+	// When nil or when the template doesn't request a worktree, the
+	// spawn handler falls back to the M11 stop-gap dir under
+	// WorkspaceRoot. The spawn-time worktree is named per
+	// specs/architecture.md §11 "Worktree naming" via
+	// worktree.SpawnWorktreeName.
+	Worktree      WorktreeProvider
 	HostID        string
 	NATSURL       string
 	NATSUser      string
@@ -80,6 +88,42 @@ type SpawnDeps struct {
 	TestRunLabel string
 	// Now is injected for deterministic timestamps in tests.
 	Now func() time.Time
+}
+
+// WorktreeProvider is the narrow surface the spawn handler needs on
+// pkg/worktree. Defined here (consumer-side) so the handlers package
+// doesn't depend on the worktree package; the daemon adapts its
+// *worktree.Manager into this interface.
+type WorktreeProvider interface {
+	Create(ctx context.Context, name, baseBranch string, owningAgent uuid.UUID) (sextantproto.WorktreeInfo, error)
+	Destroy(ctx context.Context, name string, force bool) error
+}
+
+// SpawnWorktreeName builds the agent-spawn-time worktree name. Pinned
+// to specs/architecture.md §11 "Worktree naming". Duplicated here so
+// callers don't have to import pkg/worktree for the name shape; the
+// canonical implementation lives in pkg/worktree.SpawnWorktreeName.
+func SpawnWorktreeName(templateName string, agentUUID uuid.UUID) string {
+	short := agentUUID.String()
+	if len(short) > 8 {
+		short = short[:8]
+	}
+	safe := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r + ('a' - 'A')
+		case r == '-' || r == '_':
+			return r
+		default:
+			return '-'
+		}
+	}, templateName)
+	if safe == "" {
+		safe = "agent"
+	}
+	return fmt.Sprintf("feat-%s-%s-001", safe, short)
 }
 
 // ContainerRunner is the subset of containermgr.Manager the handlers
@@ -230,15 +274,17 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 			}
 		}
 
-		// 6. Materialize workspace.
-		workspace, err := ensureWorkspaceDir(deps.WorkspaceRoot, agentUUID.String())
+		// 6. Materialize workspace. When the template's `mounts`
+		// includes "worktree" and the daemon has a worktree provider
+		// wired, create a per-incarnation worktree and mount that.
+		// Otherwise, fall back to the M11 stop-gap dir under
+		// WorkspaceRoot.
+		workspace, workspaceCleanup, err := materializeWorkspace(ctx, deps, tpl, agentUUID)
 		if err != nil {
 			return emitErr(emit, sextantproto.ErrCodeInternal,
-				fmt.Sprintf("create workspace dir: %v", err))
+				fmt.Sprintf("create workspace: %v", err))
 		}
-		pushRollback(func() {
-			_ = os.RemoveAll(workspace)
-		})
+		pushRollback(workspaceCleanup)
 
 		// 7+8. Build incarnation record (state=starting) + issue JWT.
 		inc := sextantproto.AgentIncarnation{
@@ -415,7 +461,9 @@ func cloneStringMap(in map[string]string) map[string]string {
 }
 
 // ensureWorkspaceDir creates ~/.local/share/sextant/spawn-workspaces/<uuid>/
-// if missing. M11 stop-gap — M14 wires git worktrees here.
+// if missing. M11 stop-gap — used as the fallback when a template
+// doesn't request a worktree mount (or the daemon has no worktree
+// provider).
 func ensureWorkspaceDir(root, agentUUID string) (string, error) {
 	if root == "" {
 		return "", fmt.Errorf("workspace root is empty")
@@ -425,6 +473,58 @@ func ensureWorkspaceDir(root, agentUUID string) (string, error) {
 		return "", fmt.Errorf("mkdir %s: %w", path, err)
 	}
 	return path, nil
+}
+
+// materializeWorkspace decides whether to create a per-incarnation
+// worktree or fall back to the M11 stop-gap dir, and returns the
+// resolved on-host path + a cleanup closure for the rollback ledger.
+//
+// Rules:
+//
+//   - Template lists "worktree" in mounts AND deps.Worktree non-nil →
+//     create a worktree via worktree.Create; cleanup removes the
+//     worktree.
+//   - Otherwise → ensureWorkspaceDir; cleanup os.RemoveAll's the dir.
+//
+// The fallback path covers two scenarios: M11-style templates that
+// never declared the mount, and templates that do declare it but
+// land on a daemon where worktree.repo_root is unset (M14
+// transitional state).
+func materializeWorkspace(ctx context.Context, deps SpawnDeps, tpl templates.Template, agentUUID uuid.UUID) (string, func(), error) {
+	if wantsWorktreeMount(tpl) && deps.Worktree != nil {
+		name := SpawnWorktreeName(tpl.Name, agentUUID)
+		info, err := deps.Worktree.Create(ctx, name, "main", agentUUID)
+		if err != nil {
+			return "", nil, fmt.Errorf("worktree.Create %s: %w", name, err)
+		}
+		cleanup := func() {
+			//nolint:contextcheck // rollback closure intentionally outlives the request ctx
+			rbCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_ = deps.Worktree.Destroy(rbCtx, info.Name, true)
+		}
+		return info.Path, cleanup, nil
+	}
+	path, err := ensureWorkspaceDir(deps.WorkspaceRoot, agentUUID.String())
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup := func() {
+		_ = os.RemoveAll(path)
+	}
+	return path, cleanup, nil
+}
+
+// wantsWorktreeMount returns true if the template's `mounts` field
+// contains the string "worktree". Spec: specs/architecture.md
+// §"Mount classes".
+func wantsWorktreeMount(tpl templates.Template) bool {
+	for _, m := range tpl.Mounts {
+		if m == "worktree" {
+			return true
+		}
+	}
+	return false
 }
 
 func containerName(agentName string, incID uuid.UUID) string {

@@ -73,6 +73,11 @@ type daemon struct {
 	// doShutdown.
 	spawnRT *spawnRuntime
 
+	// worktreeRT is the M14 worktree manager + KV handles. nil when
+	// worktree.repo_root is unset in the config; the daemon still boots
+	// in that case, just without the worktree surface.
+	worktreeRT *worktreeRuntime
+
 	shutdownOnce sync.Once
 	shutdownErr  error
 }
@@ -282,11 +287,35 @@ func (d *daemon) Start(ctx context.Context) error {
 		return fmt.Errorf("build spawn runtime: %w", err)
 	}
 	spawnRT.setMCPURL(mcpRT.server.HTTPAddr())
+
+	// 11. Build the worktree runtime first so the spawn runtime can
+	// carry it through to spawn_agent (which mounts /workspace as the
+	// per-incarnation worktree when the template requests it).
+	// Optional: when worktree.repo_root is empty the daemon skips
+	// without erroring (M14 transitional state).
+	worktreeRT, err := d.buildWorktreeRuntime(ctx, rpcRT.nc)
+	if err != nil {
+		_ = spawnRT.containers.Close()
+		_ = rpcRT.stopRPC()
+		_ = mcpRT.stop(ctx)
+		if d.supCancel != nil {
+			d.supCancel()
+		}
+		d.closeSocket()
+		_ = sextantd.RemoveRuntimeInfo(d.cfg.Paths.RuntimeFile)
+		_ = d.stopClickHouseNow(ctx)
+		_ = d.stopNATSNow(ctx)
+		return fmt.Errorf("build worktree runtime: %w", err)
+	}
+	if worktreeRT != nil {
+		spawnRT.setWorktree(worktreeRT.mgr)
+	}
 	d.mu.Lock()
 	d.spawnRT = spawnRT
+	d.worktreeRT = worktreeRT
 	d.mu.Unlock()
 
-	// 11. Register the lifecycle verbs on the RPC server now that the
+	// 12. Register the lifecycle verbs on the RPC server now that the
 	// spawn runtime exists. Also hand the same dep bag to the MCP
 	// server so the agent path uses the same backend.
 	if err := rpcRT.registerLifecycleVerbs(d.ca, spawnRT); err != nil {
@@ -303,6 +332,24 @@ func (d *daemon) Start(ctx context.Context) error {
 		return fmt.Errorf("register lifecycle verbs: %w", err)
 	}
 	mcpRT.server.SetSpawnDeps(spawnRT.asMCPDeps(d.ca, rpcRT.chConn))
+
+	// 13. Register the worktree verbs/tools.
+	if worktreeRT != nil {
+		if err := rpcRT.registerWorktreeVerbs(worktreeRT); err != nil {
+			_ = spawnRT.containers.Close()
+			_ = rpcRT.stopRPC()
+			_ = mcpRT.stop(ctx)
+			if d.supCancel != nil {
+				d.supCancel()
+			}
+			d.closeSocket()
+			_ = sextantd.RemoveRuntimeInfo(d.cfg.Paths.RuntimeFile)
+			_ = d.stopClickHouseNow(ctx)
+			_ = d.stopNATSNow(ctx)
+			return fmt.Errorf("register worktree verbs: %w", err)
+		}
+		mcpRT.server.SetWorktree(worktreeRT.mgr)
+	}
 
 	log.Printf("sextantd: ready (nats=%s clickhouse=%s control=%s rpc=sextant.rpc.* mcp=%s)",
 		natsSrv.Address(), chSrv.TCPAddress(), d.cfg.Daemon.ControlSocket, mcpRT.server.HTTPURL())
