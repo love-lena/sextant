@@ -1,11 +1,36 @@
 ---
 title: agents kill leaves agent in 'defined' state — name never released
-status: open
+status: resolved
 priority: P2
 created_at: 2026-05-24T23:18-07:00
+resolved_at: 2026-05-25T00:00-07:00
 labels: [bug, lifecycle, agents-cli]
 discovered_in: phase-1 smoke verification
+resolved_by: feat-lead-f2db6f38-001 (bundle with [[feat-agents-archive-cli-verb]])
 ---
+
+## Resolution
+
+Bundle fix landed on branch `feat-lead-f2db6f38-001`. Both options from
+the proposed fix shipped together so an operator can pick the
+ergonomics that suit the moment:
+
+- **Option A — `kill --archive` flag**: `sextant agents kill <agent>
+  --archive` now issues `kill_agent` + `archive_agent` against the
+  same UUID. The name is released as soon as the kill returns.
+- **Option B — explicit `archive` verb**: `sextant agents archive
+  <agent>` (and the bulk `--all-dead`) flip lifecycle to archived
+  directly. See [[feat-agents-archive-cli-verb]] for the verb's
+  surface and MCP tool registration.
+
+The new `archive_agent` RPC lives at `pkg/rpc/handlers/archive.go`.
+`agentNameInUse` already excluded archived definitions, so flipping
+lifecycle is the only step required to release the name.
+
+Pinned by `TestArchiveAgentReleasesName` and `TestKillWithArchiveFlag`
+in `pkg/rpc/handlers/archive_test.go`. Both assert the exact
+spawn → kill → archive → spawn-again-succeeds shape this issue
+specifies.
 
 ## Summary
 

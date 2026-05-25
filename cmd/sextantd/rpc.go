@@ -167,6 +167,13 @@ func (r *rpcRuntime) registerLifecycleVerbs(ca *authjwt.CA, spawnRT *spawnRuntim
 	})); err != nil {
 		return err
 	}
+	if err := r.server.Register(rpc.VerbArchiveAgent, handlers.NewArchiveAgent(handlers.ArchiveDeps{
+		Definitions:  spawnDeps.Definitions,
+		Incarnations: spawnDeps.Incarnations,
+		Containers:   spawnDeps.Containers,
+	})); err != nil {
+		return err
+	}
 	if err := r.server.Register(rpc.VerbPromptAgent, handlers.NewPromptAgent(handlers.PromptDeps{
 		Definitions: spawnDeps.Definitions,
 		NATS:        r.nc,

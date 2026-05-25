@@ -50,6 +50,9 @@ func TestSchemasOnDisk(t *testing.T) {
 		"kill_agent_response.json":   false,
 		"prompt_agent_request.json":  false,
 		"prompt_agent_response.json": false,
+		// M12 archive verb payloads.
+		"archive_agent_request.json":  false,
+		"archive_agent_response.json": false,
 		// M12 verb payloads.
 		"restart_agent_request.json":      false,
 		"restart_agent_response.json":     false,
