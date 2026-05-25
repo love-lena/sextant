@@ -2,32 +2,38 @@
  * @sextant/sidecar — runtime entrypoint that boots inside every per-agent
  * container.
  *
- * Plan: plans/bootstrap.md#M9
- * Spec: specs/components/sidecar-image.md §"Sidecar entrypoint"
+ * Plan: plans/bootstrap.md#M10 (extended from M9 scaffolding).
+ * Spec: specs/components/sidecar-image.md §"Sidecar entrypoint",
+ *       specs/components/sextantd.md §"MCP server".
  *
- * M9 scope (the scaffolding milestone for the container surface):
+ * Combined M9+M10 scope:
  *
- *   - Read the env-var contract sextantd will set at spawn time.
- *   - Connect to NATS (over the operator password path; the JWT path
- *     lands at M11 when the TS client gains credsAuthenticator support
- *     and sextantd starts issuing per-agent JWTs).
- *   - Publish `lifecycle.started` to `agents.<uuid>.lifecycle`.
- *   - Heartbeat every 5s to `agents.<uuid>.heartbeat`.
- *   - On SIGTERM/SIGINT: publish `lifecycle.ended`, close client, exit 0.
+ *   - Read the env-var contract sextantd sets at spawn time.
+ *   - Connect to NATS (operator password path today; JWT lands at M11).
+ *   - Publish `lifecycle.started`, heartbeat every 5s, drain cleanly on
+ *     SIGTERM/SIGINT.
+ *   - **M10**: connect to sextantd's MCP server over Streamable HTTP at
+ *     `SEXTANT_MCP_URL`, presenting `Authorization: Bearer ${SEXTANT_JWT}`
+ *     on every request. Call `tools/list` once on startup to confirm the
+ *     server is reachable and log the tool catalog the agent can call.
  *
- * Out of M9 scope (lands in M10/M11):
+ * Out of M10 scope (lands in M11):
  *
- *   - MCP server connection (M10 ships the server; M11 wires the sidecar).
- *   - Claude Code Agent SDK driver loop (M11).
- *   - JWT-authenticated NATS connection (M11).
+ *   - Claude Code Agent SDK driver loop that *invokes* the MCP tools.
+ *   - JWT-authenticated NATS connection.
  *
- * The entrypoint is deliberately conservative about which env vars are
- * required so the M9 smoke test (`docker run --rm sextant-sidecar:latest
- * /bin/bash`) doesn't need them at all — only the long-running mode
- * (`sextant-sidecar run`) does.
+ * The entrypoint stays conservative about required env vars so the
+ * smoke test (`docker run --rm sextant-sidecar:latest /bin/bash`)
+ * doesn't need them at all — only the long-running mode
+ * (`sextant-sidecar run`) does. The MCP connection is best-effort: a
+ * missing `SEXTANT_JWT` or `SEXTANT_MCP_URL` logs a warning and skips
+ * the connection rather than failing the sidecar.
  */
 
 import { randomUUID } from "node:crypto";
+
+import { Client as MCPClient } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 import {
   ADDRESS_AGENT,
@@ -104,15 +110,9 @@ function buildConfig(env: SidecarEnv): ClientConfig {
       },
     };
   }
-  if (env.jwt) {
-    throw new Error(
-      "sidecar: SEXTANT_JWT is set but JWT auth is not yet wired in the TS client (lands in M11). " +
-        "For M9 set SEXTANT_OPERATOR_USER + SEXTANT_OPERATOR_PASSWORD to exercise the entrypoint via the operator path.",
-    );
-  }
   throw new Error(
-    "sidecar: no NATS credentials provided. M9 expects SEXTANT_OPERATOR_USER + SEXTANT_OPERATOR_PASSWORD; " +
-      "M11 will accept SEXTANT_JWT instead.",
+    "sidecar: no NATS credentials provided. M9/M10 expect SEXTANT_OPERATOR_USER + SEXTANT_OPERATOR_PASSWORD; " +
+      "M11 will accept SEXTANT_JWT for the NATS conn too. The MCP path uses SEXTANT_JWT directly today.",
   );
 }
 
@@ -176,6 +176,90 @@ async function publishHeartbeat(
   await client.publish(`agents.${env.agentUuid}.heartbeat`, envelope);
 }
 
+/**
+ * Connect to the sextantd MCP server over Streamable HTTP, presenting
+ * the per-incarnation JWT as a Bearer token. Calls `tools/list` once on
+ * connect to confirm the server is reachable and capture the catalog
+ * the agent can call.
+ *
+ * The connection persists for the lifetime of the sidecar — the M11 SDK
+ * driver loop will reuse it to invoke tools. Today the result is logged
+ * and the client is held in scope; the returned MCPClient is closed on
+ * shutdown.
+ *
+ * Failure handling: any error (no URL configured, no JWT, server
+ * unreachable, auth failed) is logged and `null` is returned. The
+ * sidecar keeps running — the MCP path is non-essential for the
+ * heartbeat/lifecycle loop.
+ */
+async function connectMCP(env: SidecarEnv): Promise<MCPClient | null> {
+  if (!env.mcpUrl) {
+    log("info", "SEXTANT_MCP_URL unset; skipping MCP connection");
+    return null;
+  }
+  if (!env.jwt) {
+    log(
+      "warn",
+      "SEXTANT_MCP_URL set but SEXTANT_JWT missing; cannot authenticate to MCP",
+      { mcpUrl: env.mcpUrl },
+    );
+    return null;
+  }
+
+  let url: URL;
+  try {
+    url = new URL(env.mcpUrl);
+  } catch (err) {
+    log("error", "SEXTANT_MCP_URL is not a valid URL", {
+      mcpUrl: env.mcpUrl,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+
+  const transport = new StreamableHTTPClientTransport(url, {
+    requestInit: {
+      headers: {
+        Authorization: `Bearer ${env.jwt}`,
+      },
+    },
+  });
+  const client = new MCPClient(
+    {
+      name: "@sextant/sidecar",
+      version: "0.1.0",
+    },
+    {
+      capabilities: {},
+    },
+  );
+
+  try {
+    await client.connect(transport);
+  } catch (err) {
+    log("error", "MCP connect failed", {
+      mcpUrl: env.mcpUrl,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+
+  try {
+    const { tools } = await client.listTools();
+    log("info", "MCP connected", {
+      mcpUrl: env.mcpUrl,
+      toolCount: tools.length,
+      tools: tools.map((t) => t.name),
+    });
+  } catch (err) {
+    log("warn", "MCP listTools failed after connect", {
+      err: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  return client;
+}
+
 /** Heartbeat interval. Spec says "every N seconds"; pin at 5s for M9. */
 const HEARTBEAT_INTERVAL_MS = 5_000;
 
@@ -222,11 +306,8 @@ async function run(): Promise<void> {
   if (env.jwt && !env.operatorPassword) {
     log(
       "warn",
-      "SEXTANT_JWT set but JWT auth lands in M11; need SEXTANT_OPERATOR_USER + SEXTANT_OPERATOR_PASSWORD for M9",
+      "SEXTANT_JWT set but NATS JWT auth lands in M11; need SEXTANT_OPERATOR_USER + SEXTANT_OPERATOR_PASSWORD for the NATS conn",
     );
-  }
-  if (env.mcpUrl) {
-    log("info", "SEXTANT_MCP_URL set; MCP wiring lands in M11", { mcpUrl: env.mcpUrl });
   }
 
   const config = buildConfig(env);
@@ -239,10 +320,15 @@ async function run(): Promise<void> {
     hostId: env.hostId,
     incarnationId,
     natsUrl: env.natsUrl,
+    mcpUrl: env.mcpUrl ?? null,
   });
 
   const client = await connectWithConfig(config);
   log("info", "nats connected");
+
+  // M10: open the MCP client connection. Failure here logs but does
+  // not abort the sidecar — heartbeats/lifecycle remain the contract.
+  const mcpClient = await connectMCP(env);
 
   await publishLifecycle(client, env, incarnationId, "started");
   log("info", "lifecycle.started published");
@@ -299,6 +385,15 @@ async function run(): Promise<void> {
       log("error", "lifecycle.ended publish failed", {
         err: err instanceof Error ? err.message : String(err),
       });
+    }
+    if (mcpClient) {
+      try {
+        await mcpClient.close();
+      } catch (err) {
+        log("error", "mcp client close failed", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
     try {
       await client.close();
