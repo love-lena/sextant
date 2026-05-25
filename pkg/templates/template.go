@@ -18,6 +18,44 @@ import (
 // row in pkg/natsboot/layout.go.
 const Bucket = "templates"
 
+// Mount class identifiers accepted in the template `mounts` field. The
+// spawn handler resolves each class to a concrete container bind mount.
+// New classes must be added here AND wired in the spawn handler;
+// validation in Template.Validate guards against typo'd values like
+// "shh". See specs/architecture.md §11b "Mount classes".
+const (
+	// MountClassWorktree → the agent's git worktree → /workspace.
+	MountClassWorktree = "worktree"
+	// MountClassSecrets → the per-template subset of
+	// ~/.config/sextant/secrets/ → read-only mount. Stubbed; full
+	// resolver lands with the secrets-store milestone.
+	MountClassSecrets = "secrets"
+	// MountClassSSH → host's ~/.ssh → /home/agent/.ssh read-only. Opt-in
+	// so agents can `git push` over SSH. See
+	// plans/issues/feat-container-ssh-passthrough.md and
+	// specs/components/sidecar-image.md.
+	MountClassSSH = "ssh"
+)
+
+// KnownMountClasses returns the sorted set of mount class strings the
+// template loader accepts. Mirrored into error messages so a malformed
+// template tells the operator exactly which values are valid.
+func KnownMountClasses() []string {
+	return []string{MountClassWorktree, MountClassSecrets, MountClassSSH}
+}
+
+// KnownMountClass reports whether name is one of the accepted mount
+// class identifiers. Kept package-level so the spawn handler can reuse
+// it when it inspects a template's mounts.
+func KnownMountClass(name string) bool {
+	for _, k := range KnownMountClasses() {
+		if k == name {
+			return true
+		}
+	}
+	return false
+}
+
 // Template is the parsed shape of one agent-template TOML file. The
 // schema is specs/architecture.md §11b. Fields are additive; new
 // optional fields are safe to add without a wire break.
@@ -62,6 +100,16 @@ func (t Template) Validate() error {
 		// valid
 	default:
 		return fmt.Errorf("templates: permission_ceiling must be \"auto\" or \"plan\" (template %q, got %q)", t.Name, t.PermissionCeiling)
+	}
+	// Mounts is an allowlist — unknown values fail loudly so a typo'd
+	// class name (e.g. "shh" instead of "ssh") doesn't silently produce
+	// an agent without the intended mount. See specs/architecture.md §11b
+	// "Mount classes" for the resolved set.
+	for _, m := range t.Mounts {
+		if !KnownMountClass(m) {
+			return fmt.Errorf("templates: unknown mount class %q (template %q); known: %s",
+				m, t.Name, strings.Join(KnownMountClasses(), ", "))
+		}
 	}
 	if t.ClaudeSeed != "" {
 		expanded, err := ExpandClaudeSeed(t.ClaudeSeed)
