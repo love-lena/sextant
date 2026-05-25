@@ -34,9 +34,15 @@ Every verb supports --json for machine-parseable output. Use
 --config-dir to point at a non-default sextant install.`
 
 // runAgents dispatches the second-level verb (list/show/spawn/kill/prompt).
+//
+// Uses fmt.Fprintln directly rather than the package's `println` helper
+// (output.go) because the helper shadows Go's builtin println — a casual
+// reader can't tell at a glance which one is in scope. Explicit
+// fmt.Fprintln(os.Stderr, ...) removes the ambiguity at the dispatch
+// site where it matters most.
 func runAgents(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		println(os.Stderr, agentsUsage)
+		_, _ = fmt.Fprintln(os.Stderr, agentsUsage)
 		return errUserUsage("missing agents verb")
 	}
 	verb, rest := args[0], args[1:]
@@ -52,10 +58,10 @@ func runAgents(ctx context.Context, args []string) error {
 	case "prompt":
 		return runAgentsPrompt(ctx, rest)
 	case "-h", "--help", "help":
-		println(os.Stdout, agentsUsage)
+		_, _ = fmt.Fprintln(os.Stdout, agentsUsage)
 		return nil
 	default:
-		println(os.Stderr, agentsUsage)
+		_, _ = fmt.Fprintln(os.Stderr, agentsUsage)
 		return errUserUsage(fmt.Sprintf("unknown agents verb %q", verb))
 	}
 }
