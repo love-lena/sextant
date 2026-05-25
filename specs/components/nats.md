@@ -51,7 +51,7 @@ Retention numbers are starting points; tune based on disk usage.
 | Bucket | Purpose | Notes |
 |---|---|---|
 | `agent_definitions` | current agent definition per UUID | watchable |
-| `agent_incarnations` | current/last incarnation per agent UUID (M11+) | one entry per incarnation_id; latest is the live one |
+| `agent_incarnations` | one entry per `incarnation_id` (M11+) | keyed by incarnation_id (UUID); the live incarnation per agent is the one with `ended_at == null` |
 | `templates` | agent templates | shipped defaults + operator-added |
 | `viz_specs` | visualization specs | post-M17 feature |
 | `ui_state` | inter-UI coordination | per-operator-scoped keys |
