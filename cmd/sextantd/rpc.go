@@ -9,6 +9,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/love-lena/sextant-initial/pkg/authjwt"
 	"github.com/love-lena/sextant-initial/pkg/rpc"
 	"github.com/love-lena/sextant-initial/pkg/rpc/handlers"
 	"github.com/love-lena/sextant-initial/pkg/sextantproto"
@@ -22,9 +23,10 @@ import (
 // The daemon holds at most one rpcRuntime at a time — the daemon's
 // rpc field. It is created in startRPC and torn down in stopRPC.
 type rpcRuntime struct {
-	server *rpc.Server
-	nc     *nats.Conn
-	chConn driver.Conn
+	server      *rpc.Server
+	nc          *nats.Conn
+	chConn      driver.Conn
+	agentDefsKV jetstream.KeyValue
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -105,11 +107,12 @@ func (d *daemon) startRPC(ctx context.Context) (*rpcRuntime, error) {
 	}()
 
 	return &rpcRuntime{
-		server: srv,
-		nc:     nc,
-		chConn: chConn,
-		cancel: cancel,
-		done:   done,
+		server:      srv,
+		nc:          nc,
+		chConn:      chConn,
+		agentDefsKV: kv,
+		cancel:      cancel,
+		done:        done,
 	}, nil
 }
 
@@ -124,6 +127,35 @@ func registerInitialVerbs(srv *rpc.Server, kv handlers.AgentKV, chConn handlers.
 		return err
 	}
 	if err := srv.Register(rpc.VerbQueryHistory, handlers.NewQueryHistory(chConn)); err != nil {
+		return err
+	}
+	return nil
+}
+
+// registerLifecycleVerbs wires the M11 agent-lifecycle verbs onto the
+// RPC server now that the spawn runtime exists. The CA is the daemon's
+// signing CA (rpc handler embeds it in every issued JWT).
+func (r *rpcRuntime) registerLifecycleVerbs(ca *authjwt.CA, spawnRT *spawnRuntime) error {
+	spawnDeps := spawnRT.asSpawnDeps(r.chConn)
+	spawnDeps.CA = ca
+	if err := r.server.Register(rpc.VerbSpawnAgent, handlers.NewSpawnAgent(spawnDeps)); err != nil {
+		return err
+	}
+	if err := r.server.Register(rpc.VerbKillAgent, handlers.NewKillAgent(handlers.KillDeps{
+		Definitions:  spawnDeps.Definitions,
+		Incarnations: spawnDeps.Incarnations,
+		Containers:   spawnDeps.Containers,
+	})); err != nil {
+		return err
+	}
+	if err := r.server.Register(rpc.VerbPromptAgent, handlers.NewPromptAgent(handlers.PromptDeps{
+		Definitions: spawnDeps.Definitions,
+		NATS:        r.nc,
+		From: sextantproto.Address{
+			Kind: sextantproto.AddressDaemon,
+			ID:   "daemon",
+		},
+	})); err != nil {
 		return err
 	}
 	return nil
