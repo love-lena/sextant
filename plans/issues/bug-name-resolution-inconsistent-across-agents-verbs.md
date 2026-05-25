@@ -1,8 +1,9 @@
 ---
 title: `sextant agents` verbs inconsistently accept names vs UUIDs
-status: open
+status: fixed
 priority: P3
 created_at: 2026-05-25T14:53-07:00
+fixed_in: 4fb95d9583046315d1ddffdc492073a9930ace5b
 labels: [bug, cli, agents-cli, ergonomics]
 discovered_in: assistant-agent daily-drive setup
 ---
