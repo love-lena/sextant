@@ -191,7 +191,7 @@ func TestWorktreePrunerDeletesIdleOver30d(t *testing.T) {
 // emits an audit.worktree_pruned_orphan envelope. Recent orphans
 // (mtime < archive threshold) are left in place with a warning.
 func TestWorktreePrunerHandlesKVOrphans(t *testing.T) {
-	mgr, reg, _, _ := buildManager(t)
+	mgr, _, _, _ := buildManager(t)
 	wtRoot := mgr.WorktreesRoot()
 
 	// Stranded orphan: directory on disk with old mtime, no KV entry.
@@ -227,7 +227,11 @@ func TestWorktreePrunerHandlesKVOrphans(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPruner: %v", err)
 	}
-	report, err := pr.Run(context.Background(), worktree.PruneRunOptions{})
+	// Opt into orphan deletion; without AllowOrphanDelete the pruner
+	// refuses to touch on-disk dirs that aren't in the registry — a
+	// defensive default that protects operator-curated paths the
+	// daemon doesn't know about.
+	report, err := pr.Run(context.Background(), worktree.PruneRunOptions{AllowOrphanDelete: true})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -256,10 +260,56 @@ func TestWorktreePrunerHandlesKVOrphans(t *testing.T) {
 	if !sawOrphan {
 		t.Errorf("missing audit.worktree_pruned_orphan; got %+v", audits)
 	}
+}
 
-	// Sanity: the registry is still empty (we never registered anyone).
-	if len(reg.entries) != 0 {
-		t.Errorf("registry should still be empty: %+v", reg.entries)
+// TestWorktreePrunerRefusesUnregisteredPaths pins the safe-by-default
+// behavior: an old on-disk directory without a registry entry is NOT
+// deleted unless the caller explicitly passes AllowOrphanDelete=true.
+// This is the guard against the pruner wiping operator-curated
+// directories that happen to live in worktreesRoot but were created
+// outside sextant.
+func TestWorktreePrunerRefusesUnregisteredPaths(t *testing.T) {
+	mgr, _, _, _ := buildManager(t)
+	wtRoot := mgr.WorktreesRoot()
+
+	// Old on-disk dir (100d) with no KV entry — exactly the shape
+	// the operator's pre-existing worktrees would have.
+	orphanName := "feat-operator-keepme-001"
+	orphanPath := filepath.Join(wtRoot, orphanName)
+	if err := os.MkdirAll(orphanPath, 0o750); err != nil {
+		t.Fatalf("mkdir orphan: %v", err)
+	}
+	old := time.Now().Add(-100 * 24 * time.Hour)
+	if err := os.Chtimes(orphanPath, old, old); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	audits := []worktree.PruneAudit{}
+	pr, err := worktree.NewPruner(worktree.PrunerConfig{
+		Manager:     mgr,
+		ArchiveRoot: filepath.Join(t.TempDir(), "archive"),
+		Now:         time.Now,
+		AuditFn:     func(a worktree.PruneAudit) { audits = append(audits, a) },
+	})
+	if err != nil {
+		t.Fatalf("NewPruner: %v", err)
+	}
+
+	report, err := pr.Run(context.Background(), worktree.PruneRunOptions{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if _, err := os.Stat(orphanPath); err != nil {
+		t.Errorf("safe-by-default failed: unregistered orphan was removed (or stat err): %v", err)
+	}
+	if report.OrphansDeleted != 0 {
+		t.Errorf("OrphansDeleted = %d, want 0 (orphan delete is opt-in)", report.OrphansDeleted)
+	}
+	for _, a := range audits {
+		if a.Action == "audit.worktree_pruned_orphan" {
+			t.Errorf("audit.worktree_pruned_orphan should not fire when AllowOrphanDelete=false; got %+v", a)
+		}
 	}
 }
 

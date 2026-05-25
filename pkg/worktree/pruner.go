@@ -64,8 +64,19 @@ type PrunerConfig struct {
 // reports what would happen without performing any disk or KV
 // mutation; AuditFn is not called either (the dry-run is an
 // inspection, not an action).
+//
+// AllowOrphanDelete=false (default) makes the pruner SKIP any disk
+// dir not in the worktrees KV registry — even if old enough by the
+// archive threshold. Orphans are by definition things sextant did
+// not create or has lost track of, and silently deleting them on
+// the operator's disk is high-blast-radius. Operators opt in via
+// `sextant worktree prune --apply --orphan-delete` or by setting it
+// explicitly in the daemon ticker path. Registered worktrees are
+// unaffected by this flag — they always follow the archive/delete
+// policy.
 type PruneRunOptions struct {
-	DryRun bool
+	DryRun            bool
+	AllowOrphanDelete bool
 }
 
 // PruneAudit is the structured record the Pruner hands to AuditFn for
@@ -429,7 +440,21 @@ func (p *Pruner) reconcileOrphans(ctx context.Context, opts PruneRunOptions, reg
 			})
 			continue
 		}
-		// Old enough to delete. Honor dry-run.
+		// Old enough that the policy would delete it — but orphans
+		// are off by default to protect operator-curated dirs that
+		// the registry doesn't know about. Only act when the caller
+		// explicitly opts in.
+		if !opts.AllowOrphanDelete {
+			report.Skipped++
+			report.Plans = append(report.Plans, PrunePlan{
+				Name:   name,
+				Path:   path,
+				Action: "orphan_keep",
+				Reason: fmt.Sprintf("orphan idle %dd ≥ %s threshold but AllowOrphanDelete=false — keeping for operator review", ageDays, humanDays(p.archiveAge)),
+			})
+			continue
+		}
+		// Old enough to delete and operator opted in. Honor dry-run.
 		plan := PrunePlan{
 			Name:   name,
 			Path:   path,

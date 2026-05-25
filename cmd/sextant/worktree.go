@@ -24,9 +24,11 @@ Verbs:
   destroy <name> [--force]               Remove a worktree's dir + registry entry.
   merge <name> [--target main]           Merge a worktree's branch into target.
   diff <name> [--against main]           Show the diff against a target branch.
-  prune [--dry-run]                      Enforce the idle-worktree policy now:
-                                         archive >14d, delete >30d. --dry-run
-                                         lists the plan without acting.
+  prune [--apply] [--orphan-delete]      Enforce the idle-worktree policy now:
+                                         archive >14d, delete >30d. Defaults to
+                                         dry-run; pass --apply to act. Pass
+                                         --orphan-delete to also remove on-disk
+                                         dirs without a registry entry.
 
 Every verb supports --json for machine-parseable output. Use
 --config-dir to point at a non-default sextant install.
@@ -218,14 +220,20 @@ func runWorktreeMerge(ctx context.Context, args []string) error {
 // as a human-readable table.
 func runWorktreePrune(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("sextant worktree prune", flag.ContinueOnError)
-	var dryRun bool
-	fs.BoolVar(&dryRun, "dry-run", false, "list what would happen without acting")
+	// Defaults to dry-run. The operator opts into real action with
+	// --apply; this is deliberately the inverse of the spec's
+	// original --dry-run shape because the blast radius of an
+	// accidental sweep is high. Orphan deletion is doubly opt-in.
+	var apply bool
+	var orphanDelete bool
+	fs.BoolVar(&apply, "apply", false, "perform the planned actions (default is dry-run)")
+	fs.BoolVar(&orphanDelete, "orphan-delete", false, "also delete on-disk dirs that aren't in the worktrees registry (requires --apply to take effect)")
 	opts, rest, err := parseCommonOpts(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(rest) != 0 {
-		return errUserUsage("sextant worktree prune [--dry-run]")
+		return errUserUsage("sextant worktree prune [--apply] [--orphan-delete]")
 	}
 	cli, _, err := connectAgent(ctx, opts.configDir)
 	if err != nil {
@@ -233,7 +241,11 @@ func runWorktreePrune(ctx context.Context, args []string) error {
 	}
 	defer cli.Close() //nolint:errcheck // best-effort close
 
-	reqRaw, err := json.Marshal(sextantd.WorktreePruneRequest{DryRun: dryRun})
+	dryRun := !apply
+	reqRaw, err := json.Marshal(sextantd.WorktreePruneRequest{
+		DryRun:            dryRun,
+		AllowOrphanDelete: orphanDelete,
+	})
 	if err != nil {
 		return fmt.Errorf("marshal request: %w", err)
 	}
