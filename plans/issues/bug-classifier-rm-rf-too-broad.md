@@ -1,8 +1,9 @@
 ---
 title: Sidecar bash classifier denies `rm -rf` anywhere — blocks legitimate `rm -rf /tmp/somedir`
-status: open
+status: fixed
 priority: P3
 created_at: 2026-05-25T14:53-07:00
+fixed_in: 800eb77
 labels: [bug, sidecar, classifier, permissions]
 discovered_in: dev-3 first sextant-driven dispatch
 ---
