@@ -311,3 +311,139 @@ func TestDoctorFailsOnMissingConfig(t *testing.T) {
 		t.Error("expected at least one fail row when nothing is initialized")
 	}
 }
+
+// TestDoctor_DaemonNotRunning_HasRemedy ensures the not-running daemon row
+// carries the obvious remedy. The daemon row reaches the not-running state
+// after a fresh init when no daemon has been started.
+func TestDoctor_DaemonNotRunning_HasRemedy(t *testing.T) {
+	opts := tempInitOpts(t)
+	var buf bytes.Buffer
+	if err := doInit(context.Background(), &buf, opts); err != nil {
+		t.Fatalf("doInit: %v", err)
+	}
+	results := collectChecks(context.Background(), opts.ConfigDir, opts.DataDir)
+	var row *CheckResult
+	for i := range results {
+		if results[i].Kind == "daemon" && results[i].Status == StatusNotRunning {
+			row = &results[i]
+		}
+	}
+	if row == nil {
+		t.Fatalf("no daemon not-running row in %+v", results)
+	}
+	const want = "start the daemon: sextant start"
+	if row.Remedy != want {
+		t.Errorf("daemon not-running remedy = %q, want %q", row.Remedy, want)
+	}
+}
+
+// TestDoctor_BinaryBehind_HasRemedy reuses the stale-binary harness from
+// TestDoctorFlagsStaleBinary and asserts the warn row carries the obvious
+// remedy ("refresh installed binary: make install").
+func TestDoctor_BinaryBehind_HasRemedy(t *testing.T) {
+	repoRoot := stubGitRepo(t)
+	firstSHA := gitRunOut(t, repoRoot, "rev-parse", "HEAD")
+	if err := os.WriteFile(filepath.Join(repoRoot, "b.txt"), []byte("b"), 0o644); err != nil {
+		t.Fatalf("write b.txt: %v", err)
+	}
+	gitRun(t, repoRoot, "add", ".")
+	gitRun(t, repoRoot, "commit", "-q", "-m", "second")
+
+	r, ok := checkBinaryVersion(repoRoot, firstSHA)
+	if !ok {
+		t.Fatal("checkBinaryVersion returned skip; want emitted result")
+	}
+	const want = "refresh installed binary: make install"
+	if r.Remedy != want {
+		t.Errorf("binary-version behind remedy = %q, want %q", r.Remedy, want)
+	}
+}
+
+// TestDoctor_HumanOutput_RendersRemedyLine ensures the human-readable
+// emit() output appends an indented "→ <remedy>" line under each row that
+// has a remedy populated.
+func TestDoctor_HumanOutput_RendersRemedyLine(t *testing.T) {
+	results := []CheckResult{
+		{
+			Kind:   "daemon",
+			Check:  "/tmp/runtime.json",
+			Status: StatusNotRunning,
+			Detail: "runtime.json not present (daemon not started)",
+			Remedy: "start the daemon: sextant start",
+		},
+	}
+	var out bytes.Buffer
+	emit(&out, results, false)
+	got := out.String()
+	if !strings.Contains(got, "start the daemon: sextant start") {
+		t.Errorf("human output missing remedy text:\n%s", got)
+	}
+	if !strings.Contains(got, "→") {
+		t.Errorf("human output missing arrow indicator:\n%s", got)
+	}
+}
+
+// TestDoctor_JSONOutput_HasRemedyField checks that --json emits the
+// "remedy" key for rows that carry a remedy, and omits it (via omitempty)
+// for rows that don't.
+func TestDoctor_JSONOutput_HasRemedyField(t *testing.T) {
+	results := []CheckResult{
+		{
+			Kind:   "daemon",
+			Check:  "/tmp/runtime.json",
+			Status: StatusNotRunning,
+			Detail: "runtime.json not present (daemon not started)",
+			Remedy: "start the daemon: sextant start",
+		},
+		{
+			Kind:   "config",
+			Check:  "/tmp/sextantd.toml",
+			Status: StatusPass,
+			Detail: "loaded",
+		},
+	}
+	var out bytes.Buffer
+	emit(&out, results, true)
+	raw := out.String()
+	if !strings.Contains(raw, `"remedy"`) {
+		t.Errorf("JSON output missing remedy field:\n%s", raw)
+	}
+	if !strings.Contains(raw, "start the daemon: sextant start") {
+		t.Errorf("JSON output missing remedy text:\n%s", raw)
+	}
+	// Round-trip and ensure the passing config row didn't gain a remedy.
+	var parsed []CheckResult
+	if err := json.Unmarshal(out.Bytes(), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, raw)
+	}
+	for _, r := range parsed {
+		if r.Kind == "config" && r.Remedy != "" {
+			t.Errorf("passing config row got remedy %q (omitempty broken)", r.Remedy)
+		}
+	}
+}
+
+// TestDoctor_PassingCheck_NoRemedy ensures passing checks don't carry
+// remedies in either format. A passing row with a remedy would be a UX
+// regression — operators shouldn't see "fix it" advice next to "all good".
+func TestDoctor_PassingCheck_NoRemedy(t *testing.T) {
+	opts := tempInitOpts(t)
+	var buf bytes.Buffer
+	if err := doInit(context.Background(), &buf, opts); err != nil {
+		t.Fatalf("doInit: %v", err)
+	}
+	results := collectChecks(context.Background(), opts.ConfigDir, opts.DataDir)
+	for _, r := range results {
+		if r.Status == StatusPass && r.Remedy != "" {
+			t.Errorf("passing check %s/%s carried remedy %q", r.Kind, r.Check, r.Remedy)
+		}
+	}
+	// Also verify human output doesn't render arrow lines under passing rows.
+	var out bytes.Buffer
+	emit(&out, results, false)
+	for _, line := range strings.Split(out.String(), "\n") {
+		if strings.Contains(line, "→") && strings.Contains(line, "pass") {
+			t.Errorf("passing row rendered remedy line: %q", line)
+		}
+	}
+}

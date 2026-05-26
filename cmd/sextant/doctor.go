@@ -32,12 +32,30 @@ const (
 )
 
 // CheckResult is one row in doctor's report.
+//
+// Remedy is the obvious next action when a check fails or warns and the
+// answer is mechanical (e.g. "make install", "run sextant init"). Left
+// blank when the failure mode needs operator judgment — doctor shouldn't
+// invent vague advice like "look at logs".
 type CheckResult struct {
 	Kind   string      `json:"kind"`
 	Check  string      `json:"check"`
 	Status CheckStatus `json:"status"`
 	Detail string      `json:"detail,omitempty"`
+	Remedy string      `json:"remedy,omitempty"`
 }
+
+// Remedy strings — kept as package-level consts so tests and the rendering
+// code share the exact text, and grep can find every site that wires one
+// up.
+const (
+	remedyStartDaemon       = "start the daemon: sextant start"
+	remedyMakeInstall       = "refresh installed binary: make install"
+	remedyCommitThenInstall = "commit/stash changes, then make install"
+	remedyRunInit           = "run sextant init"
+	remedyRestartForStream  = "restart sextantd to re-run Bootstrap()"
+	remedyRestartForMigrate = "restart sextantd to re-run migrations"
+)
 
 var errDoctorFailures = errors.New("doctor: one or more checks failed")
 
@@ -89,6 +107,7 @@ func collectChecks(ctx context.Context, cfgDir, dataDir string) []CheckResult {
 		out = append(out, CheckResult{
 			Kind: "config", Check: sextantdTomlPath,
 			Status: StatusFail, Detail: cfgErr.Error(),
+			Remedy: remedyRunInit,
 		})
 		// Without config, every downstream check would need fallback
 		// paths. Use defaults so the rest of the report is still useful.
@@ -132,6 +151,7 @@ func collectChecks(ctx context.Context, cfgDir, dataDir string) []CheckResult {
 		out = append(out, CheckResult{
 			Kind: "daemon", Check: cfg.Paths.RuntimeFile,
 			Status: StatusNotRunning, Detail: "runtime.json not present (daemon not started)",
+			Remedy: remedyStartDaemon,
 		})
 	default:
 		out = append(out, CheckResult{
@@ -146,7 +166,10 @@ func checkCA(keyPath, pubPath string) CheckResult {
 	st, err := os.Stat(keyPath)
 	switch {
 	case err != nil:
-		return CheckResult{Kind: "ca", Check: keyPath, Status: StatusFail, Detail: err.Error()}
+		return CheckResult{
+			Kind: "ca", Check: keyPath, Status: StatusFail, Detail: err.Error(),
+			Remedy: remedyRunInit,
+		}
 	case st.Mode().Perm() != 0o600:
 		return CheckResult{
 			Kind: "ca", Check: keyPath, Status: StatusFail,
@@ -154,7 +177,10 @@ func checkCA(keyPath, pubPath string) CheckResult {
 		}
 	}
 	if _, err := authjwt.LoadCA(keyPath, pubPath); err != nil {
-		return CheckResult{Kind: "ca", Check: keyPath, Status: StatusFail, Detail: err.Error()}
+		return CheckResult{
+			Kind: "ca", Check: keyPath, Status: StatusFail, Detail: err.Error(),
+			Remedy: remedyRunInit,
+		}
 	}
 	return CheckResult{Kind: "ca", Check: keyPath, Status: StatusPass, Detail: "ed25519 keypair valid"}
 }
@@ -162,7 +188,10 @@ func checkCA(keyPath, pubPath string) CheckResult {
 func checkOperatorCreds(path string) CheckResult {
 	st, err := os.Stat(path)
 	if err != nil {
-		return CheckResult{Kind: "operator-creds", Check: path, Status: StatusFail, Detail: err.Error()}
+		return CheckResult{
+			Kind: "operator-creds", Check: path, Status: StatusFail, Detail: err.Error(),
+			Remedy: remedyRunInit,
+		}
 	}
 	if st.Mode().Perm() != 0o600 {
 		return CheckResult{
@@ -171,7 +200,10 @@ func checkOperatorCreds(path string) CheckResult {
 		}
 	}
 	if _, err := sextantd.ReadOperatorCreds(path); err != nil {
-		return CheckResult{Kind: "operator-creds", Check: path, Status: StatusFail, Detail: err.Error()}
+		return CheckResult{
+			Kind: "operator-creds", Check: path, Status: StatusFail, Detail: err.Error(),
+			Remedy: remedyRunInit,
+		}
 	}
 	return CheckResult{Kind: "operator-creds", Check: path, Status: StatusPass, Detail: "loaded"}
 }
@@ -179,7 +211,10 @@ func checkOperatorCreds(path string) CheckResult {
 func checkClickHousePassword(path string) CheckResult {
 	st, err := os.Stat(path)
 	if err != nil {
-		return CheckResult{Kind: "clickhouse-password", Check: path, Status: StatusFail, Detail: err.Error()}
+		return CheckResult{
+			Kind: "clickhouse-password", Check: path, Status: StatusFail, Detail: err.Error(),
+			Remedy: remedyRunInit,
+		}
 	}
 	if st.Mode().Perm() != 0o600 {
 		return CheckResult{
@@ -188,7 +223,10 @@ func checkClickHousePassword(path string) CheckResult {
 		}
 	}
 	if _, err := sextantd.ReadPasswordFile(path); err != nil {
-		return CheckResult{Kind: "clickhouse-password", Check: path, Status: StatusFail, Detail: err.Error()}
+		return CheckResult{
+			Kind: "clickhouse-password", Check: path, Status: StatusFail, Detail: err.Error(),
+			Remedy: remedyRunInit,
+		}
 	}
 	return CheckResult{Kind: "clickhouse-password", Check: path, Status: StatusPass, Detail: "loaded"}
 }
@@ -322,12 +360,14 @@ func checkBinaryVersion(repoRoot, installedSHA string) (CheckResult, bool) {
 			Kind: "binary-version", Check: repoRoot, Status: StatusWarn,
 			Detail: fmt.Sprintf("installed %s is not in ancestry of workspace HEAD %s; consider `make install`",
 				shortSHA(installedSHA), shortSHA(headSHA)),
+			Remedy: remedyMakeInstall,
 		}, true
 	}
 	return CheckResult{
 		Kind: "binary-version", Check: repoRoot, Status: StatusWarn,
 		Detail: fmt.Sprintf("installed binary is %d commits behind workspace HEAD (%s → %s); consider `make install`",
 			ahead, shortSHA(installedSHA), shortSHA(headSHA)),
+		Remedy: remedyMakeInstall,
 	}, true
 }
 
@@ -364,6 +404,7 @@ func checkWorkingTree(repoRoot string) (CheckResult, bool) {
 	return CheckResult{
 		Kind: "working-tree", Check: repoRoot, Status: StatusWarn,
 		Detail: fmt.Sprintf("%d files differ from HEAD; run `git checkout HEAD -- .` to sync", n),
+		Remedy: remedyCommitThenInstall,
 	}, true
 }
 
@@ -436,6 +477,14 @@ func emit(w io.Writer, results []CheckResult, asJSON bool) bool {
 			maxStatus, string(r.Status),
 			r.Detail,
 		)
+		// Indented remedy line under the row, only when populated.
+		// Indent matches the second column so the arrow lines up under
+		// the check name visually. Passing rows never carry a remedy
+		// (we only set it on fail/warn/not-running paths) so this stays
+		// silent on the happy path.
+		if r.Remedy != "" {
+			printf(w, "%-*s    → %s\n", maxKind, "", r.Remedy)
+		}
 	}
 	return failed
 }
