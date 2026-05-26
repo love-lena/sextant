@@ -32,7 +32,11 @@ type RuntimeInfo struct {
 	// MCPStdioSocket is the absolute path of the operator-facing MCP
 	// Unix socket. Same purpose as MCPHTTPAddr for the stdio transport.
 	MCPStdioSocket string `json:"mcp_stdio_socket,omitempty"`
-	Version        string `json:"version"`
+	// LogFile is the absolute path of sextantd's tee'd log file. The
+	// daemon always opens this on startup (append, mode 0600) so doctor
+	// and post-mortem debugging have a canonical sink to point at.
+	LogFile string `json:"log_file,omitempty"`
+	Version string `json:"version"`
 }
 
 // WriteRuntimeInfo persists info to path with mode 0600. The parent dir
