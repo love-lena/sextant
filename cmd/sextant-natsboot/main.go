@@ -21,7 +21,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/love-lena/sextant-initial/pkg/natsboot"
+	"github.com/love-lena/sextant/pkg/natsboot"
 )
 
 func main() {

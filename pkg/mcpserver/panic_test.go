@@ -12,7 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
 // TestRunToolHandlerRecoversPanic exercises the dispatcher's panic

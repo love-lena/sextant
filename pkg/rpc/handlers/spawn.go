@@ -13,12 +13,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/love-lena/sextant-initial/pkg/authjwt"
-	"github.com/love-lena/sextant-initial/pkg/containermgr"
-	"github.com/love-lena/sextant-initial/pkg/rpc"
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
-	"github.com/love-lena/sextant-initial/pkg/templates"
-	"github.com/love-lena/sextant-initial/pkg/worktree"
+	"github.com/love-lena/sextant/pkg/authjwt"
+	"github.com/love-lena/sextant/pkg/containermgr"
+	"github.com/love-lena/sextant/pkg/rpc"
+	"github.com/love-lena/sextant/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/templates"
+	"github.com/love-lena/sextant/pkg/worktree"
 )
 
 // AgentIncarnationsBucket is the canonical KV bucket name for agent

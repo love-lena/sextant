@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
 // TestTailGenericSubject is the acceptance test for `sextant tail

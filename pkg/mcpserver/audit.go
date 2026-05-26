@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
 // auditSubject is the bus subject every tool-call audit envelope lands

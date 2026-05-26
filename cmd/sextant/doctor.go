@@ -16,9 +16,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/love-lena/sextant-initial/pkg/authjwt"
-	"github.com/love-lena/sextant-initial/pkg/sextantd"
-	"github.com/love-lena/sextant-initial/pkg/version"
+	"github.com/love-lena/sextant/pkg/authjwt"
+	"github.com/love-lena/sextant/pkg/sextantd"
+	"github.com/love-lena/sextant/pkg/version"
 )
 
 // CheckStatus enumerates a check's outcome.

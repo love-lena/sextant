@@ -25,7 +25,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/love-lena/sextant-initial/pkg/client"
+	"github.com/love-lena/sextant/pkg/client"
 )
 
 func main() {

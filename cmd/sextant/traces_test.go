@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
 // TestRenderSpanTreeNests proves the tree projection: a root span

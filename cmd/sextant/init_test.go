@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/love-lena/sextant-initial/pkg/authjwt"
-	"github.com/love-lena/sextant-initial/pkg/sextantd"
-	"github.com/love-lena/sextant-initial/pkg/shipper"
+	"github.com/love-lena/sextant/pkg/authjwt"
+	"github.com/love-lena/sextant/pkg/sextantd"
+	"github.com/love-lena/sextant/pkg/shipper"
 )
 
 func tempInitOpts(t *testing.T) initOptions {

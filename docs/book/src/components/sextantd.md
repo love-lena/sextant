@@ -89,7 +89,7 @@ auto_prune     = false         # default off (safe-by-default)
 
 > **Note on `listen_port = 0`**: For NATS, ClickHouse, and MCP, port `0` means "let the kernel pick." `sextantd` then writes the real port to `runtime.json` for clients to discover. Tests use `0`; production installs usually pin explicit ports.
 
-> **Note on `worktree.repo_root`**: empty is the documented "transitional" state — the daemon then skips wiring the worktree manager. To enable agent worktrees, set this to the operator's main checkout (e.g. `~/dev/sextant-initial`) and `worktrees_root` to a sibling directory (e.g. `~/dev/sextant-worktrees`).
+> **Note on `worktree.repo_root`**: empty is the documented "transitional" state — the daemon then skips wiring the worktree manager. To enable agent worktrees, set this to the operator's main checkout (e.g. `~/dev/sextant`) and `worktrees_root` to a sibling directory (e.g. `~/dev/sextant-worktrees`).
 
 ## Runtime file
 

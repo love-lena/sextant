@@ -8,9 +8,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/love-lena/sextant-initial/pkg/rpc"
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
-	"github.com/love-lena/sextant-initial/pkg/worktree"
+	"github.com/love-lena/sextant/pkg/rpc"
+	"github.com/love-lena/sextant/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/worktree"
 )
 
 // WorktreeManager is the narrow surface the M14 RPC handlers call on

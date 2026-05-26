@@ -17,7 +17,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/love-lena/sextant-initial/pkg/sextantd"
+	"github.com/love-lena/sextant/pkg/sextantd"
 )
 
 func main() {

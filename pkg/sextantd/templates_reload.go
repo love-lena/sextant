@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/love-lena/sextant-initial/pkg/templates"
+	"github.com/love-lena/sextant/pkg/templates"
 )
 
 // ControlTemplatesReloadSubject is the NATS subject the daemon

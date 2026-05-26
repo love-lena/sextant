@@ -11,4 +11,4 @@ package sextantproto
 // additive only; major bumps require a parallel subject namespace.
 const ProtoVersion = "1.0"
 
-//go:generate go run github.com/love-lena/sextant-initial/cmd/sextantproto-gen -out ./schemas
+//go:generate go run github.com/love-lena/sextant/cmd/sextantproto-gen -out ./schemas

@@ -21,11 +21,11 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/love-lena/sextant-initial/pkg/client"
-	"github.com/love-lena/sextant-initial/pkg/natsboot"
-	"github.com/love-lena/sextant-initial/pkg/rpc"
-	"github.com/love-lena/sextant-initial/pkg/rpc/handlers"
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/client"
+	"github.com/love-lena/sextant/pkg/natsboot"
+	"github.com/love-lena/sextant/pkg/rpc"
+	"github.com/love-lena/sextant/pkg/rpc/handlers"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
 func TestIntegrationEnterPersistsSelectedAgent(t *testing.T) {

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/love-lena/sextant-initial/pkg/rpc"
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/rpc"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
 const tracesUsage = `usage: sextant traces show <trace_id> [--json]

@@ -15,8 +15,8 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"github.com/love-lena/sextant-initial/pkg/sextantd"
-	"github.com/love-lena/sextant-initial/pkg/shipper"
+	"github.com/love-lena/sextant/pkg/sextantd"
+	"github.com/love-lena/sextant/pkg/shipper"
 )
 
 // requireBins skips when the required binaries are not available on
@@ -229,7 +229,7 @@ func startDaemonHarnessWithCfgPath(t *testing.T, cfgPath string) *daemonHarness 
 
 	binDir := t.TempDir()
 	binPath := filepath.Join(binDir, "sextantd")
-	build := exec.Command("go", "build", "-o", binPath, "github.com/love-lena/sextant-initial/cmd/sextantd") //nolint:gosec // test-controlled args
+	build := exec.Command("go", "build", "-o", binPath, "github.com/love-lena/sextant/cmd/sextantd") //nolint:gosec // test-controlled args
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
 		t.Fatalf("go build sextantd: %v", err)
@@ -239,7 +239,7 @@ func startDaemonHarnessWithCfgPath(t *testing.T, cfgPath string) *daemonHarness 
 	// matches the production layout where `go install` drops both
 	// binaries into $GOBIN.
 	shipperBin := filepath.Join(binDir, "sextant-shipper")
-	buildShipper := exec.Command("go", "build", "-o", shipperBin, "github.com/love-lena/sextant-initial/cmd/sextant-shipper") //nolint:gosec // test-controlled args
+	buildShipper := exec.Command("go", "build", "-o", shipperBin, "github.com/love-lena/sextant/cmd/sextant-shipper") //nolint:gosec // test-controlled args
 	buildShipper.Stderr = os.Stderr
 	if err := buildShipper.Run(); err != nil {
 		t.Fatalf("go build sextant-shipper: %v", err)

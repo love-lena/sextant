@@ -13,10 +13,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/love-lena/sextant-initial/pkg/authjwt"
-	"github.com/love-lena/sextant-initial/pkg/containermgr"
-	"github.com/love-lena/sextant-initial/pkg/rpc/handlers"
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/authjwt"
+	"github.com/love-lena/sextant/pkg/containermgr"
+	"github.com/love-lena/sextant/pkg/rpc/handlers"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
 // fakeMutableKV adds Put/Delete to the read-only fakeKV (in agents_test.go).

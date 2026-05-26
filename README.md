@@ -7,8 +7,8 @@ The first considered implementation of sextant — a Go-based control plane for 
 ## Install
 
 ```bash
-git clone git@github.com:love-lena/sextant-initial.git
-cd sextant-initial
+git clone git@github.com:love-lena/sextant.git
+cd sextant
 make install            # NOT `cp bin/* ~/.local/bin/`; cp triggers macOS
                         # Gatekeeper SIGKILL (exit 137, silent kill).
                         # PREFIX overridable: `sudo make install PREFIX=/usr/local`

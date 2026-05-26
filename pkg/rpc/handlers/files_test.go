@@ -10,9 +10,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/love-lena/sextant-initial/pkg/containermgr"
-	"github.com/love-lena/sextant-initial/pkg/rpc/handlers"
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/containermgr"
+	"github.com/love-lena/sextant/pkg/rpc/handlers"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
 // stubExec is a fake ContainerExecRunner. It dispatches on the first

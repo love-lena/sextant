@@ -8,8 +8,8 @@ src = "src"
 [output.html]
 default-theme = "navy"
 preferred-dark-theme = "navy"
-git-repository-url = "https://github.com/love-lena/sextant-initial"
-edit-url-template = "https://github.com/love-lena/sextant-initial/edit/main/docs/book/{path}"
+git-repository-url = "https://github.com/love-lena/sextant"
+edit-url-template = "https://github.com/love-lena/sextant/edit/main/docs/book/{path}"
 no-section-label = false
 mathjax-support = false
 

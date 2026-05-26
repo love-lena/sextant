@@ -8,7 +8,7 @@ package version
 const Version = "0.0.0-dev"
 
 // GitSHA is the workspace HEAD recorded at build time. It is overridden by
-// the Makefile via `-ldflags "-X github.com/love-lena/sextant-initial/pkg/
+// the Makefile via `-ldflags "-X github.com/love-lena/sextant/pkg/
 // version.GitSHA=<sha>"`. An empty value means the binary was built without
 // the linker flag (e.g. `go build` straight from source); doctor treats
 // that case as "no embedded SHA, skip the staleness check".

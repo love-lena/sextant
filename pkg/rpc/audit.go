@@ -7,7 +7,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
 // Audit subject prefixes per specs/protocols/bus-subjects.md.

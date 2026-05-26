@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/love-lena/sextant-initial/pkg/sextantproto/span",
+  "$id": "https://github.com/love-lena/sextant/pkg/sextantproto/span",
   "$ref": "#/$defs/Span",
   "$defs": {
     "Span": {

@@ -39,7 +39,7 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/love-lena/sextant-initial
+        - github.com/love-lena/sextant
 
 issues:
   max-issues-per-linter: 0

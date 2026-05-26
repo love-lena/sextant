@@ -21,7 +21,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/love-lena/sextant-initial/pkg/shipper"
+	"github.com/love-lena/sextant/pkg/shipper"
 )
 
 func main() {

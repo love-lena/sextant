@@ -122,7 +122,7 @@ async function main(): Promise<void> {
   // anyway, which is what we want.
   const root: JSONSchema = {
     $schema: "https://json-schema.org/draft/2020-12/schema",
-    $id: "https://github.com/love-lena/sextant-initial/clients/typescript/types-bundle",
+    $id: "https://github.com/love-lena/sextant/clients/typescript/types-bundle",
     title: "SextantProtoBundle",
     type: "object",
     additionalProperties: false,

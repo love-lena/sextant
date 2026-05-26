@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/love-lena/sextant-initial/pkg/sextantd"
+	"github.com/love-lena/sextant/pkg/sextantd"
 )
 
 const templatesUsage = `usage: sextant templates <verb> [args...]

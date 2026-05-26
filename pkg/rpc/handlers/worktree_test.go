@@ -8,9 +8,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/love-lena/sextant-initial/pkg/rpc/handlers"
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
-	"github.com/love-lena/sextant-initial/pkg/worktree"
+	"github.com/love-lena/sextant/pkg/rpc/handlers"
+	"github.com/love-lena/sextant/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/worktree"
 )
 
 // fakeWorktreeMgr is a stand-in for worktree.Manager. Each method

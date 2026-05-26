@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 
-	"github.com/love-lena/sextant-initial/pkg/clickhouseboot"
-	"github.com/love-lena/sextant-initial/pkg/natsboot"
-	"github.com/love-lena/sextant-initial/pkg/shipperboot"
+	"github.com/love-lena/sextant/pkg/clickhouseboot"
+	"github.com/love-lena/sextant/pkg/natsboot"
+	"github.com/love-lena/sextant/pkg/shipperboot"
 )
 
 // natsProcess adapts a natsboot.Server to the supervisor.Process
