@@ -54,6 +54,18 @@ func run() error {
 		return fmt.Errorf("load config %s: %w", cfgPath, err)
 	}
 
+	// Open the daemon's own log sink BEFORE any other startup work so
+	// the first "sextantd: starting…" line written by daemon.Start lands
+	// in the file. Tees stderr + file via log.SetOutput; foreground
+	// operators keep terminal feedback while doctor / post-mortem
+	// debugging always has a canonical sink at <data_dir>/sextantd.log
+	// (overridable via [log] file = "..." in sextantd.toml).
+	logFile, err := openLogFile(cfg)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = logFile.Close() }()
+
 	// Signal handling: SIGTERM/SIGINT trigger the daemon's graceful
 	// shutdown sequence (supervisor.Stop → signalProcessGroup → wait on
 	// cmd.Wait with SIGKILL escalation). We deliberately do NOT cancel

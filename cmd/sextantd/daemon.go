@@ -871,6 +871,7 @@ func (d *daemon) writeRuntimeInfo(natsSrv *natsboot.Server, chSrv *clickhouseboo
 		ClickHouseHTTP: chSrv.HTTPAddress(),
 		ClickHousePID:  chSrv.PID(),
 		ControlSocket:  d.cfg.Daemon.ControlSocket,
+		LogFile:        d.cfg.Log.File,
 		Version:        version.Version,
 	}
 	d.mu.Lock()
