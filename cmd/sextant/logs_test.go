@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -73,14 +74,36 @@ func TestLogs_Follow(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	var out bytes.Buffer
+	var (
+		mu  sync.Mutex
+		buf bytes.Buffer
+	)
+	out := lockedWriter{mu: &mu, w: &buf}
+	snapshot := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return buf.String()
+	}
 	done := make(chan error, 1)
 	go func() {
-		done <- doLogs(ctx, &out, path, 1, true)
+		done <- doLogs(ctx, out, path, 1, true)
 	}()
 
-	// Give follow loop a moment to seek to end and start polling.
-	time.Sleep(300 * time.Millisecond)
+	// Sync on the seed line appearing in output before we append. This
+	// confirms doLogs has finished the tail-then-seek-to-end transition;
+	// under heavy parallel test load a fixed sleep can let our append
+	// land before the followLog goroutine seeks, in which case the line
+	// silently slides off the end-of-file the goroutine seeks to.
+	seedDeadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(seedDeadline) {
+		if strings.Contains(snapshot(), "seed") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(snapshot(), "seed") {
+		t.Fatalf("seed line never surfaced; doLogs may not have started:\n%s", snapshot())
+	}
 
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // test-controlled path
 	if err != nil {
@@ -94,7 +117,7 @@ func TestLogs_Follow(t *testing.T) {
 	// Wait for the polling loop to surface the append, then cancel.
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if strings.Contains(out.String(), "appended") {
+		if strings.Contains(snapshot(), "appended") {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -108,7 +131,22 @@ func TestLogs_Follow(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("follow did not return after cancel")
 	}
-	if !strings.Contains(out.String(), "appended") {
-		t.Errorf("follow did not surface appended line:\n%s", out.String())
+	if !strings.Contains(snapshot(), "appended") {
+		t.Errorf("follow did not surface appended line:\n%s", snapshot())
 	}
+}
+
+// lockedWriter is a tiny io.Writer that serializes concurrent writes
+// from the followLog goroutine with reads from the test body. bytes.Buffer
+// is not safe for concurrent use; race-detector runs flagged this when
+// the seed-sync polling read while followLog was still writing.
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  *bytes.Buffer
+}
+
+func (l lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }
