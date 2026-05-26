@@ -123,31 +123,14 @@ func checkExecutable(path string) error {
 }
 
 // daemonLogPath returns the canonical log path for the daemon. We prefer
-// runtime.json's LogFile field when present (so post-fix #2 the log can
-// move without operators re-learning the location); otherwise fall back
-// to <dataDir>/sextantd.log. The fallback is what makes this code work
-// before fix #2 lands.
+// runtime.json's LogFile field when present (the daemon writes it on
+// startup); otherwise fall back to <dataDir>/sextantd.log so the
+// command still works if runtime.json is stale or pre-dates the field.
 func daemonLogPath(dataDir string, info sextantd.RuntimeInfo) string {
-	// The RuntimeInfo struct may grow a LogFile field in fix #2. Until
-	// it does, the reflect-free fallback below is the only path. We
-	// deliberately keep the public surface narrow so callers don't have
-	// to read into RuntimeInfo themselves.
-	if logFile := runtimeLogFile(info); logFile != "" {
-		return logFile
+	if info.LogFile != "" {
+		return info.LogFile
 	}
 	return filepath.Join(dataDir, daemonLogFilename)
-}
-
-// runtimeLogFile is a thin abstraction so we can grow into the
-// upcoming LogFile field without an interface break. Returns "" when
-// the field is unset or absent.
-func runtimeLogFile(info sextantd.RuntimeInfo) string {
-	// Placeholder for forward-compatibility — when the LogFile field
-	// lands on RuntimeInfo (fix #2), update this to return info.LogFile.
-	// Today the field doesn't exist; returning "" makes callers use the
-	// conventional path.
-	_ = info
-	return ""
 }
 
 // waitForDaemonUp polls runtime.json until it appears AND the recorded
