@@ -31,6 +31,7 @@ func run() error {
 	configPath := fs.String("config", "", "sextantd.toml path (default ~/.config/sextant/sextantd.toml)")
 	testMode := fs.Bool("test-mode", false, "run in test mode (reserved for M17)")
 	testID := fs.String("test-id", "", "test environment uuid (with --test-mode)")
+	restart := fs.Bool("restart", false, "replace any already-running sextantd (graceful SIGTERM then start fresh)")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return err
 	}
@@ -53,6 +54,15 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("load config %s: %w", cfgPath, err)
 	}
+
+	// Pre-startup probe: bail (or replace) if another sextantd already
+	// owns runtime.json. Before this check, a duplicate start crashed on
+	// the NATS/ClickHouse port-bind. See plans/issues/feat-daemon-
+	// lifecycle-ergonomics.md fix #4. This call may os.Exit; survivors
+	// continue with normal startup. Runs before the log file is opened
+	// so a benign double-start doesn't append a "starting…" line to a
+	// log owned by the live daemon.
+	checkExistingDaemonOrExit(cfg, *restart)
 
 	// Open the daemon's own log sink BEFORE any other startup work so
 	// the first "sextantd: starting…" line written by daemon.Start lands
