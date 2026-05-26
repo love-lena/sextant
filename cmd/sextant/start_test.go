@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,6 +83,44 @@ func TestStart_AlreadyRunning_ExitsZero(t *testing.T) {
 }
 
 // TestStart_StaleRuntimeFile_IsCleanedThenStarts proves the
+// TestStart_RefusesWhenOrphanDetected covers the scenario discovered
+// live in Lena's session: runtime.json was deleted but sextantd kept
+// running. The new daemon spawn would crash on the ClickHouse data-dir
+// lock, leaving the operator with two half-broken sextantds. doStart
+// must detect the orphan via process scan (path-matched), refuse, and
+// point the operator at `sextant stop` so they don't have to hunt PIDs.
+//
+// Uses spawnFakeSextantd (sleep-forever binary named "sextantd") so the
+// test doesn't require the real sextantd or its subprocesses.
+func TestStart_RefusesWhenOrphanDetected(t *testing.T) {
+	h := newLifecycleHarness(t)
+	defer h.cleanup()
+
+	// Pretend the operator deleted runtime.json: leave it absent.
+	_ = os.Remove(h.cfg.Paths.RuntimeFile)
+
+	fakeDir := t.TempDir()
+	fakeBin, fakePID, cleanupFake := spawnFakeSextantd(t, fakeDir)
+	defer cleanupFake()
+	t.Setenv("SEXTANTD_BIN", fakeBin)
+
+	var buf bytes.Buffer
+	err := doStart(&buf, h.cfg, 5*time.Second)
+	if err == nil {
+		t.Fatalf("doStart should refuse when orphan detected; stdout:\n%s", buf.String())
+	}
+	out := buf.String()
+	if !strings.Contains(out, "orphan") {
+		t.Errorf("stdout missing 'orphan' guidance:\n%s", out)
+	}
+	if !strings.Contains(out, fmt.Sprintf("pid %d", fakePID)) {
+		t.Errorf("stdout missing fake pid %d:\n%s", fakePID, out)
+	}
+	if !strings.Contains(out, "sextant stop") {
+		t.Errorf("stdout should point at 'sextant stop' remedy:\n%s", out)
+	}
+}
+
 // stale-cleanup branch: when runtime.json points at a dead pid we
 // remove it and spawn fresh rather than refusing to start.
 func TestStart_StaleRuntimeFile_IsCleanedThenStarts(t *testing.T) {

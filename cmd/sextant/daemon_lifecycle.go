@@ -206,6 +206,111 @@ func printLines(w io.Writer, lines []string) {
 	}
 }
 
+// findOrphanSextantd scans the process table for sextantd processes
+// whose first argv token matches binaryPath, excluding excludePID (the
+// daemon recorded in runtime.json, if any). Returns the matching PIDs
+// sorted ascending. Used by `sextant start` to detect zombies — a
+// sextantd whose runtime.json was removed but whose process kept
+// running — and by `sextant stop` to clean them up.
+//
+// We match on the full path (not basename) so an unrelated binary that
+// happens to be named "sextantd" elsewhere on the box can't trigger a
+// false positive. binaryPath is whatever findSextantdBinary would
+// resolve to in the current operator's setup.
+//
+// Implementation: shells out to `ps -axo pid=,command=`. Portable
+// across macOS + Linux; the trailing `=` suppresses the column header
+// so we get pure rows. Errors propagate as-is.
+func findOrphanSextantd(binaryPath string, excludePID int) ([]int, error) {
+	if binaryPath == "" {
+		return nil, errors.New("findOrphanSextantd: binaryPath required")
+	}
+	out, err := exec.Command("ps", "-axo", "pid=,command=").Output() //nolint:gosec // fixed args
+	if err != nil {
+		return nil, fmt.Errorf("ps: %w", err)
+	}
+	var pids []int
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// "<pid> <command...>". Split on the first run of whitespace so
+		// the command (which may contain spaces in its args) stays intact.
+		sp := strings.IndexAny(line, " \t")
+		if sp < 0 {
+			continue
+		}
+		pidStr := line[:sp]
+		cmd := strings.TrimSpace(line[sp:])
+		pid := 0
+		for _, ch := range pidStr {
+			if ch < '0' || ch > '9' {
+				pid = 0
+				break
+			}
+			pid = pid*10 + int(ch-'0')
+		}
+		if pid <= 0 || pid == excludePID {
+			continue
+		}
+		// argv[0] is the leading token of the command line. Match exact
+		// path so we don't catch unrelated binaries with the same name.
+		// macOS/Linux both render argv[0] verbatim under -o command.
+		firstTok := cmd
+		if i := strings.IndexAny(cmd, " \t"); i >= 0 {
+			firstTok = cmd[:i]
+		}
+		if firstTok == binaryPath {
+			pids = append(pids, pid)
+		}
+	}
+	return pids, nil
+}
+
+// sigtermPIDs sends SIGTERM to each pid and waits up to timeout for
+// every one to disappear. Returns the slice of PIDs still alive at the
+// deadline. Best-effort: ESRCH on signal (process already gone) is
+// treated as success for that pid.
+func sigtermPIDs(pids []int, timeout time.Duration) []int {
+	if len(pids) == 0 {
+		return nil
+	}
+	for _, pid := range pids {
+		proc, err := os.FindProcess(pid)
+		if err != nil {
+			continue
+		}
+		if sigErr := proc.Signal(syscall.SIGTERM); sigErr != nil && !errors.Is(sigErr, syscall.ESRCH) {
+			// We don't fail outright — the caller decides what to do
+			// with a still-alive return list.
+			continue
+		}
+	}
+	const interval = 100 * time.Millisecond
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		var stillAlive []int
+		for _, pid := range pids {
+			if isProcessAlive(pid) {
+				stillAlive = append(stillAlive, pid)
+			}
+		}
+		if len(stillAlive) == 0 {
+			return nil
+		}
+		pids = stillAlive
+		time.Sleep(interval)
+	}
+	var remaining []int
+	for _, pid := range pids {
+		if isProcessAlive(pid) {
+			remaining = append(remaining, pid)
+		}
+	}
+	return remaining
+}
+
 // loadDaemonConfig resolves config-dir / data-dir flags through the
 // shared init helper, loads sextantd.toml (or falls back to defaults
 // when the config file is missing — `sextant start` should still work
