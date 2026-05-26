@@ -2,11 +2,16 @@
 
 The operator CLI. Source: `cmd/sextant/`.
 
-Twelve top-level subcommands (`cmd/sextant/main.go:46-69`):
+Top-level subcommands (`cmd/sextant/main.go`):
 
 ```
 sextant init          # first-run setup
 sextant doctor        # health diagnostics
+sextant start         # detach sextantd as its own session leader
+sextant stop          # SIGTERM the daemon, wait for graceful shutdown
+sextant restart       # stop then start
+sextant status        # daemon liveness + subprocess pids/addrs
+sextant logs          # tail or follow the daemon log
 sextant agents …      # agent lifecycle (7 subverbs: list|show|spawn|kill|restart|archive|prompt)
 sextant ask           # synchronous prompt (publish + wait for turn_ended)
 sextant conversation  # stream agent frames
@@ -44,6 +49,55 @@ sextant doctor [--config-dir DIR] [--data-dir DIR] [--json]
 ```
 
 Health probes: config files parse, CA keypair exists, sextantd reachable, NATS reachable, ClickHouse reachable, installed binary's `GitSHA` matches the daemon's. Exit `2` on any failure.
+
+## Daemon lifecycle
+
+Operator-facing wrappers around `sextantd` itself. All five share `--config-dir` / `--data-dir` flags that default to the canonical locations.
+
+### `start`
+
+```bash
+sextant start [--config-dir DIR] [--data-dir DIR] [--timeout 30s]
+```
+
+Resolves the `sextantd` binary (in order: `$SEXTANTD_BIN`, sibling of the running `sextant` binary, then `$PATH`) and forks it as its own session leader. Stdout/stderr go to `<DataDir>/sextantd.log` (append, 0600). Waits up to `--timeout` for `runtime.json` to appear with a live PID; prints the last 50 log lines on timeout. Idempotent — if a live daemon already exists, exits 0 with an "already running" message. Stale `runtime.json` (file present, PID dead) is cleared automatically before the spawn.
+
+### `stop`
+
+```bash
+sextant stop [--timeout 30s]
+```
+
+Sends `SIGTERM` to the PID in `runtime.json` and waits for the file to disappear (the daemon removes it during graceful shutdown). Never escalates to `SIGKILL` — that's an operator decision. Prints `daemon not running` and exits 0 when no daemon is recorded.
+
+### `restart`
+
+```bash
+sextant restart [--stop-timeout 30s] [--start-timeout 30s]
+```
+
+Stop then start, with transition prints (`stopping daemon (pid N)`, `starting…`, `daemon up (pid M)`). Tolerates a not-running starting state.
+
+### `status`
+
+```bash
+sextant status [--json]
+```
+
+Reads `runtime.json` and probes the PID with `signal 0`. Exit codes:
+
+- `0` — alive (prints a table of daemon/nats/clickhouse/mcp pids + addrs).
+- `1` — not running OR stale `runtime.json` (PID dead).
+
+`--json` emits a structured row including `state` (`running` / `not_running` / `stale`) for scripts.
+
+### `logs`
+
+```bash
+sextant logs [--follow] [--tail N]
+```
+
+Reads the daemon log (`<DataDir>/sextantd.log`). `--tail N` (default 50) prints the trailing N lines and exits unless `--follow` is set, in which case new bytes stream until Ctrl-C. Exit `1` if the log file does not exist.
 
 ## `agents`
 

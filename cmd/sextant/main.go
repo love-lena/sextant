@@ -25,9 +25,14 @@ func mainErr() int {
 	if err := run(ctx, os.Args[1:]); err != nil {
 		// `sextant exec` writes its own stdout/stderr verbatim; we
 		// shouldn't add a "sextant: command exited with code N" line on
-		// top — that would make shell pipelines noisy.
+		// top — that would make shell pipelines noisy. Similarly,
+		// `sextant status` writes its own "daemon: not running" line to
+		// stdout and only returns the sentinel error to drive the exit
+		// code — no extra stderr line needed.
 		var ec *exitCodeError
-		if !errors.As(err, &ec) {
+		switch {
+		case errors.As(err, &ec), isStatusNotRunningErr(err):
+		default:
 			printf(os.Stderr, "sextant: %v\n", err)
 		}
 		return exitCodeFor(err)
@@ -46,6 +51,16 @@ func run(ctx context.Context, args []string) error {
 		return runInit(ctx, rest)
 	case "doctor":
 		return runDoctor(ctx, rest)
+	case "start":
+		return runStart(ctx, rest)
+	case "stop":
+		return runStop(ctx, rest)
+	case "restart":
+		return runRestart(ctx, rest)
+	case "status":
+		return runStatus(ctx, rest)
+	case "logs":
+		return runLogs(ctx, rest)
 	case "agents":
 		return runAgents(ctx, rest)
 	case "conversation":
@@ -86,6 +101,11 @@ func printUsage(w *os.File) {
 Subcommands:
   init          First-run setup: CA + config + data dirs + default template.
   doctor        Health diagnostics for sextantd, NATS, ClickHouse, config.
+  start         Detach sextantd and wait for runtime.json to appear.
+  stop          SIGTERM the daemon and wait for graceful shutdown.
+  restart       Stop then start (with transition prints).
+  status        Print daemon liveness + subprocess pids/addrs.
+  logs          Print or follow the daemon log file.
   agents        Agent operations (list|show|spawn|kill|restart|prompt).
   conversation  Stream agent frames in human-readable form.
   ask           Send one prompt + wait for the turn to finish.
@@ -129,6 +149,12 @@ func exitCodeFor(err error) int {
 	}
 	var ue usageError
 	if errors.As(err, &ue) {
+		return exitUser
+	}
+	// `sextant status` uses exit 1 ("not running") to distinguish a
+	// dead daemon from a real system error (exit 2). The spec calls for
+	// this so supervisor scripts can branch on the exit code.
+	if isStatusNotRunningErr(err) {
 		return exitUser
 	}
 	// Bubble doctor's wrapped sentinel up.
