@@ -1,4 +1,4 @@
-# Sextant initial — build orchestration.
+# Sextant — build orchestration.
 # Plain make. Targets: fmt, lint, test, build. All target the Go workspace.
 # Plan: plans/bootstrap.md#M0
 

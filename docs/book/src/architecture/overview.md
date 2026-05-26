@@ -1,6 +1,6 @@
 # Architecture overview
 
-Sextant initial is built around four load-bearing properties. If you understand these, the rest of the system follows.
+Sextant is built around four load-bearing properties. If you understand these, the rest of the system follows.
 
 ## 1. Everything on the bus
 
