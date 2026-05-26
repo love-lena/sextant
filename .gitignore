@@ -38,5 +38,8 @@ shipper-buffer/
 node_modules/
 *.tsbuildinfo
 
+# mdbook build output
+/docs/book/book/
+
 # Claude harness state
 .claude/
