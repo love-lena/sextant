@@ -1,7 +1,7 @@
 [book]
-title = "Sextant Initial — Reference"
+title = "Sextant — Reference"
 authors = ["sextant maintainers"]
-description = "Operator and developer reference for sextant initial as it exists today."
+description = "Operator and developer reference for sextant as it exists today."
 language = "en"
 src = "src"
 

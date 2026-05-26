@@ -1,7 +1,6 @@
-// sextant is the operator CLI for the sextant initial deployment. M5
-// ships two subcommands: `init` (first-run setup) and `doctor` (health
-// diagnostics). Additional verbs (agents, conversation, files, ...) land
-// in M11 and M12.
+// sextant is the operator CLI. M5 shipped two subcommands: `init`
+// (first-run setup) and `doctor` (health diagnostics). Additional
+// verbs (agents, conversation, files, ...) landed in M11 and M12.
 //
 // Plan: plans/bootstrap.md#M5
 package main
@@ -73,7 +72,7 @@ func run(ctx context.Context, args []string) error {
 		printUsage(os.Stdout)
 		return nil
 	case "--version", "version":
-		fmt.Println("sextant initial (M12)")
+		fmt.Println("sextant (M12)")
 		return nil
 	default:
 		printUsage(os.Stderr)

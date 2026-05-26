@@ -1,6 +1,6 @@
 # Bus subjects — protocol spec
 
-Canonical NATS subject layout for sextant initial. Subjects are dot-separated hierarchies. Wildcards: `*` matches one token, `>` matches one or more.
+Canonical NATS subject layout for sextant. Subjects are dot-separated hierarchies. Wildcards: `*` matches one token, `>` matches one or more.
 
 ## Top-level namespaces
 

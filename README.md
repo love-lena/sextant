@@ -1,8 +1,8 @@
-# sextant initial
+# sextant
 
-The first considered implementation of sextant — a Go-based control plane for AI coding agents, built on NATS JetStream, ClickHouse, and Claude Code SDK sidecars.
+A Go-based control plane for AI coding agents, built on NATS JetStream, ClickHouse, and Claude Code SDK sidecars.
 
-> **Note on naming**: this is "initial" (v1). The earlier experimental version is "pilot" (v0), located in the `sextant` repo. Initial is a clean ground-up implementation informed by what pilot taught us — no code carryover from pilot, and the design has been considered top-to-bottom in [`specs/architecture.md`](specs/architecture.md).
+> **History**: this is v1, originally code-named "initial" (see [`specs/architecture.md`](specs/architecture.md) for the design decisions). The earlier experimental Rust version, code-named "pilot" (v0), lives archived at [`love-lena/sextant-pilot`](https://github.com/love-lena/sextant-pilot). No code carryover from pilot; the design has been considered top-to-bottom.
 
 ## Install
 

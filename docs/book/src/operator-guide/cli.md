@@ -158,11 +158,11 @@ There is no `templates list` / `templates show` at this snapshot — read the fi
 ## `version`, `help`
 
 ```bash
-sextant version    # prints "sextant initial (M12)"
+sextant version    # prints "sextant (M12)"
 sextant help       # prints the top-level usage
 ```
 
-**Note**: as of the snapshot's main, the dispatch table has 13 verbs (the 12 above plus `ask`). The `version` string is still `"sextant initial (M12)"` — it's a hand-rolled label, not a generated build version.
+**Note**: as of the snapshot's main, the dispatch table has 13 verbs (the 12 above plus `ask`). The `version` string `"sextant (M12)"` is a hand-rolled label, not a generated build version.
 
 ## Not yet implemented
 

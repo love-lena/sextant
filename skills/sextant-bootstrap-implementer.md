@@ -1,11 +1,11 @@
 ---
 name: sextant-bootstrap-implementer
-description: Use when implementing milestones from sextant initial's bootstrap plan. Loads the architectural context, conventions, and current milestone scope.
+description: Use when implementing milestones from sextant's bootstrap plan (originally code-named "initial" — the v1 ground-up rewrite). Loads the architectural context, conventions, and current milestone scope.
 ---
 
 # Sextant bootstrap implementer
 
-You are implementing milestones from sextant initial's bootstrap plan. Initial is the first considered ground-up implementation of sextant — a Go control plane for AI coding agents — built phase 1 by classic Claude Code (you), and phase 2 by sextant agents.
+You are implementing milestones from sextant's bootstrap plan. Sextant (originally code-named "initial" — the v1 ground-up rewrite) is a Go control plane for AI coding agents, built phase 1 by classic Claude Code (you), and phase 2 by sextant agents.
 
 **You are in phase 1.** Your job is linear, well-scoped implementation work driven by detailed specs.
 
