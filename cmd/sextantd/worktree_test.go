@@ -13,10 +13,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/love-lena/sextant-initial/pkg/rpc"
-	"github.com/love-lena/sextant-initial/pkg/sextantd"
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
-	"github.com/love-lena/sextant-initial/pkg/worktree"
+	"github.com/love-lena/sextant/pkg/rpc"
+	"github.com/love-lena/sextant/pkg/sextantd"
+	"github.com/love-lena/sextant/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/worktree"
 )
 
 // startDaemonHarnessWithWorktree spins up a tiny ephemeral git repo
@@ -110,7 +110,7 @@ func bootDaemonAtConfig(t *testing.T, cfgPath string) *daemonHarness {
 
 	binDir := t.TempDir()
 	binPath := filepath.Join(binDir, "sextantd")
-	build := exec.Command("go", "build", "-o", binPath, "github.com/love-lena/sextant-initial/cmd/sextantd") //nolint:gosec // test-controlled args
+	build := exec.Command("go", "build", "-o", binPath, "github.com/love-lena/sextant/cmd/sextantd") //nolint:gosec // test-controlled args
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
 		t.Fatalf("go build sextantd: %v", err)

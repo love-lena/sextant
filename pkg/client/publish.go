@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
 // Publish sends env on subject via core NATS (not JetStream — events

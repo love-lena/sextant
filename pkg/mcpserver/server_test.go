@@ -15,10 +15,10 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/nats-io/nats.go"
 
-	"github.com/love-lena/sextant-initial/pkg/authjwt"
-	"github.com/love-lena/sextant-initial/pkg/mcpserver"
-	"github.com/love-lena/sextant-initial/pkg/natsboot"
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/authjwt"
+	"github.com/love-lena/sextant/pkg/mcpserver"
+	"github.com/love-lena/sextant/pkg/natsboot"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
 // ----- Test fixtures -------------------------------------------------------

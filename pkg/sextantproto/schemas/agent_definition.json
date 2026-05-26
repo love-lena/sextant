@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/love-lena/sextant-initial/pkg/sextantproto/agent-definition",
+  "$id": "https://github.com/love-lena/sextant/pkg/sextantproto/agent-definition",
   "$ref": "#/$defs/AgentDefinition",
   "$defs": {
     "AgentDefinition": {

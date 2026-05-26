@@ -6,7 +6,7 @@ import (
 
 	mcpauth "github.com/modelcontextprotocol/go-sdk/auth"
 
-	"github.com/love-lena/sextant-initial/pkg/authjwt"
+	"github.com/love-lena/sextant/pkg/authjwt"
 )
 
 // tokenVerifier returns a TokenVerifier closing over the sextant CA. The

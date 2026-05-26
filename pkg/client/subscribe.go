@@ -9,7 +9,7 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
 // Message wraps a received envelope with the JetStream metadata callers

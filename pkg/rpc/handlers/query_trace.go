@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/love-lena/sextant-initial/pkg/rpc"
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/rpc"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
 // NewQueryTrace returns a Handler that selects every span in

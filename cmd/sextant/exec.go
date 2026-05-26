@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/love-lena/sextant-initial/pkg/rpc"
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/rpc"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
 const execUsage = `usage: sextant exec <agent_uuid> [--workdir DIR] [--env K=V]... -- <cmd> [args...]

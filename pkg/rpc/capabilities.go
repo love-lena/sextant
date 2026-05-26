@@ -1,6 +1,6 @@
 package rpc
 
-import "github.com/love-lena/sextant-initial/pkg/sextantproto"
+import "github.com/love-lena/sextant/pkg/sextantproto"
 
 // CapabilityChecker decides whether a request envelope carries the
 // capability required for the verb. M10 implements the real JWT-backed

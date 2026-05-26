@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/love-lena/sextant-initial/pkg/mcpserver"
+	"github.com/love-lena/sextant/pkg/mcpserver"
 )
 
 // unixSocketTransport is a Transport that opens a fresh unix socket

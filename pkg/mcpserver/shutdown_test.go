@@ -8,8 +8,8 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/love-lena/sextant-initial/pkg/mcpserver"
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/mcpserver"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
 // TestShutdownForcesCloseOnLongLivedSSEStream pins the contract that

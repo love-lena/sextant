@@ -11,8 +11,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/love-lena/sextant-initial/pkg/rpc"
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/rpc"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
 // ArchiveDeps bundles the dependencies the archive handler needs. It is

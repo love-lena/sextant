@@ -11,9 +11,9 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/love-lena/sextant-initial/pkg/rpc"
-	"github.com/love-lena/sextant-initial/pkg/sextantd"
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/rpc"
+	"github.com/love-lena/sextant/pkg/sextantd"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
 const worktreeUsage = `usage: sextant worktree <verb> [args...]

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/love-lena/sextant-initial/pkg/sextantd"
+	"github.com/love-lena/sextant/pkg/sextantd"
 )
 
 // TestSextantdShutdownKillsClickHouse is the regression for

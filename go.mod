@@ -1,4 +1,4 @@
-module github.com/love-lena/sextant-initial
+module github.com/love-lena/sextant
 
 go 1.26
 

@@ -9,9 +9,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/love-lena/sextant-initial/pkg/clickhouseboot"
-	"github.com/love-lena/sextant-initial/pkg/sextantd"
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/clickhouseboot"
+	"github.com/love-lena/sextant/pkg/sextantd"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
 // TestSpilloverSurvivesClickHouseRestart is the M6 second acceptance

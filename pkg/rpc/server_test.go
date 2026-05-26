@@ -14,10 +14,10 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"github.com/love-lena/sextant-initial/pkg/client"
-	"github.com/love-lena/sextant-initial/pkg/natsboot"
-	"github.com/love-lena/sextant-initial/pkg/rpc"
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/client"
+	"github.com/love-lena/sextant/pkg/natsboot"
+	"github.com/love-lena/sextant/pkg/rpc"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
 // requireNATSBin skips the test when nats-server is not on PATH.

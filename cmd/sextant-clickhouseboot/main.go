@@ -21,7 +21,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
-	"github.com/love-lena/sextant-initial/pkg/clickhouseboot"
+	"github.com/love-lena/sextant/pkg/clickhouseboot"
 )
 
 func main() {

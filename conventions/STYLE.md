@@ -72,8 +72,8 @@ These are enforced by lint or review. Violations block merge.
 
 Two tools, one make target. CI runs `make lint test` on every commit; failure blocks merge.
 
-- **`golangci-lint`** (v2) for the bulk of checks. `.golangci.yml` enables: `govet`, `staticcheck`, `errcheck`, `gosec`, `revive`, `gocritic`, `unused`, `ineffassign`, `errorlint`, `bodyclose`, `contextcheck`, `copyloopvar`. Formatters: `gofumpt`, `goimports` (local prefix `github.com/love-lena/sextant-initial`).
-- **`nilaway`** runs as a standalone tool — golangci-lint v2 does not bundle it. Invoked via `make lint-nilaway` with `-include-pkgs=github.com/love-lena/sextant-initial`. Fail-build mode: any nilaway diagnostic fails the build. False positives get `//nolint:nilaway // <reason>` with an explicit justification.
+- **`golangci-lint`** (v2) for the bulk of checks. `.golangci.yml` enables: `govet`, `staticcheck`, `errcheck`, `gosec`, `revive`, `gocritic`, `unused`, `ineffassign`, `errorlint`, `bodyclose`, `contextcheck`, `copyloopvar`. Formatters: `gofumpt`, `goimports` (local prefix `github.com/love-lena/sextant`).
+- **`nilaway`** runs as a standalone tool — golangci-lint v2 does not bundle it. Invoked via `make lint-nilaway` with `-include-pkgs=github.com/love-lena/sextant`. Fail-build mode: any nilaway diagnostic fails the build. False positives get `//nolint:nilaway // <reason>` with an explicit justification.
 
 The exact `.golangci.yml` and `Makefile` live at the repo root.
 

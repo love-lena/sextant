@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/love-lena/sextant-initial/pkg/version"
+	"github.com/love-lena/sextant/pkg/version"
 )
 
 func TestDoctorAgainstFreshInit(t *testing.T) {

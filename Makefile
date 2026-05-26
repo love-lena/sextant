@@ -7,7 +7,7 @@ GOLANGCI_LINT ?= golangci-lint
 NILAWAY ?= nilaway
 NPM ?= npm
 
-MODULE := github.com/love-lena/sextant-initial
+MODULE := github.com/love-lena/sextant
 PKGS := ./...
 
 BIN_DIR := bin
@@ -98,7 +98,7 @@ ts-build: ts-install
 # Falls back to empty when not in a git checkout — doctor treats empty as
 # "skip the staleness check" rather than an error.
 GIT_SHA ?= $(shell git rev-parse HEAD 2>/dev/null)
-BUILD_LDFLAGS := -X github.com/love-lena/sextant-initial/pkg/version.GitSHA=$(GIT_SHA)
+BUILD_LDFLAGS := -X github.com/love-lena/sextant/pkg/version.GitSHA=$(GIT_SHA)
 
 build: $(BIN_DIR)
 	@if [ -z "$(CMDS)" ]; then echo "no cmds to build yet"; exit 0; fi

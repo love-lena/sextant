@@ -12,13 +12,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/love-lena/sextant-initial/pkg/authjwt"
-	"github.com/love-lena/sextant-initial/pkg/clickhouseboot"
-	"github.com/love-lena/sextant-initial/pkg/natsboot"
-	"github.com/love-lena/sextant-initial/pkg/sextantd"
-	"github.com/love-lena/sextant-initial/pkg/shipperboot"
-	"github.com/love-lena/sextant-initial/pkg/supervisor"
-	"github.com/love-lena/sextant-initial/pkg/version"
+	"github.com/love-lena/sextant/pkg/authjwt"
+	"github.com/love-lena/sextant/pkg/clickhouseboot"
+	"github.com/love-lena/sextant/pkg/natsboot"
+	"github.com/love-lena/sextant/pkg/sextantd"
+	"github.com/love-lena/sextant/pkg/shipperboot"
+	"github.com/love-lena/sextant/pkg/supervisor"
+	"github.com/love-lena/sextant/pkg/version"
 )
 
 // daemon owns the lifecycle of one sextantd process. Subprocesses are

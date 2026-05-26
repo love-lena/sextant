@@ -10,8 +10,8 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"github.com/love-lena/sextant-initial/pkg/sextantd"
-	"github.com/love-lena/sextant-initial/pkg/templates"
+	"github.com/love-lena/sextant/pkg/sextantd"
+	"github.com/love-lena/sextant/pkg/templates"
 )
 
 // controlRuntime owns the NATS subscriptions for the daemon's lightweight

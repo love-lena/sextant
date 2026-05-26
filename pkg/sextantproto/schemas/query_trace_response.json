@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/love-lena/sextant-initial/pkg/sextantproto/query-trace-response",
+  "$id": "https://github.com/love-lena/sextant/pkg/sextantproto/query-trace-response",
   "$ref": "#/$defs/QueryTraceResponse",
   "$defs": {
     "QueryTraceResponse": {

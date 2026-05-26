@@ -33,8 +33,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/love-lena/sextant-initial/pkg/client"
-	"github.com/love-lena/sextant-initial/pkg/sextantd"
+	"github.com/love-lena/sextant/pkg/client"
+	"github.com/love-lena/sextant/pkg/sextantd"
 )
 
 func main() {

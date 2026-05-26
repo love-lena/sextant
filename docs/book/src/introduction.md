@@ -2,7 +2,7 @@
 
 Sextant **initial** is a Go control plane for AI coding agents. It supervises a NATS JetStream bus, a ClickHouse store, and one Docker container per running agent. Each container runs a TypeScript sidecar that drives the Claude Agent SDK and reports back over the bus.
 
-This book is a *reference* for the codebase as it currently exists at the snapshot's commit. It does not argue for the design — for that, read [`specs/architecture.md`](https://github.com/love-lena/sextant-initial/blob/main/specs/architecture.md). It also does not document features that have been planned but not built; those land in [Milestone status](./reference/milestones.md) and [Known gaps and drift](./reference/known-gaps.md).
+This book is a *reference* for the codebase as it currently exists at the snapshot's commit. It does not argue for the design — for that, read [`specs/architecture.md`](https://github.com/love-lena/sextant/blob/main/specs/architecture.md). It also does not document features that have been planned but not built; those land in [Milestone status](./reference/milestones.md) and [Known gaps and drift](./reference/known-gaps.md).
 
 ## What's in the repo
 

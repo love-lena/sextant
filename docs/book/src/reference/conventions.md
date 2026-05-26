@@ -8,7 +8,7 @@ Baseline: **Uber Go style guide**. Sextant additions on top.
 
 Hard rules enforced by lint or review:
 
-- `gofumpt` over `gofmt`. `goimports` with local prefix `github.com/love-lena/sextant-initial`.
+- `gofumpt` over `gofmt`. `goimports` with local prefix `github.com/love-lena/sextant`.
 - Acronyms keep consistent case: `URLParser`, `httpClient`.
 - No `Get` prefix on getters.
 - Always wrap errors with `%w`: `fmt.Errorf("loading config: %w", err)`.

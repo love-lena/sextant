@@ -4,11 +4,11 @@ Two libraries, mirroring each other in API. Both built from the same JSON Schema
 
 ## `sextant-client-go` (Go)
 
-Package: `github.com/love-lena/sextant-initial/pkg/client`
+Package: `github.com/love-lena/sextant/pkg/client`
 
 ### API surface
 
-`Envelope` is `github.com/love-lena/sextant-initial/pkg/sextantproto.Envelope`. `KVUpdate`, `QueryFilter`, and the option types live in `pkg/client`.
+`Envelope` is `github.com/love-lena/sextant/pkg/sextantproto.Envelope`. `KVUpdate`, `QueryFilter`, and the option types live in `pkg/client`.
 
 ```go
 // Connect loads ~/.config/sextant/client.toml and dials the configured NATS.

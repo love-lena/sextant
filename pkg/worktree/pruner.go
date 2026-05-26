@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
 // Default age thresholds. The policy lives in

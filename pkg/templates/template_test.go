@@ -12,7 +12,7 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/love-lena/sextant-initial/pkg/natsboot"
+	"github.com/love-lena/sextant/pkg/natsboot"
 )
 
 // natsServerPath skips when nats-server is not on PATH (CI without

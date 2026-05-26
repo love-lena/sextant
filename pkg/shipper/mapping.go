@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
 // Table enumerates the ClickHouse target tables the shipper writes into.

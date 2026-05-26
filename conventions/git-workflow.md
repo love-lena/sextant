@@ -4,7 +4,7 @@ Sextant's working model is **many parallel agents, each on their own git worktre
 
 ## Worktrees
 
-The repo at `/Users/lena/dev/sextant-initial/` is the operator's main worktree (post-cutover: `/Users/lena/dev/sextant/`). Agent worktrees live at `/Users/lena/dev/sextant-worktrees/<branch-name>/`.
+The repo at `/Users/lena/dev/sextant/` is the operator's main worktree. Agent worktrees live at `/Users/lena/dev/sextant-worktrees/<branch-name>/`.
 
 Each worktree:
 - Has its own working tree (independent file state)
@@ -51,7 +51,7 @@ Merge flow (via the `worktree_merge` MCP tool — see `specs/architecture.md` §
 5. On clean merge: tear down the transient worktree (`git worktree remove`), update the source worktree's KV entry to `status=merged`, release the lock.
 6. Source worktree is now safe to destroy or kept for follow-up work.
 
-The operator's main checkout (typically `/Users/lena/dev/sextant-initial/`) is never touched during a merge — the dedicated transient worktree owns the merge commit, and the target ref advances in the shared `.git` database.
+The operator's main checkout (typically `/Users/lena/dev/sextant/`) is never touched during a merge — the dedicated transient worktree owns the merge commit, and the target ref advances in the shared `.git` database.
 
 Reviewers (lead agent, or a dedicated review agent) inspect the diff via `worktree_diff` before approving a merge. Merge without review is technically allowed but capability-gated.
 

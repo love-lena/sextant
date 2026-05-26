@@ -11,7 +11,7 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/love-lena/sextant-initial/pkg/templates"
+	"github.com/love-lena/sextant/pkg/templates"
 )
 
 const tplDefault = `name = "default"

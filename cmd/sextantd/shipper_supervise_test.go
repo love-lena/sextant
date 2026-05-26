@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/love-lena/sextant-initial/pkg/sextantd"
+	"github.com/love-lena/sextant/pkg/sextantd"
 )
 
 // TestSextantdSupervisesShipper is the acceptance test for

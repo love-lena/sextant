@@ -14,8 +14,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/love-lena/sextant-initial/pkg/rpc/handlers"
-	"github.com/love-lena/sextant-initial/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/rpc/handlers"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
 // TestM12CLIBinaryWalkthroughAcceptance is the literal-reading of the
@@ -231,7 +231,7 @@ func buildSextantBinary(t *testing.T) string {
 	t.Helper()
 	binDir := t.TempDir()
 	binPath := filepath.Join(binDir, "sextant")
-	build := exec.Command("go", "build", "-o", binPath, "github.com/love-lena/sextant-initial/cmd/sextant") //nolint:gosec // test-controlled args
+	build := exec.Command("go", "build", "-o", binPath, "github.com/love-lena/sextant/cmd/sextant") //nolint:gosec // test-controlled args
 	var buildErr bytes.Buffer
 	build.Stderr = &buildErr
 	if err := build.Run(); err != nil {

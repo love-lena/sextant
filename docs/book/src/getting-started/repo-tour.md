@@ -5,7 +5,7 @@ A high-level map of the snapshot's tree.
 ## Top level
 
 ```
-sextant-initial/
+sextant/
 ├── cmd/                    # binary entry points
 ├── pkg/                    # libraries (one folder per logical unit)
 ├── clients/typescript/     # @sextant/client npm package
