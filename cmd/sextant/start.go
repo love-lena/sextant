@@ -81,6 +81,28 @@ func doStart(w io.Writer, cfg sextantd.Config, timeout time.Duration) error {
 		return err
 	}
 
+	// 2b. Zombie check: a sextantd matching `bin` might still be running
+	// from a previous session where runtime.json was deleted (manually,
+	// by a botched cleanup, etc.). Spawning a fresh daemon in that state
+	// crashes on the ClickHouse data-dir lock, leaving two half-broken
+	// processes. Refuse and point at `sextant stop`, which will clean
+	// them up. Discovered live in 2026-05-25 ops session.
+	orphans, scanErr := findOrphanSextantd(bin, 0)
+	if scanErr != nil {
+		// Scan failure shouldn't block startup outright — log a warning
+		// and proceed. If a real orphan exists, the upcoming spawn will
+		// still surface the conflict via clickhouse exit 76.
+		printf(w, "warning: orphan scan failed: %v (continuing)\n", scanErr)
+	}
+	if len(orphans) > 0 {
+		printf(w, "found orphan sextantd process(es) without runtime.json:\n")
+		for _, pid := range orphans {
+			printf(w, "  pid %d  %s\n", pid, bin)
+		}
+		printf(w, "run `sextant stop` to clean them up, then retry `sextant start`.\n")
+		return fmt.Errorf("orphan sextantd detected (pid %v)", orphans)
+	}
+
 	// 3. Open the log file. We pre-create it so the spawn doesn't race
 	//    a missing parent dir and so operators can `tail -f` it before
 	//    the daemon has fully come up.

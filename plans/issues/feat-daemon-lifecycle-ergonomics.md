@@ -43,6 +43,19 @@ Running `sextantd` when one is already up just crashes on port-bind collisions (
 - `--restart` flag does a graceful SIGTERM → wait → start cycle so operators never have to hunt PIDs.
 - `sextant start` (above) inherits this guard for free.
 
+### 4a. Zombie detection: runtime.json absent but sextantd still alive
+
+(Discovered live during the 2026-05-25 ops session — added after the original five.)
+
+`runtime.json` is the canonical "is the daemon up?" record, but it can disappear without the daemon dying: a partial shutdown, a stray `rm`, a test harness that cleaned up the file but not the process. In that state the double-start guard (#4) sees no `runtime.json` and lets the new `sextantd` spawn — which then crashes on the ClickHouse data-dir lock, leaving the operator with two half-broken daemons and no idea what's running.
+
+Fix shape:
+
+- `sextant start` and `sextant stop` resolve the canonical sextantd binary path (via the existing `findSextantdBinary`), then scan the process table for any process whose argv[0] matches that path. We match by full path so unrelated "sextantd"-named binaries elsewhere on `$PATH` don't trigger false positives.
+- `sextant start`: if any orphans are found, refuse with `found orphan sextantd process(es): pid N — run 'sextant stop'`. Don't auto-kill; let the operator confirm the action.
+- `sextant stop`: always runs the orphan sweep after handling `runtime.json`, SIGTERMs every matching PID, and waits for them to exit. This makes `stop` the universal cleanup the operator can reach for, regardless of how the state got broken.
+- Acceptance: `TestFindOrphanSextantd_*` covers the scanner; `TestStart_RefusesWhenOrphanDetected` covers the start refusal; `TestStop_CleansUpOrphanWithoutRuntimeJSON` covers the stop sweep.
+
 ### 5. `sextant doctor` should suggest fixes when the answer is obvious
 
 Doctor today reports state; it doesn't tell the operator what to do about it. Easy wins:

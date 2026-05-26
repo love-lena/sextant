@@ -23,6 +23,9 @@ func TestStop_NotRunning_Idempotent(t *testing.T) {
 	if err := os.MkdirAll(opts.DataDir, 0o750); err != nil {
 		t.Fatalf("mkdir data: %v", err)
 	}
+	// Point SEXTANTD_BIN at a stub so the orphan sweep can't accidentally
+	// match a real sextantd elsewhere on the dev box.
+	setStubSextantdBin(t)
 
 	var buf bytes.Buffer
 	if err := doStop(&buf, cfg, 5*time.Second); err != nil {
@@ -43,6 +46,7 @@ func TestStop_StaleRuntimeFile_Cleared(t *testing.T) {
 	if err := os.MkdirAll(opts.DataDir, 0o750); err != nil {
 		t.Fatalf("mkdir data: %v", err)
 	}
+	setStubSextantdBin(t)
 	stale := sextantd.RuntimeInfo{PID: 999_999, StartedAt: time.Now(), Version: "stale"}
 	if err := sextantd.WriteRuntimeInfo(cfg.Paths.RuntimeFile, stale); err != nil {
 		t.Fatalf("seed stale runtime.json: %v", err)
@@ -89,4 +93,45 @@ func TestStop_GracefullyShutsDown(t *testing.T) {
 	if _, err := os.Stat(h.cfg.Paths.RuntimeFile); !os.IsNotExist(err) {
 		t.Errorf("runtime.json still present: err=%v", err)
 	}
+}
+
+// TestStop_CleansUpOrphanWithoutRuntimeJSON covers Lena's live
+// scenario: no runtime.json on disk, but a sextantd process is still
+// running. Plain `sextant stop` would have printed "daemon not running"
+// and left the orphan in place; the operator was then stuck because
+// `sextant start` couldn't take over. Fix: `sextant stop` always scans
+// for orphans (by sextantd binary path) and SIGTERMs them too, so the
+// goal state ("nothing is running") actually holds afterward.
+func TestStop_CleansUpOrphanWithoutRuntimeJSON(t *testing.T) {
+	opts := tempInitOpts(t)
+	cfg := sextantd.DefaultConfig(opts.ConfigDir, opts.DataDir)
+	if err := os.MkdirAll(opts.DataDir, 0o750); err != nil {
+		t.Fatalf("mkdir data: %v", err)
+	}
+
+	fakeDir := t.TempDir()
+	fakeBin, fakePID, cleanupFake := spawnFakeSextantd(t, fakeDir)
+	// Cleanup is a safety net — the test expects doStop to kill it.
+	defer cleanupFake()
+	t.Setenv("SEXTANTD_BIN", fakeBin)
+
+	var buf bytes.Buffer
+	if err := doStop(&buf, cfg, 10*time.Second); err != nil {
+		t.Fatalf("doStop: %v\nstdout:\n%s", err, buf.String())
+	}
+	out := buf.String()
+	if !strings.Contains(out, "orphan") {
+		t.Errorf("stdout should mention orphan cleanup:\n%s", out)
+	}
+
+	// The orphan must actually be gone — that's the goal state callers
+	// rely on. Poll briefly in case the OS hasn't finished reaping.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if !isProcessAlive(fakePID) {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Errorf("orphan pid %d still alive after stop:\n%s", fakePID, out)
 }

@@ -3,8 +3,10 @@ package main
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -216,4 +218,132 @@ func itoaTest(n int) string {
 		n /= 10
 	}
 	return string(digits)
+}
+
+// spawnFakeSextantd builds a tiny long-running Go binary at
+// <dir>/sextantd and starts it. Used by orphan-detection tests so we have
+// a process whose `ps -axo command=` listing matches a path we control.
+// The fake installs explicit SIGINT/SIGTERM handlers that exit(0) — Go's
+// default signal disposition isn't reliable here (a long-running runtime
+// on macOS occasionally swallows SIGTERM during the time.Sleep wakeup),
+// so we make the signal contract explicit.
+// Returned cleanup function SIGKILLs and reaps the child as a safety net.
+func spawnFakeSextantd(t *testing.T, dir string) (binPath string, pid int, cleanup func()) {
+	t.Helper()
+	binPath = filepath.Join(dir, "sextantd")
+	src := filepath.Join(dir, "main.go")
+	source := `package main
+
+import (
+	"os"
+	"os/signal"
+	"syscall"
+)
+
+func main() {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
+	<-c
+	os.Exit(0)
+}
+`
+	if err := os.WriteFile(src, []byte(source), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	build := exec.Command("go", "build", "-o", binPath, src) //nolint:gosec // test-controlled
+	build.Stderr = os.Stderr
+	if err := build.Run(); err != nil {
+		t.Fatalf("go build fake sextantd: %v", err)
+	}
+	cmd := exec.Command(binPath) //nolint:gosec // test-controlled
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start fake sextantd: %v", err)
+	}
+	pid = cmd.Process.Pid
+	// Reap in a background goroutine so the fake's exit promptly removes
+	// it from the process table. Without this, SIGTERM leaves it as a
+	// zombie (we're the parent in tests) and isProcessAlive keeps
+	// returning true until t.Cleanup runs — which would race the test's
+	// own poll loop. In production the daemon's parent is init, which
+	// reaps automatically.
+	reapDone := make(chan struct{})
+	go func() {
+		_, _ = cmd.Process.Wait()
+		close(reapDone)
+	}()
+	cleanup = func() {
+		// SIGKILL is a safety net for tests that exit before SIGTERM
+		// reaches the fake. ESRCH ("already gone") is fine.
+		_ = cmd.Process.Signal(syscall.SIGKILL)
+		<-reapDone
+	}
+	// Give ps a moment to surface the new process.
+	time.Sleep(200 * time.Millisecond)
+	return binPath, pid, cleanup
+}
+
+// setStubSextantdBin sets SEXTANTD_BIN to a freshly-created stub binary
+// in a t.TempDir() so the orphan-scan code in `doStart`/`doStop` won't
+// accidentally match a real sextantd installed elsewhere on the dev
+// box. The stub is never executed — only its path is used for the
+// process-table comparison.
+func setStubSextantdBin(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "sextantd")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil { //nolint:gosec
+		t.Fatalf("write stub: %v", err)
+	}
+	t.Setenv("SEXTANTD_BIN", bin)
+	return bin
+}
+
+// TestFindOrphanSextantd_DetectsByBinaryPath spawns a fake sextantd named
+// after a test-controlled path, then asserts findOrphanSextantd returns
+// exactly that PID. This is the load-bearing zombie-detection check: the
+// real bug it shields against is "runtime.json was removed but sextantd
+// kept running" — discovered live in Lena's session.
+func TestFindOrphanSextantd_DetectsByBinaryPath(t *testing.T) {
+	dir := t.TempDir()
+	bin, fakePID, cleanup := spawnFakeSextantd(t, dir)
+	defer cleanup()
+
+	pids, err := findOrphanSextantd(bin, 0)
+	if err != nil {
+		t.Fatalf("findOrphanSextantd: %v", err)
+	}
+	if len(pids) != 1 || pids[0] != fakePID {
+		t.Errorf("findOrphanSextantd = %v, want [%d]", pids, fakePID)
+	}
+}
+
+// TestFindOrphanSextantd_ExcludesGivenPID covers the "this is the daemon
+// we expect to be running" filter. `sextant stop` uses it to avoid
+// counting the runtime.json daemon as its own orphan.
+func TestFindOrphanSextantd_ExcludesGivenPID(t *testing.T) {
+	dir := t.TempDir()
+	bin, fakePID, cleanup := spawnFakeSextantd(t, dir)
+	defer cleanup()
+
+	pids, err := findOrphanSextantd(bin, fakePID)
+	if err != nil {
+		t.Fatalf("findOrphanSextantd: %v", err)
+	}
+	if len(pids) != 0 {
+		t.Errorf("excludePID %d should hide it; got %v", fakePID, pids)
+	}
+}
+
+// TestFindOrphanSextantd_NoMatchOnUnrelatedBinary confirms the path-match
+// is strict — pointing at a binary nobody is running yields no orphans.
+// Protects against false positives like "I happen to have another binary
+// named sextantd in $PATH".
+func TestFindOrphanSextantd_NoMatchOnUnrelatedBinary(t *testing.T) {
+	pids, err := findOrphanSextantd("/nonexistent/path/to/sextantd-"+t.Name(), 0)
+	if err != nil {
+		t.Fatalf("findOrphanSextantd: %v", err)
+	}
+	if len(pids) != 0 {
+		t.Errorf("expected no orphans, got %v", pids)
+	}
 }
