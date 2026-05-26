@@ -23,6 +23,20 @@ type Config struct {
 	Shipper    ShipperConfig    `toml:"shipper"`
 	Paths      PathsConfig      `toml:"paths"`
 	Worktree   WorktreeConfig   `toml:"worktree"`
+	Log        LogConfig        `toml:"log"`
+}
+
+// LogConfig governs sextantd's own log sink (distinct from the per-
+// subprocess log_file knobs under [nats] / [clickhouse] / [shipper]).
+// The daemon always writes its `log` package output to File in addition
+// to stderr — operators get terminal feedback when running foreground,
+// and post-mortem debugging always has a file to point at.
+//
+//   - File defaults to <data_dir>/sextantd.log. The operator may override
+//     in sextantd.toml; an empty/omitted value resolves to the default
+//     during Config.Resolve.
+type LogConfig struct {
+	File string `toml:"file"`
 }
 
 // ShipperConfig governs sextantd's supervision of the sextant-shipper
@@ -233,6 +247,9 @@ func DefaultConfig(configDir, dataDir string) Config {
 			PruneInterval: Duration(DefaultPruneInterval),
 			ArchiveRoot:   filepath.Join(dataDir, "worktree-archive"),
 		},
+		Log: LogConfig{
+			File: filepath.Join(dataDir, "sextantd.log"),
+		},
 	}
 }
 
@@ -345,6 +362,14 @@ func (c Config) Resolve() (Config, error) {
 		out.Worktree.ArchiveRoot = filepath.Join(out.Paths.DataDir, "worktree-archive")
 	}
 
+	// Log file default: <data_dir>/sextantd.log when DataDir is known.
+	// Operators wanting a different sink set [log] file = "..." in
+	// sextantd.toml; an omitted block resolves to the canonical path so
+	// a fresh upgrade still gets a captured log on disk.
+	if out.Log.File == "" && out.Paths.DataDir != "" {
+		out.Log.File = filepath.Join(out.Paths.DataDir, "sextantd.log")
+	}
+
 	pathFields := []*string{
 		&out.Daemon.ControlSocket,
 		&out.CA.KeyPath, &out.CA.PubPath,
@@ -355,6 +380,7 @@ func (c Config) Resolve() (Config, error) {
 		&out.Paths.TemplatesDir, &out.Paths.ClientConfig, &out.Paths.RuntimeFile,
 		&out.Paths.ConfigDir, &out.Paths.DataDir,
 		&out.Worktree.RepoRoot, &out.Worktree.WorktreesRoot, &out.Worktree.ArchiveRoot,
+		&out.Log.File,
 	}
 	for _, p := range pathFields {
 		if *p == "" {
