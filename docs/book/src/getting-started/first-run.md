@@ -1,13 +1,21 @@
 # First run
 
-The three-step flow from a fresh install to a running agent:
+The four-step flow from a fresh install to a running agent:
 
 ```bash
 sextant init      # generate config + CA keys + default template
-sextantd &        # start the daemon (NATS, ClickHouse, shipper, MCP, RPC)
+sextant start     # detach sextantd (writes log to ~/.local/share/sextant/sextantd.log)
 sextant doctor    # confirm the stack is healthy
 sextant agents spawn assistant --template default
 ```
+
+`sextant start` is the recommended way to bring the daemon up — it
+backgrounds `sextantd` as its own session leader, redirects its
+stdout/stderr to a canonical log file, and waits for `runtime.json` to
+appear before returning. Pair with `sextant stop` / `sextant restart` /
+`sextant status` / `sextant logs` for the rest of the lifecycle. Running
+`sextantd` directly still works (see below) for development or when you
+want the daemon attached to your terminal.
 
 ## `sextant init`
 
