@@ -178,6 +178,165 @@ func TestInitRejectsHalfInstalledCA(t *testing.T) {
 func isDir(st os.FileInfo) bool  { return st.IsDir() }
 func isFile(st os.FileInfo) bool { return !st.IsDir() }
 
+// TestInit_SummaryLine_FreshInstall asserts that running `sextant init` on a
+// fresh (empty) install ends with a one-line summary stating how many steps
+// were written. Operators rely on this line to know whether anything
+// changed.
+//
+// Issue: feat-daemon-lifecycle-ergonomics (#1 — init clarity)
+func TestInit_SummaryLine_FreshInstall(t *testing.T) {
+	opts := tempInitOpts(t)
+	var buf bytes.Buffer
+	if err := doInit(context.Background(), &buf, opts); err != nil {
+		t.Fatalf("doInit: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "init: ") {
+		t.Fatalf("expected summary line prefixed with 'init: ', got:\n%s", out)
+	}
+	if !strings.Contains(out, "written") {
+		t.Errorf("fresh install: expected summary to contain 'written', got:\n%s", out)
+	}
+	// On a fresh install nothing pre-existed, so "already satisfied" must
+	// not appear in the summary line.
+	summary := lastSummaryLine(t, out)
+	if strings.Contains(summary, "already satisfied") {
+		t.Errorf("fresh install: summary should not mention 'already satisfied', got: %q", summary)
+	}
+}
+
+// TestInit_SummaryLine_AllSatisfied asserts that re-running `sextant init`
+// after a complete install reports every step as already satisfied. This is
+// the bug the feature targets: operators rerun init and have no way to tell
+// it was a no-op.
+func TestInit_SummaryLine_AllSatisfied(t *testing.T) {
+	opts := tempInitOpts(t)
+	var buf1 bytes.Buffer
+	if err := doInit(context.Background(), &buf1, opts); err != nil {
+		t.Fatalf("first doInit: %v", err)
+	}
+	var buf2 bytes.Buffer
+	if err := doInit(context.Background(), &buf2, opts); err != nil {
+		t.Fatalf("second doInit: %v", err)
+	}
+	out := buf2.String()
+	summary := lastSummaryLine(t, out)
+	if !strings.Contains(summary, "already satisfied") {
+		t.Errorf("second run: expected summary to mention 'already satisfied', got: %q\nfull output:\n%s", summary, out)
+	}
+	if !strings.Contains(summary, "0 written") {
+		t.Errorf("second run: expected '0 written' in summary, got: %q", summary)
+	}
+}
+
+// TestInit_Check_AllPresent_Exit0 verifies that `--check` against a complete
+// install returns no error (exit 0) and does not modify any file on disk.
+// File mtimes are recorded before and after; any change indicates a write.
+func TestInit_Check_AllPresent_Exit0(t *testing.T) {
+	opts := tempInitOpts(t)
+	var buf bytes.Buffer
+	if err := doInit(context.Background(), &buf, opts); err != nil {
+		t.Fatalf("seed doInit: %v", err)
+	}
+
+	mtimes := snapshotMTimes(t, opts.ConfigDir)
+	dataMtimes := snapshotMTimes(t, opts.DataDir)
+
+	checkOpts := opts
+	checkOpts.Check = true
+	var checkBuf bytes.Buffer
+	if err := doInit(context.Background(), &checkBuf, checkOpts); err != nil {
+		t.Fatalf("doInit --check on complete install returned error: %v\noutput:\n%s", err, checkBuf.String())
+	}
+
+	// Nothing should have been written.
+	assertMTimesUnchanged(t, opts.ConfigDir, mtimes)
+	assertMTimesUnchanged(t, opts.DataDir, dataMtimes)
+
+	out := checkBuf.String()
+	if !strings.Contains(out, "check: ok") {
+		t.Errorf("expected check output to contain 'check: ok', got:\n%s", out)
+	}
+}
+
+// TestInit_Check_Missing_Exit2 verifies that `--check` against an incomplete
+// install returns an error mapped to exit 2 and names the missing files in
+// the output so the operator can act.
+func TestInit_Check_Missing_Exit2(t *testing.T) {
+	opts := tempInitOpts(t)
+	checkOpts := opts
+	checkOpts.Check = true
+	var buf bytes.Buffer
+	err := doInit(context.Background(), &buf, checkOpts)
+	if err == nil {
+		t.Fatalf("expected --check on empty dir to return an error, got nil; output:\n%s", buf.String())
+	}
+	if exitCodeFor(err) != exitSystem {
+		t.Errorf("expected exit code %d (system), got %d; err=%v", exitSystem, exitCodeFor(err), err)
+	}
+	out := buf.String()
+	// At minimum, the CA and one config file should be reported missing.
+	for _, needle := range []string{"ca", "sextantd.toml", "would"} {
+		if !strings.Contains(out, needle) {
+			t.Errorf("expected --check output to mention %q, got:\n%s", needle, out)
+		}
+	}
+	// No files should have been written.
+	if _, err := os.Stat(filepath.Join(opts.ConfigDir, "ca.key")); !os.IsNotExist(err) {
+		t.Errorf("--check should not have created ca.key (err=%v)", err)
+	}
+}
+
+// snapshotMTimes walks dir and returns path -> modtime.
+func snapshotMTimes(t *testing.T, dir string) map[string]int64 {
+	t.Helper()
+	out := map[string]int64{}
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		out[path] = info.ModTime().UnixNano()
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", dir, err)
+	}
+	return out
+}
+
+func assertMTimesUnchanged(t *testing.T, dir string, before map[string]int64) {
+	t.Helper()
+	after := snapshotMTimes(t, dir)
+	for path, ts := range before {
+		got, ok := after[path]
+		if !ok {
+			t.Errorf("%s: file disappeared during --check", path)
+			continue
+		}
+		if got != ts {
+			t.Errorf("%s: mtime changed during --check (before=%d after=%d)", path, ts, got)
+		}
+	}
+	for path := range after {
+		if _, ok := before[path]; !ok {
+			t.Errorf("%s: file appeared during --check", path)
+		}
+	}
+}
+
+// lastSummaryLine returns the last non-empty line of the init output that
+// starts with the summary prefix.
+func lastSummaryLine(t *testing.T, out string) string {
+	t.Helper()
+	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if strings.HasPrefix(line, "init: ") {
+			return line
+		}
+	}
+	t.Fatalf("no summary line ('init: ...') in output:\n%s", out)
+	return ""
+}
+
 // TestInitOutputMentionsMakeInstallOnMacOS asserts that `sextant init` ends with
 // a note steering operators to `make install`. Plain `cp bin/* ~/.local/bin/`
 // stamps com.apple.provenance onto the destination, and Gatekeeper SIGKILLs
