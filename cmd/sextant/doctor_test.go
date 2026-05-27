@@ -19,7 +19,7 @@ func TestDoctorAgainstFreshInit(t *testing.T) {
 	if err := doInit(context.Background(), &buf, opts); err != nil {
 		t.Fatalf("doInit: %v", err)
 	}
-	results := collectChecks(context.Background(), opts.ConfigDir, opts.DataDir)
+	results := collectChecks(context.Background(), opts.ConfigDir, opts.DataDir, false)
 
 	// Expect: every static check (config, ca, operator-creds, clickhouse-password,
 	// templates, data-dirs) passes; daemon check is "not-running".
@@ -33,6 +33,9 @@ func TestDoctorAgainstFreshInit(t *testing.T) {
 	}
 	seen := map[string]bool{}
 	for _, r := range results {
+		if r.Kind == "host-dep" {
+			continue // environmental; not what this test exercises
+		}
 		if r.Status == StatusFail {
 			failures++
 		}
@@ -69,7 +72,7 @@ func TestDoctorReportsCorruptedCA(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(opts.ConfigDir, "ca.key"), []byte("not a real key"), 0o600); err != nil {
 		t.Fatalf("corrupt ca.key: %v", err)
 	}
-	results := collectChecks(context.Background(), opts.ConfigDir, opts.DataDir)
+	results := collectChecks(context.Background(), opts.ConfigDir, opts.DataDir, false)
 	var caRow *CheckResult
 	for i := range results {
 		if results[i].Kind == "ca" {
@@ -90,7 +93,7 @@ func TestDoctorJSONOutput(t *testing.T) {
 	if err := doInit(context.Background(), &buf, opts); err != nil {
 		t.Fatalf("doInit: %v", err)
 	}
-	results := collectChecks(context.Background(), opts.ConfigDir, opts.DataDir)
+	results := collectChecks(context.Background(), opts.ConfigDir, opts.DataDir, false)
 	var out bytes.Buffer
 	emit(&out, results, true)
 	var parsed []CheckResult
@@ -170,7 +173,7 @@ func TestDoctorFlagsStaleBinaryReadsVersionPackage(t *testing.T) {
 	// Patch the sextantd.toml to set worktree.repo_root.
 	patchRepoRoot(t, filepath.Join(opts.ConfigDir, "sextantd.toml"), repoRoot)
 
-	results := collectChecks(context.Background(), opts.ConfigDir, opts.DataDir)
+	results := collectChecks(context.Background(), opts.ConfigDir, opts.DataDir, false)
 	var row *CheckResult
 	for i := range results {
 		if results[i].Kind == "binary-version" {
@@ -300,7 +303,7 @@ func patchRepoRoot(t *testing.T, tomlPath, repoRoot string) {
 
 func TestDoctorFailsOnMissingConfig(t *testing.T) {
 	dir := t.TempDir()
-	results := collectChecks(context.Background(), filepath.Join(dir, "cfg"), filepath.Join(dir, "data"))
+	results := collectChecks(context.Background(), filepath.Join(dir, "cfg"), filepath.Join(dir, "data"), false)
 	hasFail := false
 	for _, r := range results {
 		if r.Status == StatusFail {
@@ -321,7 +324,7 @@ func TestDoctor_DaemonNotRunning_HasRemedy(t *testing.T) {
 	if err := doInit(context.Background(), &buf, opts); err != nil {
 		t.Fatalf("doInit: %v", err)
 	}
-	results := collectChecks(context.Background(), opts.ConfigDir, opts.DataDir)
+	results := collectChecks(context.Background(), opts.ConfigDir, opts.DataDir, false)
 	var row *CheckResult
 	for i := range results {
 		if results[i].Kind == "daemon" && results[i].Status == StatusNotRunning {
@@ -423,6 +426,24 @@ func TestDoctor_JSONOutput_HasRemedyField(t *testing.T) {
 	}
 }
 
+// TestDoctorPreflightReturnsOnlyHostDepRows exercises the --preflight
+// dispatch path: collectHostDepChecks must return only "host-dep" rows and
+// must return at least one of them.
+func TestDoctorPreflightReturnsOnlyHostDepRows(t *testing.T) {
+	// Hermetic: every dep "present" via fake lookup; docker daemon OK.
+	lookFn := fakeLookup("nats-server", "clickhouse", "docker", "go", "node", "npm")
+	results := collectHostDepChecks(context.Background(), false, lookFn, okDocker, fakeGoVersion("1.26.1"))
+
+	if len(results) == 0 {
+		t.Fatal("expected at least one host-dep row, got zero")
+	}
+	for _, r := range results {
+		if r.Kind != "host-dep" {
+			t.Errorf("preflight returned non-host-dep row: kind=%s check=%s", r.Kind, r.Check)
+		}
+	}
+}
+
 // TestDoctor_PassingCheck_NoRemedy ensures passing checks don't carry
 // remedies in either format. A passing row with a remedy would be a UX
 // regression — operators shouldn't see "fix it" advice next to "all good".
@@ -432,7 +453,7 @@ func TestDoctor_PassingCheck_NoRemedy(t *testing.T) {
 	if err := doInit(context.Background(), &buf, opts); err != nil {
 		t.Fatalf("doInit: %v", err)
 	}
-	results := collectChecks(context.Background(), opts.ConfigDir, opts.DataDir)
+	results := collectChecks(context.Background(), opts.ConfigDir, opts.DataDir, false)
 	for _, r := range results {
 		if r.Status == StatusPass && r.Remedy != "" {
 			t.Errorf("passing check %s/%s carried remedy %q", r.Kind, r.Check, r.Remedy)
