@@ -67,6 +67,11 @@ func TestRootCmdWiring(t *testing.T) {
 		// events.* (NEW)
 		{"events", "tail"},
 
+		// theme.* (NEW — sextant theme list/import/show)
+		{"theme", "list"},
+		{"theme", "import"},
+		{"theme", "show"},
+
 		// Aliases (legacy top-level verbs, hidden but resolvable).
 		{"ask"},
 		{"conversation"},

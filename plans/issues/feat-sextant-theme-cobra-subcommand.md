@@ -1,11 +1,22 @@
 ---
 title: Wire `sextant theme list/import/show` Cobra subcommand
-status: open
+status: resolved
 priority: P3
 created_at: 2026-05-26T23:10-07:00
+resolved_at: 2026-05-27T04:15-07:00
 labels: [feature, cli, theme, follow-up]
 discovered_in: cobra-fang migration — pkg/theme/ landed in a sibling worktree commit while the cobra subagent was migrating cmd/sextant/, so the agent skipped wiring the `sextant theme` subcommand to avoid races
 ---
+
+## Resolution
+
+`cmd/sextant/theme.go` ships `sextant theme list`, `sextant theme import <path>`, and `sextant theme show [name]`. All three respect the standard `--json` envelope contract (via `writeJSON`). `theme list` against an empty / missing themes dir returns `errNoResults` (exit code 10), matching the convention.
+
+`theme import` validates the file parses as base16 YAML (`theme.ParseBase16`) before writing into `$XDG_CONFIG_HOME/sextant/themes/`. `theme show` accepts an optional theme name; with no name it shows the built-in default.
+
+`cmd/sextant/root_test.go` covers the cobra wiring (3 new entries in the verb-path matrix). Lint clean (gofumpt-formatted, gosec-suppressed for the operator-supplied import path).
+
+The `--json` shape for `theme show` lists only the role names (not the resolved hex codes) because `lipgloss.TerminalColor` is an interface without a stable hex accessor. Filed as a small follow-up [[feat-theme-show-hex-codes]] if richer JSON output becomes valuable.
 
 ## Summary
 

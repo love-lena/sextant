@@ -126,6 +126,7 @@ sextant install itself).`,
 	// New top-level nouns per `feat-cli-resource-verb-cleanup`:
 	cmd.AddCommand(newDaemonCmd())
 	cmd.AddCommand(newEventsCmd())
+	cmd.AddCommand(newThemeCmd())
 
 	// Backwards-compat aliases — each prints a stderr deprecation note
 	// pointing at the new home. Removed one minor release after landing.

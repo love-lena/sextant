@@ -1,11 +1,26 @@
 ---
 title: Adopt JSON envelope contract + exit code 10 (no-results) for CLI output
-status: in-progress
+status: resolved
 priority: P3
 created_at: 2026-05-26T20:33-07:00
+resolved_at: 2026-05-27T04:00-07:00
 labels: [feature, cli, output-protocol]
 discovered_in: CLI/TUI conventions adoption
 ---
+
+## Resolution
+
+Shipped across three commits on main:
+
+- `dd32a58` — **`pkg/cliout/`** package with `Envelope`, `MetaInfo`, `ErrorEnvelope`, `ErrorInfo` + stable error code constants. Tests cover the envelope round-trip and ErrorEnvelope shape.
+- `e916508` — **`writeJSON` envelope sweep** in `cmd/sextant/`. Every `--json` site that calls `writeJSON(cmd, out, v)` now emits `{data: v, meta: {version: 1, command: <dotted-path>}}`.
+- `0ebae51` — **Exit code 10 (no-results)** + agents check envelope. `exitNoResults` sentinel in `cmd/sextant/main.go`; `errNoResults` threaded through `agents list` and `pending list` empty-result paths. `specs/cli/commands.md` § "Exit codes" documents 10. `agents check --json` wraps the verdict in the envelope.
+
+Split off as separate tickets:
+
+- [[feat-cli-exit-code-no-results]] — resolved alongside this.
+- [[feat-cli-output-protocol-tail-and-errors]] — needs-input. Wraps the remaining tail.go NDJSON design decision and the error-envelope-under-`--json` execution work.
+- [[feat-cli-output-protocol-wiring]] — resolved as the follow-up that landed the wiring work this ticket started.
 
 ## Progress (2026-05-26)
 
