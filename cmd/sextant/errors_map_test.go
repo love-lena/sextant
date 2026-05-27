@@ -133,6 +133,47 @@ func TestErrorBannerJSONMode(t *testing.T) {
 	}
 }
 
+// TestErrorBannerJSONModeEmitsForNoResults pins Codex's second-round
+// finding: errNoResults must produce a NO_RESULTS error envelope under
+// --json, not get silently dropped by the text-mode suppression rule
+// that exists for the "no agents" stdout-line convention. Without
+// this, `sextant agents list --json` against an empty fleet exits 10
+// with no machine-readable failure object — a broken contract for
+// scripts.
+func TestErrorBannerJSONModeEmitsForNoResults(t *testing.T) {
+	prev := globalFlags.asJSON
+	globalFlags.asJSON = true
+	defer func() { globalFlags.asJSON = prev }()
+
+	var buf strings.Builder
+	errorBanner(&buf, fangStylesZero(), errNoResults)
+
+	got := buf.String()
+	for _, want := range []string{`"error"`, `"code"`, cliout.CodeNoResults} {
+		if !strings.Contains(got, want) {
+			t.Errorf("no-results JSON banner missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestErrorBannerPlainModeSuppressesNoResults confirms the
+// suppression rule still applies in TEXT mode — errNoResults is
+// silenced because the verb already wrote "no agents" / "no pending
+// requests" to stdout. Without this guard the operator would see a
+// noisy `sextant: no results` line alongside the verb's own message.
+func TestErrorBannerPlainModeSuppressesNoResults(t *testing.T) {
+	prev := globalFlags.asJSON
+	globalFlags.asJSON = false
+	defer func() { globalFlags.asJSON = prev }()
+
+	var buf strings.Builder
+	errorBanner(&buf, fangStylesZero(), errNoResults)
+
+	if got := buf.String(); got != "" {
+		t.Errorf("text-mode errNoResults should be silent, got %q", got)
+	}
+}
+
 // TestErrorBannerPlainMode confirms the default path still writes the
 // pre-cobra plain-text banner. The text mode is the operator's
 // default — don't accidentally JSON-ify it.
