@@ -1,73 +1,66 @@
 # sextant
 
-A Go-based control plane for AI coding agents, built on NATS JetStream, ClickHouse, and Claude Code SDK sidecars.
+A Go control plane for AI coding agents. Sextant supervises a NATS JetStream bus, a ClickHouse store, and one Docker container per running agent — each container drives the Claude Agent SDK and reports back over the bus.
 
-> **History**: this is v1, originally code-named "initial" (see [`specs/architecture.md`](specs/architecture.md) for the design decisions). The earlier experimental Rust version, code-named "pilot" (v0), lives archived at [`love-lena/sextant-pilot`](https://github.com/love-lena/sextant-pilot). No code carryover from pilot; the design has been considered top-to-bottom.
-
-## Install
+## Quickstart (operators)
 
 ```bash
 git clone git@github.com:love-lena/sextant.git
 cd sextant
-make install            # NOT `cp bin/* ~/.local/bin/`; cp triggers macOS
-                        # Gatekeeper SIGKILL (exit 137, silent kill).
-                        # PREFIX overridable: `sudo make install PREFIX=/usr/local`
-sextant init
-sextantd &
+make bootstrap            # installs host deps, builds, installs, runs `sextant init`
+sextant start             # bring up the daemon
+sextant agents spawn assistant --template default
+sextant conversation assistant
 ```
 
-> **macOS gotcha — do not use plain `cp`.** `cp bin/sextant ~/.local/bin/` stamps
-> the `com.apple.provenance` xattr onto the destination, and Gatekeeper SIGKILLs
-> the resulting binary on invocation (exit code 137, **no stderr message**). The
-> failure looks like the binary itself is broken. `make install` invokes
-> `/usr/bin/install` which writes a clean file, sidestepping the xattr entirely.
-> Linux is unaffected. Cross-reference: `plans/issues/docs-install-via-make-install-not-cp.md`.
+`make bootstrap` audits host deps (Go ≥ 1.26, `nats-server`, `clickhouse`, `docker`/OrbStack, `node`), prints what it's about to brew-install, prompts `Y/n`, then chains `make install` → `sextant doctor --preflight` → `sextant init`. Pass `YES=1` for non-interactive (CI / repeat runs).
 
-`make uninstall` removes every installed binary from `$PREFIX/bin`.
+macOS via Homebrew is the tested path. Linux is partial — `nats-server` and `clickhouse` aren't in default apt repos, so on Linux the script bails with upstream URLs if those are missing.
 
-## What's in this repo
+For a deeper walkthrough — what each step writes, how the daemon is supervised, where logs land — read [`docs/book/src/getting-started/first-run.md`](docs/book/src/getting-started/first-run.md).
 
-Right now: **specifications, plans, and conventions only**. No code yet. This repo is built in two phases.
+### Verifying
 
-### Phase 1: Classic Claude Code builds initial
-
-Classic Claude Code (CLI mode) reads from this repo and implements the system following the specs. Linear, well-scoped work — no self-iteration needed during this phase.
-
-Start point for any implementor (human or agent): [`plans/bootstrap.md`](plans/bootstrap.md).
-
-### Phase 2: Sextant agents iterate on sextant
-
-Once the system is functional enough to spawn its first agent, the **switchover** happens. After that, sextant agents work on sextant itself in parallel via git worktrees, with self-update, capability descoping, and audit trails all working.
-
-## Directory layout
-
-```
-.
-├── README.md                 # you are here
-├── plans/
-│   ├── bootstrap.md          # master plan: sequenced milestones
-│   └── milestones/           # per-milestone detail (filled as we go)
-├── specs/
-│   ├── architecture.md       # the design pillars — load-bearing doc
-│   ├── components/           # nats, clickhouse, sextantd, shipper, sidecar-image, libraries
-│   ├── cli/                  # CLI verb shapes
-│   └── protocols/            # bus subjects, RPC catalog, envelope schema
-├── conventions/
-│   ├── STYLE.md              # Go style (Uber baseline + sextant additions)
-│   ├── git-workflow.md       # worktrees, branch naming, merge flow
-│   └── tui-conventions.md    # keymap, layout, ui.state.* patterns
-└── skills/                   # SKILL.md files for agents
-    └── sextant-bootstrap-implementer.md
+```bash
+sextant doctor
 ```
 
-## Reading order for implementors
+Runs ~15 checks: config files present, CA keypair valid, sextantd reachable, NATS and ClickHouse running, host binaries on PATH, installed binary's `GitSHA` matches the repo. Exit code `0` on green, `2` if anything failed. `sextant doctor --preflight` runs only the host-binary checks (faster, doesn't need the daemon running).
 
-1. [`specs/architecture.md`](specs/architecture.md) — the why and the what of every load-bearing decision
-2. [`plans/bootstrap.md`](plans/bootstrap.md) — the sequenced milestone list, top to bottom
-3. [`conventions/STYLE.md`](conventions/STYLE.md) — how code is written here
-4. [`conventions/git-workflow.md`](conventions/git-workflow.md) — how branches and merges work
-5. Per-milestone spec files referenced from `bootstrap.md`
+> **macOS gotcha — do not use plain `cp`.** `cp bin/sextant ~/.local/bin/` stamps `com.apple.provenance` onto the destination, and Gatekeeper SIGKILLs the resulting binary on invocation (exit 137, **no stderr**). The failure looks like the binary itself is broken. `make install` (which `make bootstrap` uses) invokes `/usr/bin/install`, which writes a clean file. Cross-reference: [`plans/issues/docs-install-via-make-install-not-cp.md`](plans/issues/docs-install-via-make-install-not-cp.md).
 
-## Status
+### Where to go next
 
-Pre-implementation. Plans and specs being filled in.
+The reference book lives in [`docs/book/`](docs/book/). Run `mdbook serve docs/book` to browse in a browser, or open the `.md` files directly.
+
+- [CLI reference](docs/book/src/operator-guide/cli.md) — every `sextant <subcommand>`
+- [TUIs](docs/book/src/operator-guide/tuis.md) — `sextant conversation`, `sextant-tui-agents`
+- [Templates](docs/book/src/operator-guide/templates.md) — defining new agent kinds
+- [Worktrees](docs/book/src/operator-guide/worktrees.md) — how agents work in isolated git worktrees
+- [Architecture overview](docs/book/src/architecture/overview.md) — the why behind the design
+
+## Contributing
+
+If you're working *on* sextant rather than driving it:
+
+- **[`PRINCIPLES.md`](PRINCIPLES.md)** — three load-bearing values that constrain every feature decision. Read once.
+- **[`CLAUDE.md`](CLAUDE.md)** — auto-loaded project guidance for AI agents (and a useful orientation for humans too).
+- **[`conventions/`](conventions/)** — Go style, git workflow, TUI patterns, operator-experience conventions.
+- **[`plans/bootstrap.md`](plans/bootstrap.md)** — the M0–M17 milestone plan. M0–M15 are merged on `main`; M16 (self-update) and M17 (test environments) are not implemented.
+- **[`plans/issues/`](plans/issues/)** — open + closed bugs and feature requests, one markdown file per issue.
+
+For the build/test/lint loop, after `make bootstrap`:
+
+```bash
+make test       # go test -race + TS vitest + sidecar tests
+make lint       # golangci-lint + nilaway + tsc --noEmit
+make install    # rebuild and reinstall binaries to ~/.local/bin
+```
+
+Worktree-based feature work uses the `EnterWorktree` tool (Claude Code) or `git worktree add` directly — see [`conventions/git-workflow.md`](conventions/git-workflow.md).
+
+Every commit carries `Co-Authored-By: <model> <noreply@anthropic.com>` when an AI participated. If you spawn subagents to commit, tell them to include the trailer too.
+
+---
+
+The earlier experimental Rust version, code-named "pilot" (v0), lives archived at [`love-lena/sextant-pilot`](https://github.com/love-lena/sextant-pilot). No code carryover; design reconsidered top-to-bottom for v1.
