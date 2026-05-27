@@ -65,9 +65,19 @@ func errorBanner(w io.Writer, _ fang.Styles, err error) {
 	}
 	if errors.Is(err, errSilentExit) {
 		// The verb already emitted its own user-facing failure on
-		// stderr (status's "daemon: not running", exec's pass-through).
-		// Suppressing applies in both text AND JSON modes — in JSON
-		// mode the verb is expected to have written its own envelope.
+		// stderr (exec's pass-through). Suppressing applies in both
+		// text AND JSON modes — in JSON mode the verb is expected to
+		// have written its own envelope.
+		return
+	}
+	if isStatusNotRunningErr(err) {
+		// `sextant daemon status` (and its alias `sextant status`)
+		// has already written the canonical status surface — a text
+		// "daemon: not running" line OR a JSON `daemon_status` row,
+		// depending on --json. Banner-suppression must apply in BOTH
+		// modes; without this check, the JSON path below would write
+		// a second stderr envelope conflicting with the verb's own
+		// stdout row. See Codex follow-up review finding 1.
 		return
 	}
 	if globalFlags.asJSON {

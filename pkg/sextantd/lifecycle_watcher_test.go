@@ -218,9 +218,76 @@ func TestLifecycleWatcherGivesUpAfterPersistentCASConflicts(t *testing.T) {
 	}
 }
 
+// TestLifecycleWatcherDropsStaleIncarnationTerminal pins the
+// stale-incarnation filter Codex flagged on the follow-up review:
+// after `transition=started` for incarnation A, an `ended` envelope
+// arriving from a prior incarnation B must NOT rewrite the running
+// record. Without the filter, restart_agent would be sabotaged by
+// its predecessor's final lifecycle envelope.
+func TestLifecycleWatcherDropsStaleIncarnationTerminal(t *testing.T) {
+	kv := newFakeLifecycleKV()
+	id := uuid.New()
+	currentInc := uuid.New()
+	staleInc := uuid.New()
+	kv.seedDefinition(t, id, "iota", sextantproto.LifecycleRunning, 1)
+
+	w := &LifecycleWatcher{defs: kv}
+	// Record the current incarnation via a synthetic `started` envelope.
+	w.handle(envelopeForWithIncarnation(t, id, currentInc, sextantproto.LifecycleStarted))
+	// Now a stale `ended` from a prior incarnation arrives.
+	w.handle(envelopeForWithIncarnation(t, id, staleInc, sextantproto.LifecycleEnded))
+
+	if got := kv.currentLifecycle(t, id); got != sextantproto.LifecycleRunning {
+		t.Errorf("Lifecycle = %q, want running (stale ended should have been dropped)", got)
+	}
+}
+
+// TestLifecycleWatcherAcceptsCurrentIncarnationTerminal — the matching
+// incarnation IS applied. Ensures the filter isn't over-broad.
+func TestLifecycleWatcherAcceptsCurrentIncarnationTerminal(t *testing.T) {
+	kv := newFakeLifecycleKV()
+	id := uuid.New()
+	currentInc := uuid.New()
+	kv.seedDefinition(t, id, "kappa", sextantproto.LifecycleRunning, 1)
+
+	w := &LifecycleWatcher{defs: kv}
+	w.handle(envelopeForWithIncarnation(t, id, currentInc, sextantproto.LifecycleStarted))
+	w.handle(envelopeForWithIncarnation(t, id, currentInc, sextantproto.LifecycleEnded))
+
+	if got := kv.currentLifecycle(t, id); got != sextantproto.LifecycleEndedState {
+		t.Errorf("Lifecycle = %q, want ended (matching incarnation should apply)", got)
+	}
+}
+
+// TestLifecycleWatcherWarmUpAllowsFirstEnvelope — daemon-restart case:
+// the watcher boots with no incarnation map. The first lifecycle
+// envelope for a pre-existing agent should pass through (we don't
+// know which incarnation is current, so trust the bus).
+func TestLifecycleWatcherWarmUpAllowsFirstEnvelope(t *testing.T) {
+	kv := newFakeLifecycleKV()
+	id := uuid.New()
+	someInc := uuid.New()
+	kv.seedDefinition(t, id, "lambda", sextantproto.LifecycleRunning, 1)
+
+	w := &LifecycleWatcher{defs: kv}
+	// No started envelope first — first message the watcher sees is ended.
+	w.handle(envelopeForWithIncarnation(t, id, someInc, sextantproto.LifecycleEnded))
+
+	if got := kv.currentLifecycle(t, id); got != sextantproto.LifecycleEndedState {
+		t.Errorf("Lifecycle = %q, want ended (warm-up: no recorded incarnation, allow)", got)
+	}
+}
+
 // --- helpers ---------------------------------------------------------
 
 func envelopeFor(t *testing.T, id uuid.UUID, transition sextantproto.LifecycleEvent) *nats.Msg {
+	return envelopeForWithIncarnation(t, id, uuid.New(), transition)
+}
+
+// envelopeForWithIncarnation lets the caller pin the IncarnationID —
+// required by the incarnation-filter tests where the same agent
+// receives envelopes from multiple incarnations across the test body.
+func envelopeForWithIncarnation(t *testing.T, id, incarnation uuid.UUID, transition sextantproto.LifecycleEvent) *nats.Msg {
 	t.Helper()
 	from := sextantproto.Address{Kind: sextantproto.AddressAgent, ID: id.String()}
 	state := sextantproto.IncarnationReady
@@ -232,7 +299,7 @@ func envelopeFor(t *testing.T, id uuid.UUID, transition sextantproto.LifecycleEv
 	}
 	env, err := sextantproto.NewEnvelopeWith(sextantproto.KindLifecycle, from,
 		sextantproto.LifecyclePayload{
-			IncarnationID: uuid.New(),
+			IncarnationID: incarnation,
 			AgentUUID:     id,
 			Transition:    transition,
 			State:         state,

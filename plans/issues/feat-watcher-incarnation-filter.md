@@ -1,11 +1,29 @@
 ---
 title: Lifecycle watcher should drop envelopes from stale incarnations (not just yield to archived)
-status: open
+status: resolved
 priority: P3
 created_at: 2026-05-27T10:55-07:00
-labels: [feature, daemon, observability, lifecycle, needs-input]
+resolved_at: 2026-05-27T11:05-07:00
+labels: [feature, daemon, observability, lifecycle]
 discovered_in: Codex adversarial review of the lifecycle watcher CAS fix — the immediate fix yields when the current state is archived, but the full hardening also needs incarnation-ID filtering so envelopes from a now-restarted prior incarnation can't muddy the record
+
 ---
+
+## Resolution
+
+Codex flagged this again on the follow-up review as a high-severity blocker. Implemented the in-memory variant (option 3 from this ticket's original list) — minimal scope, no schema churn, closes the operator-visible race:
+
+- `LifecycleWatcher` gains a `currentIncarnation map[uuid.UUID]uuid.UUID` (mu-protected).
+- `transition=started` / `resumed` / `restarted` envelopes record the IncarnationID as the current live incarnation for the agent.
+- Other transitions (ended / crashed / paused / archived) check the envelope's IncarnationID against the map; mismatches drop with a log line.
+- Warm-up: when no incarnation is recorded (daemon restart with pre-existing live agents), the envelope passes through. The next `started` establishes the baseline.
+
+Tests in `pkg/sextantd/lifecycle_watcher_test.go`:
+- `TestLifecycleWatcherDropsStaleIncarnationTerminal` — the Codex repro.
+- `TestLifecycleWatcherAcceptsCurrentIncarnationTerminal` — guards against over-broad filtering.
+- `TestLifecycleWatcherWarmUpAllowsFirstEnvelope` — daemon-restart edge.
+
+The schema-based variants (CurrentIncarnationID field on AgentDefinition, or per-event agent_incarnations bucket lookup) were the other options on the original ticket — both have a wider blast radius and are deferred. The in-memory map is rebuilt from incoming envelopes on daemon restart, which is acceptable for the operator-visible failure mode this race produced.
 
 ## Needs Lena's input
 
