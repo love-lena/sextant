@@ -3,9 +3,15 @@ title: Output protocol — sweep bespoke JSON writers + wrap error paths under -
 status: open
 priority: P3
 created_at: 2026-05-27T03:20-07:00
-labels: [feature, cli, output-protocol, follow-up]
+labels: [feature, cli, output-protocol, follow-up, needs-input]
 discovered_in: feat-cli-output-protocol-wiring landed the writeJSON sweep but two corners still emit raw payloads — agents_check.go (renderAgentCheck) and tail.go (renderTailEnvelope) — and the --json error paths still surface as plain text
 ---
+
+## Needs Lena's input
+
+The agents_check piece landed (commit `0ebae51`). What remains has a real design call: **tail.go's NDJSON stream** — wrap each envelope in `cliout.Envelope` (NDJSON of envelopes, `meta.command` repeated per line) or document tail as the exception because it's a stream not a single response. Backward-compat for the existing consumers piping `sextant tail` into `jq` depends on the answer.
+
+The error-envelope half is pure execution and could ship anytime; not blocking on input. Splitting into [[feat-cli-output-protocol-error-envelope]] when picked up.
 
 ## Progress (2026-05-27)
 
