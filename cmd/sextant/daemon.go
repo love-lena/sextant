@@ -61,13 +61,21 @@ func newDaemonStopCmd() *cobra.Command {
 		Use:   "stop",
 		Short: "SIGTERM the daemon and wait for graceful shutdown",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := loadDaemonConfig(globalFlags.configDir, globalFlags.dataDir)
-			if err != nil {
-				return err
-			}
-			return doStop(cmd.OutOrStdout(), cfg, timeout)
-		},
+	}
+	destructive := newDestructiveFlags(cmd)
+	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
+		proceed, err := destructive.confirm(cmd, "stop the running sextant daemon")
+		if err != nil {
+			return err
+		}
+		if !proceed {
+			return nil
+		}
+		cfg, err := loadDaemonConfig(globalFlags.configDir, globalFlags.dataDir)
+		if err != nil {
+			return err
+		}
+		return doStop(cmd.OutOrStdout(), cfg, timeout)
 	}
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Second,
 		"max wait for runtime.json to disappear")
@@ -81,13 +89,21 @@ func newDaemonRestartCmd() *cobra.Command {
 		Use:   "restart",
 		Short: "Stop then start (with transition prints)",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := loadDaemonConfig(globalFlags.configDir, globalFlags.dataDir)
-			if err != nil {
-				return err
-			}
-			return doRestart(cmd.OutOrStdout(), cfg, stopTimeout, startTimeout)
-		},
+	}
+	destructive := newDestructiveFlags(cmd)
+	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
+		proceed, err := destructive.confirm(cmd, "restart the running sextant daemon (brief downtime)")
+		if err != nil {
+			return err
+		}
+		if !proceed {
+			return nil
+		}
+		cfg, err := loadDaemonConfig(globalFlags.configDir, globalFlags.dataDir)
+		if err != nil {
+			return err
+		}
+		return doRestart(cmd.OutOrStdout(), cfg, stopTimeout, startTimeout)
 	}
 	cmd.Flags().DurationVar(&stopTimeout, "stop-timeout", 30*time.Second,
 		"max wait for graceful shutdown")

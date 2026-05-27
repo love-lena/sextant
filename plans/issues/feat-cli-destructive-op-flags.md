@@ -1,11 +1,26 @@
 ---
 title: Destructive CLI ops need --dry-run + --yes + Huh confirm on TTY
-status: open
+status: resolved
 priority: P3
 created_at: 2026-05-26T20:33-07:00
+resolved_at: 2026-05-26T23:50-07:00
 labels: [feature, cli, safety]
 discovered_in: CLI/TUI conventions adoption
 ---
+
+## Resolution
+
+Shipped the safety baseline: `--dry-run` and `--yes` (alias `-y`) on every destructive verb. `cmd/sextant/destructive.go` owns the helper; the five wired verbs are `agents kill`, `agents restart`, `agents archive` (single + `--all-dead`), `daemon stop`, `daemon restart`.
+
+Behavior per verb:
+
+- `--dry-run` → print `[dry-run] would <action>` to stderr, exit 0, no RPC.
+- `--yes` / `-y` → proceed without prompting. Required outside TTY.
+- Neither → return `errDestructiveNoYes` with a message naming the action and pointing at the flags.
+
+Tests in `cmd/sextant/destructive_test.go` cover all three branches.
+
+The TTY-interactive Huh confirm variant the conventions doc pins is deferred to `[[feat-cli-huh-interactive-confirm]]` — `charmbracelet/huh` isn't actually in `go.mod` today (despite cobra-fang's plan to add it), and bringing it in is a separate dependency decision. The current `--yes`-required behavior preserves the safety property; Huh is the UX polish on top.
 
 ## Summary
 
