@@ -1,11 +1,38 @@
 ---
 title: Migrate cmd/sextant from stdlib flag to Cobra + Fang + charmbracelet/log
-status: open
+status: resolved
 priority: P3
 created_at: 2026-05-26T20:33-07:00
+resolved_at: 2026-05-26T22:55-07:00
 labels: [feature, cli, framework-migration]
 discovered_in: CLI/TUI conventions adoption
 ---
+
+## Resolution
+
+Landed on branch `feat-cli-cobra-fang-resource-verb-001` together with
+`[[feat-cli-resource-verb-cleanup]]` — the migration vehicle was a single
+RootCmd tree built directly in resource-verb shape (no intermediate
+stdlib-shape rename). Summary:
+
+- `go.mod` now requires `github.com/spf13/cobra`,
+  `github.com/charmbracelet/fang`, `github.com/charmbracelet/log`,
+  `github.com/charmbracelet/huh`.
+- `cmd/sextant/main.go` is a thin Fang entry point; `cmd/sextant/root.go`
+  builds the RootCmd tree, persistent flags (`--config-dir`,
+  `--data-dir`, `--json`, `-v`, `--no-color`), and the two
+  `charmbracelet/log` loggers (`userLog` → stderr always, `diagLog` →
+  stderr when `-v`).
+- Every verb file is cobra-native; `reorderFlagsBeforePositional` and
+  `parseCommonOpts` are deleted (Cobra parses flags interleaved with
+  positionals natively). `output.go`'s `printf`/`println` helpers are
+  retained only where init.go still emits progress lines; no new code
+  uses them.
+- Wiring test at `cmd/sextant/root_test.go::TestRootCmdWiring` asserts
+  every documented command path resolves.
+- Exit codes preserved (0 / 1 user / 2 system). Fang's
+  `WithErrorHandler` is configured to suppress the banner for
+  exec/status sentinels and otherwise render `sextant: <err>` on stderr.
 
 ## Summary
 
