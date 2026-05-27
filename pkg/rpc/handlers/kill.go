@@ -68,6 +68,16 @@ func NewKillAgent(deps KillDeps) rpc.Handler {
 			return emitErr(emit, sextantproto.ErrCodeInternal,
 				fmt.Sprintf("decode definition: %v", err))
 		}
+		// initialDefRevision pins the revision we just read so the
+		// final def writes (both the no-live-incarnation fast path and
+		// the post-stop path) can refuse to clobber a concurrent
+		// restart_agent / archive_agent commit. Without this guard,
+		// kill would stop the (stale) old incarnation, then plain-Put
+		// lifecycle=defined back, overwriting the new incarnation a
+		// concurrent restart_agent just committed and leaving its
+		// container running orphaned. Codex 7th-round adversarial
+		// review pinned that as a real interleaving.
+		initialDefRevision := defEntry.Revision()
 
 		// 3. Find live incarnation.
 		inc, incKey, err := findLiveIncarnation(ctx, deps.Incarnations, args.AgentID)
@@ -78,11 +88,22 @@ func NewKillAgent(deps KillDeps) rpc.Handler {
 		if inc == nil {
 			// No live incarnation — fall through to lifecycle flip so a
 			// caller can use kill_agent to put a stuck agent back to
-			// defined without errors.
+			// defined without errors. CAS the write so we don't
+			// overwrite a concurrent restart_agent that's about to
+			// land a fresh incarnation.
 			def.Lifecycle = sextantproto.LifecycleDefined
 			def.Version++
 			def.UpdatedAt = sextantproto.AtTimestamp(deps.Now().UTC())
-			if err := putJSON(ctx, deps.Definitions, args.AgentID.String(), def); err != nil {
+			raw, mErr := json.Marshal(def)
+			if mErr != nil {
+				return emitErr(emit, sextantproto.ErrCodeInternal,
+					fmt.Sprintf("marshal definition: %v", mErr))
+			}
+			if _, err := deps.Definitions.Update(ctx, args.AgentID.String(), raw, initialDefRevision); err != nil {
+				if errors.Is(err, jetstream.ErrKeyExists) {
+					return emitErr(emit, sextantproto.ErrCodeBadRequest,
+						fmt.Sprintf("agent %s definition changed during kill (concurrent restart/archive); re-issue kill if still appropriate", args.AgentID))
+				}
 				return emitErr(emit, sextantproto.ErrCodeInternal,
 					fmt.Sprintf("update definition: %v", err))
 			}
@@ -107,11 +128,24 @@ func NewKillAgent(deps KillDeps) rpc.Handler {
 				fmt.Sprintf("update incarnation: %v", err))
 		}
 
-		// 6. Flip the definition back to defined.
+		// 6. Flip the definition back to defined via CAS. If a
+		// concurrent restart_agent has committed a new incarnation
+		// between step 2 and here, the revision moved and we bail
+		// rather than clobbering its work. The operator sees a clear
+		// error and can re-issue kill against the new incarnation.
 		def.Lifecycle = sextantproto.LifecycleDefined
 		def.Version++
 		def.UpdatedAt = sextantproto.AtTimestamp(now)
-		if err := putJSON(ctx, deps.Definitions, args.AgentID.String(), def); err != nil {
+		raw, mErr := json.Marshal(def)
+		if mErr != nil {
+			return emitErr(emit, sextantproto.ErrCodeInternal,
+				fmt.Sprintf("marshal definition: %v", mErr))
+		}
+		if _, err := deps.Definitions.Update(ctx, args.AgentID.String(), raw, initialDefRevision); err != nil {
+			if errors.Is(err, jetstream.ErrKeyExists) {
+				return emitErr(emit, sextantproto.ErrCodeBadRequest,
+					fmt.Sprintf("agent %s definition changed during kill (concurrent restart/archive); the container was stopped — re-issue kill against the new incarnation if appropriate", args.AgentID))
+			}
 			return emitErr(emit, sextantproto.ErrCodeInternal,
 				fmt.Sprintf("flip lifecycle to defined: %v", err))
 		}
