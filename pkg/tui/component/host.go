@@ -31,11 +31,11 @@ type ChromeFunc func(width, height int, content string) string
 //
 // Construct via NewHost. Zero value is invalid (no inner component).
 type Host struct {
-	inner           Component
-	chrome          ChromeFunc
-	chromeReserved  int // rows the chrome occupies (subtracted from height before SetSize)
-	width, height   int
-	initialLoadID   string // sent as a LoadMsg on Init, if non-empty
+	inner            Component
+	chrome           ChromeFunc
+	chromeReserved   int // rows the chrome occupies (subtracted from height before SetSize)
+	width, height    int
+	initialLoadID    string // sent as a LoadMsg on Init, if non-empty
 	wantInitialFocus bool
 }
 

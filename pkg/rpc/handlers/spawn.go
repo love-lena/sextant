@@ -806,7 +806,10 @@ func buildClaudeSeedMount(ctx context.Context, deps SpawnDeps, mode, seedPath st
 		if created {
 			// Only roll back the volume when we created it. Re-attaching
 			// an existing volume is a no-op for the caller; deleting it
-			// would destroy the agent's accumulated state.
+			// would destroy the agent's accumulated state. Rollback runs
+			// after the outer spawn ctx may have been cancelled, so the
+			// timeout context derives from Background by design.
+			//nolint:contextcheck // rollback against fresh ctx is intentional
 			cleanup = func() {
 				rbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()

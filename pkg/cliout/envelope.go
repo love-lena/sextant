@@ -66,12 +66,12 @@ type ErrorInfo struct {
 // removing one breaks downstream scripts and requires a meta.version
 // bump per doc.go.
 const (
-	CodeAgentNotFound    = "AGENT_NOT_FOUND"
+	CodeAgentNotFound     = "AGENT_NOT_FOUND"
 	CodeDaemonUnreachable = "DAEMON_UNREACHABLE"
-	CodeInvalidRef       = "INVALID_REF"
-	CodeRPCTimeout       = "RPC_TIMEOUT"
-	CodeUsageError       = "USAGE_ERROR"
-	CodeNoResults        = "NO_RESULTS"
+	CodeInvalidRef        = "INVALID_REF"
+	CodeRPCTimeout        = "RPC_TIMEOUT"
+	CodeUsageError        = "USAGE_ERROR"
+	CodeNoResults         = "NO_RESULTS"
 )
 
 // EnvelopeFromCommand builds an envelope whose meta.command is derived

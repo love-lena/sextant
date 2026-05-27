@@ -419,7 +419,7 @@ func checkWorkingTree(repoRoot string) (CheckResult, bool) {
 	if _, err := os.Stat(filepath.Join(repoRoot, ".git")); err != nil {
 		return CheckResult{}, false
 	}
-	cmd := exec.Command("git", "-C", repoRoot, "diff", "--name-only", "HEAD")
+	cmd := exec.Command("git", "-C", repoRoot, "diff", "--name-only", "HEAD") //nolint:gosec // repoRoot is loaded from sextantd config, not user input
 	out, err := cmd.Output()
 	if err != nil {
 		return CheckResult{
@@ -444,7 +444,7 @@ func checkWorkingTree(repoRoot string) (CheckResult, bool) {
 
 // gitRevParseHEAD returns the full SHA of HEAD in repoRoot.
 func gitRevParseHEAD(repoRoot string) (string, error) {
-	out, err := exec.Command("git", "-C", repoRoot, "rev-parse", "HEAD").Output()
+	out, err := exec.Command("git", "-C", repoRoot, "rev-parse", "HEAD").Output() //nolint:gosec // repoRoot loaded from sextantd config, not user input
 	if err != nil {
 		return "", err
 	}
@@ -455,10 +455,10 @@ func gitRevParseHEAD(repoRoot string) (string, error) {
 // tip but not from base, and whether base is actually an ancestor of tip.
 // When ancestor is false, the returned count is meaningless.
 func gitAheadCount(repoRoot, base, tip string) (count int, ancestor bool) {
-	if err := exec.Command("git", "-C", repoRoot, "merge-base", "--is-ancestor", base, tip).Run(); err != nil {
+	if err := exec.Command("git", "-C", repoRoot, "merge-base", "--is-ancestor", base, tip).Run(); err != nil { //nolint:gosec // repoRoot loaded from sextantd config, not user input
 		return 0, false
 	}
-	out, err := exec.Command("git", "-C", repoRoot, "rev-list", "--count", base+".."+tip).Output()
+	out, err := exec.Command("git", "-C", repoRoot, "rev-list", "--count", base+".."+tip).Output() //nolint:gosec // repoRoot loaded from sextantd config, not user input
 	if err != nil {
 		return 0, true
 	}

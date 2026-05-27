@@ -3,8 +3,8 @@ package chat
 import (
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/love-lena/sextant/pkg/tui/component"
 )

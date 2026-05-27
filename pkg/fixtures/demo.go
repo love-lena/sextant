@@ -142,4 +142,3 @@ func aliceTranscript(t0 time.Time) []Frame {
 		},
 	}
 }
-

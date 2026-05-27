@@ -684,8 +684,13 @@ func (m *Manager) PopulateVolumeFromHostDir(ctx context.Context, volumeName, hos
 		return fmt.Errorf("%w: create populate container: %w", ErrDaemonUnavailable, err)
 	}
 	// Always remove the populate container, even on error paths.
+	//
+	// Deferred cleanup intentionally runs against context.Background():
+	// the outer ctx may already be cancelled (that's often why we're
+	// unwinding), and a cancelled remove would leak the container.
+	//nolint:contextcheck // best-effort cleanup against a fresh ctx by design
 	defer func() {
-		_ = m.cli.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true}) //nolint:contextcheck // best-effort cleanup
+		_ = m.cli.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true})
 	}()
 	if err := m.cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
 		return fmt.Errorf("%w: start populate container: %w", ErrDaemonUnavailable, err)

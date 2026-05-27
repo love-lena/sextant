@@ -76,7 +76,7 @@ func renderTailEnvelope(w io.Writer, msg client.Message, asJSON bool) error {
 		_, err = fmt.Fprintln(w, string(raw))
 		return err
 	}
-	ts := msg.Envelope.Ts.Time.Format(time.RFC3339)
+	ts := msg.Envelope.Ts.Format(time.RFC3339)
 	summary := summarizeEnvelope(msg.Envelope)
 	if summary == "" {
 		printf(w, "[%s] %s  kind=%s\n", ts, msg.Subject, msg.Envelope.Kind)

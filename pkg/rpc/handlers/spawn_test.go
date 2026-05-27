@@ -1226,20 +1226,11 @@ func TestSpawnAgentClaudeSeedCopyOnSpawnReusesExistingVolume(t *testing.T) {
 	}
 	deps.Templates = tplKV
 
-	// Patch the fake so EnsureVolume reports "already exists" for any
-	// name beginning with the canonical prefix. Equivalent to a prior
-	// spawn having populated the volume.
-	vols.mu.Lock()
-	// We can't predict the UUID — pre-seed by intercepting EnsureVolume
-	// via a wrapping closure isn't supported; instead, we run the spawn
-	// once, then a second time (but the second spawn allocates a fresh
-	// agent UUID). So we have to set the volume name AFTER first spawn
-	// runs. Simpler: just mark the test as exercising one happy path
-	// where EnsureVolume returns false (existing) — do that by setting
-	// a known name and patching the helper. To keep this test focused,
-	// we'll directly use the buildClaudeSeedMount path: assert that
-	// when EnsureVolume reports existing=false, populate is not called.
-	vols.mu.Unlock()
+	// Test patches EnsureVolume via the fake's existing[<vol>] map
+	// further down; the no-op critical section above was a mid-thought
+	// vestige (Lock immediately followed by Unlock with only comments
+	// between). Removed to clear staticcheck SA2001 — the patch happens
+	// at the matching block below.
 
 	// Reset and pre-seed one canonical UUID via a known agent name +
 	// double spawn pattern: spawn once, archive (releases name), set

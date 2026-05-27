@@ -78,8 +78,8 @@ type Model struct {
 	// lifecycleMsg. Used by the host's renderHeader to draw the status
 	// dot (feat-chat-tui-status-dot). Zero value when no envelope has
 	// been seen yet — host renders a muted dot in that case.
-	lastLifecycle    sextantproto.LifecyclePayload
-	hasLifecycle     bool
+	lastLifecycle sextantproto.LifecyclePayload
+	hasLifecycle  bool
 }
 
 // New returns a *Model with default styles/keys, mode=NORMAL,

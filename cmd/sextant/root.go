@@ -37,6 +37,13 @@ var globalFlags rootFlags
 // userLog is the user-facing logger. Writes to stderr (per the convention
 // that stdout is data, stderr is messages). Configured by configureLoggers
 // once the root command's PersistentPreRun fires.
+//
+// Held package-level so future verbs (output protocol envelope wave per
+// feat-cli-output-protocol-wiring) can route prose through it consistently.
+// Currently unused at the call sites — they still use output.go's
+// printf/println wrappers — but kept around as the planned home.
+//
+//nolint:unused // reserved for the output protocol wave (see ticket above)
 var userLog = charmlog.NewWithOptions(os.Stderr, charmlog.Options{
 	Level:           charmlog.InfoLevel,
 	ReportTimestamp: false,
