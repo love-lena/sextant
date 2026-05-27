@@ -9,8 +9,9 @@ discovered_in: CLI/TUI conventions adoption
 
 ## Progress (2026-05-26)
 
-- **Done (commit `9717abf`):** `pkg/fixtures/` package shipped — Demo dataset (agents + transcripts + pending) and an in-memory `Bus` that serves it through the same interface methods TUI components consume from `*client.Client`. Tests in `pkg/fixtures/fixture_test.go`.
-- **Remaining:** `--fixture <name>` hidden flag wiring on TUI-entry commands (best landed under cobra migration); `tests/visual/*.tape` files; `make screenshots` Makefile target; migrate `cmd/sextant-tui-chat-preview/` to consume `pkg/fixtures/`; optional `.github/workflows/screenshots.yml`.
+- **Done (commit `9717abf`):** `pkg/fixtures/` package — Demo dataset (agents + transcripts + pending) + in-memory `Bus`. Tests in `pkg/fixtures/fixture_test.go`.
+- **Done (this commit):** `make screenshots` Makefile target wraps `ghcr.io/charmbracelet/vhs`. `tests/visual/chat_default.tape` lands the first capture (size 100×30, Tomorrow Night theme).
+- **Remaining (filed as [[feat-tui-vhs-remaining]]):** `--fixture <name>` flag wiring on TUI-entry commands (cobra+output-protocol territory); `tests/visual/agents_list.tape` + `pending_list.tape`; migrate `cmd/sextant-tui-chat-preview/main.go` to consume `pkg/fixtures.Demo`; optional `.github/workflows/screenshots.yml`.
 
 ## Summary
 
