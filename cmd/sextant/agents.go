@@ -220,54 +220,67 @@ func newAgentsKillCmd() *cobra.Command {
 		Use:   "kill <agent>",
 		Short: "Terminate a running agent",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
-			cli, _, err := connectAgent(ctx, globalFlags.configDir)
-			if err != nil {
-				return err
-			}
-			defer cli.Close() //nolint:errcheck // best-effort close
-
-			id, err := resolveAgentRef(ctx, cli, args[0])
-			if err != nil {
-				return errUserUsage(fmt.Sprintf("agent: %v", err))
-			}
-
-			req := sextantproto.KillAgentRequest{
-				AgentID:      id,
-				GraceSeconds: int(grace / time.Second),
-			}
-			rpcCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-			defer cancel()
-			var resp sextantproto.KillAgentResponse
-			if err := cli.RPC(rpcCtx, rpc.VerbKillAgent, req, &resp); err != nil {
-				return fmt.Errorf("kill_agent: %w", err)
-			}
-			if archive {
-				archiveCtx, cancelArchive := context.WithTimeout(ctx, 60*time.Second)
-				var archiveResp sextantproto.ArchiveAgentResponse
-				archiveErr := cli.RPC(archiveCtx, rpc.VerbArchiveAgent,
-					sextantproto.ArchiveAgentRequest{AgentID: id},
-					&archiveResp)
-				cancelArchive()
-				if archiveErr != nil {
-					return fmt.Errorf("kill ok but archive failed: %w", archiveErr)
-				}
-				if !archiveResp.OK {
-					return fmt.Errorf("kill ok but archive returned ok=false")
-				}
-			}
-			out := cmd.OutOrStdout()
-			if globalFlags.asJSON {
-				return writeJSON(out, resp)
-			}
-			if resp.OK {
-				_, err = fmt.Fprintln(out, "ok")
-			} else {
-				_, err = fmt.Fprintln(out, "not ok")
-			}
+	}
+	destructive := newDestructiveFlags(cmd)
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
+		cli, _, err := connectAgent(ctx, globalFlags.configDir)
+		if err != nil {
 			return err
-		},
+		}
+		defer cli.Close() //nolint:errcheck // best-effort close
+
+		id, err := resolveAgentRef(ctx, cli, args[0])
+		if err != nil {
+			return errUserUsage(fmt.Sprintf("agent: %v", err))
+		}
+
+		action := fmt.Sprintf("kill agent %s (%s)", args[0], id)
+		if archive {
+			action = fmt.Sprintf("kill + archive agent %s (%s)", args[0], id)
+		}
+		proceed, err := destructive.confirm(cmd, action)
+		if err != nil {
+			return err
+		}
+		if !proceed {
+			return nil
+		}
+
+		req := sextantproto.KillAgentRequest{
+			AgentID:      id,
+			GraceSeconds: int(grace / time.Second),
+		}
+		rpcCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		defer cancel()
+		var resp sextantproto.KillAgentResponse
+		if err := cli.RPC(rpcCtx, rpc.VerbKillAgent, req, &resp); err != nil {
+			return fmt.Errorf("kill_agent: %w", err)
+		}
+		if archive {
+			archiveCtx, cancelArchive := context.WithTimeout(ctx, 60*time.Second)
+			var archiveResp sextantproto.ArchiveAgentResponse
+			archiveErr := cli.RPC(archiveCtx, rpc.VerbArchiveAgent,
+				sextantproto.ArchiveAgentRequest{AgentID: id},
+				&archiveResp)
+			cancelArchive()
+			if archiveErr != nil {
+				return fmt.Errorf("kill ok but archive failed: %w", archiveErr)
+			}
+			if !archiveResp.OK {
+				return fmt.Errorf("kill ok but archive returned ok=false")
+			}
+		}
+		out := cmd.OutOrStdout()
+		if globalFlags.asJSON {
+			return writeJSON(out, resp)
+		}
+		if resp.OK {
+			_, err = fmt.Fprintln(out, "ok")
+		} else {
+			_, err = fmt.Fprintln(out, "not ok")
+		}
+		return err
 	}
 	cmd.Flags().DurationVar(&grace, "grace", 10*time.Second,
 		"graceful stop deadline before SIGKILL")
@@ -283,39 +296,49 @@ func newAgentsRestartCmd() *cobra.Command {
 		Use:   "restart <agent>",
 		Short: "Restart a running agent in place",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
-			cli, _, err := connectAgent(ctx, globalFlags.configDir)
-			if err != nil {
-				return err
-			}
-			defer cli.Close() //nolint:errcheck // best-effort close
-
-			id, err := resolveAgentRef(ctx, cli, args[0])
-			if err != nil {
-				return errUserUsage(fmt.Sprintf("agent: %v", err))
-			}
-			req := sextantproto.RestartAgentRequest{
-				AgentID:         id,
-				PreserveSession: preserve,
-			}
-			var resp sextantproto.RestartAgentResponse
-			rpcCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
-			defer cancel()
-			if err := cli.RPC(rpcCtx, rpc.VerbRestartAgent, req, &resp); err != nil {
-				return fmt.Errorf("restart_agent: %w", err)
-			}
-			out := cmd.OutOrStdout()
-			if globalFlags.asJSON {
-				return writeJSON(out, resp)
-			}
-			if resp.OK {
-				_, err = fmt.Fprintf(out, "agent_id: %s\n", resp.AgentID)
-			} else {
-				_, err = fmt.Fprintln(out, "not ok")
-			}
+	}
+	destructive := newDestructiveFlags(cmd)
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
+		cli, _, err := connectAgent(ctx, globalFlags.configDir)
+		if err != nil {
 			return err
-		},
+		}
+		defer cli.Close() //nolint:errcheck // best-effort close
+
+		id, err := resolveAgentRef(ctx, cli, args[0])
+		if err != nil {
+			return errUserUsage(fmt.Sprintf("agent: %v", err))
+		}
+
+		proceed, err := destructive.confirm(cmd, fmt.Sprintf("restart agent %s (%s)", args[0], id))
+		if err != nil {
+			return err
+		}
+		if !proceed {
+			return nil
+		}
+
+		req := sextantproto.RestartAgentRequest{
+			AgentID:         id,
+			PreserveSession: preserve,
+		}
+		var resp sextantproto.RestartAgentResponse
+		rpcCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+		defer cancel()
+		if err := cli.RPC(rpcCtx, rpc.VerbRestartAgent, req, &resp); err != nil {
+			return fmt.Errorf("restart_agent: %w", err)
+		}
+		out := cmd.OutOrStdout()
+		if globalFlags.asJSON {
+			return writeJSON(out, resp)
+		}
+		if resp.OK {
+			_, err = fmt.Fprintf(out, "agent_id: %s\n", resp.AgentID)
+		} else {
+			_, err = fmt.Fprintln(out, "not ok")
+		}
+		return err
 	}
 	cmd.Flags().BoolVar(&preserve, "preserve-session", false,
 		"preserve session state across the restart (reserved; no-op today)")
@@ -336,45 +359,60 @@ func newAgentsArchiveCmd() *cobra.Command {
 exactly one agent reference (UUID or name). --all-dead bulk-archives every
 agent currently in lifecycle=defined.`,
 		Args: cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
-			cli, _, err := connectAgent(ctx, globalFlags.configDir)
+	}
+	destructive := newDestructiveFlags(cmd)
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
+		cli, _, err := connectAgent(ctx, globalFlags.configDir)
+		if err != nil {
+			return err
+		}
+		defer cli.Close() //nolint:errcheck // best-effort close
+
+		if allDead {
+			if len(args) != 0 {
+				return errUserUsage("sextant agents archive --all-dead takes no positional args")
+			}
+			proceed, err := destructive.confirm(cmd, "archive every agent in lifecycle=defined")
 			if err != nil {
 				return err
 			}
-			defer cli.Close() //nolint:errcheck // best-effort close
-
-			if allDead {
-				if len(args) != 0 {
-					return errUserUsage("sextant agents archive --all-dead takes no positional args")
-				}
-				return runAgentsArchiveAllDead(ctx, cmd.OutOrStdout(), cli)
+			if !proceed {
+				return nil
 			}
-			if len(args) != 1 {
-				return errUserUsage("sextant agents archive <agent> | --all-dead")
-			}
-			id, err := resolveAgentRef(ctx, cli, args[0])
-			if err != nil {
-				return errUserUsage(fmt.Sprintf("agent: %v", err))
-			}
-			rpcCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-			defer cancel()
-			var resp sextantproto.ArchiveAgentResponse
-			if err := cli.RPC(rpcCtx, rpc.VerbArchiveAgent,
-				sextantproto.ArchiveAgentRequest{AgentID: id}, &resp); err != nil {
-				return fmt.Errorf("archive_agent: %w", err)
-			}
-			out := cmd.OutOrStdout()
-			if globalFlags.asJSON {
-				return writeJSON(out, resp)
-			}
-			if resp.OK {
-				_, err = fmt.Fprintln(out, "ok")
-			} else {
-				_, err = fmt.Fprintln(out, "not ok")
-			}
+			return runAgentsArchiveAllDead(ctx, cmd.OutOrStdout(), cli)
+		}
+		if len(args) != 1 {
+			return errUserUsage("sextant agents archive <agent> | --all-dead")
+		}
+		id, err := resolveAgentRef(ctx, cli, args[0])
+		if err != nil {
+			return errUserUsage(fmt.Sprintf("agent: %v", err))
+		}
+		proceed, err := destructive.confirm(cmd, fmt.Sprintf("archive agent %s (%s)", args[0], id))
+		if err != nil {
 			return err
-		},
+		}
+		if !proceed {
+			return nil
+		}
+		rpcCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		defer cancel()
+		var resp sextantproto.ArchiveAgentResponse
+		if err := cli.RPC(rpcCtx, rpc.VerbArchiveAgent,
+			sextantproto.ArchiveAgentRequest{AgentID: id}, &resp); err != nil {
+			return fmt.Errorf("archive_agent: %w", err)
+		}
+		out := cmd.OutOrStdout()
+		if globalFlags.asJSON {
+			return writeJSON(out, resp)
+		}
+		if resp.OK {
+			_, err = fmt.Fprintln(out, "ok")
+		} else {
+			_, err = fmt.Fprintln(out, "not ok")
+		}
+		return err
 	}
 	cmd.Flags().BoolVar(&allDead, "all-dead", false,
 		"archive every agent currently in lifecycle defined")
