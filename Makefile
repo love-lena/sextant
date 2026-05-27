@@ -22,7 +22,7 @@ INSTALL_DIR := $(PREFIX)/bin
 # Binaries built by `make build`. New cmd/<name> dirs land here as milestones add them.
 CMDS := sextant sextantd sextant-shipper sextant-natsboot sextant-clickhouseboot sextant-client-demo sextant-tui-agents
 
-.PHONY: all fmt lint lint-go lint-nilaway lint-ts lint-sidecar test test-go test-ts test-sidecar build clean tidy install install-tools uninstall \
+.PHONY: all fmt lint lint-go lint-nilaway lint-ts lint-sidecar test test-go test-ts test-sidecar build clean tidy install install-tools uninstall bootstrap \
         ts-install ts-codegen ts-lint ts-test ts-build \
         sidecar-install sidecar-image sidecar-image-test
 
@@ -134,6 +134,15 @@ tidy:
 install-tools:
 	@command -v $(GOLANGCI_LINT) >/dev/null || brew install golangci-lint
 	@command -v $(NILAWAY) >/dev/null || $(GO) install go.uber.org/nilaway/cmd/nilaway@latest
+
+## bootstrap — green-field setup: host deps + build + install + init.
+##             Interactive; prompts before brew-installing. Pass YES=1 for
+##             non-interactive (CI / repeat runs). Pass SKIP_INIT=1 to
+##             skip `sextant init`.
+bootstrap:
+	@bash scripts/bootstrap.sh \
+	  $(if $(YES),--yes,) \
+	  $(if $(SKIP_INIT),--skip-init,)
 
 clean:
 	rm -rf $(BIN_DIR)
