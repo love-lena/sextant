@@ -3,17 +3,19 @@
 The four-step flow from a fresh install to a running agent:
 
 ```bash
-sextant init      # generate config + CA keys + default template
-sextant start     # detach sextantd (writes log to ~/.local/share/sextant/sextantd.log)
-sextant doctor    # confirm the stack is healthy
+sextant init           # generate config + CA keys + default template
+sextant daemon start   # detach sextantd (writes log to ~/.local/share/sextant/sextantd.log)
+sextant doctor         # confirm the stack is healthy
 sextant agents spawn assistant --template default
 ```
 
-`sextant start` is the recommended way to bring the daemon up — it
-backgrounds `sextantd` as its own session leader, redirects its
+`sextant daemon start` is the recommended way to bring the daemon up —
+it backgrounds `sextantd` as its own session leader, redirects its
 stdout/stderr to a canonical log file, and waits for `runtime.json` to
-appear before returning. Pair with `sextant stop` / `sextant restart` /
-`sextant status` / `sextant logs` for the rest of the lifecycle. Running
+appear before returning. Pair with `sextant daemon stop`, `daemon restart`,
+`daemon status`, `daemon logs` for the rest of the lifecycle. The legacy
+top-level forms (`sextant start`, `stop`, ...) still work for one minor
+release as deprecated aliases. Running
 `sextantd` directly still works (see below) for development or when you
 want the daemon attached to your terminal.
 
@@ -86,10 +88,12 @@ Exit code `0` if everything is green, `2` if any check fails (`cmd/sextant/main.
 ```bash
 sextant agents spawn assistant --template default
 sextant agents list
-sextant agents prompt assistant "Hello, can you summarize this repo?"
-sextant conversation assistant --tail
+sextant agents chat assistant "Hello, can you summarize this repo?"
+sextant agents chat assistant --tail
 ```
 
 `spawn` instantiates the `default` template (which references the sidecar image), creates an agent record in the `agent_definitions` NATS KV bucket, allocates a new incarnation, issues a JWT, and starts the container with the right env vars and mounts. See [Agent lifecycle](../architecture/lifecycle.md) for the full sequence.
 
-`conversation --tail` subscribes to `agents.<uuid>.frames` and `agents.<uuid>.lifecycle` and exits when the agent emits a `lifecycle.ended` frame.
+`sextant agents chat <agent>` opens the chat TUI; passing a positional
+text argument switches to one-shot mode (send + wait for `turn_ended`
++ print + exit). `--tail` (TUI mode) closes the window on `lifecycle.ended`.
