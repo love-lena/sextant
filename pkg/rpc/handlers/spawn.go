@@ -55,6 +55,14 @@ const (
 type AgentMutableKV interface {
 	AgentKV
 	Put(ctx context.Context, key string, value []byte) (uint64, error)
+	// Update is the CAS write: writes value when the entry's last
+	// revision matches `revision`. Real jetstream.KeyValue returns
+	// jetstream.ErrKeyExists on revision mismatch; handlers should
+	// treat that as "concurrent writer slipped in" and re-read +
+	// re-apply their guards before retrying. Used by restart_agent
+	// to close the restart-vs-archive race the Codex adversarial
+	// review caught.
+	Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error)
 	Delete(ctx context.Context, key string, opts ...jetstream.KVDeleteOpt) error
 }
 
