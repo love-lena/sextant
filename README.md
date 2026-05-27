@@ -7,10 +7,10 @@ A Go control plane for AI coding agents. Sextant supervises a NATS JetStream bus
 ```bash
 git clone git@github.com:love-lena/sextant.git
 cd sextant
-make bootstrap            # installs host deps, builds, installs, runs `sextant init`
-sextant start             # bring up the daemon
+make bootstrap                   # installs host deps, builds, installs, runs `sextant init`
+sextant daemon start             # bring up the daemon
 sextant agents spawn assistant --template default
-sextant conversation assistant
+sextant agents chat assistant
 ```
 
 `make bootstrap` audits host deps (Go ≥ 1.26, `nats-server`, `clickhouse`, `docker`/OrbStack, `node`), prints what it's about to brew-install, prompts `Y/n`, then chains `make install` → `sextant doctor --preflight` → `sextant init`. Pass `YES=1` for non-interactive (CI / repeat runs).
@@ -34,7 +34,7 @@ Runs ~15 checks: config files present, CA keypair valid, sextantd reachable, NAT
 The reference book lives in [`docs/book/`](docs/book/). Run `mdbook serve docs/book` to browse in a browser, or open the `.md` files directly.
 
 - [CLI reference](docs/book/src/operator-guide/cli.md) — every `sextant <subcommand>`
-- [TUIs](docs/book/src/operator-guide/tuis.md) — `sextant conversation`, `sextant-tui-agents`
+- [TUIs](docs/book/src/operator-guide/tuis.md) — `sextant agents chat`, `sextant-tui-agents`
 - [Templates](docs/book/src/operator-guide/templates.md) — defining new agent kinds
 - [Worktrees](docs/book/src/operator-guide/worktrees.md) — how agents work in isolated git worktrees
 - [Architecture overview](docs/book/src/architecture/overview.md) — the why behind the design

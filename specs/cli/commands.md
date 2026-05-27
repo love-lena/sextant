@@ -9,20 +9,44 @@ Built on `sextant-client-go`. Every command supports `--json` for scriptable out
 `sextant <noun> <verb> [args...]` is the canonical shape.
 
 ```
-sextant init                          # first-run setup
-sextant agents <verb>                 # agent operations
-sextant conversation <agent>          # conversation tail
-sextant pending                       # user-input request queue
+sextant init                          # first-run setup (top-level singleton)
+sextant doctor                        # health diagnostics (top-level singleton)
+sextant version                       # print version (top-level singleton)
+
+sextant daemon <verb>                 # daemon lifecycle (start|stop|restart|status|logs)
+sextant agents <verb>                 # agent ops (incl. chat, exec — folded under agents)
+sextant pending <verb>                # user-input request queue
 sextant files <verb>                  # container filesystem access
-sextant exec <agent> -- <cmd>         # exec in container
 sextant audit <verb>                  # audit log
-sextant tail <subject>                # subscribe to any bus subject
+sextant events <verb>                 # subscribe to any bus subject (events tail)
 sextant traces <verb>                 # OTel traces
-sextant worktree <verb>               # worktree management (post-M14)
+sextant worktree <verb>               # worktree management
+sextant templates <verb>              # template reload
 sextant self <verb>                   # self-management (post-M16)
 sextant test <verb>                   # test envs (post-M17)
-sextant doctor                        # health diagnostics
 ```
+
+### Resource-verb migration (May 2026)
+
+Per `plans/issues/feat-cli-resource-verb-cleanup.md`, the following
+top-level verbs moved under resource nouns. Old forms remain as
+deprecated aliases for one minor release:
+
+| Old | New |
+|---|---|
+| `sextant ask <agent> "<text>"` | `sextant agents chat <agent> "<text>"` (one-shot mode) |
+| `sextant conversation <agent>` | `sextant agents chat <agent>` (TUI mode) |
+| `sextant exec <agent> -- <cmd>` | `sextant agents exec <agent> -- <cmd>` |
+| `sextant tail <subject>` | `sextant events tail <subject>` |
+| `sextant start` | `sextant daemon start` |
+| `sextant stop` | `sextant daemon stop` |
+| `sextant restart` | `sextant daemon restart` |
+| `sextant status` | `sextant daemon status` |
+| `sextant logs` | `sextant daemon logs` |
+
+`init`, `doctor`, `version` remain top-level singletons (verbs on the
+sextant install itself — explicit exceptions per
+`conventions/tui-conventions.md`).
 
 ## Commands
 

@@ -65,6 +65,12 @@ land on the target stack.
 - **Resource-verb-modifier, in that order.** `sextant agents list`,
   not `sextant list agents`. Verbs cluster under resources; matches
   the daemon shape and makes tab completion useful.
+  - **Documented exceptions:** `sextant init`, `sextant doctor`,
+    `sextant version` are verbs on the **sextant install itself**
+    (initialize, diagnose, identify the install) — folding them under
+    a `sextant install <verb>` noun would add an explicit noun for a
+    single-instance resource and buy nothing. Rationale tracked at
+    `plans/issues/feat-cli-resource-verb-cleanup.md`.
 - **Fixed verb vocabulary.** `list`, `show`, `create`, `update`,
   `delete`, `run`. Custom verbs (`approve`, `escalate`) live as flags
   or subcommands of `update`, not top-level.
