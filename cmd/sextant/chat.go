@@ -138,6 +138,13 @@ func doOneShot(ctx context.Context, w io.Writer, cli *client.Client, id uuid.UUI
 
 // streamAskTurn is the testable core of one-shot chat. Reuses the same
 // renderFrame / renderLifecycle helpers as the TUI fallback path.
+//
+// On timeout, returns an error enriched with the last-known lifecycle
+// state so the operator gets a remedy ("agent ended — restart with …")
+// instead of a bare timeout. The lifecycle channel feeds both the
+// terminal-state detection and this diagnostic — every observed
+// transition updates `lastLifecycle`. Per
+// feat-ask-conversation-self-diagnose-on-timeout.
 func streamAskTurn(
 	ctx context.Context,
 	w io.Writer,
@@ -150,12 +157,14 @@ func streamAskTurn(
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 
+	var lastLifecycle sextantproto.LifecycleEvent
+
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline.C:
-			return fmt.Errorf("%w (waited %s)", errAskTimeout, timeout)
+			return askTimeoutError(timeout, lastLifecycle, agentID)
 		case msg, ok := <-frames:
 			if !ok {
 				return fmt.Errorf("%w: frames channel closed before turn_ended", errAskTimeout)
@@ -186,6 +195,7 @@ func streamAskTurn(
 				_ = msg.Ack()
 				continue
 			}
+			lastLifecycle = p.Transition
 			terminal := p.Transition == sextantproto.LifecycleTurnEnded ||
 				p.Transition == sextantproto.LifecycleEnded
 			if terminal {
@@ -199,6 +209,35 @@ func streamAskTurn(
 				return nil
 			}
 		}
+	}
+}
+
+// askTimeoutError builds the timeout error body. When the lifecycle
+// stream surfaced a terminal transition before the deadline, the
+// message names the state and the remedy. When the stream was silent
+// (the common "agent unresponsive" case), the message mentions that
+// the prompt was accepted but no frames arrived.
+func askTimeoutError(timeout time.Duration, last sextantproto.LifecycleEvent, agentID uuid.UUID) error {
+	switch last {
+	case sextantproto.LifecycleEnded:
+		return fmt.Errorf("%w: agent lifecycle=ended; restart with `sextant agents restart %s`",
+			errAskTimeout, agentID)
+	case sextantproto.LifecycleCrashedEvent:
+		return fmt.Errorf("%w: agent lifecycle=crashed; restart with `sextant agents restart %s`",
+			errAskTimeout, agentID)
+	case sextantproto.LifecyclePausedEvent:
+		return fmt.Errorf("%w: agent lifecycle=paused; resume with `sextant agents resume %s`",
+			errAskTimeout, agentID)
+	case sextantproto.LifecycleArchivedEvent:
+		return fmt.Errorf("%w: agent lifecycle=archived; spawn a new agent instead",
+			errAskTimeout)
+	case "":
+		return fmt.Errorf("%w (waited %s; no lifecycle activity — try `sextant logs --tail 50` or extend --timeout)",
+			errAskTimeout, timeout)
+	default:
+		// Saw started / resumed / restarted / turn_ended (mid-turn) but no terminal.
+		return fmt.Errorf("%w (waited %s; agent is alive but didn't complete a turn — extend --timeout or check `sextant logs --tail 50`)",
+			errAskTimeout, timeout)
 	}
 }
 
