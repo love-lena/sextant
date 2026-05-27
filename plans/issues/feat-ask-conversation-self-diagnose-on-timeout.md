@@ -1,11 +1,26 @@
 ---
 title: ask / conversation should self-diagnose on timeout instead of saying "waited N seconds"
-status: open
+status: fixed
 priority: P2
 created_at: 2026-05-26T15:05-07:00
+fixed_in: (next commit)
 labels: [feature, cli, operator-experience, ergonomics]
 discovered_in: chat TUI Checkpoint C debugging
 ---
+
+## Fix
+
+Lives on `streamAskTurn` in `cmd/sextant/chat.go` — the function that
+drives the one-shot mode of `sextant agents chat`. The function now
+tracks the last lifecycle transition observed during the wait and
+routes through `askTimeoutError(timeout, lastLifecycle, agentID)` on
+the deadline path. Branches:
+
+- terminal lifecycle (`ended` / `crashed` / `paused` / `archived`) — names the state, prints the remedy command.
+- non-terminal lifecycle (`started` / `resumed` / `restarted` / `turn_ended`) — "agent is alive but didn't complete a turn — extend `--timeout` or check `sextant logs --tail 50`".
+- no lifecycle envelope at all — "no lifecycle activity — try `sextant logs --tail 50` or extend `--timeout`".
+
+Tests in `cmd/sextant/ask_test.go`'s `TestStreamAskTurnTimeoutEnrichesWithLifecycle` cover every branch (no live daemon required — feeds the lifecycle channel directly).
 
 ## Summary
 
