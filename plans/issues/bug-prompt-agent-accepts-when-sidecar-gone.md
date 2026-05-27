@@ -1,11 +1,25 @@
 ---
 title: prompt_agent RPC returns ok=true even when the target sidecar is gone
-status: open
+status: resolved
 priority: P1
 created_at: 2026-05-26T15:05-07:00
+resolved_at: 2026-05-26T22:30-07:00
 labels: [bug, daemon, rpc, operator-experience]
 discovered_in: chat TUI Checkpoint C — sent prompts to an agent whose container had exited; RPC succeeded, no frames ever arrived, `ask` timed out
 ---
+
+## Resolution
+
+Two-part fix landed on main:
+
+1. **Lifecycle freshness (real root cause).** The companion ticket [[bug-agents-list-stale-lifecycle]] landed a `LifecycleWatcher` in `pkg/sextantd/` that subscribes to `agents.*.lifecycle` and folds each transition envelope back into the agent record. With the lifecycle field fresh, the prompt_agent handler's existing `def.Lifecycle != LifecycleRunning` check now correctly refuses dead agents.
+
+2. **Structured error with remedy (this ticket).** Updated `pkg/rpc/handlers/prompt.go`:
+   - New error code `ErrCodeAgentNotReachable` (sextantproto/rpc.go) replaces the generic `ErrCodeBadRequest` for the lifecycle-mismatch path.
+   - New `promptUnreachableMessage` helper formats the message per state: ended/crashed → `restart with sextant agents restart <uuid>`; paused → `resume with sextant agents resume <uuid>`; archived → `spawn a new agent`; defined → `restart with ...`.
+   - Tests in `pkg/rpc/handlers/prompt_test.go` cover all five non-running states + the unknown-agent path.
+
+Option (3) from the original fix-shape (lifecycle check) is fully shipped. Option (1) (stale-heartbeat as a deeper safety net for kill-9 cases that bypass lifecycle publish) is filed as a P2 follow-up at [[feat-prompt-agent-heartbeat-staleness]].
 
 ## Summary
 
