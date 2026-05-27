@@ -1,11 +1,20 @@
 ---
 title: --help prints empty output for most sextant subcommands
-status: open
+status: wontfix
 priority: P3
 created_at: 2026-05-26T16:15-07:00
+resolved_at: 2026-05-26T22:55-07:00
 labels: [feature, cli, ergonomics, polish]
 discovered_in: chat TUI Checkpoint C — `sextant conversation --help` was broken; the fix wired conversation's fs.Usage but the other subcommands still emit nothing
 ---
+
+## Resolution
+
+Obsoleted by `[[feat-cli-cobra-fang-migration]]` — Fang renders
+per-command help automatically. Every subcommand in the new RootCmd
+tree gets styled, complete `--help` output by virtue of the Cobra +
+Fang stack. The original stdlib `flag.FlagSet` / `fs.Usage` boilerplate
+problem no longer exists.
 
 ## Summary
 

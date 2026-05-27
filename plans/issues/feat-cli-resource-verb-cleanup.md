@@ -1,11 +1,37 @@
 ---
 title: Migrate non-compliant top-level verbs into resource-verb form; rename conversation→chat
-status: open
+status: resolved
 priority: P3
 created_at: 2026-05-26T21:08-07:00
+resolved_at: 2026-05-26T22:55-07:00
 labels: [feature, cli, ergonomics, command-design]
 discovered_in: triage pass post-CLI/TUI conventions adoption — convention says resource-verb but several top-level singletons violate it
 ---
+
+## Resolution
+
+Landed on branch `feat-cli-cobra-fang-resource-verb-001` together with
+`[[feat-cli-cobra-fang-migration]]`. The cobra RootCmd tree was built
+directly in resource-verb shape; legacy top-level verbs are preserved
+as hidden aliases for one minor release with stderr deprecation notes
+(suppressed under `--json`).
+
+Migrations shipped:
+
+- `sextant ask <agent> "<text>"` → `sextant agents chat <agent> "<text>"` (one-shot mode)
+- `sextant conversation <agent>` → `sextant agents chat <agent>` (TUI mode)
+- `sextant tail <subject>` → `sextant events tail <subject>` (new `events` noun)
+- `sextant exec <agent> -- <cmd>` → `sextant agents exec <agent> -- <cmd>`
+- `sextant start|stop|restart|status|logs` → `sextant daemon <verb>` (new `daemon` noun)
+
+`sextant agents chat <agent> [text]` uses `cobra.RangeArgs(1, 2)`; when
+`len(args) == 2` OR stdin is piped (not a TTY), one-shot mode is
+selected. Otherwise the chat TUI launches.
+
+Singletons `init`, `doctor`, `version` documented as explicit
+exceptions in `conventions/tui-conventions.md` § "Command design".
+`specs/cli/commands.md` and `docs/book/src/getting-started/first-run.md`
+updated to the new tree.
 
 ## Summary
 
