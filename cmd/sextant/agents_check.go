@@ -134,19 +134,19 @@ func renderAgentCheck(w io.Writer, check AgentCheck, asJSON bool) error {
 		return err
 	}
 	if check.UUID == uuid.Nil {
-		fmt.Fprintf(w, "agent: %s\n", check.Ref)
-		fmt.Fprintf(w, "verdict: %s\n", check.Verdict)
+		printf(w, "agent: %s\n", check.Ref)
+		printf(w, "verdict: %s\n", check.Verdict)
 		if check.Remedy != "" {
-			fmt.Fprintf(w, "remedy: %s\n", check.Remedy)
+			printf(w, "remedy: %s\n", check.Remedy)
 		}
 		return nil
 	}
-	fmt.Fprintf(w, "agent:   %s (%s)\n", check.Name, check.UUID)
-	fmt.Fprintf(w, "record:  lifecycle=%s version=%d updated=%s\n",
+	printf(w, "agent:   %s (%s)\n", check.Name, check.UUID)
+	printf(w, "record:  lifecycle=%s version=%d updated=%s\n",
 		check.Lifecycle, check.Version, check.UpdatedAt.Format(time.RFC3339))
-	fmt.Fprintf(w, "verdict: %s\n", check.Verdict)
+	printf(w, "verdict: %s\n", check.Verdict)
 	if check.Remedy != "" {
-		fmt.Fprintf(w, "remedy:  %s\n", check.Remedy)
+		printf(w, "remedy:  %s\n", check.Remedy)
 	}
 	return nil
 }

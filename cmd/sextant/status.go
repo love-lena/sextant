@@ -57,7 +57,7 @@ func doStatus(w io.Writer, cfg sextantd.Config, asJSON bool) error {
 			}
 			emitStatusJSON(w, row)
 		} else {
-			fmt.Fprintf(w, "daemon: not running\n")
+			printf(w, "daemon: not running\n")
 		}
 		return errStatusNotRunning
 	case err != nil:
@@ -75,7 +75,7 @@ func doStatus(w io.Writer, cfg sextantd.Config, asJSON bool) error {
 			}
 			emitStatusJSON(w, row)
 		} else {
-			fmt.Fprintf(w, "daemon: stale runtime.json (pid %d not running)\n", st.Info.PID)
+			printf(w, "daemon: stale runtime.json (pid %d not running)\n", st.Info.PID)
 		}
 		return errStatusNotRunning
 	}
@@ -98,14 +98,14 @@ func doStatus(w io.Writer, cfg sextantd.Config, asJSON bool) error {
 		emitStatusJSON(w, row)
 		return nil
 	}
-	fmt.Fprintf(w, "daemon          pid %d, uptime %s\n", st.Info.PID, uptime)
-	fmt.Fprintf(w, "nats            pid %d, addr %s\n", st.Info.NATSPID, defaultStr(st.Info.NATSAddr, "(unset)"))
-	fmt.Fprintf(w, "clickhouse      pid %d, tcp %s\n", st.Info.ClickHousePID, defaultStr(st.Info.ClickHouseTCP, "(unset)"))
-	fmt.Fprintf(w, "mcp             addr %s, stdio %s\n",
+	printf(w, "daemon          pid %d, uptime %s\n", st.Info.PID, uptime)
+	printf(w, "nats            pid %d, addr %s\n", st.Info.NATSPID, defaultStr(st.Info.NATSAddr, "(unset)"))
+	printf(w, "clickhouse      pid %d, tcp %s\n", st.Info.ClickHousePID, defaultStr(st.Info.ClickHouseTCP, "(unset)"))
+	printf(w, "mcp             addr %s, stdio %s\n",
 		defaultStr(st.Info.MCPHTTPAddr, "(unset)"),
 		defaultStr(st.Info.MCPStdioSocket, "(unset)"),
 	)
-	fmt.Fprintf(w, "log             %s\n", logPath)
+	printf(w, "log             %s\n", logPath)
 	return nil
 }
 
@@ -126,8 +126,8 @@ func defaultStr(s, fallback string) string {
 func emitStatusJSON(w io.Writer, row statusRow) {
 	raw, err := json.MarshalIndent(row, "", "  ")
 	if err != nil {
-		fmt.Fprintf(w, "{\"error\":\"marshal: %v\"}\n", err)
+		printf(w, "{\"error\":\"marshal: %v\"}\n", err)
 		return
 	}
-	fmt.Fprintln(w, string(raw))
+	println(w, string(raw))
 }

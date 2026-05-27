@@ -32,10 +32,10 @@ func doStop(w io.Writer, cfg sextantd.Config, timeout time.Duration) error {
 		if rmErr := sextantd.RemoveRuntimeInfo(cfg.Paths.RuntimeFile); rmErr != nil {
 			return fmt.Errorf("remove stale runtime.json: %w", rmErr)
 		}
-		fmt.Fprintf(w, "cleared stale runtime.json (pid %d was not running)\n", st.Info.PID)
+		printf(w, "cleared stale runtime.json (pid %d was not running)\n", st.Info.PID)
 	default:
 		trackedPID = st.Info.PID
-		fmt.Fprintf(w, "stopping daemon (pid %d)\n", trackedPID)
+		printf(w, "stopping daemon (pid %d)\n", trackedPID)
 		proc, err := os.FindProcess(trackedPID)
 		if err != nil {
 			return fmt.Errorf("find pid %d: %w", trackedPID, err)
@@ -44,37 +44,37 @@ func doStop(w io.Writer, cfg sextantd.Config, timeout time.Duration) error {
 			return fmt.Errorf("SIGTERM pid %d: %w", trackedPID, err)
 		}
 		if err := waitForDaemonGone(cfg.Paths.RuntimeFile, timeout); err != nil {
-			fmt.Fprintf(w, "warning: %v — daemon may still be shutting down\n", err)
+			printf(w, "warning: %v — daemon may still be shutting down\n", err)
 			return fmt.Errorf("daemon did not shut down within %s", timeout)
 		}
-		fmt.Fprintf(w, "daemon stopped (was pid %d)\n", trackedPID)
+		printf(w, "daemon stopped (was pid %d)\n", trackedPID)
 	}
 
 	// Orphan sweep.
 	bin, binErr := findSextantdBinary()
 	if binErr != nil {
-		fmt.Fprintf(w, "warning: orphan scan skipped: %v\n", binErr)
+		printf(w, "warning: orphan scan skipped: %v\n", binErr)
 		return nil
 	}
 	orphans, scanErr := findOrphanSextantd(bin, trackedPID)
 	if scanErr != nil {
-		fmt.Fprintf(w, "warning: orphan scan failed: %v\n", scanErr)
+		printf(w, "warning: orphan scan failed: %v\n", scanErr)
 		return nil
 	}
 	if len(orphans) == 0 {
 		if trackedPID == 0 && (errors.Is(err, errDaemonNotRunning)) {
-			fmt.Fprintf(w, "daemon not running\n")
+			printf(w, "daemon not running\n")
 		}
 		return nil
 	}
-	fmt.Fprintf(w, "found %d orphan sextantd process(es) without runtime.json:\n", len(orphans))
+	printf(w, "found %d orphan sextantd process(es) without runtime.json:\n", len(orphans))
 	for _, pid := range orphans {
-		fmt.Fprintf(w, "  SIGTERM pid %d\n", pid)
+		printf(w, "  SIGTERM pid %d\n", pid)
 	}
 	stillAlive := sigtermPIDs(orphans, timeout)
 	if len(stillAlive) > 0 {
 		return fmt.Errorf("orphan sextantd did not exit within %s: pid %v (try `kill -9` manually)", timeout, stillAlive)
 	}
-	fmt.Fprintf(w, "orphan sextantd cleaned up (%d process(es))\n", len(orphans))
+	printf(w, "orphan sextantd cleaned up (%d process(es))\n", len(orphans))
 	return nil
 }

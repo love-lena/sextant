@@ -58,9 +58,9 @@ func newWorktreeListCmd() *cobra.Command {
 				return err
 			}
 			tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tBRANCH\tBASE\tSTATUS\tCREATED\tPATH")
+			println(tw, "NAME\tBRANCH\tBASE\tSTATUS\tCREATED\tPATH")
 			for _, w := range resp.Worktrees {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+				printf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
 					w.Name, w.Branch, w.BaseBranch, w.Status,
 					w.CreatedAt.Format(time.RFC3339), w.Path)
 			}
@@ -97,9 +97,9 @@ func newWorktreeCreateCmd() *cobra.Command {
 			if globalFlags.asJSON {
 				return writeJSON(out, resp)
 			}
-			fmt.Fprintf(out, "name:   %s\n", resp.Worktree.Name)
-			fmt.Fprintf(out, "path:   %s\n", resp.Worktree.Path)
-			fmt.Fprintf(out, "branch: %s\n", resp.Worktree.Branch)
+			printf(out, "name:   %s\n", resp.Worktree.Name)
+			printf(out, "path:   %s\n", resp.Worktree.Path)
+			printf(out, "branch: %s\n", resp.Worktree.Branch)
 			return nil
 		},
 	}
@@ -170,12 +170,12 @@ func newWorktreeMergeCmd() *cobra.Command {
 				return writeJSON(out, resp)
 			}
 			if resp.OK {
-				fmt.Fprintf(out, "merged %s into %s\n", resp.Branch, resp.Target)
+				printf(out, "merged %s into %s\n", resp.Branch, resp.Target)
 				return nil
 			}
-			fmt.Fprintf(out, "merge conflict (%s into %s):\n", resp.Branch, resp.Target)
+			printf(out, "merge conflict (%s into %s):\n", resp.Branch, resp.Target)
 			for _, f := range resp.Conflicts {
-				fmt.Fprintf(out, "  %s\n", f)
+				printf(out, "  %s\n", f)
 			}
 			return errUserUsage("merge conflict")
 		},
@@ -266,23 +266,23 @@ also remove on-disk dirs without a registry entry (requires --apply).`,
 			if resp.DryRun {
 				mode = "dry-run"
 			}
-			fmt.Fprintf(out, "worktree prune (%s)\n", mode)
-			fmt.Fprintf(out, "  policy: archive ≥%s, delete ≥%s\n",
+			printf(out, "worktree prune (%s)\n", mode)
+			printf(out, "  policy: archive ≥%s, delete ≥%s\n",
 				formatDays(resp.ArchiveAge), formatDays(resp.DeleteAge))
-			fmt.Fprintf(out, "  archived=%d deleted=%d skipped=%d orphans_deleted=%d orphans_kept=%d errors=%d\n",
+			printf(out, "  archived=%d deleted=%d skipped=%d orphans_deleted=%d orphans_kept=%d errors=%d\n",
 				resp.Archived, resp.Deleted, resp.Skipped, resp.OrphansDeleted, resp.OrphansKept, len(resp.Errors))
 			if len(resp.Plans) > 0 {
 				tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
-				fmt.Fprintln(tw, "ACTION\tNAME\tREASON")
+				println(tw, "ACTION\tNAME\tREASON")
 				for _, p := range resp.Plans {
-					fmt.Fprintf(tw, "%s\t%s\t%s\n", p.Action, p.Name, p.Reason)
+					printf(tw, "%s\t%s\t%s\n", p.Action, p.Name, p.Reason)
 				}
 				if err := tw.Flush(); err != nil {
 					return err
 				}
 			}
 			for _, e := range resp.Errors {
-				fmt.Fprintf(os.Stderr, "error: %s\n", e)
+				printf(os.Stderr, "error: %s\n", e)
 			}
 			return nil
 		},

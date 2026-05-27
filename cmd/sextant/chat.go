@@ -170,7 +170,7 @@ func streamAskTurn(
 				return fmt.Errorf("%w: frames channel closed before turn_ended", errAskTimeout)
 			}
 			if msg.Err != nil {
-				fmt.Fprintf(w, "[decode error seq=%d]: %v\n", msg.StreamSeq, msg.Err)
+				printf(w, "[decode error seq=%d]: %v\n", msg.StreamSeq, msg.Err)
 				continue
 			}
 			if err := renderFrame(w, msg, asJSON); err != nil {
@@ -253,7 +253,7 @@ func drainAskFrames(w io.Writer, frames <-chan client.Message, asJSON bool) {
 				return
 			}
 			if msg.Err != nil {
-				fmt.Fprintf(w, "[decode error seq=%d]: %v\n", msg.StreamSeq, msg.Err)
+				printf(w, "[decode error seq=%d]: %v\n", msg.StreamSeq, msg.Err)
 				continue
 			}
 			if err := renderFrame(w, msg, asJSON); err != nil {
@@ -307,7 +307,7 @@ func streamConversation(
 				return nil
 			}
 			if msg.Err != nil {
-				fmt.Fprintf(w, "[decode error seq=%d]: %v\n", msg.StreamSeq, msg.Err)
+				printf(w, "[decode error seq=%d]: %v\n", msg.StreamSeq, msg.Err)
 				continue
 			}
 			if err := renderFrame(w, msg, asJSON); err != nil {
@@ -363,7 +363,7 @@ func renderFrame(w io.Writer, msg client.Message, asJSON bool) error {
 		if len(preview) > 120 {
 			preview = preview[:120] + "…"
 		}
-		fmt.Fprintf(w, "%s [%s] %s\n", msg.Envelope.Ts.Format(time.RFC3339), msg.Envelope.Kind, preview)
+		printf(w, "%s [%s] %s\n", msg.Envelope.Ts.Format(time.RFC3339), msg.Envelope.Kind, preview)
 		return nil
 	}
 	ts := msg.Envelope.Ts.Format(time.RFC3339)
@@ -373,17 +373,17 @@ func renderFrame(w io.Writer, msg client.Message, asJSON bool) error {
 		if text == "" {
 			text, _ = fp.Body["content"].(string)
 		}
-		fmt.Fprintf(w, "%s [assistant] %s\n", ts, text)
+		printf(w, "%s [assistant] %s\n", ts, text)
 	case sextantproto.FrameToolCall:
-		fmt.Fprintf(w, "%s [tool_call] %s %s\n", ts, fp.ToolName, summarizeBody(fp.Body))
+		printf(w, "%s [tool_call] %s %s\n", ts, fp.ToolName, summarizeBody(fp.Body))
 	case sextantproto.FrameToolResult:
-		fmt.Fprintf(w, "%s [tool_result] %s %s\n", ts, fp.ToolName, summarizeBody(fp.Body))
+		printf(w, "%s [tool_result] %s %s\n", ts, fp.ToolName, summarizeBody(fp.Body))
 	case sextantproto.FrameSystemNote:
-		fmt.Fprintf(w, "%s [system] %s\n", ts, summarizeBody(fp.Body))
+		printf(w, "%s [system] %s\n", ts, summarizeBody(fp.Body))
 	case sextantproto.FrameError:
-		fmt.Fprintf(w, "%s [error] %s\n", ts, summarizeBody(fp.Body))
+		printf(w, "%s [error] %s\n", ts, summarizeBody(fp.Body))
 	default:
-		fmt.Fprintf(w, "%s [%s] %s\n", ts, fp.FrameKind, summarizeBody(fp.Body))
+		printf(w, "%s [%s] %s\n", ts, fp.FrameKind, summarizeBody(fp.Body))
 	}
 	return nil
 }
@@ -400,9 +400,9 @@ func renderLifecycle(w io.Writer, msg client.Message, p sextantproto.LifecyclePa
 	}
 	ts := msg.Envelope.Ts.Format(time.RFC3339)
 	if p.Reason != "" {
-		fmt.Fprintf(w, "%s [lifecycle] transition=%s reason=%q\n", ts, p.Transition, p.Reason)
+		printf(w, "%s [lifecycle] transition=%s reason=%q\n", ts, p.Transition, p.Reason)
 	} else {
-		fmt.Fprintf(w, "%s [lifecycle] transition=%s\n", ts, p.Transition)
+		printf(w, "%s [lifecycle] transition=%s\n", ts, p.Transition)
 	}
 	return nil
 }

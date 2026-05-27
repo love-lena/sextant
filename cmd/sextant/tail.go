@@ -55,7 +55,7 @@ func streamTail(ctx context.Context, w io.Writer, ch <-chan client.Message, asJS
 				return nil
 			}
 			if msg.Err != nil {
-				fmt.Fprintf(os.Stderr, "[decode error subject=%s seq=%d]: %v\n", msg.Subject, msg.StreamSeq, msg.Err)
+				printf(os.Stderr, "[decode error subject=%s seq=%d]: %v\n", msg.Subject, msg.StreamSeq, msg.Err)
 				continue
 			}
 			if err := renderTailEnvelope(w, msg, asJSON); err != nil {
@@ -79,9 +79,9 @@ func renderTailEnvelope(w io.Writer, msg client.Message, asJSON bool) error {
 	ts := msg.Envelope.Ts.Time.Format(time.RFC3339)
 	summary := summarizeEnvelope(msg.Envelope)
 	if summary == "" {
-		fmt.Fprintf(w, "[%s] %s  kind=%s\n", ts, msg.Subject, msg.Envelope.Kind)
+		printf(w, "[%s] %s  kind=%s\n", ts, msg.Subject, msg.Envelope.Kind)
 	} else {
-		fmt.Fprintf(w, "[%s] %s  kind=%s  %s\n", ts, msg.Subject, msg.Envelope.Kind, summary)
+		printf(w, "[%s] %s  kind=%s  %s\n", ts, msg.Subject, msg.Envelope.Kind, summary)
 	}
 	return nil
 }

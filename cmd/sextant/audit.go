@@ -80,9 +80,9 @@ func newAuditQueryCmd() *cobra.Command {
 				return err
 			}
 			tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
-			fmt.Fprintln(tw, "TS\tACTOR\tACTION\tRESULT\tCAP")
+			println(tw, "TS\tACTOR\tACTION\tRESULT\tCAP")
 			for _, r := range resp.Rows {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
+				printf(tw, "%s\t%s\t%s\t%s\t%s\n",
 					r.Ts.Format(time.RFC3339), r.Actor, r.Action, r.Result, r.CapabilityRequired)
 			}
 			return tw.Flush()
@@ -127,12 +127,12 @@ func newAuditTailCmd() *cobra.Command {
 						return nil
 					}
 					if msg.Err != nil {
-						fmt.Fprintf(os.Stderr, "[decode error seq=%d]: %v\n", msg.StreamSeq, msg.Err)
+						printf(os.Stderr, "[decode error seq=%d]: %v\n", msg.StreamSeq, msg.Err)
 						continue
 					}
 					if globalFlags.asJSON {
 						raw, _ := json.Marshal(msg.Envelope)
-						fmt.Fprintln(out, string(raw))
+						println(out, string(raw))
 						_ = msg.Ack()
 						continue
 					}
@@ -151,10 +151,10 @@ var _ = os.Stderr // keep `os` import for the tail error path
 func renderAuditEnvelope(w io.Writer, msg client.Message) {
 	var p sextantproto.AuditPayload
 	if err := json.Unmarshal(msg.Envelope.Payload, &p); err != nil {
-		fmt.Fprintf(w, "%s [audit] (undecodable payload)\n", msg.Envelope.Ts.Format(time.RFC3339))
+		printf(w, "%s [audit] (undecodable payload)\n", msg.Envelope.Ts.Format(time.RFC3339))
 		return
 	}
-	fmt.Fprintf(w, "%s actor=%s action=%s result=%s cap=%s\n",
+	printf(w, "%s actor=%s action=%s result=%s cap=%s\n",
 		msg.Envelope.Ts.Format(time.RFC3339),
 		p.Actor, p.Action, p.Result, p.CapabilityRequired)
 }
