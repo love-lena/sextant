@@ -73,14 +73,23 @@ func MapLifecycleTransition(t sextantproto.LifecycleEvent) (sextantproto.Lifecyc
 }
 
 // LifecycleDefinitionsKV is the minimal KV surface the watcher needs.
-// Get + Put on the agent_definitions bucket; no list, no watch (the
-// watcher is reading the subject, not the KV). Defined here on the
-// consumer side so this package doesn't depend on the full handlers KV
-// abstraction.
+// Get + Update on the agent_definitions bucket. Update is used (not
+// Put) so concurrent archive_agent / restart_agent / kill_agent writes
+// cannot be clobbered by a stale sidecar lifecycle envelope — the
+// revision check serializes us with them. See the type comment on
+// LifecycleWatcher for the full race story.
 type LifecycleDefinitionsKV interface {
 	Get(ctx context.Context, key string) (jetstream.KeyValueEntry, error)
-	Put(ctx context.Context, key string, value []byte) (uint64, error)
+	// Update writes value when the last-seen revision matches. Returns
+	// a non-nil error (commonly jetstream.ErrKeyExists, depending on
+	// the underlying KV) when the revision is stale.
+	Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error)
 }
+
+// watcherCASRetries caps how many times applyTransition retries on a
+// revision conflict. Each retry re-reads the record + re-evaluates the
+// guards, so a runaway loop is impossible — 3 is generous.
+const watcherCASRetries = 3
 
 // LifecycleWatcher subscribes to `agents.*.lifecycle` and updates the
 // matching AgentDefinition's Lifecycle field on every transition
@@ -197,41 +206,103 @@ func (w *LifecycleWatcher) handle(msg *nats.Msg) {
 	}
 }
 
-// applyTransition reads the current AgentDefinition, rewrites the
-// Lifecycle / Version / UpdatedAt fields, and writes back. Returns
-// jetstream.ErrKeyNotFound (wrapped) if the agent is unknown — the
-// watcher drops those, see handle().
+// applyTransition reads the current AgentDefinition, decides whether
+// the watcher's new state should overwrite it, and writes back via
+// CAS so concurrent archive/restart/kill writes cannot be clobbered
+// by a stale sidecar lifecycle envelope. Returns nil on:
+//
+//   - unknown agent (the watcher does not repopulate purged records)
+//   - idempotent target (current state already matches)
+//   - terminal-priority guard (current state is archived; the
+//     operator's explicit terminal — see watcherShouldYield)
+//   - CAS conflict that the retry loop resolved
+//
+// Returns the wrapped error on:
+//
+//   - decode failure
+//   - persistent CAS conflict (>watcherCASRetries collisions)
+//   - any other KV error
 func (w *LifecycleWatcher) applyTransition(key string, state sextantproto.LifecycleState) error {
 	ctx, cancel := context.WithTimeout(context.Background(), watcherUpdateTimeout)
 	defer cancel()
-	entry, err := w.defs.Get(ctx, key)
-	if err != nil {
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			// Unknown agent. The watcher refuses to create records from
-			// thin air — a forged envelope or a stale subject from a
-			// purged agent must not repopulate the bucket.
+
+	for attempt := 0; attempt < watcherCASRetries; attempt++ {
+		entry, err := w.defs.Get(ctx, key)
+		if err != nil {
+			if errors.Is(err, jetstream.ErrKeyNotFound) {
+				// Unknown agent. The watcher refuses to create records from
+				// thin air — a forged envelope or a stale subject from a
+				// purged agent must not repopulate the bucket.
+				return nil
+			}
+			return fmt.Errorf("get %s: %w", key, err)
+		}
+		var def sextantproto.AgentDefinition
+		if err := json.Unmarshal(entry.Value(), &def); err != nil {
+			return fmt.Errorf("decode %s: %w", key, err)
+		}
+		if def.Lifecycle == state {
+			// No change — skip the write so spawn/restart's
+			// version-bumps aren't churned by an idempotent lifecycle
+			// envelope.
 			return nil
 		}
-		return fmt.Errorf("get %s: %w", key, err)
+		if watcherShouldYield(def.Lifecycle, state) {
+			// The current record is in a terminal state the watcher
+			// must not demote (archived is operator-explicit). Drop the
+			// envelope — a stale sidecar "ended" arriving after the
+			// operator archived the agent would otherwise rewrite the
+			// record to ended, releasing the name-uniqueness lock
+			// incorrectly. See feat-cli-output-protocol /
+			// the Codex adversarial-review finding that flagged this.
+			return nil
+		}
+		def.Lifecycle = state
+		def.Version++
+		def.UpdatedAt = sextantproto.NowTimestamp()
+		raw, err := json.Marshal(def)
+		if err != nil {
+			return fmt.Errorf("marshal: %w", err)
+		}
+		_, err = w.defs.Update(ctx, key, raw, entry.Revision())
+		if err == nil {
+			return nil
+		}
+		if !isCASConflict(err) {
+			return fmt.Errorf("update %s: %w", key, err)
+		}
+		// CAS conflict — concurrent archive/restart/kill wrote the
+		// record between our Get and Update. Re-read and re-evaluate
+		// the guards; the new revision may now be archived (terminal)
+		// in which case the next iteration's watcherShouldYield
+		// returns and we drop the envelope.
 	}
-	var def sextantproto.AgentDefinition
-	if err := json.Unmarshal(entry.Value(), &def); err != nil {
-		return fmt.Errorf("decode %s: %w", key, err)
-	}
-	if def.Lifecycle == state {
-		// No change — skip the write so spawn/restart's version-bumps
-		// aren't churned by an idempotent lifecycle envelope.
-		return nil
-	}
-	def.Lifecycle = state
-	def.Version++
-	def.UpdatedAt = sextantproto.NowTimestamp()
-	raw, err := json.Marshal(def)
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	if _, err := w.defs.Put(ctx, key, raw); err != nil {
-		return fmt.Errorf("put %s: %w", key, err)
-	}
-	return nil
+	return fmt.Errorf("update %s: gave up after %d CAS conflicts", key, watcherCASRetries)
+}
+
+// watcherShouldYield reports whether the watcher must NOT overwrite
+// the current lifecycle with the proposed new state. The rule the
+// codex adversarial review pinned: operator-explicit terminals
+// (archived) outrank sidecar-driven transitions (ended/crashed).
+//
+// Specifically: if the current state is archived, the watcher yields
+// to whatever set it (archive_agent). The watcher's incoming
+// envelope is necessarily from a prior incarnation at that point —
+// the agent can't be both archived and still running.
+//
+// `crashed` / `ended` are NOT in the yield set because the operator
+// can legitimately want to know that the agent's last incarnation
+// crashed even after spawn flipped it back to running on a restart;
+// that's the watcher's main job. The archive case is the one that
+// needs special handling.
+func watcherShouldYield(current sextantproto.LifecycleState, _ sextantproto.LifecycleState) bool {
+	return current == sextantproto.LifecycleArchived
+}
+
+// isCASConflict reports whether the given error indicates that the
+// KV's Update rejected our revision as stale. nats.go's jetstream
+// returns ErrKeyExists for this — keeping the predicate inline so
+// the call site doesn't import that error directly.
+func isCASConflict(err error) bool {
+	return errors.Is(err, jetstream.ErrKeyExists)
 }

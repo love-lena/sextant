@@ -91,8 +91,8 @@ func TestLifecycleWatcherIgnoresTurnEnded(t *testing.T) {
 	if got := kv.currentLifecycle(t, id); got != sextantproto.LifecycleRunning {
 		t.Errorf("Lifecycle = %q, want unchanged (running)", got)
 	}
-	if kv.putCount() != 1 { // 1 = the seed Put
-		t.Errorf("turn_ended produced an extra Put; total = %d, want 1 (seed only)", kv.putCount())
+	if kv.writeCount() != 1 { // 1 = the seed Put
+		t.Errorf("turn_ended produced an extra write; total = %d, want 1 (seed only)", kv.writeCount())
 	}
 }
 
@@ -144,8 +144,77 @@ func TestLifecycleWatcherSkipsIdempotentWrite(t *testing.T) {
 	if def.Version != 7 {
 		t.Errorf("Version = %d, want 7 (idempotent no-op)", def.Version)
 	}
-	if kv.putCount() != 1 { // 1 = the seed Put
-		t.Errorf("idempotent transition produced an extra Put; total = %d, want 1", kv.putCount())
+	if kv.writeCount() != 1 { // 1 = the seed Put
+		t.Errorf("idempotent transition produced an extra write; total = %d, want 1", kv.writeCount())
+	}
+}
+
+// TestLifecycleWatcherDoesNotClobberArchived pins the codex
+// adversarial-review fix: once the operator explicitly archived the
+// agent, a stale sidecar `ended` envelope from a prior incarnation
+// must NOT rewrite the record back to ended. The watcher's
+// archive-guard yields to the terminal state.
+func TestLifecycleWatcherDoesNotClobberArchived(t *testing.T) {
+	kv := newFakeLifecycleKV()
+	id := uuid.New()
+	// Pretend archive_agent ran: lifecycle=archived, version=5.
+	kv.seedDefinition(t, id, "epsilon", sextantproto.LifecycleArchived, 5)
+	writesBefore := kv.writeCount()
+
+	// Stale `ended` envelope from the now-dead prior incarnation.
+	w := &LifecycleWatcher{defs: kv}
+	w.handle(envelopeFor(t, id, sextantproto.LifecycleEnded))
+
+	def := kv.currentDefinition(t, id)
+	if def.Lifecycle != sextantproto.LifecycleArchived {
+		t.Errorf("Lifecycle = %q, want archived (stale ended must not clobber)", def.Lifecycle)
+	}
+	if def.Version != 5 {
+		t.Errorf("Version = %d, want 5 (archive-guard skips the version bump)", def.Version)
+	}
+	if kv.writeCount() != writesBefore {
+		t.Errorf("write count increased; archive-guard should have skipped the Update")
+	}
+}
+
+// TestLifecycleWatcherCASRetriesOnConflict pins the retry path: when
+// a concurrent writer slips a write in between the watcher's Get and
+// Update, the watcher gets ErrKeyExists from Update and retries with
+// the fresh revision. On the retry the new state should be applied
+// against the updated record.
+func TestLifecycleWatcherCASRetriesOnConflict(t *testing.T) {
+	kv := newFakeLifecycleKV()
+	id := uuid.New()
+	kv.seedDefinition(t, id, "zeta", sextantproto.LifecycleRunning, 1)
+	kv.conflictsRemaining = 1 // first Update returns ErrKeyExists
+
+	w := &LifecycleWatcher{defs: kv}
+	w.handle(envelopeFor(t, id, sextantproto.LifecycleEnded))
+
+	if got := kv.currentLifecycle(t, id); got != sextantproto.LifecycleEndedState {
+		t.Errorf("Lifecycle = %q, want ended (retry should have succeeded)", got)
+	}
+	if kv.conflictsRemaining != 0 {
+		t.Errorf("conflictsRemaining = %d, want 0 (the test injected exactly 1)", kv.conflictsRemaining)
+	}
+}
+
+// TestLifecycleWatcherGivesUpAfterPersistentCASConflicts asserts the
+// retry budget caps at watcherCASRetries. With more forced conflicts
+// than the cap, the watcher logs + drops the envelope rather than
+// looping forever.
+func TestLifecycleWatcherGivesUpAfterPersistentCASConflicts(t *testing.T) {
+	kv := newFakeLifecycleKV()
+	id := uuid.New()
+	kv.seedDefinition(t, id, "eta", sextantproto.LifecycleRunning, 1)
+	kv.conflictsRemaining = watcherCASRetries + 5 // exceed the budget
+
+	w := &LifecycleWatcher{defs: kv}
+	w.handle(envelopeFor(t, id, sextantproto.LifecycleEnded))
+
+	// The lifecycle did NOT update — every attempt conflicted.
+	if got := kv.currentLifecycle(t, id); got != sextantproto.LifecycleRunning {
+		t.Errorf("Lifecycle = %q, want running (all retries should have failed)", got)
 	}
 }
 
@@ -182,40 +251,87 @@ func envelopeFor(t *testing.T, id uuid.UUID, transition sextantproto.LifecycleEv
 }
 
 // fakeLifecycleKV satisfies LifecycleDefinitionsKV without a live
-// nats-server. Stores raw JSON values keyed by string; counts Puts so
-// tests can assert idempotency.
+// nats-server. Stores raw JSON values + per-key revisions; the Update
+// implementation enforces CAS semantics so tests can exercise the
+// watcher's retry path. A test that wants to force one conflict
+// (simulating a concurrent archive/restart writer slipping in between
+// Get and Update) sets conflictsRemaining > 0.
 type fakeLifecycleKV struct {
-	mu    sync.Mutex
-	store map[string][]byte
-	puts  uint64
+	mu                 sync.Mutex
+	store              map[string]fakeLifecycleEntry
+	writes             uint64 // counts every storePut + Update
+	conflictsRemaining int    // forced CAS-conflict count for retry tests
 }
 
 func newFakeLifecycleKV() *fakeLifecycleKV {
-	return &fakeLifecycleKV{store: map[string][]byte{}}
+	return &fakeLifecycleKV{store: map[string]fakeLifecycleEntry{}}
 }
 
 func (f *fakeLifecycleKV) Get(_ context.Context, key string) (jetstream.KeyValueEntry, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	v, ok := f.store[key]
+	e, ok := f.store[key]
 	if !ok {
 		return nil, jetstream.ErrKeyNotFound
 	}
-	return fakeLifecycleEntry{key: key, value: v}, nil
+	// Return a copy so the caller can't mutate the stored entry.
+	return e, nil
 }
 
-func (f *fakeLifecycleKV) Put(_ context.Context, key string, value []byte) (uint64, error) {
+// Update is the CAS write. The fake rejects the call when the
+// caller's revision doesn't match the stored one — same shape as
+// jetstream.KeyValue.Update on a real server. Also drains a forced
+// conflict if conflictsRemaining > 0 so tests can pin the retry path.
+func (f *fakeLifecycleKV) Update(_ context.Context, key string, value []byte, revision uint64) (uint64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.store[key] = append([]byte(nil), value...)
-	f.puts++
-	return f.puts, nil
+	if f.conflictsRemaining > 0 {
+		f.conflictsRemaining--
+		// Bump the stored revision so the next Get reflects the
+		// "concurrent writer" that the test simulated.
+		if e, ok := f.store[key]; ok {
+			e.revision++
+			f.store[key] = e
+		}
+		return 0, jetstream.ErrKeyExists
+	}
+	existing, ok := f.store[key]
+	if !ok {
+		return 0, jetstream.ErrKeyNotFound
+	}
+	if existing.revision != revision {
+		return 0, jetstream.ErrKeyExists
+	}
+	existing.value = append([]byte(nil), value...)
+	existing.revision++
+	f.store[key] = existing
+	f.writes++
+	return existing.revision, nil
 }
 
-func (f *fakeLifecycleKV) putCount() uint64 {
+// storePut is a test-only direct write — used by seedDefinition + by
+// tests that want to simulate a concurrent archive/restart writer
+// updating the record between Get and Update.
+func (f *fakeLifecycleKV) storePut(key string, value []byte) uint64 {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.puts
+	existing, ok := f.store[key]
+	if !ok {
+		existing = fakeLifecycleEntry{key: key, revision: 0}
+	}
+	existing.value = append([]byte(nil), value...)
+	existing.revision++
+	f.store[key] = existing
+	f.writes++
+	return existing.revision
+}
+
+// writeCount returns the total number of writes (Update successes +
+// storePut calls). Used by idempotency assertions.
+func (f *fakeLifecycleKV) writeCount() uint64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.writes
 }
 
 func (f *fakeLifecycleKV) seedDefinition(t *testing.T, id uuid.UUID, name string, state sextantproto.LifecycleState, version uint64) {
@@ -234,9 +350,7 @@ func (f *fakeLifecycleKV) seedDefinition(t *testing.T, id uuid.UUID, name string
 	if err != nil {
 		t.Fatalf("marshal def: %v", err)
 	}
-	if _, err := f.Put(context.Background(), id.String(), raw); err != nil {
-		t.Fatalf("seed put: %v", err)
-	}
+	f.storePut(id.String(), raw)
 }
 
 func (f *fakeLifecycleKV) currentDefinition(t *testing.T, id uuid.UUID) sextantproto.AgentDefinition {
@@ -258,14 +372,15 @@ func (f *fakeLifecycleKV) currentLifecycle(t *testing.T, id uuid.UUID) sextantpr
 }
 
 type fakeLifecycleEntry struct {
-	key   string
-	value []byte
+	key      string
+	value    []byte
+	revision uint64
 }
 
 func (e fakeLifecycleEntry) Bucket() string                  { return AgentDefinitionsBucket }
 func (e fakeLifecycleEntry) Key() string                     { return e.key }
 func (e fakeLifecycleEntry) Value() []byte                   { return e.value }
-func (e fakeLifecycleEntry) Revision() uint64                { return 1 }
+func (e fakeLifecycleEntry) Revision() uint64                { return e.revision }
 func (e fakeLifecycleEntry) Created() time.Time              { return time.Time{} }
 func (e fakeLifecycleEntry) Delta() uint64                   { return 0 }
 func (e fakeLifecycleEntry) Operation() jetstream.KeyValueOp { return jetstream.KeyValuePut }
