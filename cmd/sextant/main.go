@@ -63,15 +63,28 @@ func errorBanner(w io.Writer, _ fang.Styles, err error) {
 	if err == nil {
 		return
 	}
-	if shouldSuppressErrorBanner(err) {
-		return
-	}
 	if errors.Is(err, errSilentExit) {
+		// The verb already emitted its own user-facing failure on
+		// stderr (status's "daemon: not running", exec's pass-through).
+		// Suppressing applies in both text AND JSON modes — in JSON
+		// mode the verb is expected to have written its own envelope.
 		return
 	}
 	if globalFlags.asJSON {
+		// JSON mode emits an envelope for every error, including
+		// errNoResults and other text-mode-suppressed sentinels.
+		// Scripts pivoting on stderr need the machine-readable failure
+		// object regardless of the operator-visible text suppression
+		// rules. See Codex follow-up review.
 		code, msg := mapErrorToCode(err)
 		_ = cliout.WriteErrorEnvelope(w, code, msg)
+		return
+	}
+	if shouldSuppressErrorBanner(err) {
+		// Text-mode suppression: the verb already printed its own
+		// human-readable line on stdout (e.g. "no agents" for
+		// errNoResults, "daemon: not running" for the status verb)
+		// and a banner here would be noise.
 		return
 	}
 	_, _ = fmt.Fprintf(w, "sextant: %s\n", err.Error())
