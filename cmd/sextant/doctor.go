@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -15,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/spf13/cobra"
 
 	"github.com/love-lena/sextant/pkg/authjwt"
 	"github.com/love-lena/sextant/pkg/sextantd"
@@ -61,55 +62,52 @@ var errDoctorFailures = errors.New("doctor: one or more checks failed")
 
 func isDoctorFailureErr(err error) bool { return errors.Is(err, errDoctorFailures) }
 
-func runDoctor(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("sextant doctor", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	configDir := fs.String("config-dir", "", "config directory (default ~/.config/sextant)")
-	dataDir := fs.String("data-dir", "", "data directory (default ~/.local/share/sextant)")
-	asJSON := fs.Bool("json", false, "emit machine-parseable JSON")
-	preflight := fs.Bool("preflight", false, "host-dep checks only (skips config, daemon, NATS, ClickHouse)")
-	contributor := fs.Bool("contributor", false, "additionally check contributor deps (go, node, npm)")
-	help := fs.Bool("help", false, "print help")
-	if err := fs.Parse(args); err != nil {
-		return errUserUsage(fmt.Sprintf("parse flags: %v", err))
-	}
-	if *help {
-		fmt.Println(doctorUsage)
-		return nil
-	}
-
-	cfgDir, dataDirAbs, err := resolveInitPaths(*configDir, *dataDir)
-	if err != nil {
-		return err
-	}
-
-	var results []CheckResult
-	if *preflight {
-		results = collectHostDepChecks(ctx, *contributor, exec.LookPath, defaultDockerInfo, defaultRunCmd)
-	} else {
-		results = collectChecks(ctx, cfgDir, dataDirAbs, *contributor)
-	}
-	failed := emit(os.Stdout, results, *asJSON)
-	if failed {
-		return errDoctorFailures
-	}
-	return nil
-}
-
-const doctorUsage = `usage: sextant doctor [--config-dir PATH] [--data-dir PATH] [--json] [--preflight] [--contributor]
-
-Runs health diagnostics against the installation rooted at the given
+// newDoctorCmd wires `sextant doctor`. Doctor is a top-level singleton
+// per `feat-cli-resource-verb-cleanup` — verb on the sextant install
+// itself, diagnosing the install's health.
+func newDoctorCmd() *cobra.Command {
+	var preflight, contributor bool
+	cmd := &cobra.Command{
+		Use:   "doctor",
+		Short: "Health diagnostics for sextantd, NATS, ClickHouse, config",
+		Long: `Runs health diagnostics against the installation rooted at the given
 config and data dirs (defaults: ~/.config/sextant, ~/.local/share/sextant).
 
---preflight runs only host-dep checks (nats-server, clickhouse, docker binary + daemon)
-and skips anything that needs config to exist. Use it before
-sextant init has ever been run, or from scripts/bootstrap.sh.
+--preflight runs only host-dep checks (nats-server, clickhouse, docker
+binary + daemon) and skips anything that needs config to exist. Use it
+before sextant init has ever been run, or from scripts/bootstrap.sh.
 
 --contributor additionally checks deps needed to build sextant from
 source (go, node, npm). Off by default; operators using installed
 binaries don't need it.
 
-Exit code 0 on all-pass (or only "not running" warnings), 2 on failure.`
+Exit code 0 on all-pass (or only "not running" warnings), 2 on failure.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx := cmd.Context()
+			cfgDir, dataDirAbs, err := resolveInitPaths(globalFlags.configDir, globalFlags.dataDir)
+			if err != nil {
+				return err
+			}
+			var results []CheckResult
+			if preflight {
+				results = collectHostDepChecks(ctx, contributor, exec.LookPath, defaultDockerInfo, defaultRunCmd)
+			} else {
+				results = collectChecks(ctx, cfgDir, dataDirAbs, contributor)
+			}
+			failed := emit(cmd.OutOrStdout(), results, globalFlags.asJSON)
+			if failed {
+				return errDoctorFailures
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&preflight, "preflight", false,
+		"host-dep checks only (skips config, daemon, NATS, ClickHouse)")
+	cmd.Flags().BoolVar(&contributor, "contributor", false,
+		"additionally check contributor deps (go, node, npm)")
+	return cmd
+}
 
 // collectChecks runs every diagnostic and returns the rows in display
 // order. We try to keep each check side-effect-free.

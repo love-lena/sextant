@@ -1,9 +1,10 @@
+// files.go owns `sextant files <verb>` — read/ls/tail files in an
+// agent's container.
 package main
 
 import (
 	"bytes"
 	"context"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -11,150 +12,145 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/spf13/cobra"
 
 	"github.com/love-lena/sextant/pkg/client"
 	"github.com/love-lena/sextant/pkg/rpc"
 	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
-const filesUsage = `usage: sextant files <verb> <agent_uuid> <path> [args...]
-
-Verbs:
-  read <agent> <path>            Read a file from the agent's container.
-  ls <agent> <path>              List a directory in the agent's container.
-  tail <agent> <path> [--interval 500ms]
-                                 Poll the file for new content (M12 ships
-                                 a poll loop; streaming RPC is deferred).
-
-Every verb supports --json.`
-
-func runFiles(ctx context.Context, args []string) error {
-	if len(args) == 0 {
-		_, _ = fmt.Fprintln(os.Stderr, filesUsage)
-		return errUserUsage("missing files verb")
+// newFilesCmd builds the `sextant files` parent command.
+func newFilesCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "files",
+		Short: "Read/list/tail files in an agent's container",
 	}
-	verb, rest := args[0], args[1:]
-	switch verb {
-	case "read":
-		return runFilesRead(ctx, rest)
-	case "ls":
-		return runFilesLs(ctx, rest)
-	case "tail":
-		return runFilesTail(ctx, rest)
-	case "-h", "--help", "help":
-		_, _ = fmt.Fprintln(os.Stdout, filesUsage)
-		return nil
-	default:
-		_, _ = fmt.Fprintln(os.Stderr, filesUsage)
-		return errUserUsage(fmt.Sprintf("unknown files verb %q", verb))
+	cmd.AddCommand(newFilesReadCmd())
+	cmd.AddCommand(newFilesLsCmd())
+	cmd.AddCommand(newFilesTailCmd())
+	return cmd
+}
+
+// parseFilesPositional validates the two-arg <agent_uuid> <path> shape.
+func parseFilesPositional(label string, args []string) (uuid.UUID, string, error) {
+	if len(args) != 2 {
+		return uuid.Nil, "", errUserUsage(fmt.Sprintf("%s <agent_uuid> <path>", label))
+	}
+	id, err := uuid.Parse(args[0])
+	if err != nil {
+		return uuid.Nil, "", errUserUsage(fmt.Sprintf("agent_uuid: %v", err))
+	}
+	if args[1] == "" {
+		return uuid.Nil, "", errUserUsage("path must be non-empty")
+	}
+	return id, args[1], nil
+}
+
+func newFilesReadCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "read <agent_uuid> <path>",
+		Short: "Read a file from the agent's container",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, path, err := parseFilesPositional("sextant files read", args)
+			if err != nil {
+				return err
+			}
+			ctx := cmd.Context()
+			cli, _, err := connectAgent(ctx, globalFlags.configDir)
+			if err != nil {
+				return err
+			}
+			defer cli.Close() //nolint:errcheck // best-effort close
+
+			var resp sextantproto.ReadFileResponse
+			rpcCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+			defer cancel()
+			if err := cli.RPC(rpcCtx, rpc.VerbReadFile,
+				sextantproto.ReadFileRequest{AgentID: id, Path: path}, &resp); err != nil {
+				return fmt.Errorf("read_file: %w", err)
+			}
+			out := cmd.OutOrStdout()
+			if globalFlags.asJSON {
+				return writeJSON(out, resp)
+			}
+			_, err = out.Write(resp.Content)
+			return err
+		},
 	}
 }
 
-func parseFilesArgs(label string, fs *flag.FlagSet, args []string) (commonOpts, uuid.UUID, string, error) {
-	opts, rest, err := parseCommonOpts(fs, args)
-	if err != nil {
-		return commonOpts{}, uuid.Nil, "", err
+func newFilesLsCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "ls <agent_uuid> <path>",
+		Short: "List a directory in the agent's container",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, path, err := parseFilesPositional("sextant files ls", args)
+			if err != nil {
+				return err
+			}
+			ctx := cmd.Context()
+			cli, _, err := connectAgent(ctx, globalFlags.configDir)
+			if err != nil {
+				return err
+			}
+			defer cli.Close() //nolint:errcheck // best-effort close
+
+			var resp sextantproto.ListDirResponse
+			rpcCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+			defer cancel()
+			if err := cli.RPC(rpcCtx, rpc.VerbListDir,
+				sextantproto.ListDirRequest{AgentID: id, Path: path}, &resp); err != nil {
+				return fmt.Errorf("list_dir: %w", err)
+			}
+			out := cmd.OutOrStdout()
+			if globalFlags.asJSON {
+				return writeJSON(out, resp)
+			}
+			tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
+			for _, e := range resp.Entries {
+				marker := " "
+				if e.IsDir {
+					marker = "/"
+				}
+				fmt.Fprintf(tw, "%s%s\n", e.Name, marker)
+			}
+			return tw.Flush()
+		},
 	}
-	if len(rest) != 2 {
-		return commonOpts{}, uuid.Nil, "", errUserUsage(fmt.Sprintf("%s <agent_uuid> <path>", label))
-	}
-	id, err := uuid.Parse(rest[0])
-	if err != nil {
-		return commonOpts{}, uuid.Nil, "", errUserUsage(fmt.Sprintf("agent_uuid: %v", err))
-	}
-	if rest[1] == "" {
-		return commonOpts{}, uuid.Nil, "", errUserUsage("path must be non-empty")
-	}
-	return opts, id, rest[1], nil
 }
 
-func runFilesRead(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("sextant files read", flag.ContinueOnError)
-	opts, id, path, err := parseFilesArgs("sextant files read", fs, args)
-	if err != nil {
-		return err
-	}
-	cli, _, err := connectAgent(ctx, opts.configDir)
-	if err != nil {
-		return err
-	}
-	defer cli.Close() //nolint:errcheck // best-effort close
-
-	var resp sextantproto.ReadFileResponse
-	rpcCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	if err := cli.RPC(rpcCtx, rpc.VerbReadFile,
-		sextantproto.ReadFileRequest{AgentID: id, Path: path}, &resp); err != nil {
-		return fmt.Errorf("read_file: %w", err)
-	}
-	if opts.asJSON {
-		return writeJSON(os.Stdout, resp)
-	}
-	_, err = os.Stdout.Write(resp.Content)
-	return err
-}
-
-func runFilesLs(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("sextant files ls", flag.ContinueOnError)
-	opts, id, path, err := parseFilesArgs("sextant files ls", fs, args)
-	if err != nil {
-		return err
-	}
-	cli, _, err := connectAgent(ctx, opts.configDir)
-	if err != nil {
-		return err
-	}
-	defer cli.Close() //nolint:errcheck // best-effort close
-
-	var resp sextantproto.ListDirResponse
-	rpcCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	if err := cli.RPC(rpcCtx, rpc.VerbListDir,
-		sextantproto.ListDirRequest{AgentID: id, Path: path}, &resp); err != nil {
-		return fmt.Errorf("list_dir: %w", err)
-	}
-	if opts.asJSON {
-		return writeJSON(os.Stdout, resp)
-	}
-	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	for _, e := range resp.Entries {
-		marker := " "
-		if e.IsDir {
-			marker = "/"
-		}
-		printf(tw, "%s%s\n", e.Name, marker)
-	}
-	return tw.Flush()
-}
-
-// runFilesTail polls the file's content until ctx is canceled. We
-// poll because the M12 wire doesn't ship a streaming `read_file`
-// implementation yet (see specs/protocols/rpc-catalog.md "Open").
-func runFilesTail(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("sextant files tail", flag.ContinueOnError)
+func newFilesTailCmd() *cobra.Command {
 	var interval time.Duration
-	fs.DurationVar(&interval, "interval", 500*time.Millisecond, "poll interval (M12 stop-gap; streaming RPC TBD)")
-	opts, id, path, err := parseFilesArgs("sextant files tail", fs, args)
-	if err != nil {
-		return err
+	cmd := &cobra.Command{
+		Use:   "tail <agent_uuid> <path>",
+		Short: "Poll the file for new content (M12 stop-gap)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, path, err := parseFilesPositional("sextant files tail", args)
+			if err != nil {
+				return err
+			}
+			ctx := cmd.Context()
+			cli, _, err := connectAgent(ctx, globalFlags.configDir)
+			if err != nil {
+				return err
+			}
+			defer cli.Close() //nolint:errcheck // best-effort close
+			return tailFile(ctx, cmd.OutOrStdout(), cli, id, path, interval, globalFlags.asJSON)
+		},
 	}
-	cli, _, err := connectAgent(ctx, opts.configDir)
-	if err != nil {
-		return err
-	}
-	defer cli.Close() //nolint:errcheck // best-effort close
-
-	return tailFile(ctx, os.Stdout, cli, id, path, interval, opts.asJSON)
+	cmd.Flags().DurationVar(&interval, "interval", 500*time.Millisecond,
+		"poll interval (M12 stop-gap; streaming RPC TBD)")
+	return cmd
 }
 
-// tailFile is the testable core of `files tail`. It tracks the last
-// bytes printed and only forwards the suffix on each poll.
+// tailFile is the testable core of `files tail`.
 func tailFile(ctx context.Context, w io.Writer, cli *client.Client, id uuid.UUID, path string, interval time.Duration, asJSON bool) error {
 	var seen []byte
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
-	// One immediate read so the operator gets the current content on
-	// connect rather than waiting an interval for the first tick.
 	if err := tailOnce(ctx, w, cli, id, path, &seen, asJSON); err != nil {
 		return err
 	}
@@ -179,7 +175,6 @@ func tailOnce(ctx context.Context, w io.Writer, cli *client.Client, id uuid.UUID
 		return fmt.Errorf("read_file: %w", err)
 	}
 	cur := resp.Content
-	// Only forward the suffix that's new since last poll.
 	switch {
 	case bytes.HasPrefix(cur, *seen):
 		newBytes := cur[len(*seen):]
@@ -196,9 +191,8 @@ func tailOnce(ctx context.Context, w io.Writer, cli *client.Client, id uuid.UUID
 		}
 		*seen = append((*seen)[:0], cur...)
 	default:
-		// File was truncated or rotated — emit a marker and reset.
 		if !asJSON {
-			printf(w, "[file truncated, resetting]\n")
+			fmt.Fprintf(w, "[file truncated, resetting]\n")
 		}
 		if _, err := w.Write(cur); err != nil {
 			return err
@@ -207,3 +201,6 @@ func tailOnce(ctx context.Context, w io.Writer, cli *client.Client, id uuid.UUID
 	}
 	return nil
 }
+
+// keep os used import in case test code referenced it transitively.
+var _ = os.Stdout

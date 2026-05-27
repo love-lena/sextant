@@ -1,27 +1,21 @@
+// exec.go owns `sextant agents exec <agent> -- <cmd>`. Relocated under
+// the `agents` resource from the previous top-level `sextant exec` per
+// `plans/issues/feat-cli-resource-verb-cleanup.md`. The legacy form
+// stays as an alias for one minor release.
 package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"os"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/spf13/cobra"
 
 	"github.com/love-lena/sextant/pkg/rpc"
 	"github.com/love-lena/sextant/pkg/sextantproto"
 )
-
-const execUsage = `usage: sextant exec <agent_uuid> [--workdir DIR] [--env K=V]... -- <cmd> [args...]
-
-Run a command inside the agent's container. Capability-gated as
-control.exec (operator-level). Returns stdout to stdout, stderr to
-stderr, and exits with the command's exit code so shell pipelines
-behave naturally.
-
---json emits the full ExecInContainerResponse as JSON to stdout
-instead of streaming.`
 
 // envFlag is a repeatable --env flag (--env K=V --env A=B).
 type envFlag struct {
@@ -29,11 +23,11 @@ type envFlag struct {
 }
 
 func (e *envFlag) String() string { return fmt.Sprintf("%v", e.pairs) }
+func (e *envFlag) Type() string   { return "K=V" }
 func (e *envFlag) Set(v string) error {
 	if e.pairs == nil {
 		e.pairs = map[string]string{}
 	}
-	// Split at the first '=' so values can contain '='.
 	for i := 0; i < len(v); i++ {
 		if v[i] == '=' {
 			e.pairs[v[:i]] = v[i+1:]
@@ -43,78 +37,88 @@ func (e *envFlag) Set(v string) error {
 	return fmt.Errorf("--env requires K=V form, got %q", v)
 }
 
-// runExec — `sextant exec <agent_uuid> -- cmd args...`
-func runExec(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("sextant exec", flag.ContinueOnError)
+// newAgentsExecCmd wires `sextant agents exec <agent> -- <cmd> [args...]`.
+// Capability-gated as control.exec (operator-level). Mirrors docker exec:
+// stdout → stdout, stderr → stderr, container exit code → CLI exit code.
+func newAgentsExecCmd() *cobra.Command {
 	var workdir string
 	envs := &envFlag{}
-	fs.StringVar(&workdir, "workdir", "", "working directory inside the container")
-	fs.Var(envs, "env", "K=V env vars (repeat for multiple)")
+	cmd := &cobra.Command{
+		Use:   "exec <agent_uuid> -- <cmd> [args...]",
+		Short: "Run a command inside an agent's container",
+		Long: `Capability-gated (control.exec) command execution inside an agent's
+container. Output mirrors docker exec: stdout → stdout, stderr → stderr,
+the command's exit code becomes the CLI's exit code so shell pipelines
+behave naturally.
 
-	// The exec verb's positional shape is `<agent> -- <cmd>...`. We
-	// split args at the first `--` so the command's own flags (e.g.
-	// `ls -lah`) don't get parsed by our FlagSet.
-	flagArgs, cmdArgs := splitDoubleDash(args)
-	opts, rest, err := parseCommonOpts(fs, flagArgs)
-	if err != nil {
-		return err
-	}
-	if len(rest) != 1 {
-		_, _ = fmt.Fprintln(os.Stderr, execUsage)
-		return errUserUsage("sextant exec <agent_uuid> -- <cmd> [args...]")
-	}
-	if len(cmdArgs) == 0 {
-		_, _ = fmt.Fprintln(os.Stderr, execUsage)
-		return errUserUsage("missing command after --")
-	}
-	id, err := uuid.Parse(rest[0])
-	if err != nil {
-		return errUserUsage(fmt.Sprintf("agent_uuid: %v", err))
-	}
+--json emits the full ExecInContainerResponse as JSON to stdout instead
+of streaming.`,
+		Args: cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dash := cmd.ArgsLenAtDash()
+			if dash < 0 {
+				return errUserUsage("sextant agents exec <agent_uuid> -- <cmd> [args...]")
+			}
+			cmdArgs := args[dash:]
+			if len(cmdArgs) == 0 {
+				return errUserUsage("missing command after --")
+			}
+			positional := args[:dash]
+			if len(positional) != 1 {
+				return errUserUsage("sextant agents exec <agent_uuid> -- <cmd> [args...]")
+			}
+			id, err := uuid.Parse(positional[0])
+			if err != nil {
+				return errUserUsage(fmt.Sprintf("agent_uuid: %v", err))
+			}
 
-	cli, _, err := connectAgent(ctx, opts.configDir)
-	if err != nil {
-		return err
-	}
-	defer cli.Close() //nolint:errcheck // best-effort close
+			ctx := cmd.Context()
+			cli, _, err := connectAgent(ctx, globalFlags.configDir)
+			if err != nil {
+				return err
+			}
+			defer cli.Close() //nolint:errcheck // best-effort close
 
-	req := sextantproto.ExecInContainerRequest{
-		AgentID: id,
-		Cmd:     cmdArgs,
-		Workdir: workdir,
-		Env:     envs.pairs,
+			req := sextantproto.ExecInContainerRequest{
+				AgentID: id,
+				Cmd:     cmdArgs,
+				Workdir: workdir,
+				Env:     envs.pairs,
+			}
+			var resp sextantproto.ExecInContainerResponse
+			rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+			defer cancel()
+			if err := cli.RPC(rpcCtx, rpc.VerbExecInContainer, req, &resp); err != nil {
+				return fmt.Errorf("exec_in_container: %w", err)
+			}
+			if globalFlags.asJSON {
+				if err := writeJSON(cmd.OutOrStdout(), resp); err != nil {
+					return err
+				}
+				if resp.ExitCode != 0 {
+					return &exitCodeError{code: resp.ExitCode}
+				}
+				return nil
+			}
+			if _, err := os.Stdout.WriteString(resp.Stdout); err != nil {
+				return err
+			}
+			if _, err := os.Stderr.WriteString(resp.Stderr); err != nil {
+				return err
+			}
+			if resp.ExitCode != 0 {
+				return &exitCodeError{code: resp.ExitCode}
+			}
+			return nil
+		},
 	}
-	var resp sextantproto.ExecInContainerResponse
-	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
-	if err := cli.RPC(rpcCtx, rpc.VerbExecInContainer, req, &resp); err != nil {
-		return fmt.Errorf("exec_in_container: %w", err)
-	}
-	if opts.asJSON {
-		if err := writeJSON(os.Stdout, resp); err != nil {
-			return err
-		}
-		if resp.ExitCode != 0 {
-			return &exitCodeError{code: resp.ExitCode}
-		}
-		return nil
-	}
-	// Mirror docker exec: stdout to stdout, stderr to stderr, exit
-	// code becomes the CLI's exit.
-	if _, err := os.Stdout.WriteString(resp.Stdout); err != nil {
-		return err
-	}
-	if _, err := os.Stderr.WriteString(resp.Stderr); err != nil {
-		return err
-	}
-	if resp.ExitCode != 0 {
-		return &exitCodeError{code: resp.ExitCode}
-	}
-	return nil
+	cmd.Flags().StringVar(&workdir, "workdir", "", "working directory inside the container")
+	cmd.Flags().Var(envs, "env", "K=V env vars (repeat for multiple)")
+	return cmd
 }
 
 // exitCodeError carries the container exec's exit code so the CLI can
-// surface it via os.Exit. errors.As-able from main's exitCodeFor.
+// surface it via os.Exit. errors.As-able from mainErr's exitCodeFor.
 type exitCodeError struct {
 	code int
 }
@@ -124,7 +128,7 @@ func (e *exitCodeError) Error() string {
 }
 
 // splitDoubleDash partitions args at the first standalone `--`. The
-// `--` itself is dropped.
+// `--` itself is dropped. Kept for the exec_test.go helper-shape tests.
 func splitDoubleDash(args []string) (before, after []string) {
 	for i, a := range args {
 		if a == "--" {
