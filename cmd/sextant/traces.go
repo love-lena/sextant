@@ -1,78 +1,64 @@
+// traces.go owns `sextant traces show <trace_id>`.
 package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/spf13/cobra"
 
 	"github.com/love-lena/sextant/pkg/rpc"
 	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
-const tracesUsage = `usage: sextant traces show <trace_id> [--json]
-
-Render a distributed trace as a span tree. Spans are projected into a
-tree by ParentSpanId, sorted by Timestamp ASC within each level.`
-
-func runTraces(ctx context.Context, args []string) error {
-	if len(args) == 0 {
-		_, _ = fmt.Fprintln(os.Stderr, tracesUsage)
-		return errUserUsage("missing traces verb")
+func newTracesCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "traces",
+		Short: "Render distributed traces by trace_id",
 	}
-	verb, rest := args[0], args[1:]
-	switch verb {
-	case "show":
-		return runTracesShow(ctx, rest)
-	case "-h", "--help", "help":
-		_, _ = fmt.Fprintln(os.Stdout, tracesUsage)
-		return nil
-	default:
-		_, _ = fmt.Fprintln(os.Stderr, tracesUsage)
-		return errUserUsage(fmt.Sprintf("unknown traces verb %q", verb))
-	}
+	cmd.AddCommand(newTracesShowCmd())
+	return cmd
 }
 
-func runTracesShow(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("sextant traces show", flag.ContinueOnError)
-	opts, rest, err := parseCommonOpts(fs, args)
-	if err != nil {
-		return err
-	}
-	if len(rest) != 1 {
-		return errUserUsage("sextant traces show <trace_id>")
-	}
-	traceID := rest[0]
-	cli, _, err := connectAgent(ctx, opts.configDir)
-	if err != nil {
-		return err
-	}
-	defer cli.Close() //nolint:errcheck // best-effort close
+func newTracesShowCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "show <trace_id>",
+		Short: "Render a distributed trace as a span tree",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			cli, _, err := connectAgent(ctx, globalFlags.configDir)
+			if err != nil {
+				return err
+			}
+			defer cli.Close() //nolint:errcheck // best-effort close
 
-	var resp sextantproto.QueryTraceResponse
-	rpcCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	if err := cli.RPC(rpcCtx, rpc.VerbQueryTrace,
-		sextantproto.QueryTraceRequest{TraceID: traceID}, &resp); err != nil {
-		return fmt.Errorf("query_trace: %w", err)
+			var resp sextantproto.QueryTraceResponse
+			rpcCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+			defer cancel()
+			if err := cli.RPC(rpcCtx, rpc.VerbQueryTrace,
+				sextantproto.QueryTraceRequest{TraceID: args[0]}, &resp); err != nil {
+				return fmt.Errorf("query_trace: %w", err)
+			}
+			out := cmd.OutOrStdout()
+			if globalFlags.asJSON {
+				return writeJSON(cmd, out, resp)
+			}
+			return renderSpanTree(out, resp.Spans)
+		},
 	}
-	if opts.asJSON {
-		return writeJSON(os.Stdout, resp)
-	}
-	return renderSpanTree(os.Stdout, resp.Spans)
 }
 
 // renderSpanTree projects spans into a parent→children index, then
-// walks every root in Timestamp order. The walker is iterative so a
-// deep trace doesn't blow the stack.
+// walks every root in Timestamp order.
 func renderSpanTree(w io.Writer, spans []sextantproto.TraceSpan) error {
 	if len(spans) == 0 {
-		println(w, "no spans")
-		return nil
+		_, err := fmt.Fprintln(w, "no spans")
+		return err
 	}
 	children := map[string][]sextantproto.TraceSpan{}
 	known := map[string]bool{}
@@ -95,14 +81,11 @@ func renderSpanTree(w io.Writer, spans []sextantproto.TraceSpan) error {
 	sort.Slice(roots, func(i, j int) bool {
 		return roots[i].Timestamp.Before(roots[j].Timestamp)
 	})
-
-	// Walk iteratively. Each frame is {span, depth}.
 	type frame struct {
 		span  sextantproto.TraceSpan
 		depth int
 	}
 	stack := make([]frame, 0, len(spans))
-	// Push in reverse so the first root pops first (DFS pre-order).
 	for i := len(roots) - 1; i >= 0; i-- {
 		stack = append(stack, frame{span: roots[i], depth: 0})
 	}

@@ -1,11 +1,16 @@
 ---
 title: Migrate sextant CLI from stdlib flag to cobra + charmbracelet/fang
-status: open
+status: wontfix
 priority: P3
 created_at: 2026-05-26T17:20-07:00
+resolved_at: 2026-05-26T21:30-07:00
 labels: [feature, cli, polish, ergonomics, charm]
 discovered_in: chat TUI Checkpoint C — `--help` audit raised the question of whether sextant should use charm's CLI tooling to match the TUI
 ---
+
+## Duplicate
+
+Superseded by [[feat-cli-cobra-fang-migration]] — same scope, same fix shape, more current cross-links (destructive flags, output protocol, resource-verb cleanup). Tracking continues there.
 
 ## Summary
 

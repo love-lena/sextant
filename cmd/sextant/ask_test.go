@@ -99,6 +99,54 @@ func TestStreamAskTurnExitsOnLifecycleEnded(t *testing.T) {
 	}
 }
 
+// TestStreamAskTurnTimeoutEnrichesWithLifecycle exercises
+// feat-ask-conversation-self-diagnose-on-timeout: when streamAskTurn
+// times out AND we saw a terminal lifecycle envelope before the
+// deadline, the error message names the state and the remedy command.
+func TestStreamAskTurnTimeoutEnrichesWithLifecycle(t *testing.T) {
+	cases := []struct {
+		name       string
+		transition sextantproto.LifecycleEvent
+		wantSubstr string
+	}{
+		{"ended", sextantproto.LifecycleEnded, "lifecycle=ended"},
+		{"crashed", sextantproto.LifecycleCrashedEvent, "lifecycle=crashed"},
+		{"paused", sextantproto.LifecyclePausedEvent, "lifecycle=paused"},
+		{"archived", sextantproto.LifecycleArchivedEvent, "lifecycle=archived"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			agentID := uuid.New()
+			err := askTimeoutError(2*time.Second, tc.transition, agentID)
+			if err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.wantSubstr) {
+				t.Errorf("error = %q, want substring %q", err, tc.wantSubstr)
+			}
+		})
+	}
+
+	// "running but no terminal" path: saw started/turn_ended mid-turn,
+	// then no terminal — should suggest --timeout extension, not blame
+	// a terminal state we didn't see.
+	t.Run("alive_but_silent", func(t *testing.T) {
+		err := askTimeoutError(2*time.Second, sextantproto.LifecycleStarted, uuid.New())
+		if !strings.Contains(err.Error(), "extend --timeout") {
+			t.Errorf("alive-but-silent error should suggest extending timeout: %v", err)
+		}
+	})
+
+	// "no envelopes at all" path: saw nothing — should call that out
+	// rather than guessing.
+	t.Run("no_envelopes", func(t *testing.T) {
+		err := askTimeoutError(2*time.Second, "", uuid.New())
+		if !strings.Contains(err.Error(), "no lifecycle activity") {
+			t.Errorf("no-envelopes error should mention no lifecycle activity: %v", err)
+		}
+	})
+}
+
 // TestStreamAskTurnTimeoutExitsWithError feeds nothing and asserts that
 // after --timeout streamAskTurn returns a non-nil error whose message
 // makes the timeout cause obvious. Mirrors the issue's

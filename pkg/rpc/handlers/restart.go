@@ -24,13 +24,13 @@ import (
 // directly would force callers to populate fields irrelevant to
 // restart; the narrower bundle keeps the wiring honest.
 type RestartDeps struct {
-	Definitions   AgentMutableKV
-	Incarnations  AgentMutableKV
-	Containers    ContainerRunner
+	Definitions  AgentMutableKV
+	Incarnations AgentMutableKV
+	Containers   ContainerRunner
 	// Volumes lets restart re-attach (and, on first spawn after a
 	// claude_seed change, populate) the per-agent claude_seed volume.
 	// May be nil in tests that don't exercise the seed flow.
-	Volumes      VolumeManager
+	Volumes VolumeManager
 	// Templates is required when seed mode is "copy-on-spawn" so the
 	// restart path can re-resolve claude_seed / claude_seed_mode and
 	// re-attach the named volume. May be nil; restart will then fall
@@ -48,6 +48,13 @@ type RestartDeps struct {
 	TestRunLabel  string
 	Now           func() time.Time
 }
+
+// restartCASRetries caps how many times the final definition commit
+// retries on a CAS conflict before rolling back the new incarnation.
+// Each retry re-reads the def and re-evaluates the archived guard;
+// 3 is generous for the realistic operator-actions-in-flight case
+// (archive_agent / kill_agent / update_agent racing).
+const restartCASRetries = 3
 
 // NewRestartAgent returns a Handler for the restart_agent verb. Flow:
 //
@@ -102,6 +109,15 @@ func NewRestartAgent(deps RestartDeps) rpc.Handler {
 			return emitErr(emit, sextantproto.ErrCodeInternal,
 				fmt.Sprintf("decode definition: %v", err))
 		}
+		// initialDefRevision pins the revision we read above. The CAS
+		// loop at the end of this handler bails if the def's revision
+		// moves before we commit — that catches the kill_agent /
+		// archive_agent / update_agent race where the operator
+		// intervenes mid-restart. The CAS itself would already reject
+		// the stale write, but checking the revision explicitly lets
+		// us rollback the new incarnation we just spawned instead of
+		// blindly retrying against an external writer's state.
+		initialDefRevision := defEntry.Revision()
 
 		// 2 + 3. Stop the live incarnation. Best-effort — if it's
 		// already gone we still want to spawn a fresh one.
@@ -267,21 +283,108 @@ func NewRestartAgent(deps RestartDeps) rpc.Handler {
 				fmt.Sprintf("persist new incarnation: %v", err))
 		}
 
-		// 6. Bump the definition version. SEXTANT_SESSION_ID was
-		// forwarded above when args.PreserveSession is true; the
-		// sidecar's session-id capture path persists any new session id
-		// it observes back onto def.Runtime.SessionID via CAS.
-		def.Lifecycle = sextantproto.LifecycleRunning
-		def.Version++
-		def.UpdatedAt = sextantproto.AtTimestamp(deps.Now().UTC())
-		if err := putJSON(ctx, deps.Definitions, def.UUID.String(), def); err != nil {
+		// 6. Commit the new lifecycle state with a CAS write. Between
+		// this handler's initial Get and the final write,
+		// archive_agent / kill_agent / update_agent might have
+		// changed the record. The Codex adversarial-review pinned the
+		// archive case as critical: without CAS the restart would
+		// overwrite an operator's archive with `running`, undoing the
+		// name release and accepting prompts into a dead inbox.
+		//
+		// Loop: re-read the def, check guards (archived ⇒ rollback +
+		// abort), apply our lifecycle/incarnation fields, attempt
+		// Update with the revision we just read. On
+		// jetstream.ErrKeyExists, another writer slipped in — re-read
+		// + re-apply the guards. On retry exhaustion, rollback the
+		// new incarnation we just spawned.
+		//
+		// CurrentIncarnationID is the authoritative anchor the
+		// lifecycle watcher gates stale-envelope filtering on; setting
+		// it here (before the new sidecar's `started` envelope reaches
+		// the bus) closes the restart-handoff race a delayed `ended`
+		// from the prior incarnation would otherwise win.
+		var (
+			finalDef sextantproto.AgentDefinition
+			casErr   error
+		)
+		for attempt := 0; attempt < restartCASRetries; attempt++ {
+			entry, err := deps.Definitions.Get(ctx, def.UUID.String())
+			if err != nil {
+				//nolint:contextcheck // rollback intentionally uses a fresh ctx — see comment above
+				rollbackBackgroundStopAndDelete(deps.Containers, deps.Incarnations, container.ID, newIncID.String())
+				return emitErr(emit, sextantproto.ErrCodeInternal,
+					fmt.Sprintf("re-read definition before commit: %v", err))
+			}
+			if entry.Revision() != initialDefRevision {
+				// An external writer modified the def between our
+				// initial Get and now — kill_agent / archive_agent /
+				// update_agent racing the restart. Bail with rollback
+				// rather than blindly overwriting their work.
+				// Distinguishing benign edits (e.g. Description) from
+				// terminal transitions (archive / kill) at this layer
+				// would require per-field intent; the conservative
+				// choice is to fail-closed and ask the operator to
+				// re-issue restart. See the Codex 6th-round review.
+				var raced sextantproto.AgentDefinition
+				_ = json.Unmarshal(entry.Value(), &raced)
+				//nolint:contextcheck // rollback intentionally uses a fresh ctx — see comment above
+				rollbackBackgroundStopAndDelete(deps.Containers, deps.Incarnations, container.ID, newIncID.String())
+				return emitErr(emit, sextantproto.ErrCodeBadRequest,
+					fmt.Sprintf("agent %s definition changed during restart (lifecycle=%s); rolled back new incarnation — re-issue restart if still appropriate", def.UUID, raced.Lifecycle))
+			}
+			var fresh sextantproto.AgentDefinition
+			if err := json.Unmarshal(entry.Value(), &fresh); err != nil {
+				//nolint:contextcheck // rollback intentionally uses a fresh ctx — see comment above
+				rollbackBackgroundStopAndDelete(deps.Containers, deps.Incarnations, container.ID, newIncID.String())
+				return emitErr(emit, sextantproto.ErrCodeInternal,
+					fmt.Sprintf("decode definition before commit: %v", err))
+			}
+			if fresh.Lifecycle == sextantproto.LifecycleArchived {
+				// Defensive: revision check above should already catch
+				// this, but keep the explicit check in case a future
+				// path resets the revision.
+				//nolint:contextcheck // rollback intentionally uses a fresh ctx — see comment above
+				rollbackBackgroundStopAndDelete(deps.Containers, deps.Incarnations, container.ID, newIncID.String())
+				return emitErr(emit, sextantproto.ErrCodeBadRequest,
+					fmt.Sprintf("agent %s was archived during restart; rolled back new incarnation", def.UUID))
+			}
+			// Carry forward fields the freshly-read def may have that
+			// our in-memory snapshot doesn't (Description / EscalateTo
+			// edits from in-flight update_agent calls). Lifecycle +
+			// CurrentIncarnationID + Version + UpdatedAt are this
+			// handler's to own.
+			fresh.Lifecycle = sextantproto.LifecycleRunning
+			fresh.CurrentIncarnationID = newIncID
+			fresh.Version++
+			fresh.UpdatedAt = sextantproto.AtTimestamp(deps.Now().UTC())
+			raw, mErr := json.Marshal(fresh)
+			if mErr != nil {
+				//nolint:contextcheck // rollback intentionally uses a fresh ctx — see comment above
+				rollbackBackgroundStopAndDelete(deps.Containers, deps.Incarnations, container.ID, newIncID.String())
+				return emitErr(emit, sextantproto.ErrCodeInternal,
+					fmt.Sprintf("marshal definition: %v", mErr))
+			}
+			_, casErr = deps.Definitions.Update(ctx, fresh.UUID.String(), raw, entry.Revision())
+			if casErr == nil {
+				finalDef = fresh
+				break
+			}
+			if !errors.Is(casErr, jetstream.ErrKeyExists) {
+				//nolint:contextcheck // rollback intentionally uses a fresh ctx — see comment above
+				rollbackBackgroundStopAndDelete(deps.Containers, deps.Incarnations, container.ID, newIncID.String())
+				return emitErr(emit, sextantproto.ErrCodeInternal,
+					fmt.Sprintf("flip lifecycle to running: %v", casErr))
+			}
+			// CAS conflict — loop and re-read.
+		}
+		if casErr != nil {
 			//nolint:contextcheck // rollback intentionally uses a fresh ctx — see comment above
 			rollbackBackgroundStopAndDelete(deps.Containers, deps.Incarnations, container.ID, newIncID.String())
 			return emitErr(emit, sextantproto.ErrCodeInternal,
-				fmt.Sprintf("flip lifecycle to running: %v", err))
+				fmt.Sprintf("flip lifecycle to running: gave up after %d CAS conflicts", restartCASRetries))
 		}
 
-		return emitOK(emit, sextantproto.RestartAgentResponse{AgentID: def.UUID, OK: true})
+		return emitOK(emit, sextantproto.RestartAgentResponse{AgentID: finalDef.UUID, OK: true})
 	}
 }
 

@@ -502,7 +502,7 @@ SEXTANT_DRIVER = "mock"
 //   - docker exec inside the container:
 //     1. cat CLAUDE.md — proves the populate step ran.
 //     2. write a fake session journal under projects/... — proves the
-//        mount is rw, which is the bug fix's defining behavior.
+//     mount is rw, which is the bug fix's defining behavior.
 //     3. cat back the journal — round-trips the write.
 //   - docker volume inspect sextant-claude-seed-<uuid> — proves the
 //     volume exists and outlives the container (the per-agent volume

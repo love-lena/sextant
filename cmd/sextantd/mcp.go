@@ -51,7 +51,14 @@ func (d *daemon) startMCP(ctx context.Context) (*mcpRuntime, error) {
 		return nil, fmt.Errorf("mcp: no live ClickHouse server")
 	}
 
-	nc, err := natsSrv.Connect()
+	// Reconnect-capable: same rationale as startRPC — a NATS crash
+	// during startup or steady-state must not orphan this connection.
+	// See plans/issues/bug-flake-daemon-restarts-nats-after-kill.md.
+	nc, err := natsSrv.Connect(
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(500*time.Millisecond),
+		nats.ReconnectJitter(100*time.Millisecond, 500*time.Millisecond),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("mcp: operator nats connect: %w", err)
 	}

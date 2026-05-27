@@ -31,6 +31,14 @@ linters:
     gocritic:
       disabled-checks:
         - ifElseChain
+  exclusions:
+    rules:
+      # gosec on test code is overwhelmingly false-positive: hardcoded
+      # test creds, WriteFile to t.TempDir() with 0o644, exec.Command
+      # with test-controlled args. Excluded across *_test.go so the
+      # production gosec rules stay live where they matter.
+      - path: _test\.go
+        linters: [gosec]
 
 formatters:
   enable:

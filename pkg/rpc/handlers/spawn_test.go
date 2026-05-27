@@ -23,9 +23,15 @@ import (
 // Keys live in one in-memory map; concurrent access is guarded so the
 // kill handler's list+update can race-test cleanly. The map is keyed by
 // the same UUID string the production code uses.
+//
+// Per-key revisions are tracked so Update enforces CAS — restart_agent
+// uses the CAS path to refuse to clobber concurrent archive_agent /
+// kill_agent writes. Put bumps the revision; Update succeeds only when
+// the caller's `revision` matches the stored one.
 type fakeMutableKV struct {
-	mu      sync.Mutex
-	entries map[string][]byte
+	mu        sync.Mutex
+	entries   map[string][]byte
+	revisions map[string]uint64
 	// putHook, if non-nil, runs before every Put and can return an
 	// error to abort the write. Used by the lifecycle-flip rollback
 	// test to fail the second Put on the definitions bucket.
@@ -34,7 +40,10 @@ type fakeMutableKV struct {
 }
 
 func newFakeMutableKV() *fakeMutableKV {
-	return &fakeMutableKV{entries: map[string][]byte{}}
+	return &fakeMutableKV{
+		entries:   map[string][]byte{},
+		revisions: map[string]uint64{},
+	}
 }
 
 func (f *fakeMutableKV) Get(_ context.Context, key string) (jetstream.KeyValueEntry, error) {
@@ -44,7 +53,7 @@ func (f *fakeMutableKV) Get(_ context.Context, key string) (jetstream.KeyValueEn
 	if !ok {
 		return nil, jetstream.ErrKeyNotFound
 	}
-	return mutableEntry{key: key, value: v}, nil
+	return mutableEntry{key: key, value: v, revision: f.revisions[key]}, nil
 }
 
 func (f *fakeMutableKV) ListKeys(_ context.Context, _ ...jetstream.WatchOpt) (jetstream.KeyLister, error) {
@@ -76,13 +85,33 @@ func (f *fakeMutableKV) Put(_ context.Context, key string, value []byte) (uint64
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.entries[key] = append([]byte(nil), value...)
-	return uint64(len(f.entries)), nil
+	f.revisions[key]++
+	return f.revisions[key], nil
+}
+
+// Update is the CAS write — succeeds only when the caller's revision
+// matches the stored revision. Mirrors jetstream.KeyValue.Update on a
+// real server. Returns jetstream.ErrKeyExists on revision mismatch.
+func (f *fakeMutableKV) Update(_ context.Context, key string, value []byte, revision uint64) (uint64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stored, ok := f.revisions[key]
+	if !ok {
+		return 0, jetstream.ErrKeyNotFound
+	}
+	if stored != revision {
+		return 0, jetstream.ErrKeyExists
+	}
+	f.entries[key] = append([]byte(nil), value...)
+	f.revisions[key]++
+	return f.revisions[key], nil
 }
 
 func (f *fakeMutableKV) Delete(_ context.Context, key string, _ ...jetstream.KVDeleteOpt) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.entries, key)
+	delete(f.revisions, key)
 	return nil
 }
 
@@ -102,14 +131,15 @@ func (l mutableLister) Keys() <-chan string { return l.ch }
 func (l mutableLister) Stop() error         { return nil }
 
 type mutableEntry struct {
-	key   string
-	value []byte
+	key      string
+	value    []byte
+	revision uint64
 }
 
 func (e mutableEntry) Bucket() string                  { return "" }
 func (e mutableEntry) Key() string                     { return e.key }
 func (e mutableEntry) Value() []byte                   { return e.value }
-func (e mutableEntry) Revision() uint64                { return 1 }
+func (e mutableEntry) Revision() uint64                { return e.revision }
 func (e mutableEntry) Created() time.Time              { return time.Time{} }
 func (e mutableEntry) Delta() uint64                   { return 0 }
 func (e mutableEntry) Operation() jetstream.KeyValueOp { return jetstream.KeyValuePut }
@@ -1226,20 +1256,11 @@ func TestSpawnAgentClaudeSeedCopyOnSpawnReusesExistingVolume(t *testing.T) {
 	}
 	deps.Templates = tplKV
 
-	// Patch the fake so EnsureVolume reports "already exists" for any
-	// name beginning with the canonical prefix. Equivalent to a prior
-	// spawn having populated the volume.
-	vols.mu.Lock()
-	// We can't predict the UUID — pre-seed by intercepting EnsureVolume
-	// via a wrapping closure isn't supported; instead, we run the spawn
-	// once, then a second time (but the second spawn allocates a fresh
-	// agent UUID). So we have to set the volume name AFTER first spawn
-	// runs. Simpler: just mark the test as exercising one happy path
-	// where EnsureVolume returns false (existing) — do that by setting
-	// a known name and patching the helper. To keep this test focused,
-	// we'll directly use the buildClaudeSeedMount path: assert that
-	// when EnsureVolume reports existing=false, populate is not called.
-	vols.mu.Unlock()
+	// Test patches EnsureVolume via the fake's existing[<vol>] map
+	// further down; the no-op critical section above was a mid-thought
+	// vestige (Lock immediately followed by Unlock with only comments
+	// between). Removed to clear staticcheck SA2001 — the patch happens
+	// at the matching block below.
 
 	// Reset and pre-seed one canonical UUID via a known agent name +
 	// double spawn pattern: spawn once, archive (releases name), set

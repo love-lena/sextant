@@ -35,6 +35,31 @@ type PromptPayload struct {
 	From    string `json:"from,omitempty"`
 }
 
+// promptUnreachableMessage formats the operator-facing error body when
+// prompt_agent refuses because the agent's lifecycle isn't running.
+// Includes the remedy command for terminal lifecycles so the CLI can
+// pass-through to the operator without rewording.
+func promptUnreachableMessage(agentID uuid.UUID, lifecycle sextantproto.LifecycleState) string {
+	switch lifecycle {
+	case sextantproto.LifecycleEndedState, sextantproto.LifecycleCrashedState:
+		return fmt.Sprintf("agent %s lifecycle=%s; restart with `sextant agents restart %s`",
+			agentID, lifecycle, agentID)
+	case sextantproto.LifecyclePaused:
+		// No daemon-side resume_agent RPC exists today; restart is the
+		// only recovery path that maps to a real command. See
+		// [[feat-agents-resume-verb]] if true resume support is wanted.
+		return fmt.Sprintf("agent %s lifecycle=paused; restart with `sextant agents restart %s`",
+			agentID, agentID)
+	case sextantproto.LifecycleArchived:
+		return fmt.Sprintf("agent %s lifecycle=archived; spawn a new agent instead", agentID)
+	case sextantproto.LifecycleDefined:
+		return fmt.Sprintf("agent %s lifecycle=defined; start with `sextant agents restart %s`",
+			agentID, agentID)
+	default:
+		return fmt.Sprintf("agent %s lifecycle=%s, want running", agentID, lifecycle)
+	}
+}
+
 // NewPromptAgent returns a Handler for the prompt_agent verb. Flow:
 //
 //  1. Decode args.
@@ -75,8 +100,8 @@ func NewPromptAgent(deps PromptDeps) rpc.Handler {
 				fmt.Sprintf("decode definition: %v", err))
 		}
 		if def.Lifecycle != sextantproto.LifecycleRunning {
-			return emitErr(emit, sextantproto.ErrCodeBadRequest,
-				fmt.Sprintf("agent %s lifecycle = %s, want running", args.AgentID, def.Lifecycle))
+			return emitErr(emit, sextantproto.ErrCodeAgentNotReachable,
+				promptUnreachableMessage(args.AgentID, def.Lifecycle))
 		}
 
 		payload := PromptPayload{

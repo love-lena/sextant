@@ -54,7 +54,18 @@ func (d *daemon) startRPC(ctx context.Context) (*rpcRuntime, error) {
 		return nil, fmt.Errorf("rpc: no live ClickHouse server")
 	}
 
-	nc, err := natsSrv.Connect()
+	// Reconnect-capable so the RPC server (and the spawn-runtime + control
+	// surfaces that share this conn) survives a NATS restart. Without
+	// reconnect, a NATS crash during startup (or any time) leaves every
+	// downstream Put/Subscribe on this conn permanently broken — see
+	// plans/issues/bug-flake-daemon-restarts-nats-after-kill.md for the
+	// failure shape this guards against. Knobs match pkg/client and the
+	// shared-concerns spec.
+	nc, err := natsSrv.Connect(
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(500*time.Millisecond),
+		nats.ReconnectJitter(100*time.Millisecond, 500*time.Millisecond),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("rpc: operator nats connect: %w", err)
 	}

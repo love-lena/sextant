@@ -1,8 +1,9 @@
 ---
 title: sextant tail needs a --for / --duration flag for bounded subscriptions
-status: open
+status: fixed
 priority: P3
 created_at: 2026-05-26T15:05-07:00
+fixed_in: (next commit)
 labels: [feature, cli, ergonomics]
 discovered_in: chat TUI Checkpoint C debugging — wanted to capture a 3-second window of agent envelopes without Ctrl+C-ing
 ---

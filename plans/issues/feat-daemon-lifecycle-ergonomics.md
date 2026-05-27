@@ -1,11 +1,32 @@
 ---
 title: Make startup / restart / upgrade safe and obvious by default
-status: open
+status: resolved
 priority: P2
 created_at: 2026-05-25T18:16-07:00
+resolved_at: 2026-05-26T22:35-07:00
 labels: [feature, ergonomics, sextantd, doctor, init, ops]
 discovered_in: operator session — `conversation` was empty because `sextantd` wasn't running; surfacing the cause and recovery path took longer than it should have
 ---
+
+## Resolution
+
+All five sub-items landed during the 2026-05-25/26 bootstrap-onboarding push. Mapping to commits:
+
+1. **`init` clarity** — `cmd/sextant/init.go` ships `--check` (read-only dry-run), a single-line summary, and outcome-tagged checks (`outcomeOK` / `outcomeWouldWrite` / `outcomeWouldError`). Commit `df258a6`, merged via `e85c370`.
+
+2. **`sextantd` always-on log** — daemon tees output to `<data_dir>/sextantd.log` on every start. Commit `31c5fe9`, merged via `cd26720`.
+
+3. **`sextantd` double-start guard + `--restart`** — daemon refuses to start when a healthy one is up, cycles cleanly with `--restart`. Commit `96f408f`, merged via `91ba592`.
+
+4. **`sextant start/stop/restart/status/logs`** — operator-facing wrappers shipped in `cmd/sextant/{start,stop,restart,status,logs}.go` as part of the bootstrap track.
+
+   4a. **Zombie / orphan detection** — `findOrphanSextantd` in `cmd/sextant/daemon_lifecycle.go` scans the process table for full-path matches and refuses start / sweeps on stop. Tests in `daemon_lifecycle_test.go`.
+
+5. **`doctor` remedies** — `cmd/sextant/doctor.go` annotates failing rows with `Fix:` lines and tags each check with a stable `remedy_id` for `--json` consumers. Commit `f5d6939`, merged via `bd9ef0d`.
+
+The five PRs landed as separate worktree merges from the parallel implementation push; the full audit trail is in `plans/feat-daemon-lifecycle-ergonomics-impl/` if a reader needs the per-track context.
+
+Cobra migration ([[feat-cli-cobra-fang-migration]]) will re-shape some of these surfaces (`sextant start` → `sextant daemon start` per [[feat-cli-resource-verb-cleanup]]), but the underlying capability set this ticket asked for is in place.
 
 ## Summary
 

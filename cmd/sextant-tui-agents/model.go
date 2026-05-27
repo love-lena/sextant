@@ -53,7 +53,7 @@ type agentBus interface {
 type model struct {
 	bus      agentBus
 	operator string
-	th       theme
+	th       localTheme
 
 	agents    []sextantproto.AgentSummary
 	cursor    int

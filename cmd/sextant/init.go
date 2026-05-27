@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -12,56 +11,55 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/spf13/cobra"
+
 	"github.com/love-lena/sextant/pkg/authjwt"
 	"github.com/love-lena/sextant/pkg/sextantd"
 )
 
-// runInit implements `sextant init`. Idempotent — each step inspects the
+// newInitCmd wires `sextant init`. Idempotent — each step inspects the
 // filesystem first and skips when state is already correct. `--force`
 // re-generates every file (CA included, which DESTROYS already-issued
 // JWTs; the prompt is on the operator). `--check` is a read-only dry
 // run that exits non-zero if the install is incomplete.
-func runInit(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("sextant init", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	configDir := fs.String("config-dir", "", "config directory (default ~/.config/sextant)")
-	dataDir := fs.String("data-dir", "", "data directory (default ~/.local/share/sextant)")
-	force := fs.Bool("force", false, "regenerate every file even if present")
-	check := fs.Bool("check", false, "dry-run: report what init would do without writing")
-	help := fs.Bool("help", false, "print help")
-	if err := fs.Parse(args); err != nil {
-		return errUserUsage(fmt.Sprintf("parse flags: %v", err))
-	}
-	if *help {
-		fmt.Println(initUsage)
-		return nil
-	}
-	if *force && *check {
-		return errUserUsage("--force and --check are mutually exclusive")
-	}
-
-	cfgPath, dataPath, err := resolveInitPaths(*configDir, *dataDir)
-	if err != nil {
-		return err
-	}
-	return doInit(ctx, os.Stdout, initOptions{
-		ConfigDir: cfgPath,
-		DataDir:   dataPath,
-		Force:     *force,
-		Check:     *check,
-	})
-}
-
-const initUsage = `usage: sextant init [--config-dir PATH] [--data-dir PATH] [--force] [--check]
-
-Creates the config and data directories, generates the signing CA, writes
-sextantd.toml + client.toml + operator.creds, and seeds default templates.
+//
+// init is a top-level singleton per `feat-cli-resource-verb-cleanup`
+// (verb on the sextant install itself, not a resource noun).
+func newInitCmd() *cobra.Command {
+	var force, check bool
+	cmd := &cobra.Command{
+		Use:   "init",
+		Short: "First-run setup: CA + config + data dirs + default template",
+		Long: `Creates the config and data directories, generates the signing CA,
+writes sextantd.toml + client.toml + operator.creds, and seeds default
+templates.
 
 Re-running is idempotent: every step skips when state is already correct.
 --force regenerates every file, including the CA (which invalidates any
 JWTs already issued).
 --check is a read-only dry-run; exit 0 if everything is in place, exit 2
-if any file is missing or broken. Useful for CI and pre-flight checks.`
+if any file is missing or broken. Useful for CI and pre-flight checks.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if force && check {
+				return errUserUsage("--force and --check are mutually exclusive")
+			}
+			cfgPath, dataPath, err := resolveInitPaths(globalFlags.configDir, globalFlags.dataDir)
+			if err != nil {
+				return err
+			}
+			return doInit(cmd.Context(), cmd.OutOrStdout(), initOptions{
+				ConfigDir: cfgPath,
+				DataDir:   dataPath,
+				Force:     force,
+				Check:     check,
+			})
+		},
+	}
+	cmd.Flags().BoolVar(&force, "force", false, "regenerate every file even if present")
+	cmd.Flags().BoolVar(&check, "check", false, "dry-run: report what init would do without writing")
+	return cmd
+}
 
 type initOptions struct {
 	ConfigDir string

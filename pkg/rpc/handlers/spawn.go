@@ -55,6 +55,14 @@ const (
 type AgentMutableKV interface {
 	AgentKV
 	Put(ctx context.Context, key string, value []byte) (uint64, error)
+	// Update is the CAS write: writes value when the entry's last
+	// revision matches `revision`. Real jetstream.KeyValue returns
+	// jetstream.ErrKeyExists on revision mismatch; handlers should
+	// treat that as "concurrent writer slipped in" and re-read +
+	// re-apply their guards before retrying. Used by restart_agent
+	// to close the restart-vs-archive race the Codex adversarial
+	// review caught.
+	Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error)
 	Delete(ctx context.Context, key string, opts ...jetstream.KVDeleteOpt) error
 }
 
@@ -220,11 +228,12 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 				Mounts: append([]string(nil), tpl.Mounts...),
 				Env:    cloneStringMap(tpl.Env),
 			},
-			Tools:     append([]string(nil), tpl.Permissions...),
-			Lifecycle: sextantproto.LifecycleDefined,
-			Version:   1,
-			CreatedAt: sextantproto.AtTimestamp(now),
-			UpdatedAt: sextantproto.AtTimestamp(now),
+			Tools:                append([]string(nil), tpl.Permissions...),
+			Lifecycle:            sextantproto.LifecycleDefined,
+			CurrentIncarnationID: incID,
+			Version:              1,
+			CreatedAt:            sextantproto.AtTimestamp(now),
+			UpdatedAt:            sextantproto.AtTimestamp(now),
 		}
 		if hostPin != "" {
 			pin := hostPin
@@ -806,7 +815,10 @@ func buildClaudeSeedMount(ctx context.Context, deps SpawnDeps, mode, seedPath st
 		if created {
 			// Only roll back the volume when we created it. Re-attaching
 			// an existing volume is a no-op for the caller; deleting it
-			// would destroy the agent's accumulated state.
+			// would destroy the agent's accumulated state. Rollback runs
+			// after the outer spawn ctx may have been cancelled, so the
+			// timeout context derives from Background by design.
+			//nolint:contextcheck // rollback against fresh ctx is intentional
 			cleanup = func() {
 				rbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()

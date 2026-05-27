@@ -1,8 +1,9 @@
 ---
 title: Chat TUI header should show a lifecycle status dot
-status: open
+status: fixed
 priority: P2
 created_at: 2026-05-26T15:05-07:00
+fixed_in: (next commit)
 labels: [feature, tui, chat, operator-experience]
 discovered_in: chat TUI Checkpoint C — operator opened the chat for a dead agent and got no signal; original spec listed this as a header element that we deferred to post-MVP
 ---
