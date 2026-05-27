@@ -1,18 +1,25 @@
-// sextant is the operator CLI. M5 shipped two subcommands: `init`
-// (first-run setup) and `doctor` (health diagnostics). Additional
-// verbs (agents, conversation, files, ...) landed in M11 and M12.
+// sextant is the operator CLI. Built on Cobra (command structure) with
+// Fang styling help/errors/version, and charmbracelet/log driving the
+// user-facing + diagnostic loggers.
 //
-// Plan: plans/bootstrap.md#M5
+// Plan: plans/bootstrap.md#M5 (initial scaffold), then
+// plans/issues/feat-cli-cobra-fang-migration.md (framework migration)
+// and plans/issues/feat-cli-resource-verb-cleanup.md (resource-verb
+// shape + new daemon/events nouns).
 package main
 
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/charmbracelet/fang"
+
+	"github.com/love-lena/sextant/pkg/version"
 )
 
 func main() {
@@ -23,112 +30,42 @@ func mainErr() int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	if err := run(ctx, os.Args[1:]); err != nil {
-		// --help / -h on any subcommand bubbles up as flag.ErrHelp.
-		// The subcommand's fs.Usage already printed its help text;
-		// exit cleanly with no error decoration.
-		if errors.Is(err, flag.ErrHelp) {
-			return exitOK
-		}
-		// `sextant exec` writes its own stdout/stderr verbatim; we
-		// shouldn't add a "sextant: command exited with code N" line on
-		// top — that would make shell pipelines noisy. Similarly,
-		// `sextant status` writes its own "daemon: not running" line to
-		// stdout and only returns the sentinel error to drive the exit
-		// code — no extra stderr line needed.
-		var ec *exitCodeError
-		switch {
-		case errors.As(err, &ec), isStatusNotRunningErr(err):
-		default:
-			printf(os.Stderr, "sextant: %v\n", err)
-		}
-		return exitCodeFor(err)
+	root := newRootCmd()
+
+	opts := []fang.Option{
+		fang.WithVersion(version.String()),
+		fang.WithErrorHandler(errorBanner),
 	}
-	return exitOK
+	if version.GitSHA != "" {
+		opts = append(opts, fang.WithCommit(version.GitSHA))
+	}
+
+	err := fang.Execute(ctx, root, opts...)
+	return exitCodeFor(err)
 }
 
-func run(ctx context.Context, args []string) error {
-	if len(args) == 0 {
-		printUsage(os.Stderr)
-		return errUserUsage("missing subcommand")
+// errorBanner is Fang's WithErrorHandler — it controls whether a final
+// "Error: <msg>" line is rendered. Verbs that print their own user-facing
+// failure (status's "daemon: not running", exec's verbatim pass-through)
+// suppress the banner so output stays clean. Everything else falls back
+// to a simple `sextant: <err>` line on stderr, matching the pre-cobra
+// behavior.
+func errorBanner(w io.Writer, _ fang.Styles, err error) {
+	if err == nil {
+		return
 	}
-	cmd, rest := args[0], args[1:]
-	switch cmd {
-	case "init":
-		return runInit(ctx, rest)
-	case "doctor":
-		return runDoctor(ctx, rest)
-	case "start":
-		return runStart(ctx, rest)
-	case "stop":
-		return runStop(ctx, rest)
-	case "restart":
-		return runRestart(ctx, rest)
-	case "status":
-		return runStatus(ctx, rest)
-	case "logs":
-		return runLogs(ctx, rest)
-	case "agents":
-		return runAgents(ctx, rest)
-	case "conversation":
-		return runConversation(ctx, rest)
-	case "ask":
-		return runAsk(ctx, rest)
-	case "pending":
-		return runPending(ctx, rest)
-	case "files":
-		return runFiles(ctx, rest)
-	case "exec":
-		return runExec(ctx, rest)
-	case "audit":
-		return runAudit(ctx, rest)
-	case "tail":
-		return runTail(ctx, rest)
-	case "traces":
-		return runTraces(ctx, rest)
-	case "worktree":
-		return runWorktree(ctx, rest)
-	case "templates":
-		return runTemplates(ctx, rest)
-	case "-h", "--help", "help":
-		printUsage(os.Stdout)
-		return nil
-	case "--version", "version":
-		fmt.Println("sextant (M12)")
-		return nil
-	default:
-		printUsage(os.Stderr)
-		return errUserUsage(fmt.Sprintf("unknown subcommand %q", cmd))
+	if shouldSuppressErrorBanner(err) {
+		return
 	}
+	if errors.Is(err, errSilentExit) {
+		return
+	}
+	_, _ = fmt.Fprintf(w, "sextant: %s\n", err.Error())
 }
 
-func printUsage(w *os.File) {
-	println(w, `usage: sextant <subcommand> [args...]
-
-Subcommands:
-  init          First-run setup: CA + config + data dirs + default template.
-  doctor        Health diagnostics for sextantd, NATS, ClickHouse, config.
-  start         Detach sextantd and wait for runtime.json to appear.
-  stop          SIGTERM the daemon and wait for graceful shutdown.
-  restart       Stop then start (with transition prints).
-  status        Print daemon liveness + subprocess pids/addrs.
-  logs          Print or follow the daemon log file.
-  agents        Agent operations (list|show|spawn|kill|restart|prompt).
-  conversation  Stream agent frames in human-readable form.
-  ask           Send one prompt + wait for the turn to finish.
-  pending       List/answer/defer/escalate user-input requests.
-  files         Read/list/tail files in an agent's container.
-  exec          Run a command in an agent's container.
-  audit         Query or tail the audit log.
-  tail          Subscribe to an arbitrary NATS subject (wildcards OK).
-  traces        Render a distributed trace by trace_id.
-  worktree      Manage agent worktrees (list|create|destroy|merge|diff).
-  templates     Manage agent templates (reload).
-  help          Print this message.
-  version       Print the sextant version.
-
-Run "sextant <subcommand> --help" for per-subcommand flags.`)
-}
+// errSilentExit is a sentinel used by commands that already printed
+// their own user-facing failure and want main() to skip the banner.
+var errSilentExit = errors.New("silent exit")
 
 // Exit codes per specs/cli/commands.md.
 const (
@@ -137,36 +74,10 @@ const (
 	exitSystem = 2
 )
 
+// usageError carries a free-form user-error message. main() inspects via
+// errors.As to map it to exit code 1.
 type usageError string
 
 func (e usageError) Error() string { return string(e) }
 
 func errUserUsage(msg string) error { return usageError(msg) }
-
-func exitCodeFor(err error) int {
-	if err == nil {
-		return exitOK
-	}
-	// `sextant exec` surfaces the container exec's exit code via
-	// exitCodeError so shell pipelines see the same exit status they
-	// would running the command directly.
-	var ec *exitCodeError
-	if errors.As(err, &ec) {
-		return ec.code
-	}
-	var ue usageError
-	if errors.As(err, &ue) {
-		return exitUser
-	}
-	// `sextant status` uses exit 1 ("not running") to distinguish a
-	// dead daemon from a real system error (exit 2). The spec calls for
-	// this so supervisor scripts can branch on the exit code.
-	if isStatusNotRunningErr(err) {
-		return exitUser
-	}
-	// Bubble doctor's wrapped sentinel up.
-	if isDoctorFailureErr(err) {
-		return exitSystem
-	}
-	return exitSystem
-}

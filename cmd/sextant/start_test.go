@@ -116,8 +116,8 @@ func TestStart_RefusesWhenOrphanDetected(t *testing.T) {
 	if !strings.Contains(out, fmt.Sprintf("pid %d", fakePID)) {
 		t.Errorf("stdout missing fake pid %d:\n%s", fakePID, out)
 	}
-	if !strings.Contains(out, "sextant stop") {
-		t.Errorf("stdout should point at 'sextant stop' remedy:\n%s", out)
+	if !strings.Contains(out, "sextant daemon stop") {
+		t.Errorf("stdout should point at 'sextant daemon stop' remedy:\n%s", out)
 	}
 }
 
