@@ -17,7 +17,7 @@ func TestFrameMsgAppendsTurn(t *testing.T) {
 		Body:      map[string]any{"text": "hi from agent"},
 	}}
 	next, _ := m.Update(msg)
-	mm := next.(Model)
+	mm := next.(*Model)
 	if got := len(mm.Turns()); got != 1 {
 		t.Fatalf("turn count: want 1, got %d", got)
 	}
@@ -37,7 +37,7 @@ func TestFrameMsgHoldsSelectionWhenScrolledUp(t *testing.T) {
 	t0 := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
 	msg := frameMsg{Frame: Frame{Ts: t0, FrameKind: sextantproto.FrameAssistantText, Body: map[string]any{"text": "later"}}}
 	next, _ := m.Update(msg)
-	mm := next.(Model)
+	mm := next.(*Model)
 	if mm.Selection() != 1 {
 		t.Errorf("selection moved: want 1, got %d", mm.Selection())
 	}
@@ -55,7 +55,7 @@ func TestFrameMsgAdvancesSelectionWhenAtBottom(t *testing.T) {
 	t0 := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
 	msg := frameMsg{Frame: Frame{Ts: t0, FrameKind: sextantproto.FrameAssistantText, Body: map[string]any{"text": "next"}}}
 	next, _ := m.Update(msg)
-	mm := next.(Model)
+	mm := next.(*Model)
 	if mm.Selection() != prev+1 {
 		t.Errorf("auto-tail: want %d, got %d", prev+1, mm.Selection())
 	}

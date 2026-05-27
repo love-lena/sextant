@@ -30,12 +30,12 @@ func mkKey(s string) tea.KeyMsg {
 }
 
 // applyKey is a test helper: feed a key to the model and return the new model.
-func applyKey(t *testing.T, m Model, k tea.KeyMsg) Model {
+func applyKey(t *testing.T, m *Model, k tea.KeyMsg) *Model {
 	t.Helper()
 	next, _ := m.Update(k)
-	mm, ok := next.(Model)
+	mm, ok := next.(*Model)
 	if !ok {
-		t.Fatalf("Update returned non-Model: %T", next)
+		t.Fatalf("Update returned non-*Model: %T", next)
 	}
 	return mm
 }
@@ -47,8 +47,8 @@ func TestModelInitDefaultsToNormalOnComposer(t *testing.T) {
 	if m.Mode() != ModeNormal {
 		t.Errorf("mode: want NORMAL, got %v", m.Mode())
 	}
-	if m.Focus() != FocusComposer {
-		t.Errorf("focus: want FocusComposer, got %v", m.Focus())
+	if m.FocusArea() != FocusComposer {
+		t.Errorf("focus: want FocusComposer, got %v", m.FocusArea())
 	}
 }
 
@@ -57,8 +57,8 @@ func TestNormalJK_StepsSelection(t *testing.T) {
 	m := New(Options{AgentName: "alice"}).WithTurns(seedTurns())
 	// Default is FocusComposer; first k moves to FocusStream at last turn.
 	m = applyKey(t, m, mkKey("k")) // FocusComposer → FocusStream, sel=3 (last)
-	if m.Focus() != FocusStream {
-		t.Fatalf("setup: want FocusStream after first k, got %v", m.Focus())
+	if m.FocusArea() != FocusStream {
+		t.Fatalf("setup: want FocusStream after first k, got %v", m.FocusArea())
 	}
 	m = applyKey(t, m, mkKey("k")) // sel 3→2
 	if got := m.Selection(); got != 2 {
@@ -83,12 +83,12 @@ func TestNormalJ_OnLastTurnEntersFocusComposer(t *testing.T) {
 	t.Parallel()
 	m := New(Options{AgentName: "alice"}).WithTurns(seedTurns())
 	m = applyKey(t, m, mkKey("k")) // FocusComposer → FocusStream, sel=last
-	if m.Focus() != FocusStream {
-		t.Fatalf("setup: focus should be stream, got %v", m.Focus())
+	if m.FocusArea() != FocusStream {
+		t.Fatalf("setup: focus should be stream, got %v", m.FocusArea())
 	}
 	m = applyKey(t, m, mkKey("j")) // j past last → composer
-	if m.Focus() != FocusComposer {
-		t.Errorf("after j past last: want FocusComposer, got %v", m.Focus())
+	if m.FocusArea() != FocusComposer {
+		t.Errorf("after j past last: want FocusComposer, got %v", m.FocusArea())
 	}
 }
 
@@ -97,8 +97,8 @@ func TestNormalK_OnComposerEntersStreamAtLast(t *testing.T) {
 	m := New(Options{AgentName: "alice"}).WithTurns(seedTurns())
 	// default: FocusComposer
 	m = applyKey(t, m, mkKey("k"))
-	if m.Focus() != FocusStream {
-		t.Errorf("after k from composer: want FocusStream, got %v", m.Focus())
+	if m.FocusArea() != FocusStream {
+		t.Errorf("after k from composer: want FocusStream, got %v", m.FocusArea())
 	}
 	if m.Selection() != len(seedTurns())-1 {
 		t.Errorf("selection: want %d, got %d", len(seedTurns())-1, m.Selection())
@@ -144,8 +144,8 @@ func TestInsertEsc_ReturnsToNormalPreservingDraft(t *testing.T) {
 		t.Errorf("draft preserved: want %q, got %q", "hold on", got)
 	}
 	// Esc restores the snapshot: came from FocusComposer → returns there.
-	if m.Focus() != FocusComposer {
-		t.Errorf("after esc with no prior turn navigation: want FocusComposer, got %v", m.Focus())
+	if m.FocusArea() != FocusComposer {
+		t.Errorf("after esc with no prior turn navigation: want FocusComposer, got %v", m.FocusArea())
 	}
 	// Re-enter INSERT and append more
 	m = applyKey(t, m, mkKey("i"))
@@ -168,8 +168,8 @@ func TestEscRestoresFocusStreamWhenPriorWasStream(t *testing.T) {
 		m = applyKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
 	m = applyKey(t, m, mkKey("esc"))
-	if m.Focus() != FocusStream {
-		t.Errorf("focus: want FocusStream, got %v", m.Focus())
+	if m.FocusArea() != FocusStream {
+		t.Errorf("focus: want FocusStream, got %v", m.FocusArea())
 	}
 	if m.Selection() != priorSel {
 		t.Errorf("selection: want %d (restored), got %d", priorSel, m.Selection())
@@ -220,8 +220,8 @@ func TestInsertEnter_SendsDraftAndBouncesToNormal(t *testing.T) {
 	if m.Selection() != len(turns)-1 {
 		t.Errorf("selection: want %d, got %d", len(turns)-1, m.Selection())
 	}
-	if m.Focus() != FocusStream {
-		t.Errorf("after send: want FocusStream, got %v", m.Focus())
+	if m.FocusArea() != FocusStream {
+		t.Errorf("after send: want FocusStream, got %v", m.FocusArea())
 	}
 }
 
@@ -249,7 +249,8 @@ func TestChatTUIReadModeDisallowsInsert(t *testing.T) {
 	if m.Mode() != ModeNormal {
 		t.Errorf("read mode after i: want NORMAL, got %v", m.Mode())
 	}
-	out := m.View()
+	// READ pill lives in the host's status bar — render via Standalone.
+	out := renderStandalone(m, 80, 24)
 	if !strings.Contains(out, "READ") {
 		t.Errorf("status bar missing READ pill: %q", out)
 	}

@@ -77,8 +77,13 @@ func main() {
 	turns := chat.FramesToTurns(frames)
 
 	m := chat.New(chat.Options{AgentName: "alice", Branch: "main", Read: *read}).WithTurns(turns)
+	// Wrap with the Standalone host so the preview renders the same
+	// chrome (header + status bar) as the production sextant
+	// conversation flow. Pre-refactor the chrome lived inside
+	// Model.View; post-refactor it lives on Standalone.
+	standalone := chat.NewStandalone(m)
 
-	prog := tea.NewProgram(m, tea.WithAltScreen())
+	prog := tea.NewProgram(standalone, tea.WithAltScreen())
 	if _, err := prog.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "preview: %v\n", err)
 		os.Exit(1)
