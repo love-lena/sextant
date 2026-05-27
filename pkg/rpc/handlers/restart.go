@@ -267,11 +267,18 @@ func NewRestartAgent(deps RestartDeps) rpc.Handler {
 				fmt.Sprintf("persist new incarnation: %v", err))
 		}
 
-		// 6. Bump the definition version. SEXTANT_SESSION_ID was
-		// forwarded above when args.PreserveSession is true; the
-		// sidecar's session-id capture path persists any new session id
-		// it observes back onto def.Runtime.SessionID via CAS.
+		// 6. Bump the definition version + record the new live
+		// incarnation. CurrentIncarnationID is the authoritative anchor
+		// the lifecycle watcher gates stale-envelope filtering on —
+		// setting it here (before the new sidecar's `started` envelope
+		// reaches the bus) closes the restart-handoff race a delayed
+		// `ended` from the prior incarnation would otherwise win.
+		// SEXTANT_SESSION_ID was forwarded above when
+		// args.PreserveSession is true; the sidecar's session-id
+		// capture path persists any new session id it observes back
+		// onto def.Runtime.SessionID via CAS.
 		def.Lifecycle = sextantproto.LifecycleRunning
+		def.CurrentIncarnationID = newIncID
 		def.Version++
 		def.UpdatedAt = sextantproto.AtTimestamp(deps.Now().UTC())
 		if err := putJSON(ctx, deps.Definitions, def.UUID.String(), def); err != nil {

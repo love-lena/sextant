@@ -229,16 +229,45 @@ func TestLifecycleWatcherDropsStaleIncarnationTerminal(t *testing.T) {
 	id := uuid.New()
 	currentInc := uuid.New()
 	staleInc := uuid.New()
-	kv.seedDefinition(t, id, "iota", sextantproto.LifecycleRunning, 1)
+	// Authoritative state per the def: agent is running on currentInc.
+	// Mirrors what spawn / restart sets before the new sidecar's
+	// `started` reaches the bus.
+	kv.seedDefinitionWithIncarnation(t, id, "iota", sextantproto.LifecycleRunning, 1, currentInc)
 
 	w := &LifecycleWatcher{defs: kv}
-	// Record the current incarnation via a synthetic `started` envelope.
-	w.handle(envelopeForWithIncarnation(t, id, currentInc, sextantproto.LifecycleStarted))
-	// Now a stale `ended` from a prior incarnation arrives.
+	// A stale `ended` from a prior incarnation arrives.
 	w.handle(envelopeForWithIncarnation(t, id, staleInc, sextantproto.LifecycleEnded))
 
 	if got := kv.currentLifecycle(t, id); got != sextantproto.LifecycleRunning {
 		t.Errorf("Lifecycle = %q, want running (stale ended should have been dropped)", got)
+	}
+}
+
+// TestLifecycleWatcherClosesRestartHandoffRace exercises the exact
+// race Codex flagged on the third review: restart_agent persists the
+// new incarnation + Lifecycle=running BEFORE the new sidecar emits
+// its `started` envelope. If the old sidecar publishes its `ended`
+// during that handoff window, the watcher must drop it.
+//
+// In this test the def is seeded with the post-restart state (new
+// IncarnationID, Lifecycle=running). The stale ended from the prior
+// incarnation arrives; the watcher reads the def, sees the live
+// incarnation differs from the envelope's, and drops.
+func TestLifecycleWatcherClosesRestartHandoffRace(t *testing.T) {
+	kv := newFakeLifecycleKV()
+	id := uuid.New()
+	newIncID := uuid.New()
+	priorIncID := uuid.New()
+	kv.seedDefinitionWithIncarnation(t, id, "mu", sextantproto.LifecycleRunning, 5, newIncID)
+
+	w := &LifecycleWatcher{defs: kv}
+	// Old sidecar's delayed ended envelope arrives — gated on the def's
+	// CurrentIncarnationID, not on any in-memory map the watcher has
+	// not yet observed `started` for.
+	w.handle(envelopeForWithIncarnation(t, id, priorIncID, sextantproto.LifecycleEnded))
+
+	if got := kv.currentLifecycle(t, id); got != sextantproto.LifecycleRunning {
+		t.Errorf("Lifecycle = %q, want running (restart-handoff race must drop the stale ended)", got)
 	}
 }
 
@@ -248,10 +277,9 @@ func TestLifecycleWatcherAcceptsCurrentIncarnationTerminal(t *testing.T) {
 	kv := newFakeLifecycleKV()
 	id := uuid.New()
 	currentInc := uuid.New()
-	kv.seedDefinition(t, id, "kappa", sextantproto.LifecycleRunning, 1)
+	kv.seedDefinitionWithIncarnation(t, id, "kappa", sextantproto.LifecycleRunning, 1, currentInc)
 
 	w := &LifecycleWatcher{defs: kv}
-	w.handle(envelopeForWithIncarnation(t, id, currentInc, sextantproto.LifecycleStarted))
 	w.handle(envelopeForWithIncarnation(t, id, currentInc, sextantproto.LifecycleEnded))
 
 	if got := kv.currentLifecycle(t, id); got != sextantproto.LifecycleEndedState {
@@ -403,15 +431,25 @@ func (f *fakeLifecycleKV) writeCount() uint64 {
 
 func (f *fakeLifecycleKV) seedDefinition(t *testing.T, id uuid.UUID, name string, state sextantproto.LifecycleState, version uint64) {
 	t.Helper()
+	f.seedDefinitionWithIncarnation(t, id, name, state, version, uuid.Nil)
+}
+
+// seedDefinitionWithIncarnation seeds the agent record with an explicit
+// CurrentIncarnationID — used by tests that exercise the watcher's
+// stale-incarnation filter. The basic seedDefinition leaves it
+// zero-valued (warm-up case) so existing tests behave as before.
+func (f *fakeLifecycleKV) seedDefinitionWithIncarnation(t *testing.T, id uuid.UUID, name string, state sextantproto.LifecycleState, version uint64, incarnation uuid.UUID) {
+	t.Helper()
 	def := sextantproto.AgentDefinition{
-		UUID:      id,
-		Name:      name,
-		Type:      "assistant",
-		Template:  "default",
-		Lifecycle: state,
-		Version:   version,
-		CreatedAt: sextantproto.NowTimestamp(),
-		UpdatedAt: sextantproto.NowTimestamp(),
+		UUID:                 id,
+		Name:                 name,
+		Type:                 "assistant",
+		Template:             "default",
+		Lifecycle:            state,
+		CurrentIncarnationID: incarnation,
+		Version:              version,
+		CreatedAt:            sextantproto.NowTimestamp(),
+		UpdatedAt:            sextantproto.NowTimestamp(),
 	}
 	raw, err := json.Marshal(def)
 	if err != nil {

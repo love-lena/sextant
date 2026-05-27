@@ -220,11 +220,12 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 				Mounts: append([]string(nil), tpl.Mounts...),
 				Env:    cloneStringMap(tpl.Env),
 			},
-			Tools:     append([]string(nil), tpl.Permissions...),
-			Lifecycle: sextantproto.LifecycleDefined,
-			Version:   1,
-			CreatedAt: sextantproto.AtTimestamp(now),
-			UpdatedAt: sextantproto.AtTimestamp(now),
+			Tools:                append([]string(nil), tpl.Permissions...),
+			Lifecycle:            sextantproto.LifecycleDefined,
+			CurrentIncarnationID: incID,
+			Version:              1,
+			CreatedAt:            sextantproto.AtTimestamp(now),
+			UpdatedAt:            sextantproto.AtTimestamp(now),
 		}
 		if hostPin != "" {
 			pin := hostPin
