@@ -19,6 +19,7 @@ import (
 
 	"github.com/charmbracelet/fang"
 
+	"github.com/love-lena/sextant/pkg/cliout"
 	"github.com/love-lena/sextant/pkg/version"
 )
 
@@ -44,12 +45,20 @@ func mainErr() int {
 	return exitCodeFor(err)
 }
 
-// errorBanner is Fang's WithErrorHandler — it controls whether a final
-// "Error: <msg>" line is rendered. Verbs that print their own user-facing
-// failure (status's "daemon: not running", exec's verbatim pass-through)
-// suppress the banner so output stays clean. Everything else falls back
-// to a simple `sextant: <err>` line on stderr, matching the pre-cobra
-// behavior.
+// errorBanner is Fang's WithErrorHandler — it controls how the
+// failure surfaces on stderr. Two modes:
+//
+//   - Plain text (`sextant: <err>`) — the default human surface,
+//     matches pre-cobra behavior.
+//   - cliout error envelope (`{"error":{"code":..., "message":...}}`) —
+//     emitted when `globalFlags.asJSON` is set so `sextant <verb>
+//     --json` failures honor the same envelope contract the success
+//     path uses. Per the codex adversarial-review finding that flagged
+//     the bare-text path as a protocol break.
+//
+// Verbs that print their own user-facing failure (status's
+// "daemon: not running", exec's verbatim pass-through) suppress the
+// banner entirely so output stays clean.
 func errorBanner(w io.Writer, _ fang.Styles, err error) {
 	if err == nil {
 		return
@@ -58,6 +67,11 @@ func errorBanner(w io.Writer, _ fang.Styles, err error) {
 		return
 	}
 	if errors.Is(err, errSilentExit) {
+		return
+	}
+	if globalFlags.asJSON {
+		code, msg := mapErrorToCode(err)
+		_ = cliout.WriteErrorEnvelope(w, code, msg)
 		return
 	}
 	_, _ = fmt.Fprintf(w, "sextant: %s\n", err.Error())
