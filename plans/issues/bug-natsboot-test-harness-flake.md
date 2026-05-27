@@ -3,9 +3,13 @@ title: natsboot-backed integration tests fail with "nats: connection closed" ins
 status: open
 priority: P3
 created_at: 2026-05-26T22:00-07:00
-labels: [bug, test, natsboot, jetstream, observability]
+labels: [bug, test, natsboot, jetstream, observability, needs-input]
 discovered_in: writing TestLifecycleWatcherUpdatesAgentRecord — the natsboot harness boots, the test's own Put succeeds, but the watcher's NATS callback handler hits `nats: connection closed` on its Get against the same `defs jetstream.KeyValue` handle
 ---
+
+## Needs Lena's input
+
+The ticket lists four hypotheses for the failure mode — JetStream-from-NATS-dispatcher reentry, ctx capture in the JS KV handle, auth flap, concurrent goroutine. Picking which to investigate first (or whether to dodge the issue with a different harness shape) is a judgment call on engineering time vs. test-coverage value; the lifecycle watcher's behavior is already verified via the fake-KV unit test in `bug-agents-list-stale-lifecycle`.
 
 ## Summary
 

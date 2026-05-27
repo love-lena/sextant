@@ -3,9 +3,13 @@ title: images/sidecar/entrypoint's @sextant/client symlink is broken on main —
 status: open
 priority: P3
 created_at: 2026-05-26T22:25-07:00
-labels: [bug, sidecar, build, devx, ci]
+labels: [bug, sidecar, build, devx, ci, needs-input]
 discovered_in: writing the sidecar NATS reconnect fix — both `make lint-sidecar` and `make test-sidecar` fail on a clean main checkout with `Cannot find module '@sextant/client'`
 ---
+
+## Needs Lena's input
+
+The ticket body lays out three options (commit the bridge symlink, npm workspaces / tsconfig paths, file: dependency). Each has trade-offs that touch how contributors set up the repo, what CI does, and what `make bootstrap` runs. The right call depends on which tradeoffs you weight — the implementation is the easy part once the option is picked.
 
 ## Summary
 

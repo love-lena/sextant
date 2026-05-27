@@ -3,9 +3,13 @@ title: prompt_agent should refuse when sidecar heartbeat is stale (deeper safety
 status: open
 priority: P2
 created_at: 2026-05-26T22:30-07:00
-labels: [feature, daemon, rpc, resilience, operator-experience]
+labels: [feature, daemon, rpc, resilience, operator-experience, needs-input]
 discovered_in: follow-up from [[bug-prompt-agent-accepts-when-sidecar-gone]] — lifecycle check covers clean exits; heartbeat staleness covers kill-9 / OOM / host-crash cases that bypass the lifecycle publish
 ---
+
+## Needs Lena's input
+
+Two thresholds and one design choice in this ticket — `heartbeat_staleness_threshold` (default 30s), `heartbeat_startup_grace` (default 60s), and the "no heartbeat yet during startup grace → trust lifecycle" trade-off. The defaults are inherited from the parent ticket but have real operator consequences (a too-aggressive threshold flaps; a too-lax one misses kill-9). Worth a call before implementing.
 
 ## Summary
 

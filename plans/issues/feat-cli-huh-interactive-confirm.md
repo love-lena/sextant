@@ -3,9 +3,13 @@ title: Add Huh interactive confirmation to destructive verbs (TTY path)
 status: open
 priority: P3
 created_at: 2026-05-26T23:50-07:00
-labels: [feature, cli, safety, polish, charm]
+labels: [feature, cli, safety, polish, charm, needs-input]
 discovered_in: implementing feat-cli-destructive-op-flags — shipped --dry-run + --yes but skipped the TTY+Huh interactive confirm; charmbracelet/huh isn't in go.mod yet
 ---
+
+## Needs Lena's input
+
+`charmbracelet/huh` isn't in `go.mod` today — despite the cobra-fang migration's plan to add it. Pulling it in is a deliberate dependency decision (size, alternative confirm libraries, whether a hand-rolled prompt is enough). Implementation is mechanical once the call is made.
 
 ## Summary
 
