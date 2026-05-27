@@ -1,11 +1,16 @@
 ---
 title: Wire VHS tapes + --fixture flag + make screenshots so agents can iterate visually
-status: open
+status: in-progress
 priority: P3
 created_at: 2026-05-26T20:33-07:00
 labels: [feature, tui, testing, design-loop]
 discovered_in: CLI/TUI conventions adoption
 ---
+
+## Progress (2026-05-26)
+
+- **Done (commit `9717abf`):** `pkg/fixtures/` package shipped — Demo dataset (agents + transcripts + pending) and an in-memory `Bus` that serves it through the same interface methods TUI components consume from `*client.Client`. Tests in `pkg/fixtures/fixture_test.go`.
+- **Remaining:** `--fixture <name>` hidden flag wiring on TUI-entry commands (best landed under cobra migration); `tests/visual/*.tape` files; `make screenshots` Makefile target; migrate `cmd/sextant-tui-chat-preview/` to consume `pkg/fixtures/`; optional `.github/workflows/screenshots.yml`.
 
 ## Summary
 
