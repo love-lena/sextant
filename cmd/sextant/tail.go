@@ -17,9 +17,15 @@ import (
 )
 
 // runEventsTail wires the subscribe + stream. Called from the cobra
-// RunE in events.go.
-func runEventsTail(cmd *cobra.Command, subject string, fromSeq uint64) error {
+// RunE in events.go. If duration > 0, wraps ctx with WithTimeout so
+// the subscription exits cleanly at the deadline (--for flag).
+func runEventsTail(cmd *cobra.Command, subject string, fromSeq uint64, duration time.Duration) error {
 	ctx := cmd.Context()
+	if duration > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, duration)
+		defer cancel()
+	}
 	cli, _, err := connectAgent(ctx, globalFlags.configDir)
 	if err != nil {
 		return err
