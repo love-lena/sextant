@@ -98,8 +98,13 @@ func (m Model) renderStreamBox(width int) string {
 		insertAt := len(runes) - 5 - len([]rune(posStr))
 		if insertAt > 4 {
 			styled := m.styles.Muted.Render(posStr)
-			before := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(string(runes[:insertAt]))
-			after := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(string(runes[insertAt+len([]rune(posStr)):]))
+			// Surrounding border runes inherit the same muted/dim color
+			// as the position string so the overlay reads as part of the
+			// bottom border, not a contrasting label. Muted comes from
+			// the role-token table (pkg/theme); never bind a bare ANSI
+			// palette index here.
+			before := m.styles.Muted.Render(string(runes[:insertAt]))
+			after := m.styles.Muted.Render(string(runes[insertAt+len([]rune(posStr)):]))
 			lines[len(lines)-1] = before + styled + after
 			return strings.Join(lines, "\n")
 		}
