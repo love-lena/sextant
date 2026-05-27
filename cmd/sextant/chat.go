@@ -226,7 +226,9 @@ func askTimeoutError(timeout time.Duration, last sextantproto.LifecycleEvent, ag
 		return fmt.Errorf("%w: agent lifecycle=crashed; restart with `sextant agents restart %s`",
 			errAskTimeout, agentID)
 	case sextantproto.LifecyclePausedEvent:
-		return fmt.Errorf("%w: agent lifecycle=paused; resume with `sextant agents resume %s`",
+		// No `sextant agents resume` verb today — restart is the only
+		// real recovery. See [[feat-agents-resume-verb]] follow-up.
+		return fmt.Errorf("%w: agent lifecycle=paused; restart with `sextant agents restart %s`",
 			errAskTimeout, agentID)
 	case sextantproto.LifecycleArchivedEvent:
 		return fmt.Errorf("%w: agent lifecycle=archived; spawn a new agent instead",

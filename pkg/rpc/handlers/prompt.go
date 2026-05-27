@@ -45,7 +45,10 @@ func promptUnreachableMessage(agentID uuid.UUID, lifecycle sextantproto.Lifecycl
 		return fmt.Sprintf("agent %s lifecycle=%s; restart with `sextant agents restart %s`",
 			agentID, lifecycle, agentID)
 	case sextantproto.LifecyclePaused:
-		return fmt.Sprintf("agent %s lifecycle=paused; resume with `sextant agents resume %s`",
+		// No daemon-side resume_agent RPC exists today; restart is the
+		// only recovery path that maps to a real command. See
+		// [[feat-agents-resume-verb]] if true resume support is wanted.
+		return fmt.Sprintf("agent %s lifecycle=paused; restart with `sextant agents restart %s`",
 			agentID, agentID)
 	case sextantproto.LifecycleArchived:
 		return fmt.Sprintf("agent %s lifecycle=archived; spawn a new agent instead", agentID)
