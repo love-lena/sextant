@@ -14,25 +14,30 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/love-lena/sextant/pkg/client"
+	"github.com/love-lena/sextant/pkg/rpc"
 	"github.com/love-lena/sextant/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/tui/chat"
 )
 
-const conversationUsage = `usage: sextant conversation <agent_uuid> [--tail] [--from-seq N] [--json]
+const conversationUsage = `usage: sextant conversation <agent_uuid> [--tail] [--from-seq N] [--json] [--read]
 
-Stream agents.<uuid>.frames + agents.<uuid>.lifecycle in human-readable
-form. Lifecycle transitions (started, turn_ended, ended, …) are rendered
-inline so external tooling can tell when a turn finishes. Defaults to a
-forever-live tail; --tail exits on the next lifecycle.ended event for
-the same agent. --from-seq N resumes from the given JetStream stream
-sequence so the operator can pick up after a disconnect.`
+Open the modal chat TUI on agents.<uuid>.frames + agents.<uuid>.lifecycle.
+--json switches to the legacy NDJSON streamer (preserved byte-identical
+for piped consumers). --read opens the same TUI without a composer.
+--tail closes the window on the next lifecycle.ended event.`
 
 // runConversation — `sextant conversation <agent> [--tail] [--from-seq N]`.
 func runConversation(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("sextant conversation", flag.ContinueOnError)
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(os.Stdout, conversationUsage)
+	}
 	var tail bool
 	var fromSeq uint64
+	var read bool
 	fs.BoolVar(&tail, "tail", false, "exit on the next lifecycle.ended for this agent")
 	fs.Uint64Var(&fromSeq, "from-seq", 0, "resume from JetStream stream sequence N")
+	fs.BoolVar(&read, "read", false, "open the chat TUI without a composer (read-only)")
 	opts, rest, err := parseCommonOpts(fs, args)
 	if err != nil {
 		return err
@@ -41,15 +46,16 @@ func runConversation(ctx context.Context, args []string) error {
 		_, _ = fmt.Fprintln(os.Stderr, conversationUsage)
 		return errUserUsage("sextant conversation <agent_uuid>")
 	}
-	id, err := uuid.Parse(rest[0])
-	if err != nil {
-		return errUserUsage(fmt.Sprintf("agent_uuid: %v", err))
-	}
 	cli, _, err := connectAgent(ctx, opts.configDir)
 	if err != nil {
 		return err
 	}
 	defer cli.Close() //nolint:errcheck // best-effort close
+
+	id, err := resolveAgentRef(ctx, cli, rest[0])
+	if err != nil {
+		return errUserUsage(fmt.Sprintf("agent: %v", err))
+	}
 
 	subject := "agents." + id.String() + ".frames"
 
@@ -76,7 +82,7 @@ func runConversation(ctx context.Context, args []string) error {
 		return fmt.Errorf("subscribe lifecycle: %w", err)
 	}
 
-	return streamConversation(ctx, os.Stdout, frames, lifecycle, id, opts.asJSON, tail)
+	return runConversationDispatch(ctx, os.Stdout, cli, frames, lifecycle, id, read, opts.asJSON, tail)
 }
 
 // streamConversation is the testable core: it consumes the frames
@@ -239,3 +245,88 @@ func summarizeBody(body map[string]any) string {
 // _ keep the errors import alive for future helpers (currently the
 // streaming path doesn't directly use it).
 var _ = errors.New
+
+// chatRunnerIface lets tests substitute a fake for the heavy
+// bubbletea-bound runner. Production: chatRunnerFunc(realChatRun).
+type chatRunnerIface interface {
+	Run(
+		ctx context.Context,
+		w io.Writer,
+		cli *client.Client,
+		frames <-chan client.Message,
+		lifecycle <-chan client.Message,
+		id uuid.UUID,
+		read, asJSON, tail bool,
+	) error
+}
+
+type chatRunnerFunc func(
+	context.Context, io.Writer, *client.Client,
+	<-chan client.Message, <-chan client.Message,
+	uuid.UUID, bool, bool, bool,
+) error
+
+func (f chatRunnerFunc) Run(
+	ctx context.Context, w io.Writer, cli *client.Client,
+	frames <-chan client.Message, lifecycle <-chan client.Message,
+	id uuid.UUID, read, asJSON, tail bool,
+) error {
+	return f(ctx, w, cli, frames, lifecycle, id, read, asJSON, tail)
+}
+
+// chatRunner is the swappable seam. Tests overwrite it.
+var chatRunner chatRunnerIface = chatRunnerFunc(realChatRun)
+
+// realChatRun is the production dispatch into pkg/tui/chat.Run.
+func realChatRun(
+	ctx context.Context, _ io.Writer, cli *client.Client,
+	frames <-chan client.Message, lifecycle <-chan client.Message,
+	id uuid.UUID, read, _ bool, tail bool,
+) error {
+	// Resolve agent name via list_agents so the header shows the
+	// friendly name instead of the UUID. Best-effort — fall back to
+	// the UUID string if the lookup fails.
+	agentName := resolveAgentName(ctx, cli, id)
+
+	return chat.Run(chat.RunConfig{
+		Ctx:          ctx,
+		Bus:          chat.NewClientBus(cli),
+		AgentID:      id,
+		AgentName:    agentName,
+		Read:         read,
+		TailUntilEnd: tail,
+		Frames:       frames,
+		Lifecycle:    lifecycle,
+	})
+}
+
+// resolveAgentName best-effort fetches the friendly name for an agent
+// UUID via list_agents. Falls back to the UUID string if anything goes
+// wrong — the chat TUI still works, just with a less-friendly header.
+func resolveAgentName(ctx context.Context, cli *client.Client, id uuid.UUID) string {
+	lookup, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var resp sextantproto.ListAgentsResponse
+	if err := cli.RPC(lookup, rpc.VerbListAgents, sextantproto.ListAgentsRequest{}, &resp); err != nil {
+		return id.String()
+	}
+	for _, a := range resp.Agents {
+		if a.UUID == id {
+			return a.Name
+		}
+	}
+	return id.String()
+}
+
+// runConversationDispatch routes between the NDJSON streamer and the
+// chat TUI.
+func runConversationDispatch(
+	ctx context.Context, w io.Writer, cli *client.Client,
+	frames <-chan client.Message, lifecycle <-chan client.Message,
+	id uuid.UUID, read, asJSON, tail bool,
+) error {
+	if asJSON {
+		return streamConversation(ctx, w, frames, lifecycle, id, asJSON, tail)
+	}
+	return chatRunner.Run(ctx, w, cli, frames, lifecycle, id, read, asJSON, tail)
+}

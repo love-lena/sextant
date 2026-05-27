@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +15,96 @@ import (
 	"github.com/love-lena/sextant/pkg/client"
 	"github.com/love-lena/sextant/pkg/sextantproto"
 )
+
+// fakeChatRunner records the dispatch path so the test can assert
+// which branch runConversationDispatch took without booting bubbletea.
+type fakeChatRunner struct {
+	called int
+	read   bool
+}
+
+func (f *fakeChatRunner) Run(
+	_ context.Context,
+	_ io.Writer,
+	_ *client.Client,
+	_ <-chan client.Message,
+	_ <-chan client.Message,
+	_ uuid.UUID,
+	read, asJSON, _ bool,
+) error {
+	f.called++
+	f.read = read
+	if asJSON {
+		return errors.New("fakeChatRunner: asJSON should never reach here")
+	}
+	return nil
+}
+
+func TestSextantConversationLaunchesTUIByDefault(t *testing.T) {
+	prev := chatRunner
+	defer func() { chatRunner = prev }()
+	fake := &fakeChatRunner{}
+	chatRunner = fake
+
+	frames := make(chan client.Message)
+	lifecycle := make(chan client.Message)
+	close(frames)
+	close(lifecycle)
+
+	id := uuid.New()
+	err := runConversationDispatch(context.Background(), nil, nil, frames, lifecycle, id, false /*read*/, false /*asJSON*/, false /*tail*/)
+	if err != nil {
+		t.Fatalf("dispatch returned err: %v", err)
+	}
+	if fake.called != 1 {
+		t.Errorf("chat runner not called: %d", fake.called)
+	}
+	if fake.read {
+		t.Errorf("read flag should be false by default")
+	}
+}
+
+func TestSextantConversationJsonStaysOnNdjsonPath(t *testing.T) {
+	prev := chatRunner
+	defer func() { chatRunner = prev }()
+	fake := &fakeChatRunner{}
+	chatRunner = fake
+
+	frames := make(chan client.Message)
+	lifecycle := make(chan client.Message)
+	close(frames)
+	close(lifecycle)
+
+	id := uuid.New()
+	err := runConversationDispatch(context.Background(), io.Discard, nil, frames, lifecycle, id, false, true /*asJSON*/, false)
+	if err != nil {
+		t.Fatalf("dispatch err: %v", err)
+	}
+	if fake.called != 0 {
+		t.Errorf("chat runner should not be called for --json: called=%d", fake.called)
+	}
+}
+
+func TestSextantConversationReadPropagates(t *testing.T) {
+	prev := chatRunner
+	defer func() { chatRunner = prev }()
+	fake := &fakeChatRunner{}
+	chatRunner = fake
+
+	frames := make(chan client.Message)
+	lifecycle := make(chan client.Message)
+	close(frames)
+	close(lifecycle)
+
+	id := uuid.New()
+	err := runConversationDispatch(context.Background(), nil, nil, frames, lifecycle, id, true /*read*/, false, false)
+	if err != nil {
+		t.Fatalf("dispatch err: %v", err)
+	}
+	if !fake.read {
+		t.Errorf("read flag dropped")
+	}
+}
 
 // TestStreamConversationRendersAssistantText feeds one assistant_text
 // frame through the streaming core and asserts the rendered output

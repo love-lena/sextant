@@ -97,6 +97,13 @@ func parseCommonOpts(fs *flag.FlagSet, args []string) (commonOpts, []string, err
 	// which flags expect a value vs. which are booleans.
 	args = reorderFlagsBeforePositional(fs, args)
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			// --help/-h: caller's fs.Usage (or our wrapper around it) has
+			// already printed the usage. Pass ErrHelp up unwrapped so
+			// main.go can exit cleanly (code 0) instead of treating it
+			// as a parse failure.
+			return o, nil, err
+		}
 		return o, nil, errUserUsage(fmt.Sprintf("parse flags: %v", err))
 	}
 	return o, fs.Args(), nil

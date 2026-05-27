@@ -1,0 +1,316 @@
+package chat
+
+import (
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textarea"
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/love-lena/sextant/pkg/sextantproto"
+)
+
+// Mode is the modal state of the chat TUI. Spec §"MVP (Iteration 4 —
+// Modal)". The default is NORMAL; INSERT is unreachable in read mode.
+type Mode int
+
+const (
+	ModeNormal Mode = iota
+	ModeInsert
+)
+
+// Focus identifies which surface is currently "selected" in NORMAL mode:
+// either a turn in the stream, or the composer below it. Default at
+// startup is FocusComposer — chat opens compose-first.
+type Focus int
+
+const (
+	FocusStream Focus = iota
+	FocusComposer
+)
+
+// Options configure a chat Model. AgentName/Branch are header chrome;
+// Read disables INSERT (and hides the composer in view.go).
+type Options struct {
+	AgentName string
+	Branch    string
+	Read      bool
+}
+
+// SendFunc is the callback the model invokes when the operator hits
+// Enter in INSERT. The receiver is responsible for dispatching the
+// prompt_agent RPC; program.go wires this against pkg/client in T10.
+type SendFunc func(text string)
+
+// Model is the bubbletea reducer state. Use New to construct, then
+// WithTurns to seed any pre-existing transcript before passing to
+// tea.NewProgram.
+type Model struct {
+	opts           Options
+	mode           Mode
+	focus          Focus
+	savedFocus     Focus // snapshot of focus when entering INSERT
+	savedSelection int   // snapshot of selection when entering INSERT
+	turns          []Turn
+	selection      int
+	gPending       bool // first 'g' of 'gg' seen, waiting for the second
+	width          int
+	height         int
+	streamHeight   int // computed in Update(WindowSizeMsg); rows available inside the stream box
+	styles         Styles
+	keys           keyMap
+	composer       textarea.Model
+	send           SendFunc
+}
+
+// New returns a Model with default styles/keys, mode=NORMAL,
+// focus=FocusComposer (compose-first), selection=0.
+// In Read mode focus starts on FocusStream (no composer).
+func New(opts Options) Model {
+	ta := textarea.New()
+	ta.Placeholder = "press i to compose…"
+	ta.CharLimit = 0
+	ta.SetWidth(80)
+	ta.SetHeight(3)
+	ta.ShowLineNumbers = false
+	ta.Prompt = "▎ "
+	ta.Blur()
+	focus := FocusComposer
+	if opts.Read {
+		focus = FocusStream
+	}
+	return Model{
+		opts:     opts,
+		mode:     ModeNormal,
+		focus:    focus,
+		styles:   defaultStyles(),
+		keys:     defaultKeys(),
+		composer: ta,
+	}
+}
+
+// WithSendHook installs the callback invoked on INSERT-Enter. Returns
+// the model so callers can chain it with WithTurns.
+func (m Model) WithSendHook(fn SendFunc) Model {
+	m.send = fn
+	return m
+}
+
+// WithTurns seeds the transcript. Selection is set to the last turn
+// index (used when focus=FocusStream), but focus itself is left as-is
+// (FocusComposer by default from New, so callers open compose-first).
+func (m Model) WithTurns(turns []Turn) Model {
+	m.turns = turns
+	if len(turns) == 0 {
+		m.selection = 0
+	} else {
+		m.selection = len(turns) - 1
+	}
+	// focus is left as-is (FocusComposer by default from New).
+	return m
+}
+
+func (m Model) Mode() Mode     { return m.mode }
+func (m Model) Focus() Focus   { return m.focus }
+func (m Model) Selection() int { return m.selection }
+func (m Model) Turns() []Turn  { return m.turns }
+func (m Model) IsRead() bool   { return m.opts.Read }
+
+// Draft returns the current composer text. Exposed for tests.
+func (m Model) Draft() string { return m.composer.Value() }
+
+// Init returns no startup commands — frame subscription is wired by
+// program.go and seeded via WithSubscription (Task 8).
+func (m Model) Init() tea.Cmd { return nil }
+
+// Update is the reducer. Mode-aware dispatch: in NORMAL we handle vim-
+// flavored navigation; INSERT is handled by updateInsert.
+func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
+		// Reserve rows for the chrome around the stream:
+		//   2 — header line + thin rule below
+		//   2 — stream box top + bottom border
+		//   3 — composer box (top + content + bottom)
+		//   1 — blank line between composer and status bar
+		//   1 — status bar
+		//   ----
+		//  9  total for NORMAL/INSERT mode
+		//
+		// In READ mode the composer is hidden, saving 3 rows; the gap row
+		// remains so the status bar still floats. That's 6 reserved.
+		reserved := 9
+		if m.opts.Read {
+			reserved = 6
+		}
+		m.streamHeight = msg.Height - reserved
+		if m.streamHeight < 1 {
+			m.streamHeight = 1
+		}
+		m.composer.SetWidth(msg.Width)
+		return m, nil
+	case frameMsg:
+		// at-bottom: either on the last turn in FocusStream, or focused on
+		// the composer (which implies "not navigating; keep me caught up").
+		atBottom := (m.focus == FocusStream && (m.selection == len(m.turns)-1 || len(m.turns) == 0)) ||
+			m.focus == FocusComposer
+		// Synthesize a one-frame slice and feed it through the same
+		// collapser used at seed time. We append the produced turn(s)
+		// rather than rebuilding from scratch so existing turn objects
+		// (with their tool-call indices) stay stable.
+		newTurns := FramesToTurns(append(framesFromTurns(m.turns), msg.Frame))
+		grew := len(newTurns) > len(m.turns)
+		m.turns = newTurns
+		if grew && atBottom {
+			m.selection = len(m.turns) - 1
+		}
+		if m.selection > len(m.turns)-1 && len(m.turns) > 0 {
+			m.selection = len(m.turns) - 1
+		}
+		return m, nil
+	case lifecycleMsg:
+		// Status-bar hooks (live/paused) land here later. For MVP we
+		// just absorb the envelope; --tail close lives in program.go.
+		_ = msg
+		return m, nil
+	case subscriptionEndedMsg:
+		// Upstream channel closed — usually the daemon went away or the
+		// operator hit Ctrl-C. Treat as quit signal.
+		return m, tea.Quit
+	case tea.KeyMsg:
+		if m.mode == ModeInsert {
+			return m.updateInsert(msg)
+		}
+		return m.updateNormal(msg)
+	}
+	return m, nil
+}
+
+func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// 'gg' is two-key; clear the pending flag on anything else.
+	gPending := m.gPending
+	m.gPending = false
+	switch {
+	case key.Matches(msg, m.keys.NormalQuit):
+		return m, tea.Quit
+	case key.Matches(msg, m.keys.NormalDown):
+		if m.focus == FocusStream {
+			if m.selection < len(m.turns)-1 {
+				m.selection++
+			} else if !m.opts.Read {
+				// Step past last turn → composer focus (NORMAL mode only;
+				// Read mode has no composer to focus on).
+				m.focus = FocusComposer
+			}
+		}
+		// j from FocusComposer is a no-op (composer is the bottom stop).
+	case key.Matches(msg, m.keys.NormalUp):
+		if m.focus == FocusComposer {
+			m.focus = FocusStream
+			if n := len(m.turns); n > 0 {
+				m.selection = n - 1
+			}
+		} else if m.selection > 0 {
+			m.selection--
+		}
+	case key.Matches(msg, m.keys.NormalBottom):
+		m.focus = FocusStream
+		if n := len(m.turns); n > 0 {
+			m.selection = n - 1
+		}
+	case key.Matches(msg, m.keys.NormalTop):
+		if gPending {
+			m.focus = FocusStream
+			m.selection = 0
+		} else {
+			m.gPending = true
+		}
+	case !m.opts.Read && key.Matches(msg, m.keys.NormalInsert):
+		// Snapshot the pre-INSERT focus + selection so Esc can restore it.
+		m.savedFocus = m.focus
+		m.savedSelection = m.selection
+		m.mode = ModeInsert
+		m.composer.Focus()
+		return m, textarea.Blink
+	}
+	return m, nil
+}
+
+// updateInsert handles keystrokes when the operator is in INSERT. Esc
+// returns to NORMAL preserving the draft. Enter dispatches the send hook,
+// locally echoes the user turn, clears the composer, and bounces back to
+// NORMAL with selection on the new last turn (empty draft is a no-op).
+// All other keys are forwarded to the textarea so typing works as expected.
+// framesFromTurns reconstructs an approximate Frame slice from a turn
+// slice for the incremental-append path in Update(frameMsg). The shape
+// is lossy (Body maps aren't preserved verbatim) but FramesToTurns only
+// needs Actor/Text/FrameKind/ToolName/Ts to reconstitute the same turn
+// structure for already-rendered rows.
+func framesFromTurns(turns []Turn) []Frame {
+	var frames []Frame
+	for _, t := range turns {
+		switch t.Actor {
+		case ActorUser:
+			frames = append(frames, Frame{Ts: t.Ts, Actor: ActorUser, Text: t.Text})
+		case ActorAgent:
+			frames = append(frames, Frame{Ts: t.Ts, FrameKind: sextantproto.FrameAssistantText, Body: map[string]any{"text": t.Text}})
+			for _, tc := range t.ToolCalls {
+				frames = append(frames, Frame{
+					Ts: tc.StartTs, FrameKind: sextantproto.FrameToolCall,
+					ToolName: tc.Name, Body: map[string]any{"path": tc.Arg},
+				})
+				if tc.Status != ToolStatusPending {
+					body := map[string]any{}
+					if tc.Status == ToolStatusFailed {
+						body["error"] = "boom"
+					}
+					frames = append(frames, Frame{
+						Ts: tc.StartTs.Add(tc.Duration), FrameKind: sextantproto.FrameToolResult,
+						ToolName: tc.Name, Body: body,
+					})
+				}
+			}
+		case ActorSystem:
+			frames = append(frames, Frame{Ts: t.Ts, FrameKind: sextantproto.FrameSystemNote, Body: map[string]any{"text": t.Text}})
+		}
+	}
+	return frames
+}
+
+func (m Model) updateInsert(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.InsertExit):
+		// Restore the focus + selection snapshot taken when 'i' was pressed.
+		m.focus = m.savedFocus
+		m.selection = m.savedSelection
+		m.mode = ModeNormal
+		m.composer.Blur()
+		return m, nil
+	case key.Matches(msg, m.keys.InsertSend):
+		text := strings.TrimSpace(m.composer.Value())
+		if text == "" {
+			// Empty draft: no-op. Stay in INSERT — the operator likely
+			// hit Enter by accident or hasn't typed yet.
+			return m, nil
+		}
+		if m.send != nil {
+			m.send(text)
+		}
+		m.composer.SetValue("")
+		// Local echo: surface the operator's prompt as a user turn so
+		// the conversation reads naturally before the daemon's frame
+		// round-trips back. Send always lands on FocusStream at the new
+		// last turn — the operator sees their just-sent message highlighted.
+		m.turns = append(m.turns, Turn{Ts: time.Now(), Actor: ActorUser, Text: text})
+		m.focus = FocusStream
+		m.selection = len(m.turns) - 1
+		m.mode = ModeNormal
+		m.composer.Blur()
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.composer, cmd = m.composer.Update(msg)
+	return m, cmd
+}

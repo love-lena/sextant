@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -23,6 +24,12 @@ func mainErr() int {
 	defer cancel()
 
 	if err := run(ctx, os.Args[1:]); err != nil {
+		// --help / -h on any subcommand bubbles up as flag.ErrHelp.
+		// The subcommand's fs.Usage already printed its help text;
+		// exit cleanly with no error decoration.
+		if errors.Is(err, flag.ErrHelp) {
+			return exitOK
+		}
 		// `sextant exec` writes its own stdout/stderr verbatim; we
 		// shouldn't add a "sextant: command exited with code N" line on
 		// top — that would make shell pipelines noisy. Similarly,
