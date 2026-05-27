@@ -54,6 +54,12 @@ import {
 import { classifyTool } from "./classifier.js";
 import { decodeInitialPrompt } from "./env.js";
 import { publishLifecycle as publishLifecycleEnvelope } from "./lifecycle.js";
+import { connectOrExit } from "./sidecar-connect.js";
+import {
+  watchNATSClosed,
+  watchNATSStatus,
+  type NATSConnLike,
+} from "./nats-supervision.js";
 
 /** Bucket where AgentDefinition records live. Mirrors handlers.AgentDefinitionsBucket. */
 const AGENT_DEFINITIONS_BUCKET = "agent_definitions";
@@ -818,6 +824,23 @@ class PromptQueue {
 }
 
 /**
+ * Inbox-loop controller. Exposes `restart()` so the reconnect handler
+ * (see `watchNATSStatus`) can re-arm the JetStream subscription after
+ * the server reappears — nats.js's ephemeral pull consumers don't
+ * survive a server restart, so the previous loop's iterator will have
+ * ended and a fresh subscribe is required to resume delivery.
+ *
+ * Regresses plans/issues/bug-sidecar-nats-disconnect-no-reconnect.md
+ * §"Fix shape" item 2.
+ */
+interface InboxLoopController {
+  /** Re-arm the loop. Idempotent: a no-op if a loop is already running. */
+  restart(): void;
+  /** Stop the loop; new prompts will be dropped. Used by shutdown. */
+  stop(): void;
+}
+
+/**
  * Subscribe to the agent's inbox and feed every prompt into the queue.
  * Runs in the background for the lifetime of the sidecar.
  *
@@ -829,11 +852,22 @@ class PromptQueue {
  * exists, and a `deliver_policy: new` consumer would miss it. The
  * inbox stream's 24h MaxAge bounds replay; JetStream's ack semantics
  * prevent double-processing.
+ *
+ * After a reconnect the same `deliverAll` policy ensures any prompts
+ * that landed while the sidecar was disconnected are picked up — the
+ * fresh consumer replays from the start of the inbox stream, which
+ * (modulo the stream's MaxAge) covers the gap.
  */
-function startInboxLoop(client: Client, subject: string, queue: PromptQueue): void {
-  void (async (): Promise<void> => {
+function startInboxLoop(client: Client, subject: string, queue: PromptQueue): InboxLoopController {
+  let stopped = false;
+  let inFlight = false;
+
+  const runOnce = async (): Promise<void> => {
+    if (stopped || inFlight) return;
+    inFlight = true;
     try {
       for await (const msg of client.subscribe(subject, { deliverAll: true })) {
+        if (stopped) break;
         if (msg.err) {
           log("warn", "inbox: bad envelope", {
             subject: msg.subject,
@@ -864,11 +898,42 @@ function startInboxLoop(client: Client, subject: string, queue: PromptQueue): vo
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (!message.toLowerCase().includes("closed")) {
-        log("error", "inbox loop failed", { err: message });
+      if (!stopped && !message.toLowerCase().includes("closed")) {
+        // The loop ending unexpectedly while we're meant to be live is
+        // the canonical "JetStream consumer lost across a reconnect"
+        // symptom. We log at warn (operators want it visible) and let
+        // the reconnect handler re-arm us — or, if no reconnect comes,
+        // the watchNATSClosed path triggers a non-zero exit.
+        log("warn", "inbox loop ended; waiting for reconnect to re-arm", {
+          err: message,
+        });
       }
+    } finally {
+      inFlight = false;
     }
-  })();
+  };
+
+  // Start the first iteration in the background.
+  void runOnce();
+
+  return {
+    restart(): void {
+      if (stopped) return;
+      if (inFlight) {
+        // A previous iteration is still alive — the new subscribe call
+        // it's wrapped around will pick up any backlog. Avoid a second
+        // concurrent loop that would double-deliver from `deliverAll`.
+        return;
+      }
+      log("info", "inbox: re-arming subscription after reconnect", {
+        subject,
+      });
+      void runOnce();
+    },
+    stop(): void {
+      stopped = true;
+    },
+  };
 }
 
 /**
@@ -909,7 +974,20 @@ async function run(driverMode: DriverMode): Promise<void> {
     log("info", "initial_prompt not set");
   }
 
-  const client = await connectWithConfig(config);
+  // Initial connect — if this fails (bad URL, unreachable, auth
+  // rejected at handshake) the sidecar must exit non-zero so the
+  // daemon's supervisor spawns a fresh incarnation rather than the
+  // process hanging silently. Reconnect handling (for transient
+  // failures *after* a successful initial connect) lives in
+  // watchNATSStatus / watchNATSClosed below. See
+  // plans/issues/bug-sidecar-nats-disconnect-no-reconnect.md §"Fix
+  // shape" item 3.
+  const client = (await connectOrExit(
+    () => connectWithConfig(config),
+    log,
+    (code) => process.exit(code),
+    { natsUrl: env.natsUrl },
+  )) as Client;
   log("info", "nats connected");
 
   const mcp = await connectMCP(env);
@@ -927,7 +1005,40 @@ async function run(driverMode: DriverMode): Promise<void> {
   });
 
   const inboxSubject = `agents.${env.agentUuid}.inbox`;
-  startInboxLoop(client, inboxSubject, queue);
+  const inboxLoop = startInboxLoop(client, inboxSubject, queue);
+
+  // Watch the underlying NATS connection's status stream so:
+  //
+  //   - disconnect/reconnect events land in the journal at `warn`
+  //     (operators investigating a downtime need them visible — the
+  //     previous behaviour was no log at all);
+  //   - the inbox JetStream consumer is re-armed on reconnect (nats.js
+  //     ephemeral consumers don't survive a server restart).
+  //
+  // Ticket: plans/issues/bug-sidecar-nats-disconnect-no-reconnect.md.
+  const statusStop = watchNATSStatus(client.nc as unknown as NATSConnLike, {
+    log,
+    onReconnect: () => {
+      inboxLoop.restart();
+    },
+  });
+
+  // Watch for a permanent close. The @sextant/client base config pins
+  // maxReconnectAttempts: -1, so this should only resolve when:
+  //   (a) we initiate the close ourselves (graceful shutdown — the
+  //       `shuttingDown` flag suppresses the exit), or
+  //   (b) the NATS client gives up for an unrecoverable reason (auth
+  //       rejected mid-session, manual nc.close() from elsewhere, etc).
+  // Case (b) is the silent-hang failure mode the ticket calls out;
+  // exiting non-zero hands control back to the daemon's supervisor.
+  let shuttingDown = false;
+  void watchNATSClosed(client.nc as unknown as NATSConnLike, (err) => {
+    if (shuttingDown) return;
+    log("error", "nats connection closed unexpectedly; exiting non-zero", {
+      err: err ? err.message : "(no error reported)",
+    });
+    process.exit(1);
+  });
 
   // Heartbeat loop. Same in-flight settle pattern as the M11 scaffold.
   let running = true;
@@ -949,7 +1060,13 @@ async function run(driverMode: DriverMode): Promise<void> {
   const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
     if (!running) return;
     running = false;
+    // Flip the flag *before* anything that might close the NATS
+    // connection so the `watchNATSClosed` callback knows our shutdown
+    // initiated the close (and doesn't trigger a non-zero exit on top
+    // of the graceful one).
+    shuttingDown = true;
     clearInterval(heartbeat);
+    inboxLoop.stop();
     log("info", "shutdown received", { signal });
 
     // Wait for the in-flight turn (best-effort).
@@ -983,6 +1100,14 @@ async function run(driverMode: DriverMode): Promise<void> {
           err: err instanceof Error ? err.message : String(err),
         });
       }
+    }
+    // Stop the status watcher before closing the connection so the
+    // iterator's natural end (when nc.close() runs) doesn't race the
+    // shutdown path.
+    try {
+      await statusStop();
+    } catch {
+      /* statusStop swallows internally; defensive guard. */
     }
     try {
       await client.close();
