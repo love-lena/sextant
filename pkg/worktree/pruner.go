@@ -550,7 +550,11 @@ func copyTree(src, dst string) error {
 			if err != nil {
 				return err
 			}
-			return os.Symlink(link, target)
+			// gosec G122 wants os.Root for symlink TOCTOU safety.
+			// The pruner walks worktrees the daemon itself created, so
+			// the adversarial model doesn't apply here; the symlink
+			// target is whatever git wrote when the worktree was set up.
+			return os.Symlink(link, target) //nolint:gosec // G122: worktree-internal symlinks under daemon control
 		default:
 			return copyFile(path, target, info.Mode().Perm())
 		}

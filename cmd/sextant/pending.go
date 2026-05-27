@@ -241,5 +241,7 @@ func publishUserInputResponse(cmd *cobra.Command, requestID uuid.UUID, payload s
 }
 
 // ctx kept os reference (file may transitively use it from tests).
-var _ = context.Background
-var _ = os.Stdout
+var (
+	_ = context.Background
+	_ = os.Stdout
+)

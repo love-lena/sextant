@@ -384,7 +384,7 @@ func (d *daemon) Start(ctx context.Context) error {
 	// surface would be incomplete) but a per-tick prune error is
 	// logged inside the loop.
 	if worktreeRT != nil {
-		if err := worktreeRT.startPruneLoop(d.supCtx); err != nil {
+		if err := worktreeRT.startPruneLoop(d.supCtx); err != nil { //nolint:contextcheck // d.supCtx is the daemon supervisor's long-lived context — distinct from the bootstrap ctx by design
 			_ = spawnRT.containers.Close()
 			_ = rpcRT.stopRPC()
 			_ = mcpRT.stop(ctx)

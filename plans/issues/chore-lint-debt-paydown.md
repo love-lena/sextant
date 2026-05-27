@@ -1,10 +1,28 @@
 ---
 title: Pay down accumulated lint debt across cmd/ + pkg/
-status: open
+status: resolved
 priority: P3
 created_at: 2026-05-25T19:25-07:00
+resolved_at: 2026-05-27T03:10-07:00
 labels: [chore, lint, tech-debt]
 discovered_in: post-merge of feat-daemon-lifecycle-ergonomics — `make lint-go` was already failing before the merge and stayed failing after; want a clean baseline so future PRs can re-enable lint as a merge gate
+
+---
+
+## Resolution
+
+`make lint-go` now exits 0 with zero issues reported. Achieved via:
+
+- **errcheck sweep on `cmd/sextant/*.go`** — routed line-leading `fmt.Fprintf`/`Fprintln` calls through the `output.go` `printf`/`println` wrappers that discard errors explicitly. 86 hits cleared in one mechanical pass (`cbb1c8f`).
+- **gofumpt drift** swept via `go run mvdan.cc/gofumpt@latest -w` on the touched files (`dd32a58`, plus several inline fixes in this commit).
+- **gosec on test code** excluded globally via a `.golangci.yml` `exclusions.rules` entry — test code's exec/file/cred patterns are overwhelmingly false-positive (test-controlled args, t.TempDir() permissions, hardcoded test creds).
+- **Production gosec hits** annotated with `//nolint:gosec` + documented reason (doctor's git invocations use the repoRoot from sextantd config, not user input; preflight's exec uses a whitelist of host-dep binary names; pruner's `os.Symlink` walks daemon-controlled worktrees).
+- **contextcheck on `daemon.go:387` and cleanup closures** annotated with `//nolint:contextcheck` + reason (deferred-against-Background cleanups are intentional — outer ctx may be canceled by the time defer runs).
+- **staticcheck SA2001** at `spawn_test.go:1242` — deleted the no-op Lock/Unlock leftover from a mid-thought test refactor.
+- **staticcheck QF1008** at `tail.go:79` — dropped the embedded `Time` selector.
+- **`unused`**: deleted `buildPruneFixture` (no callers), annotated `userLog` as `//nolint:unused` with a pointer at its planned use (output protocol wave).
+
+The companion ticket `chore-cobra-errcheck-debt` is closed alongside — its 78 hits were the bulk of the errcheck sweep above.
 ---
 
 ## Summary

@@ -163,12 +163,12 @@ func TestErrorEnvelopeShape(t *testing.T) {
 // breaks a test instead of silently breaking downstream scripts.
 func TestStableCodes(t *testing.T) {
 	cases := map[string]string{
-		"AGENT_NOT_FOUND":     cliout.CodeAgentNotFound,
-		"DAEMON_UNREACHABLE":  cliout.CodeDaemonUnreachable,
-		"INVALID_REF":         cliout.CodeInvalidRef,
-		"RPC_TIMEOUT":         cliout.CodeRPCTimeout,
-		"USAGE_ERROR":         cliout.CodeUsageError,
-		"NO_RESULTS":          cliout.CodeNoResults,
+		"AGENT_NOT_FOUND":    cliout.CodeAgentNotFound,
+		"DAEMON_UNREACHABLE": cliout.CodeDaemonUnreachable,
+		"INVALID_REF":        cliout.CodeInvalidRef,
+		"RPC_TIMEOUT":        cliout.CodeRPCTimeout,
+		"USAGE_ERROR":        cliout.CodeUsageError,
+		"NO_RESULTS":         cliout.CodeNoResults,
 	}
 	for want, got := range cases {
 		if got != want {

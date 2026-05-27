@@ -167,10 +167,10 @@ func newDaemonLogsCmd() *cobra.Command {
 // thin shadowing-cmd is the cleanest pattern.
 func newDaemonAliasCmds() []*cobra.Command {
 	type alias struct {
-		oldName    string
-		newForm    string
-		short      string
-		build      func() *cobra.Command
+		oldName string
+		newForm string
+		short   string
+		build   func() *cobra.Command
 	}
 	aliases := []alias{
 		{"start", "sextant daemon start", "(deprecated) alias for `sextant daemon start`", newDaemonStartCmd},

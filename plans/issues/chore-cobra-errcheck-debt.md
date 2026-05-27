@@ -1,10 +1,19 @@
 ---
 title: Pay down errcheck debt from the cobra-fang migration (fmt.Fprintf without _ = …)
-status: open
+status: resolved
 priority: P3
 created_at: 2026-05-26T23:10-07:00
+resolved_at: 2026-05-27T03:10-07:00
 labels: [chore, lint, tech-debt, cli]
 discovered_in: cobra-fang migration self-reported — the new code uses `fmt.Fprintf`/`Fprintln` directly rather than the `printf`/`println` helpers in the old `output.go`, dropping the return values and creating ~78 new errcheck hits in touched files
+
+---
+
+## Resolution
+
+Resolved as part of `chore-lint-debt-paydown` (commit `cbb1c8f`). Approach (1) from this ticket's fix shape: kept the `output.go` wrappers (`printf`/`println` — already existed) and swept every line-leading `fmt.Fprintf`/`fmt.Fprintln` in `cmd/sextant/*.go` to call them instead. 86 hits cleared in one pass.
+
+Lines that intentionally capture the error (`_, err = fmt.Fprintln(...)`) were left alone — the wrappers are for the discard-by-convention sites where the caller has nothing to do with a stdout write failure.
 ---
 
 ## Summary

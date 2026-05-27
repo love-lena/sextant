@@ -41,8 +41,8 @@ func (f *fakeComponent) Focus() tea.Cmd { f.focused = true; return nil }
 func (f *fakeComponent) Blur()          { f.focused = false }
 func (f *fakeComponent) Focused() bool  { return f.focused }
 
-func (f *fakeComponent) ShortHelp() []key.Binding   { return f.short }
-func (f *fakeComponent) FullHelp() [][]key.Binding  { return f.full }
+func (f *fakeComponent) ShortHelp() []key.Binding  { return f.short }
+func (f *fakeComponent) FullHelp() [][]key.Binding { return f.full }
 
 // Compile-time assertion that fakeComponent satisfies Component. If
 // the interface gains a method, this line breaks at build time —
@@ -95,7 +95,8 @@ func TestHostDoneMsgEmitsQuit(t *testing.T) {
 func TestHostInitFocusesAndFiresLoad(t *testing.T) {
 	t.Parallel()
 	inner := &fakeComponent{}
-	host := component.NewHost(inner,
+	host := component.NewHost(
+		inner,
 		component.WithInitialFocus(),
 		component.WithInitialLoad("abc-123"),
 	)
