@@ -16,8 +16,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
-	"github.com/love-lena/sextant/pkg/cliout"
 	"github.com/love-lena/sextant/pkg/client"
+	"github.com/love-lena/sextant/pkg/cliout"
 	"github.com/love-lena/sextant/pkg/rpc"
 	"github.com/love-lena/sextant/pkg/sextantd"
 	"github.com/love-lena/sextant/pkg/sextantproto"
@@ -107,11 +107,19 @@ func newAgentsListCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if globalFlags.asJSON {
-				return writeJSON(cmd, out, resp)
+				if err := writeJSON(cmd, out, resp); err != nil {
+					return err
+				}
+				if len(resp.Agents) == 0 {
+					return errNoResults
+				}
+				return nil
 			}
 			if len(resp.Agents) == 0 {
-				_, err := fmt.Fprintln(out, "no agents")
-				return err
+				if _, err := fmt.Fprintln(out, "no agents"); err != nil {
+					return err
+				}
+				return errNoResults
 			}
 			tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
 			println(tw, "UUID\tNAME\tTEMPLATE\tLIFECYCLE\tVERSION\tUPDATED")

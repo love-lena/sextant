@@ -183,6 +183,9 @@ func exitCodeFor(err error) int {
 	if err == nil {
 		return exitOK
 	}
+	if errors.Is(err, errNoResults) {
+		return exitNoResults
+	}
 	var ec *exitCodeError
 	if errors.As(err, &ec) {
 		return ec.code
@@ -206,6 +209,11 @@ func exitCodeFor(err error) int {
 // drives the exit code; we just skip the "sextant: <err>" stderr line
 // that fang would render.
 func shouldSuppressErrorBanner(err error) bool {
+	if errors.Is(err, errNoResults) {
+		// The verb already printed its "no agents" / "no pending requests"
+		// line on stdout; the banner would noisily restate the sentinel.
+		return true
+	}
 	var ec *exitCodeError
 	if errors.As(err, &ec) {
 		return true
