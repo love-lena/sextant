@@ -116,7 +116,7 @@ func checkDockerDaemon(ctx context.Context, lookFn lookPathFn, infoFn dockerInfo
 		return CheckResult{
 			Kind:   "host-dep",
 			Check:  "docker-daemon",
-			Status: StatusFail,
+			Status: StatusWarn,
 			Detail: fmt.Sprintf("daemon not reachable: %v", err),
 			Remedy: "start OrbStack / Docker Desktop",
 		}

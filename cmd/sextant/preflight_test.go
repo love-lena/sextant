@@ -72,8 +72,8 @@ func TestPreflight_DockerBinaryPresentDaemonDown(t *testing.T) {
 	if row == nil {
 		t.Fatal("no docker-daemon row in results")
 	}
-	if row.Status != StatusFail {
-		t.Errorf("docker-daemon status = %s, want fail", row.Status)
+	if row.Status != StatusWarn {
+		t.Errorf("docker-daemon status = %s, want warn (binary present but daemon down)", row.Status)
 	}
 	if !strings.Contains(strings.ToLower(row.Remedy), "orbstack") && !strings.Contains(strings.ToLower(row.Remedy), "docker") {
 		t.Errorf("remedy = %q, want it to mention OrbStack or Docker", row.Remedy)
