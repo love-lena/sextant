@@ -23,8 +23,10 @@ func TestChatTUIRendersTurnsAndAttachesToolCalls(t *testing.T) {
 	}
 	m := New(Options{AgentName: "alice"}).WithTurns(FramesToTurns(frames))
 	m.focus = FocusStream // render with stream selection visible (▌ bar)
-	m = mWithSize(m, 80, 24)
-	out := m.View()
+	// Render via Standalone so the chrome (agent-name header) is
+	// included — the "alice" assertion below would otherwise fail
+	// because chat.Model.View no longer draws chrome.
+	out := renderStandalone(m, 80, 24)
 
 	if !strings.Contains(out, "read main.go") {
 		t.Errorf("user turn missing: %q", out)
@@ -53,8 +55,10 @@ func TestChatTUIRendersTurnsAndAttachesToolCalls(t *testing.T) {
 func TestViewHidesComposerInReadMode(t *testing.T) {
 	t.Parallel()
 	m := New(Options{AgentName: "alice", Read: true}).WithTurns(seedTurns())
-	m = mWithSize(m, 80, 24)
-	out := m.View()
+	// Render via Standalone — the READ pill is in the status bar
+	// (host-owned chrome), and the composer-hint check requires
+	// the wrapped frame too.
+	out := renderStandalone(m, 80, 24)
 	if strings.Contains(out, "i to edit") {
 		t.Errorf("read mode should not show composer hint: %q", out)
 	}
@@ -63,11 +67,38 @@ func TestViewHidesComposerInReadMode(t *testing.T) {
 	}
 }
 
-// mWithSize is a test helper that drives a WindowSizeMsg into the model
-// so View has dimensions to work with. Returns the new Model.
-func mWithSize(m Model, w, h int) Model {
+// renderStandalone wraps m in Standalone and pushes a window-size
+// message so the chrome math runs. Returns the chrome-rendered
+// frame — what the operator sees end-to-end.
+//
+// Use this helper when the assertion is about chrome (header,
+// status bar, READ pill). For component-content assertions
+// (turns, tool lines) use Model.View directly via mWithSize.
+func renderStandalone(m *Model, w, h int) string {
+	s := NewStandalone(m)
+	_, _ = s.Update(tea.WindowSizeMsg{Width: w, Height: h})
+	return s.View()
+}
+
+// mWithSize is a test helper that drives a window resize into the
+// model. Simulates what the standalone host does: it owns 4 rows of
+// outer chrome (header line + rule + gap + status bar), then calls
+// SetSize on the inner component with the remaining content rect.
+//
+// Pre-refactor this helper sent a tea.WindowSizeMsg straight to
+// Update and the model computed everything itself. Post-refactor
+// the host owns chrome, so the helper applies the same subtraction
+// the production host applies (see chat.HostChromeReserved).
+func mWithSize(m *Model, w, h int) *Model {
+	innerH := h - HostChromeReserved
+	if innerH < 1 {
+		innerH = 1
+	}
+	m.SetSize(w, innerH)
+	// Forward the original size to Update too — composer textareas
+	// inside the component expect to see WindowSizeMsg.
 	next, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
-	return next.(Model)
+	return next.(*Model)
 }
 
 func TestStreamClipsToHeightBudget(t *testing.T) {
@@ -106,7 +137,7 @@ func TestStreamSelectionCenteredInWindow(t *testing.T) {
 	// Move selection to turn 15 by simulating keys.
 	for i := 0; i < (29 - 15); i++ {
 		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
-		m = next.(Model)
+		m = next.(*Model)
 	}
 	if m.Selection() != 15 {
 		t.Fatalf("selection setup: want 15, got %d", m.Selection())
@@ -139,7 +170,7 @@ func TestStreamClampsAtTopWhenSelectionNearStart(t *testing.T) {
 	// Step selection up to index 1.
 	for i := 0; i < 28; i++ {
 		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
-		m = next.(Model)
+		m = next.(*Model)
 	}
 	if m.Selection() != 1 {
 		t.Fatalf("selection setup: want 1, got %d", m.Selection())

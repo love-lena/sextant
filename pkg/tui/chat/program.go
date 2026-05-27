@@ -37,6 +37,10 @@ type RunConfig struct {
 
 // Run constructs the tea.Program, wires the send hook + subscription
 // pumps, and blocks until the program exits.
+//
+// Hosts the chat component via NewStandalone — which adds the header
+// + status-bar chrome that pre-refactor lived inside Model.View, and
+// translates the component's DoneMsg intent into tea.Quit.
 func Run(cfg RunConfig) error {
 	m := New(Options{
 		AgentName: cfg.AgentName,
@@ -49,7 +53,8 @@ func Run(cfg RunConfig) error {
 	if !cfg.Read && cfg.Bus != nil {
 		m = m.WithSendHook(makeSendHook(cfg.Ctx, cfg.Bus, cfg.AgentID))
 	}
-	prog := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(cfg.Ctx))
+	standalone := NewStandalone(m)
+	prog := tea.NewProgram(standalone, tea.WithAltScreen(), tea.WithContext(cfg.Ctx))
 
 	// Pump frames + lifecycle as background goroutines that re-issue
 	// themselves after every receive. Each pumpXxx returns a tea.Cmd

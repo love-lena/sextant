@@ -18,7 +18,7 @@ const (
 // `[fg+bg]text[reset]` and the selection tint stays continuous across
 // the whole line — inner resets would otherwise clear the bg between
 // chunks.
-func (m Model) withSelBg(s lipgloss.Style, selected bool) lipgloss.Style {
+func (m *Model) withSelBg(s lipgloss.Style, selected bool) lipgloss.Style {
 	if !selected {
 		return s
 	}
@@ -28,7 +28,7 @@ func (m Model) withSelBg(s lipgloss.Style, selected bool) lipgloss.Style {
 // selSpace returns n literal spaces, painted with the selection bg if
 // the row is selected so plain-whitespace gaps between styled chunks
 // don't render as untinted holes in the highlight.
-func (m Model) selSpace(selected bool, n int) string {
+func (m *Model) selSpace(selected bool, n int) string {
 	pad := strings.Repeat(" ", n)
 	if !selected {
 		return pad
@@ -36,42 +36,36 @@ func (m Model) selSpace(selected bool, n int) string {
 	return lipgloss.NewStyle().Background(m.styles.SelectedRow.GetBackground()).Render(pad)
 }
 
-// View renders the full TUI. Layout from top: header (one line, above
-// the stream box), stream pane (rounded box), composer pane (rounded
-// box, hidden in read mode), status strip (one line, outside any box).
+// View renders the component's content area: the stream pane and
+// (in non-read mode) the composer pane. Header and status bar live
+// on the standalone host — see `standalone.go` — so the dash can
+// mount this same content rect without inheriting chrome it doesn't
+// want.
 //
-// Width comes from the most recent WindowSizeMsg; everything below is
-// width-aware so the boxes don't trail off the screen.
-func (m Model) View() string {
+// Width comes from the most recent SetSize call; everything below
+// is width-aware so the boxes don't trail off the screen.
+func (m *Model) View() string {
 	width := m.width
 	if width <= 0 {
 		width = 80
 	}
-	header := m.renderHeader(width)
 	stream := m.renderStreamBox(width)
-	status := m.renderStatusBar(width)
 	if m.opts.Read {
-		return strings.Join([]string{header, stream, "", status}, "\n")
+		return stream
 	}
 	composer := m.renderComposerBox(width)
-	return strings.Join([]string{header, stream, composer, "", status}, "\n")
+	return strings.Join([]string{stream, composer}, "\n")
 }
 
-func (m Model) renderHeader(width int) string {
-	name := m.styles.HeaderName.Render(m.opts.AgentName)
-	line := name
-	if m.opts.Branch != "" {
-		line += "  " + m.styles.HeaderBranch.Render("⎇ "+m.opts.Branch)
-	}
-	rule := m.styles.HeaderRule.Render(strings.Repeat("─", width))
-	return line + "\n" + rule
-}
+// renderHeader and renderStatusBar moved to standalone.go — they are
+// host-owned chrome. The dash and other future hosts draw their own
+// equivalents.
 
 // renderStreamBox lays the stream content into a rounded-border pane.
 // Inner width is total width minus the box's 2 border columns and 2
 // padding columns. Position counter (e.g. "5/5") is overlaid on the
 // bottom border per the spec.
-func (m Model) renderStreamBox(width int) string {
+func (m *Model) renderStreamBox(width int) string {
 	// 2 border cols + 0 box-padding cols (Padding(0, 0) in StreamPane).
 	inner := width - 2
 	if inner < 20 {
@@ -140,7 +134,7 @@ func stripANSI(s string) string {
 // clipped to a window centered on the selected turn (spec §"Selection-
 // centered scroll"). The window is clamped at top and bottom so we never
 // reference lines outside the rendered slice.
-func (m Model) renderStream(width int) string {
+func (m *Model) renderStream(width int) string {
 	// Render each turn and track its line range so we can find the
 	// selected turn's position in the joined output later.
 	type turnBlock struct {
@@ -213,7 +207,7 @@ func (m Model) renderStream(width int) string {
 	return strings.Join(allLines[windowStart:windowEnd], "\n")
 }
 
-func (m Model) renderTurn(idx int, t Turn, width int) string {
+func (m *Model) renderTurn(idx int, t Turn, width int) string {
 	selected := m.focus == FocusStream && idx == m.selection
 
 	// Actor-specific name + style (used for name + colon). The icon
@@ -322,7 +316,7 @@ func (m Model) renderTurn(idx int, t Turn, width int) string {
 // Status word color routes through role tokens (Success/Destructive).
 // Every chunk + literal space gets the selection bg propagated through
 // withSelBg/selSpace so the highlight stays continuous when `selected`.
-func (m Model) renderToolLine(tc ToolCall, selected bool) string {
+func (m *Model) renderToolLine(tc ToolCall, selected bool) string {
 	statusStyle := m.withSelBg(m.styles.ToolLine, selected)
 	statusWord := "pending"
 	switch tc.Status {
@@ -439,7 +433,7 @@ func wordWrap(text string, firstWidth, restWidth int) []string {
 //   - FocusComposer (NORMAL or INSERT): accent color — signals that 'i'
 //     will land here.
 //   - FocusStream (or Read mode): muted border — parked/inactive.
-func (m Model) renderComposerBox(width int) string {
+func (m *Model) renderComposerBox(width int) string {
 	// SetWidth so the textarea wraps to the available inner width.
 	// Width-2 accounts for the rounded box border on left+right.
 	m.composer.SetWidth(width - 2)
@@ -450,58 +444,4 @@ func (m Model) renderComposerBox(width int) string {
 	return pane.Width(width - 2).Render(m.composer.View())
 }
 
-// renderStatusBar is the bottom-of-screen strip outside any pane.
-// Shows the mode pill on the left and active-mode key hints on the
-// right (or stretched across the line, depending on width).
-//
-// Spec §"Mode-aware status bar": only the keys that work in the
-// current mode appear — no busy legend of inert hotkeys.
-func (m Model) renderStatusBar(width int) string {
-	var pill string
-	switch {
-	case m.opts.Read:
-		pill = m.styles.StatusRead.Render(" READ ")
-	case m.mode == ModeInsert:
-		pill = m.styles.StatusInsert.Render("INSERT")
-	default:
-		pill = m.styles.StatusNormal.Render("NORMAL")
-	}
-
-	var hints []string
-	switch {
-	case m.opts.Read:
-		hints = m.modeHints("read")
-	case m.mode == ModeInsert:
-		hints = m.modeHints("insert")
-	default:
-		hints = m.modeHints("normal")
-	}
-	hintStr := strings.Join(hints, "   ")
-
-	left := " " + pill + "  "
-	right := hintStr
-	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 {
-		gap = 1
-	}
-	return left + strings.Repeat(" ", gap) + right
-}
-
-// modeHints returns the active-mode key chips for the status bar. The
-// chips share style with the keymap defined in keys.go (later: derive
-// them from key.Binding help text). Spec calls for "only the keys that
-// work in the current mode appear" — that's enforced by the per-mode
-// case.
-func (m Model) modeHints(mode string) []string {
-	chip := func(key, desc string) string {
-		return m.styles.KeyHintKey.Render(key) + " " + m.styles.KeyHintDesc.Render(desc)
-	}
-	switch mode {
-	case "insert":
-		return []string{chip("↵", "send"), chip("⇧↵", "newline"), chip("Esc", "back")}
-	case "read":
-		return []string{chip("j/k", "step"), chip("gg/G", "top·bot"), chip("q", "quit")}
-	default: // normal
-		return []string{chip("j/k", "step"), chip("gg/G", "top·bot"), chip("i", "edit"), chip("q", "quit")}
-	}
-}
+// renderStatusBar moved to standalone.go — see Standalone.View().
