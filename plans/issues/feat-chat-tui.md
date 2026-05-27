@@ -1,10 +1,19 @@
 ---
 title: Build chat TUI — modal one-agent chat window for `sextant conversation <agent>`
-status: open
+status: resolved
 priority: P2
 created_at: 2026-05-25T16:23-07:00
+resolved_at: 2026-05-26T17:45-07:00
 labels: [feature, tui, cli, ergonomics, operator-experience]
 discovered_in: design handoff "Sextant Chat" (v0.4-draft)
+---
+
+## Resolution
+
+Shipped on branch `worktree-feat-chat-tui-impl`. Implementation plan at `plans/feat-chat-tui-impl.md`. Package: `pkg/tui/chat/`. Wired into `cmd/sextant/conversation.go` (TUI is default, `--json` keeps NDJSON, `--read` opens read-only variant). 35 unit tests in the chat package, 3 dispatch tests in `cmd/sextant`. All acceptance tests from the original spec are covered.
+
+Follow-up tickets filed during Checkpoint C live testing — see `bug-agents-list-stale-lifecycle`, `bug-prompt-agent-accepts-when-sidecar-gone`, `bug-sidecar-nats-disconnect-no-reconnect`, `bug-sidecar-queued-prompt-drain-orphans-context`, `feat-chat-tui-history`, `feat-chat-tui-status-dot`, `feat-sextant-agents-check`, `feat-sextant-doctor-agents`, `feat-ask-conversation-self-diagnose-on-timeout`, `feat-sextant-help-flags-per-subcommand`, `feat-sextant-cobra-fang-migration`, `feat-sextant-tail-duration-flag`.
+
 ---
 
 ## Summary
