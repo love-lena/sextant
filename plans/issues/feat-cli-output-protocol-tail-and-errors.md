@@ -15,14 +15,12 @@ The error-envelope half is pure execution and could ship anytime; not blocking o
 
 ## Progress (2026-05-27)
 
-`agents_check.go::renderAgentCheck` swept — now wraps the AgentCheck
-in `cliout.WriteEnvelope`. Test updated to decode through `cliout.Envelope`.
+- `agents_check.go::renderAgentCheck` swept — wraps the AgentCheck in `cliout.WriteEnvelope` (earlier commit).
+- **Error-envelope half landed.** Fang's `errorBanner` now checks `globalFlags.asJSON` and routes through `cliout.WriteErrorEnvelope` with a stable code mapped from the error type — sentinel + `client.RPCError` + daemon-unreachable substrings all covered. See `cmd/sextant/errors_map.go` for the mapping table; `errors_map_test.go` pins every entry plus the banner wiring (JSON mode and plain mode tested separately). Fixes Codex finding 2.
 
-Remaining:
+Remaining (the open question keeping this ticket needs-input):
 
 1. **`cmd/sextant/tail.go::renderTailEnvelope`** — emits raw envelope NDJSON. **Special case**: tail's NDJSON contract may justify staying raw (it's not a single response, it's a stream). Decide explicitly: either wrap each line in `cliout.Envelope` (NDJSON of envelopes, `meta.command = "events.tail"` repeated per line) or document why tail stays raw.
-
-2. **Error paths under `--json`** — RunE error returns flow into the cobra default error printer, which writes plain text to stderr. With `globalFlags.asJSON` set the CLI should instead emit `cliout.WriteErrorEnvelope(stderr, code, msg)`. Stable codes already exist in `pkg/cliout/envelope.go` (`CodeAgentNotFound`, `CodeDaemonUnreachable`, etc.). Map each error path.
 
 ## Fix shape
 
