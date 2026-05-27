@@ -1,11 +1,22 @@
 ---
 title: sextant doctor --agents — scan every registered agent for lifecycle drift
-status: open
+status: resolved
 priority: P2
 created_at: 2026-05-26T15:05-07:00
+resolved_at: 2026-05-26T23:35-07:00
 labels: [feature, cli, doctor, operator-experience, self-serve]
 discovered_in: chat TUI Checkpoint C — operator hit a stale-lifecycle agent and the only existing way to find it was per-agent manual investigation
 ---
+
+## Resolution
+
+`sextant doctor --agents` lives in `cmd/sextant/doctor.go` via `collectAgentChecks`. Walks `list_agents`, skips archived (terminal-by-design noise), runs `runAgentCheck` (shared with `sextant agents check` per `[[feat-sextant-agents-check]]`) for each remaining agent, and projects each verdict into a `CheckResult` row alongside the host/config/daemon checks.
+
+Verdict→status mapping: `healthy` → pass, `paused`/`archived` → warn, everything else (`ended` / `stale_record` / `rpc_error` / `not_found`) → fail. Each non-pass row carries the remedy from the underlying AgentCheck so the doctor table renders the same `Fix: …` suffix the host checks already use.
+
+Parallel scanning + the `--include-archived` opt-in from the ticket are deferred — current fleets are small enough that serial scanning is fine, and archived noise has been the dominant ask. File follow-ups if those start mattering.
+
+Tests in `agents_check_test.go::TestAgentCheckToResult` pin the verdict→status mapping.
 
 ## Summary
 

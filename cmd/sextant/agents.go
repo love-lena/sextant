@@ -45,6 +45,7 @@ exec.`,
 	cmd.AddCommand(newAgentsPromptCmd())
 	cmd.AddCommand(newAgentsChatCmd())
 	cmd.AddCommand(newAgentsExecCmd())
+	cmd.AddCommand(newAgentsCheckCmd())
 	return cmd
 }
 

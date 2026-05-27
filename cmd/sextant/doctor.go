@@ -18,7 +18,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/love-lena/sextant/pkg/authjwt"
+	"github.com/love-lena/sextant/pkg/rpc"
 	"github.com/love-lena/sextant/pkg/sextantd"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 	"github.com/love-lena/sextant/pkg/version"
 )
 
@@ -66,7 +68,7 @@ func isDoctorFailureErr(err error) bool { return errors.Is(err, errDoctorFailure
 // per `feat-cli-resource-verb-cleanup` — verb on the sextant install
 // itself, diagnosing the install's health.
 func newDoctorCmd() *cobra.Command {
-	var preflight, contributor bool
+	var preflight, contributor, agentsScan bool
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Health diagnostics for sextantd, NATS, ClickHouse, config",
@@ -80,6 +82,10 @@ before sextant init has ever been run, or from scripts/bootstrap.sh.
 --contributor additionally checks deps needed to build sextant from
 source (go, node, npm). Off by default; operators using installed
 binaries don't need it.
+
+--agents scans every registered agent and flags lifecycle drift
+(stale_record, ended, paused, archived). Pairs with sextant agents
+check <ref> (the single-agent variant). Requires daemon running.
 
 Exit code 0 on all-pass (or only "not running" warnings), 2 on failure.`,
 		Args: cobra.NoArgs,
@@ -95,6 +101,18 @@ Exit code 0 on all-pass (or only "not running" warnings), 2 on failure.`,
 			} else {
 				results = collectChecks(ctx, cfgDir, dataDirAbs, contributor)
 			}
+			if agentsScan && !preflight {
+				agentRows, err := collectAgentChecks(ctx)
+				if err != nil {
+					results = append(results, CheckResult{
+						Kind: "agents", Check: "scan", Status: StatusFail,
+						Detail: err.Error(),
+						Remedy: "sextant daemon start",
+					})
+				} else {
+					results = append(results, agentRows...)
+				}
+			}
 			failed := emit(cmd.OutOrStdout(), results, globalFlags.asJSON)
 			if failed {
 				return errDoctorFailures
@@ -106,6 +124,8 @@ Exit code 0 on all-pass (or only "not running" warnings), 2 on failure.`,
 		"host-dep checks only (skips config, daemon, NATS, ClickHouse)")
 	cmd.Flags().BoolVar(&contributor, "contributor", false,
 		"additionally check contributor deps (go, node, npm)")
+	cmd.Flags().BoolVar(&agentsScan, "agents", false,
+		"scan every registered agent for lifecycle drift")
 	return cmd
 }
 
@@ -511,4 +531,66 @@ func truncate(s string, n int) string {
 		return s[:n]
 	}
 	return "..." + s[len(s)-n+3:]
+}
+
+// collectAgentChecks scans every registered agent via list_agents and
+// runs the shared runAgentCheck (from agents_check.go) against each.
+// Maps the AgentCheck verdict to a CheckResult so doctor's table
+// renders the same way as the host checks. Per
+// `plans/issues/feat-sextant-doctor-agents.md`.
+func collectAgentChecks(ctx context.Context) ([]CheckResult, error) {
+	cli, _, err := connectAgent(ctx, globalFlags.configDir)
+	if err != nil {
+		return nil, fmt.Errorf("connect: %w", err)
+	}
+	defer cli.Close() //nolint:errcheck // best-effort close
+
+	var listResp sextantproto.ListAgentsResponse
+	if err := cli.RPC(ctx, rpc.VerbListAgents,
+		sextantproto.ListAgentsRequest{}, &listResp); err != nil {
+		return nil, fmt.Errorf("list_agents: %w", err)
+	}
+
+	checker := &clientChecker{cli: cli}
+	out := make([]CheckResult, 0, len(listResp.Agents))
+	for _, a := range listResp.Agents {
+		// Skip archived by default — they're terminal-by-design; the
+		// signal is the running set drifting, not archived clutter.
+		if a.Lifecycle == string(sextantproto.LifecycleArchived) {
+			continue
+		}
+		check := runAgentCheck(ctx, checker, a.UUID.String())
+		out = append(out, agentCheckToResult(a.Name, check))
+	}
+	return out, nil
+}
+
+// agentCheckToResult projects an AgentCheck verdict into a
+// CheckResult row for the doctor table. Mapping:
+//
+//	healthy       → StatusPass
+//	paused        → StatusWarn (operator-paused, recoverable)
+//	ended/crashed → StatusFail
+//	stale_record  → StatusFail
+//	rpc_error     → StatusFail
+//	archived      → StatusWarn (we skip archived above; this is the catchall)
+func agentCheckToResult(name string, check AgentCheck) CheckResult {
+	status := StatusFail
+	switch check.Verdict {
+	case "healthy":
+		status = StatusPass
+	case "paused", "archived":
+		status = StatusWarn
+	}
+	detail := fmt.Sprintf("lifecycle=%s", check.Lifecycle)
+	if check.Verdict != "healthy" {
+		detail = fmt.Sprintf("verdict=%s lifecycle=%s", check.Verdict, check.Lifecycle)
+	}
+	return CheckResult{
+		Kind:   "agent",
+		Check:  name,
+		Status: status,
+		Detail: detail,
+		Remedy: check.Remedy,
+	}
 }
