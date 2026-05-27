@@ -1,11 +1,22 @@
 ---
 title: Adopt the Component interface + intent-message routing for Tier 1 TUIs
-status: open
+status: resolved
 priority: P3
 created_at: 2026-05-26T20:33-07:00
+resolved_at: 2026-05-26T23:15-07:00
 labels: [feature, tui, architecture]
 discovered_in: CLI/TUI conventions adoption
 ---
+
+## Resolution
+
+Shipped on main. `pkg/tui/component/` defines the Component interface, shared intent messages (DoneMsg, OpenMsg, LoadMsg), long-running types (LoadingMsg, LoadedMsg, ErrorMsg), and a `Host` helper that wraps a Component for standalone use.
+
+`pkg/tui/chat/` refactored to satisfy the interface: chrome (border + title + status bar) moved out of `Model.View` into a new `standalone.go` host wrapper; direct `tea.Quit` returns replaced with `DoneMsg{}` emits; SetSize/Focus/Blur/Focused/ShortHelp/FullHelp methods added on Model.
+
+Tests in `pkg/tui/chat/standalone_test.go` (golden + interface satisfaction) and `pkg/tui/component/component_test.go` (shared messages, Host wiring). `cmd/sextant-tui-chat-preview/main.go` updated to use the new entry shape.
+
+Building a second Tier 1 component (the ticket's "forcing function") is deferred — best landed against `agents list -i` post-cobra ([[feat-cli-i-flag-tier1-tier2]] is the umbrella).
 
 ## Summary
 
