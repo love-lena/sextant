@@ -95,18 +95,67 @@ func (s *Standalone) renderChrome(width, _ int, content string) string {
 	return strings.Join([]string{header, content, "", status}, "\n")
 }
 
-// renderHeader draws the agent name + optional branch + thin rule.
+// renderHeader draws the lifecycle status dot + agent name + optional
+// branch + thin rule. The dot reflects the most recent lifecycle
+// envelope (feat-chat-tui-status-dot):
+//
+//	green  — started / resumed / restarted / turn_ended
+//	yellow — paused / archived
+//	red    — ended / crashed
+//	muted  — no lifecycle envelope seen yet
+//
 // Moved here from view.go: pre-refactor it lived on Model.View; per
 // the Component contract the host owns chrome.
 func (s *Standalone) renderHeader(width int) string {
 	m := s.inner
+	dot := s.renderLifecycleDot()
 	name := m.styles.HeaderName.Render(m.opts.AgentName)
-	line := name
+	line := dot + " " + name
 	if m.opts.Branch != "" {
 		line += "  " + m.styles.HeaderBranch.Render("⎇ "+m.opts.Branch)
 	}
 	rule := m.styles.HeaderRule.Render(strings.Repeat("─", width))
 	return line + "\n" + rule
+}
+
+// renderLifecycleDot paints a single dot glyph in the role tone that
+// matches the inner Model's last lifecycle envelope. See renderHeader
+// for the color mapping. Falls back to a muted dot when no envelope
+// has been observed.
+func (s *Standalone) renderLifecycleDot() string {
+	const dot = "●"
+	m := s.inner
+	switch s.lifecycleDotRoleClass() {
+	case "success":
+		return m.styles.Success.Render(dot)
+	case "attention":
+		return m.styles.Attention.Render(dot)
+	case "destructive":
+		return m.styles.Destructive.Render(dot)
+	default:
+		return m.styles.Muted.Render(dot)
+	}
+}
+
+// lifecycleDotRoleClass returns the role-class name driving the
+// header dot's color. Split from renderLifecycleDot so tests can
+// assert on the mapping without depending on the terminal's color
+// profile (lipgloss renders styles as plain text under no-color).
+func (s *Standalone) lifecycleDotRoleClass() string {
+	m := s.inner
+	if !m.hasLifecycle {
+		return "muted"
+	}
+	switch m.lastLifecycle.Transition {
+	case "started", "resumed", "restarted", "turn_ended":
+		return "success"
+	case "paused", "archived":
+		return "attention"
+	case "ended", "crashed":
+		return "destructive"
+	default:
+		return "muted"
+	}
 }
 
 // renderStatusBar is the bottom-of-screen strip outside any pane.

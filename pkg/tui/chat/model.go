@@ -73,6 +73,13 @@ type Model struct {
 	composer       textarea.Model
 	send           SendFunc
 	componentFocus bool // tracks the Component.Focused() bit, independent of intra-component focus
+
+	// lastLifecycle is the most recent lifecycle envelope received via
+	// lifecycleMsg. Used by the host's renderHeader to draw the status
+	// dot (feat-chat-tui-status-dot). Zero value when no envelope has
+	// been seen yet — host renders a muted dot in that case.
+	lastLifecycle    sextantproto.LifecyclePayload
+	hasLifecycle     bool
 }
 
 // New returns a *Model with default styles/keys, mode=NORMAL,
@@ -181,9 +188,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case lifecycleMsg:
-		// Status-bar hooks (live/paused) land here later. For MVP we
-		// just absorb the envelope; --tail close lives in program.go.
-		_ = msg
+		// Store the most recent envelope so the host's header can
+		// render a status dot (feat-chat-tui-status-dot). --tail close
+		// lives in program.go.
+		m.lastLifecycle = msg.Payload
+		m.hasLifecycle = true
 		return m, nil
 	case subscriptionEndedMsg:
 		// Upstream channel closed — usually the daemon went away or the

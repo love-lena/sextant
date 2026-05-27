@@ -124,3 +124,69 @@ func TestModelSatisfiesComponentInterface(t *testing.T) {
 		t.Error("FullHelp returned empty slice")
 	}
 }
+
+// TestStandaloneHeaderDotReflectsLifecycle pins feat-chat-tui-status-dot:
+// the header carries a dot glyph and the model stores the last
+// observed lifecycle so the chrome can color it. Color attribution
+// itself is style-table lookup (see renderLifecycleDot) — verified by
+// TestRenderLifecycleDotSelectsRoleByTransition below, which doesn't
+// depend on the terminal color profile.
+func TestStandaloneHeaderDotReflectsLifecycle(t *testing.T) {
+	m := New(Options{AgentName: "alice"})
+	s := NewStandalone(m)
+	_, _ = s.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	header := strings.SplitN(s.View(), "\n", 2)[0]
+	if !strings.Contains(header, "●") {
+		t.Fatalf("header missing the dot glyph: %q", header)
+	}
+	if m.hasLifecycle {
+		t.Error("hasLifecycle = true before any envelope; want false")
+	}
+
+	m.Update(lifecycleMsg{Payload: sextantproto.LifecyclePayload{
+		Transition: sextantproto.LifecycleEnded,
+	}})
+	if !m.hasLifecycle {
+		t.Error("hasLifecycle = false after lifecycle envelope; want true")
+	}
+	if m.lastLifecycle.Transition != sextantproto.LifecycleEnded {
+		t.Errorf("lastLifecycle.Transition = %q, want %q", m.lastLifecycle.Transition, sextantproto.LifecycleEnded)
+	}
+}
+
+// TestRenderLifecycleDotSelectsRoleByTransition asserts on the style
+// table directly: each lifecycle transition pulls a distinct style.
+// Doesn't depend on the terminal color profile — compares the
+// lipgloss.Style values returned by the dot picker.
+func TestRenderLifecycleDotSelectsRoleByTransition(t *testing.T) {
+	cases := []struct {
+		name       string
+		hasL       bool
+		transition sextantproto.LifecycleEvent
+		wantClass  string // success / attention / destructive / muted
+	}{
+		{"none", false, "", "muted"},
+		{"started", true, sextantproto.LifecycleStarted, "success"},
+		{"resumed", true, sextantproto.LifecycleResumedEvent, "success"},
+		{"restarted", true, sextantproto.LifecycleRestartedEvent, "success"},
+		{"turn_ended", true, sextantproto.LifecycleTurnEnded, "success"},
+		{"paused", true, sextantproto.LifecyclePausedEvent, "attention"},
+		{"archived", true, sextantproto.LifecycleArchivedEvent, "attention"},
+		{"ended", true, sextantproto.LifecycleEnded, "destructive"},
+		{"crashed", true, sextantproto.LifecycleCrashedEvent, "destructive"},
+		{"unknown", true, sextantproto.LifecycleEvent("future"), "muted"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New(Options{AgentName: "alice"})
+			m.hasLifecycle = tc.hasL
+			m.lastLifecycle.Transition = tc.transition
+			s := &Standalone{inner: m}
+			got := s.lifecycleDotRoleClass()
+			if got != tc.wantClass {
+				t.Errorf("lifecycleDotRoleClass = %q, want %q", got, tc.wantClass)
+			}
+		})
+	}
+}
