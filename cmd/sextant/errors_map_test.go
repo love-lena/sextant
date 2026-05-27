@@ -174,6 +174,33 @@ func TestErrorBannerPlainModeSuppressesNoResults(t *testing.T) {
 	}
 }
 
+// TestErrorBannerSuppressesStatusNotRunningInBothModes pins the
+// follow-up Codex fix: errStatusNotRunning means the status verb
+// already wrote its own surface (text line in plain mode, JSON
+// status row in --json mode). The banner must stay silent in BOTH
+// modes — without this, --json would emit a second stderr envelope
+// conflicting with the verb's own stdout row.
+func TestErrorBannerSuppressesStatusNotRunningInBothModes(t *testing.T) {
+	for _, asJSON := range []bool{false, true} {
+		name := "text"
+		if asJSON {
+			name = "json"
+		}
+		t.Run(name, func(t *testing.T) {
+			prev := globalFlags.asJSON
+			globalFlags.asJSON = asJSON
+			defer func() { globalFlags.asJSON = prev }()
+
+			var buf strings.Builder
+			errorBanner(&buf, fangStylesZero(), errStatusNotRunning)
+
+			if got := buf.String(); got != "" {
+				t.Errorf("status-not-running banner in %s mode should be silent, got %q", name, got)
+			}
+		})
+	}
+}
+
 // TestErrorBannerPlainMode confirms the default path still writes the
 // pre-cobra plain-text banner. The text mode is the operator's
 // default — don't accidentally JSON-ify it.
