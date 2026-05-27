@@ -109,6 +109,15 @@ func NewRestartAgent(deps RestartDeps) rpc.Handler {
 			return emitErr(emit, sextantproto.ErrCodeInternal,
 				fmt.Sprintf("decode definition: %v", err))
 		}
+		// initialDefRevision pins the revision we read above. The CAS
+		// loop at the end of this handler bails if the def's revision
+		// moves before we commit — that catches the kill_agent /
+		// archive_agent / update_agent race where the operator
+		// intervenes mid-restart. The CAS itself would already reject
+		// the stale write, but checking the revision explicitly lets
+		// us rollback the new incarnation we just spawned instead of
+		// blindly retrying against an external writer's state.
+		initialDefRevision := defEntry.Revision()
 
 		// 2 + 3. Stop the live incarnation. Best-effort — if it's
 		// already gone we still want to spawn a fresh one.
@@ -306,6 +315,23 @@ func NewRestartAgent(deps RestartDeps) rpc.Handler {
 				return emitErr(emit, sextantproto.ErrCodeInternal,
 					fmt.Sprintf("re-read definition before commit: %v", err))
 			}
+			if entry.Revision() != initialDefRevision {
+				// An external writer modified the def between our
+				// initial Get and now — kill_agent / archive_agent /
+				// update_agent racing the restart. Bail with rollback
+				// rather than blindly overwriting their work.
+				// Distinguishing benign edits (e.g. Description) from
+				// terminal transitions (archive / kill) at this layer
+				// would require per-field intent; the conservative
+				// choice is to fail-closed and ask the operator to
+				// re-issue restart. See the Codex 6th-round review.
+				var raced sextantproto.AgentDefinition
+				_ = json.Unmarshal(entry.Value(), &raced)
+				//nolint:contextcheck // rollback intentionally uses a fresh ctx — see comment above
+				rollbackBackgroundStopAndDelete(deps.Containers, deps.Incarnations, container.ID, newIncID.String())
+				return emitErr(emit, sextantproto.ErrCodeBadRequest,
+					fmt.Sprintf("agent %s definition changed during restart (lifecycle=%s); rolled back new incarnation — re-issue restart if still appropriate", def.UUID, raced.Lifecycle))
+			}
 			var fresh sextantproto.AgentDefinition
 			if err := json.Unmarshal(entry.Value(), &fresh); err != nil {
 				//nolint:contextcheck // rollback intentionally uses a fresh ctx — see comment above
@@ -314,6 +340,9 @@ func NewRestartAgent(deps RestartDeps) rpc.Handler {
 					fmt.Sprintf("decode definition before commit: %v", err))
 			}
 			if fresh.Lifecycle == sextantproto.LifecycleArchived {
+				// Defensive: revision check above should already catch
+				// this, but keep the explicit check in case a future
+				// path resets the revision.
 				//nolint:contextcheck // rollback intentionally uses a fresh ctx — see comment above
 				rollbackBackgroundStopAndDelete(deps.Containers, deps.Incarnations, container.ID, newIncID.String())
 				return emitErr(emit, sextantproto.ErrCodeBadRequest,
