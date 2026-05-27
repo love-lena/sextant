@@ -3,6 +3,7 @@ package templates
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/love-lena/sextant/pkg/natsboot"
@@ -376,4 +378,135 @@ func (nopKV) Get(_ context.Context, _ string) (jetstream.KeyValueEntry, error) {
 
 func (nopKV) ListKeys(_ context.Context, _ ...jetstream.WatchOpt) (jetstream.KeyLister, error) {
 	return nil, errors.New("nopKV: not implemented")
+}
+
+// flakyKV reports `nats: connection closed` for the first N Put calls,
+// then succeeds. Used by TestSyncToKVRetriesOnConnectionClosed to pin
+// the bug-flake-daemon-restarts-nats-after-kill fix: a transient NATS
+// outage during the sync (the supervisor's restart-backoff window)
+// must not surface as a fatal start-up error.
+type flakyKV struct {
+	failures int      // remaining synthetic connection-closed errors
+	puts     int      // observed Put attempts (including failures)
+	keys     []string // captured keys for round-trip assertion
+	values   [][]byte // captured values
+}
+
+func (f *flakyKV) Put(_ context.Context, key string, value []byte) (uint64, error) {
+	f.puts++
+	if f.failures > 0 {
+		f.failures--
+		// Wrap the error so errors.Is matches the real failure shape the
+		// nats.go client returns (nats.ErrConnectionClosed.Error() ==
+		// "nats: connection closed"). The retry path matches on the
+		// sentinel via errors.Is, so the wrap matters.
+		return 0, fmt.Errorf("templates: simulated transient outage: %w", nats.ErrConnectionClosed)
+	}
+	f.keys = append(f.keys, key)
+	f.values = append(f.values, append([]byte(nil), value...))
+	return 1, nil
+}
+
+func (f *flakyKV) Get(_ context.Context, _ string) (jetstream.KeyValueEntry, error) {
+	return nil, jetstream.ErrKeyNotFound
+}
+
+func (f *flakyKV) ListKeys(_ context.Context, _ ...jetstream.WatchOpt) (jetstream.KeyLister, error) {
+	return nil, errors.New("flakyKV: not implemented")
+}
+
+// TestSyncToKVRetriesOnConnectionClosed pins the
+// bug-flake-daemon-restarts-nats-after-kill fix. SyncToKV must absorb
+// transient `nats: connection closed` errors (the supervisor restarts
+// NATS within ~100ms-1s; we should not return a fatal error during
+// that window) and succeed once the connection recovers.
+func TestSyncToKVRetriesOnConnectionClosed(t *testing.T) {
+	tpl := Template{
+		Name:        "default",
+		Image:       "sextant-sidecar:latest",
+		Permissions: []string{"read.agents"},
+	}
+	if err := tpl.Validate(); err != nil {
+		t.Fatalf("validate fixture: %v", err)
+	}
+
+	kv := &flakyKV{failures: 3}
+	// Tight retry budget so the test stays fast under -race; production
+	// uses the default budget at SyncDirToKV's call site.
+	if err := SyncToKVWithRetry(context.Background(), kv, []Template{tpl}, RetryPolicy{
+		Budget:   2 * time.Second,
+		Interval: 50 * time.Millisecond,
+	}); err != nil {
+		t.Fatalf("SyncToKVWithRetry: %v", err)
+	}
+	if kv.puts != 4 {
+		t.Errorf("Put attempts = %d, want 4 (3 failures + 1 success)", kv.puts)
+	}
+	if len(kv.keys) != 1 || kv.keys[0] != "default" {
+		t.Errorf("captured keys = %v, want [default]", kv.keys)
+	}
+}
+
+// TestSyncToKVRetryBudgetExpires asserts that a connection that never
+// recovers eventually returns a wrapped error (not an infinite hang).
+// The returned error must still match nats.ErrConnectionClosed so
+// callers can branch on it.
+func TestSyncToKVRetryBudgetExpires(t *testing.T) {
+	tpl := Template{
+		Name:        "default",
+		Image:       "sextant-sidecar:latest",
+		Permissions: []string{"read.agents"},
+	}
+	kv := &flakyKV{failures: 1_000_000} // never recovers within budget
+	err := SyncToKVWithRetry(context.Background(), kv, []Template{tpl}, RetryPolicy{
+		Budget:   100 * time.Millisecond,
+		Interval: 20 * time.Millisecond,
+	})
+	if err == nil {
+		t.Fatal("expected error when retry budget expires")
+	}
+	if !errors.Is(err, nats.ErrConnectionClosed) {
+		t.Errorf("err = %v, want errors.Is(nats.ErrConnectionClosed)", err)
+	}
+}
+
+// TestSyncToKVDoesNotRetryOnPermanentError asserts retries are scoped
+// to transient connection-closed errors only — a permanent error (e.g.
+// validation failure surfacing from the bucket) must bubble up
+// immediately so the operator sees the real problem.
+func TestSyncToKVDoesNotRetryOnPermanentError(t *testing.T) {
+	tpl := Template{
+		Name:        "default",
+		Image:       "sextant-sidecar:latest",
+		Permissions: []string{"read.agents"},
+	}
+	kv := &permanentErrKV{err: errors.New("templates: permission denied")}
+	err := SyncToKVWithRetry(context.Background(), kv, []Template{tpl}, RetryPolicy{
+		Budget:   1 * time.Second,
+		Interval: 10 * time.Millisecond,
+	})
+	if err == nil {
+		t.Fatal("expected permanent error to surface")
+	}
+	if kv.puts != 1 {
+		t.Errorf("Put attempts = %d, want 1 (no retry on permanent error)", kv.puts)
+	}
+}
+
+type permanentErrKV struct {
+	err  error
+	puts int
+}
+
+func (p *permanentErrKV) Put(_ context.Context, _ string, _ []byte) (uint64, error) {
+	p.puts++
+	return 0, p.err
+}
+
+func (p *permanentErrKV) Get(_ context.Context, _ string) (jetstream.KeyValueEntry, error) {
+	return nil, jetstream.ErrKeyNotFound
+}
+
+func (p *permanentErrKV) ListKeys(_ context.Context, _ ...jetstream.WatchOpt) (jetstream.KeyLister, error) {
+	return nil, errors.New("permanentErrKV: not implemented")
 }
