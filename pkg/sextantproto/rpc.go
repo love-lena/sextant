@@ -47,4 +47,11 @@ const (
 	// ErrCodeNotFound is the M14 worktree "no such name" error code.
 	// Generic on purpose so non-agent resources reuse it.
 	ErrCodeNotFound = "not_found"
+	// ErrCodeAgentNotReachable is returned when an RPC against a known
+	// agent is refused because the agent's current state guarantees the
+	// publish would vanish into the void — terminal lifecycle (ended /
+	// crashed / archived), paused (no consumer), or (post-heartbeat-
+	// cache) stale heartbeat. Distinct from ErrCodeAgentNotFound so the
+	// CLI can render a specific remedy (`sextant agents restart`).
+	ErrCodeAgentNotReachable = "agent_not_reachable"
 )

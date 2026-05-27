@@ -1,11 +1,44 @@
 ---
 title: Adopt JSON envelope contract + exit code 10 (no-results) for CLI output
-status: open
+status: resolved
 priority: P3
 created_at: 2026-05-26T20:33-07:00
+resolved_at: 2026-05-27T04:00-07:00
 labels: [feature, cli, output-protocol]
 discovered_in: CLI/TUI conventions adoption
 ---
+
+## Resolution
+
+Shipped across three commits on main:
+
+- `dd32a58` — **`pkg/cliout/`** package with `Envelope`, `MetaInfo`, `ErrorEnvelope`, `ErrorInfo` + stable error code constants. Tests cover the envelope round-trip and ErrorEnvelope shape.
+- `e916508` — **`writeJSON` envelope sweep** in `cmd/sextant/`. Every `--json` site that calls `writeJSON(cmd, out, v)` now emits `{data: v, meta: {version: 1, command: <dotted-path>}}`.
+- `0ebae51` — **Exit code 10 (no-results)** + agents check envelope. `exitNoResults` sentinel in `cmd/sextant/main.go`; `errNoResults` threaded through `agents list` and `pending list` empty-result paths. `specs/cli/commands.md` § "Exit codes" documents 10. `agents check --json` wraps the verdict in the envelope.
+
+Split off as separate tickets:
+
+- [[feat-cli-exit-code-no-results]] — resolved alongside this.
+- [[feat-cli-output-protocol-tail-and-errors]] — needs-input. Wraps the remaining tail.go NDJSON design decision and the error-envelope-under-`--json` execution work.
+- [[feat-cli-output-protocol-wiring]] — resolved as the follow-up that landed the wiring work this ticket started.
+
+## Progress (2026-05-26)
+
+`pkg/cliout/` shipped on main (commit `dd32a58`) with the
+`Envelope`, `ErrorEnvelope`, and supporting types. Tests in
+`pkg/cliout/envelope_test.go` cover the round-trip + error shape.
+
+**Remaining**: wire every `cmd/sextant/*.go` `--json` site to wrap
+its payload via `cliout.EnvelopeFromCommand`. Wrap error paths
+under `--json` with the error envelope. Add `exitNoResults = 10`
+to `cmd/sextant/main.go` and thread the sentinel through commands
+that can legitimately return empty (`agents list`, `pending list`,
+etc.). Update `specs/cli/commands.md` § "Exit codes".
+
+The subagent that started this work stalled mid-flight after
+writing the package but before wiring the CLI. Filed as
+[[feat-cli-output-protocol-wiring]] so the next session has a
+focused starting point.
 
 ## Summary
 

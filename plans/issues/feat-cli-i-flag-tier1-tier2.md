@@ -3,9 +3,22 @@ title: Wire -i flag for Tier 1 component TUIs, sextant tui launcher, and Tier 2 
 status: open
 priority: P3
 created_at: 2026-05-26T20:33-07:00
-labels: [feature, cli, tui, architecture]
+labels: [feature, cli, tui, architecture, needs-input]
 discovered_in: CLI/TUI conventions adoption
 ---
+
+## Needs Lena's input
+
+This ticket bundles three architecturally-distinct pieces (Tier 1 `-i` flag, Tier 1 discovery `sextant tui`, Tier 2 `sextant dash`) that share infrastructure but make different design tradeoffs. Foundations now landed (`pkg/theme`, `pkg/tui/component`, `pkg/fixtures`, cobra-fang); ready to decide how to land the rest.
+
+Open questions worth answering before implementation:
+
+1. **Tier 2 dash pane layout config** — `~/.config/sextant/config.toml` `[[dash.panes]]` table per the ticket, or a more discovery-friendly default that just composes the registered Tier 1 components?
+2. **Tier 1 component registry** — `init()`-time self-registration (each component package registers itself when imported) vs. an explicit registry file. The first is more decentralized; the second is more grep-able.
+3. **`sextant tui` menu sourcing** — read the registry, or hard-code the v1 surface (agents, chat, pending, traces) and grow as new components ship?
+4. **BubbleZone for click regions** — pull in `github.com/lrstanley/bubblezone` now or defer mouse support to a follow-up? The ticket pins mouse-on by default.
+
+Once these answers exist this ticket can split into 2-3 implementation sub-tickets (Tier 1 surface, `sextant tui` discovery, `sextant dash`). For now the foundations are ready; this ticket holds the open design questions.
 
 ## Summary
 

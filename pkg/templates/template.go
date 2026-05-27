@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/pelletier/go-toml/v2"
 )
@@ -273,12 +275,101 @@ type KV interface {
 	ListKeys(ctx context.Context, opts ...jetstream.WatchOpt) (jetstream.KeyLister, error)
 }
 
+// RetryPolicy controls how SyncToKVWithRetry handles transient NATS
+// outages (the supervisor's restart-backoff window after a NATS crash).
+// Zero value defaults to DefaultRetryPolicy via SyncToKVWithRetry.
+type RetryPolicy struct {
+	// Budget is the total wall-clock window allowed for retries. After
+	// Budget elapses with no successful Put, the last underlying error
+	// is returned wrapped. Defaults to 30s when zero — generous enough
+	// to cover a NATS restart on a contended box without hanging the
+	// daemon startup indefinitely.
+	Budget time.Duration
+	// Interval is the wait between retry attempts. Defaults to 200ms.
+	// We use a fixed interval rather than exponential backoff because
+	// the supervisor's restart window is short and bounded; constant
+	// polling matches the "did NATS come back yet?" question better
+	// than a backoff that overshoots the window.
+	Interval time.Duration
+}
+
+// DefaultRetryPolicy returns the retry knobs used by SyncToKV /
+// SyncDirToKV — the daemon-startup template sync path. The budget is
+// sized to cover the supervisor's NATS restart (100ms-1s initial
+// backoff + nats-server startup latency under load).
+func DefaultRetryPolicy() RetryPolicy {
+	return RetryPolicy{
+		Budget:   30 * time.Second,
+		Interval: 200 * time.Millisecond,
+	}
+}
+
+// IsTransientNATSError reports whether err is a transient NATS
+// connection error that should trigger a retry. The supervisor will
+// restart NATS within its backoff window; once the underlying
+// nats.Conn reconnects (assuming reconnect options were set at
+// Connect time) the next Put succeeds.
+//
+// Exported so the daemon's other startup steps (control.startControl,
+// etc.) can branch on the same predicate when they grow their own
+// retry loops.
+func IsTransientNATSError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// errors.Is matches the wrapped sentinel; nats.ErrConnectionClosed
+	// is what nats.go returns from a Put on a closed connection.
+	if errors.Is(err, nats.ErrConnectionClosed) {
+		return true
+	}
+	// nats.ErrNoServers fires when the auto-reconnect loop has not yet
+	// reattached. Same recovery path: wait for the supervisor to bring
+	// NATS back, then re-try the Put.
+	if errors.Is(err, nats.ErrNoServers) {
+		return true
+	}
+	// Belt-and-suspenders for libraries that wrap but don't propagate
+	// the sentinel: match by message. The string match is intentional
+	// — nats.go's KV path occasionally returns a wrapped error with no
+	// errors.Unwrap chain to the sentinel. Without the string match
+	// the retry never triggers and the daemon dies on the first hiccup.
+	msg := err.Error()
+	if strings.Contains(msg, "nats: connection closed") {
+		return true
+	}
+	if strings.Contains(msg, "nats: no servers available") {
+		return true
+	}
+	return false
+}
+
 // SyncToKV writes every template in tpls into the `templates` KV bucket,
 // JSON-encoded so other languages can read them later (TS client doesn't
 // have a TOML parser bundled). Idempotent: re-Put on the same key
 // overwrites, matching the §11b "re-run sextant init is the reload
 // path" semantics.
+//
+// Transient `nats: connection closed` errors trigger a retry under
+// DefaultRetryPolicy — sextantd startup races the NATS supervisor's
+// restart window when the operator triggers a restart-during-startup
+// (the bug-flake-daemon-restarts-nats-after-kill failure mode), and a
+// retry absorbs the hiccup. Callers that want different timing should
+// use SyncToKVWithRetry directly.
 func SyncToKV(ctx context.Context, kv KV, tpls []Template) error {
+	return SyncToKVWithRetry(ctx, kv, tpls, DefaultRetryPolicy())
+}
+
+// SyncToKVWithRetry is the policy-explicit version of SyncToKV. Each
+// per-template Put is retried until the total budget elapses; only
+// transient NATS errors trigger a retry, permanent errors (validation,
+// JetStream bucket missing, etc.) surface immediately.
+func SyncToKVWithRetry(ctx context.Context, kv KV, tpls []Template, policy RetryPolicy) error {
+	if policy.Budget <= 0 {
+		policy.Budget = DefaultRetryPolicy().Budget
+	}
+	if policy.Interval <= 0 {
+		policy.Interval = DefaultRetryPolicy().Interval
+	}
 	for _, t := range tpls {
 		if err := t.Validate(); err != nil {
 			return err
@@ -287,11 +378,44 @@ func SyncToKV(ctx context.Context, kv KV, tpls []Template) error {
 		if err != nil {
 			return fmt.Errorf("templates: marshal %q: %w", t.Name, err)
 		}
-		if _, err := kv.Put(ctx, t.Name, raw); err != nil {
+		if err := putWithRetry(ctx, kv, t.Name, raw, policy); err != nil {
 			return fmt.Errorf("templates: put %q: %w", t.Name, err)
 		}
 	}
 	return nil
+}
+
+// putWithRetry retries a single Put on transient NATS errors. The
+// underlying nats.Conn is expected to be reconnect-capable (the
+// daemon's RPC/MCP connections are; see cmd/sextantd/rpc.go and
+// cmd/sextantd/mcp.go) so the retry has a recovery path.
+func putWithRetry(ctx context.Context, kv KV, key string, value []byte, policy RetryPolicy) error {
+	deadline := time.Now().Add(policy.Budget)
+	var lastErr error
+	for {
+		if err := ctx.Err(); err != nil {
+			if lastErr != nil {
+				return fmt.Errorf("%w (context canceled mid-retry; last: %w)", err, lastErr)
+			}
+			return err
+		}
+		_, err := kv.Put(ctx, key, value)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if !IsTransientNATSError(err) {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("retry budget %s exceeded: %w", policy.Budget, lastErr)
+		}
+		select {
+		case <-time.After(policy.Interval):
+		case <-ctx.Done():
+			return fmt.Errorf("%w (context canceled mid-retry; last: %w)", ctx.Err(), lastErr)
+		}
+	}
 }
 
 // SyncDirToKV reads every *.toml under dir and writes each into the

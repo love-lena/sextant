@@ -1,11 +1,36 @@
 ---
 title: Build pkg/theme/ with role-token vocabulary and base16 YAML themes
-status: open
+status: resolved
 priority: P3
 created_at: 2026-05-26T20:33-07:00
+resolved_at: 2026-05-26T22:34-07:00
 labels: [feature, tui, theming]
 discovered_in: CLI/TUI conventions adoption
 ---
+
+## Resolution
+
+Branch: `feat-tui-theme-package-001`
+
+Built `pkg/theme/` with the role-token vocabulary, base16 YAML
+loader, icon registry, canonical spinner/progress, and the
+`config.toml` schema (`theme = "<name>"`, `icons = "nerd" | "ascii"`)
+with the flag > env > file > defaults precedence ladder. Refactored
+`pkg/tui/chat/style.go` (now `StylesFor(theme.Theme)`) and
+`cmd/sextant-tui-agents/theme.go` (now `themeFor(theme.Theme)`) to
+consume roles; cleaned up the leftover bare `lipgloss.Color("8")`
+calls in `pkg/tui/chat/view.go` to read from the role table.
+
+`grep -rn 'lipgloss.Color("' pkg/tui/ cmd/sextant-tui-*/` reports
+zero hits. Lint clean for files touched (~26 pre-existing lint
+issues unchanged elsewhere); `go test ./...` passes.
+
+The `sextant theme list/import/show` Cobra subcommand is **deferred
+to the cobra+fang migration wave** (concurrent subagent) per the
+ticket dispatch note. Operators can still consume themes today by
+dropping a base16 YAML into `~/.config/sextant/themes/` and setting
+`theme = "<name>"` in `~/.config/sextant/config.toml`; the
+subcommand will only add discovery + import-from-path ergonomics.
 
 ## Summary
 

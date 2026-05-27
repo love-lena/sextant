@@ -209,8 +209,14 @@ func compareSemver(a, b string) int {
 
 // defaultRunCmd is the production implementation of the runFn used by
 // checkGoVersion. Tests pass a fake.
+//
+// `name` is one of a small whitelist of host-dep binary names
+// (`go`, `node`, `npm`, etc.) supplied by the doctor preflight code
+// path, not user input. gosec G204's variable-binary check fires
+// regardless; we suppress it explicitly because the threat model is
+// "operator runs sextant doctor on their own machine".
 func defaultRunCmd(name string, args ...string) ([]byte, error) {
-	return exec.Command(name, args...).Output()
+	return exec.Command(name, args...).Output() //nolint:gosec // binary name is a doctor host-dep whitelist, not user input
 }
 
 // collectHostDepChecks returns one row per host dependency, in display

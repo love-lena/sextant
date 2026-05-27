@@ -1,20 +1,20 @@
 // theme.go — local Lipgloss styles for sextant-tui-agents.
 //
-// M13 ships one TUI; the conventions doc names tokens (Success / Warning /
-// Error / Info / TextPrimary / TextMuted / Border / Highlight) that should
-// eventually live in `pkg/theme/`. Until a second TUI needs them we keep
-// the styles file-local — promoting them now would build an abstraction
-// against a single caller. Moving to `pkg/theme/` is tracked as the
-// follow-up alongside the next TUI (see plans/bootstrap.md after M13).
-//
-// Plan: plans/bootstrap.md#M13
+// Role tokens live in `pkg/theme/`. This file binds them into the
+// local `theme` struct the model layer consults. Adding a new style
+// here means picking a role from `pkg/theme.Theme`, not introducing
+// a bare palette index.
 package main
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
 
-// theme holds the four logical roles M13 needs. Other roles
-// (Warning/Info) land when a TUI needs them.
-type theme struct {
+	"github.com/love-lena/sextant/pkg/theme"
+)
+
+// theme holds the local style table. Fields are populated from
+// `pkg/theme.Theme` via themeFor.
+type localTheme struct {
 	title     lipgloss.Style
 	header    lipgloss.Style
 	row       lipgloss.Style
@@ -25,19 +25,23 @@ type theme struct {
 	errorBar  lipgloss.Style
 }
 
-// defaultTheme returns the M13 baseline styles. Colors are ANSI numbers
-// so the TUI renders identically across terminal palettes — Lipgloss
-// degrades named colors on non-256 terminals, which matters because the
-// operator may SSH in.
-func defaultTheme() theme {
-	return theme{
-		title:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")), // bright blue
-		header:    lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("8")),  // bright black / dim
+// defaultTheme returns the M13 baseline styles hydrated from
+// `pkg/theme`'s built-in adaptive theme. Tests and standalone runs
+// land here; an operator who sets `theme = "..."` in
+// `~/.config/sextant/config.toml` gets their loaded scheme via
+// themeFor.
+func defaultTheme() localTheme { return themeFor(theme.DefaultTheme()) }
+
+// themeFor binds a `pkg/theme.Theme` into the local style table.
+func themeFor(th theme.Theme) localTheme {
+	return localTheme{
+		title:     lipgloss.NewStyle().Bold(true).Foreground(th.Accent),
+		header:    lipgloss.NewStyle().Bold(true).Foreground(th.ForegroundMuted),
 		row:       lipgloss.NewStyle(),
 		rowActive: lipgloss.NewStyle().Reverse(true),
-		muted:     lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
-		status:    lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
-		help:      lipgloss.NewStyle().Foreground(lipgloss.Color("7")),
-		errorBar:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9")), // bright red
+		muted:     lipgloss.NewStyle().Foreground(th.ForegroundMuted),
+		status:    lipgloss.NewStyle().Foreground(th.ForegroundMuted),
+		help:      lipgloss.NewStyle().Foreground(th.Foreground),
+		errorBar:  lipgloss.NewStyle().Bold(true).Foreground(th.Danger),
 	}
 }

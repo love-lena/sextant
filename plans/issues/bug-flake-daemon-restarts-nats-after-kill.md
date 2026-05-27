@@ -1,8 +1,9 @@
 ---
 title: TestDaemonRestartsNATSAfterKill flakes when kill cascade hits template sync
-status: open
+status: fixed
 priority: P3
 created_at: 2026-05-25T17:40-07:00
+fixed_in: d207cd7
 labels: [bug, test, flake, supervisor, nats]
 discovered_in: 2026-05-25 module-rename verification run (1 failure in 1 full-package run; 3/3 passes on isolated retry)
 ---

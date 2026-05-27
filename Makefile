@@ -147,6 +147,18 @@ bootstrap:
 clean:
 	rm -rf $(BIN_DIR)
 
+## screenshots: Render every tests/visual/*.tape via VHS (Docker) and
+##              drop the PNGs into screenshots/. Used by the
+##              design-loop workflow per feat-tui-vhs-fixture-design-loop.
+##              Requires Docker; CI gets the same loop via the
+##              ghcr.io/charmbracelet/vhs image.
+screenshots:
+	@mkdir -p screenshots
+	@for tape in tests/visual/*.tape; do \
+	  echo "vhs $$tape"; \
+	  docker run --rm -v "$$(pwd):/vhs" -w /vhs ghcr.io/charmbracelet/vhs "$$tape" || exit 1; \
+	done
+
 # ---------------------------------------------------------------------------
 # Sidecar container image. Requires a working `docker` (OrbStack on macOS).
 # Intentionally NOT wired into `make test`: the image build pulls multi-MB

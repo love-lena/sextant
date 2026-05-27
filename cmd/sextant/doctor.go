@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -16,8 +15,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/love-lena/sextant/pkg/authjwt"
+	"github.com/love-lena/sextant/pkg/rpc"
 	"github.com/love-lena/sextant/pkg/sextantd"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 	"github.com/love-lena/sextant/pkg/version"
 )
 
@@ -61,55 +64,70 @@ var errDoctorFailures = errors.New("doctor: one or more checks failed")
 
 func isDoctorFailureErr(err error) bool { return errors.Is(err, errDoctorFailures) }
 
-func runDoctor(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("sextant doctor", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	configDir := fs.String("config-dir", "", "config directory (default ~/.config/sextant)")
-	dataDir := fs.String("data-dir", "", "data directory (default ~/.local/share/sextant)")
-	asJSON := fs.Bool("json", false, "emit machine-parseable JSON")
-	preflight := fs.Bool("preflight", false, "host-dep checks only (skips config, daemon, NATS, ClickHouse)")
-	contributor := fs.Bool("contributor", false, "additionally check contributor deps (go, node, npm)")
-	help := fs.Bool("help", false, "print help")
-	if err := fs.Parse(args); err != nil {
-		return errUserUsage(fmt.Sprintf("parse flags: %v", err))
-	}
-	if *help {
-		fmt.Println(doctorUsage)
-		return nil
-	}
-
-	cfgDir, dataDirAbs, err := resolveInitPaths(*configDir, *dataDir)
-	if err != nil {
-		return err
-	}
-
-	var results []CheckResult
-	if *preflight {
-		results = collectHostDepChecks(ctx, *contributor, exec.LookPath, defaultDockerInfo, defaultRunCmd)
-	} else {
-		results = collectChecks(ctx, cfgDir, dataDirAbs, *contributor)
-	}
-	failed := emit(os.Stdout, results, *asJSON)
-	if failed {
-		return errDoctorFailures
-	}
-	return nil
-}
-
-const doctorUsage = `usage: sextant doctor [--config-dir PATH] [--data-dir PATH] [--json] [--preflight] [--contributor]
-
-Runs health diagnostics against the installation rooted at the given
+// newDoctorCmd wires `sextant doctor`. Doctor is a top-level singleton
+// per `feat-cli-resource-verb-cleanup` — verb on the sextant install
+// itself, diagnosing the install's health.
+func newDoctorCmd() *cobra.Command {
+	var preflight, contributor, agentsScan bool
+	cmd := &cobra.Command{
+		Use:   "doctor",
+		Short: "Health diagnostics for sextantd, NATS, ClickHouse, config",
+		Long: `Runs health diagnostics against the installation rooted at the given
 config and data dirs (defaults: ~/.config/sextant, ~/.local/share/sextant).
 
---preflight runs only host-dep checks (nats-server, clickhouse, docker binary + daemon)
-and skips anything that needs config to exist. Use it before
-sextant init has ever been run, or from scripts/bootstrap.sh.
+--preflight runs only host-dep checks (nats-server, clickhouse, docker
+binary + daemon) and skips anything that needs config to exist. Use it
+before sextant init has ever been run, or from scripts/bootstrap.sh.
 
 --contributor additionally checks deps needed to build sextant from
 source (go, node, npm). Off by default; operators using installed
 binaries don't need it.
 
-Exit code 0 on all-pass (or only "not running" warnings), 2 on failure.`
+--agents scans every registered agent and flags lifecycle drift
+(stale_record, ended, paused, archived). Pairs with sextant agents
+check <ref> (the single-agent variant). Requires daemon running.
+
+Exit code 0 on all-pass (or only "not running" warnings), 2 on failure.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx := cmd.Context()
+			cfgDir, dataDirAbs, err := resolveInitPaths(globalFlags.configDir, globalFlags.dataDir)
+			if err != nil {
+				return err
+			}
+			var results []CheckResult
+			if preflight {
+				results = collectHostDepChecks(ctx, contributor, exec.LookPath, defaultDockerInfo, defaultRunCmd)
+			} else {
+				results = collectChecks(ctx, cfgDir, dataDirAbs, contributor)
+			}
+			if agentsScan && !preflight {
+				agentRows, err := collectAgentChecks(ctx)
+				if err != nil {
+					results = append(results, CheckResult{
+						Kind: "agents", Check: "scan", Status: StatusFail,
+						Detail: err.Error(),
+						Remedy: "sextant daemon start",
+					})
+				} else {
+					results = append(results, agentRows...)
+				}
+			}
+			failed := emit(cmd.OutOrStdout(), results, globalFlags.asJSON)
+			if failed {
+				return errDoctorFailures
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&preflight, "preflight", false,
+		"host-dep checks only (skips config, daemon, NATS, ClickHouse)")
+	cmd.Flags().BoolVar(&contributor, "contributor", false,
+		"additionally check contributor deps (go, node, npm)")
+	cmd.Flags().BoolVar(&agentsScan, "agents", false,
+		"scan every registered agent for lifecycle drift")
+	return cmd
+}
 
 // collectChecks runs every diagnostic and returns the rows in display
 // order. We try to keep each check side-effect-free.
@@ -401,7 +419,7 @@ func checkWorkingTree(repoRoot string) (CheckResult, bool) {
 	if _, err := os.Stat(filepath.Join(repoRoot, ".git")); err != nil {
 		return CheckResult{}, false
 	}
-	cmd := exec.Command("git", "-C", repoRoot, "diff", "--name-only", "HEAD")
+	cmd := exec.Command("git", "-C", repoRoot, "diff", "--name-only", "HEAD") //nolint:gosec // repoRoot is loaded from sextantd config, not user input
 	out, err := cmd.Output()
 	if err != nil {
 		return CheckResult{
@@ -426,7 +444,7 @@ func checkWorkingTree(repoRoot string) (CheckResult, bool) {
 
 // gitRevParseHEAD returns the full SHA of HEAD in repoRoot.
 func gitRevParseHEAD(repoRoot string) (string, error) {
-	out, err := exec.Command("git", "-C", repoRoot, "rev-parse", "HEAD").Output()
+	out, err := exec.Command("git", "-C", repoRoot, "rev-parse", "HEAD").Output() //nolint:gosec // repoRoot loaded from sextantd config, not user input
 	if err != nil {
 		return "", err
 	}
@@ -437,10 +455,10 @@ func gitRevParseHEAD(repoRoot string) (string, error) {
 // tip but not from base, and whether base is actually an ancestor of tip.
 // When ancestor is false, the returned count is meaningless.
 func gitAheadCount(repoRoot, base, tip string) (count int, ancestor bool) {
-	if err := exec.Command("git", "-C", repoRoot, "merge-base", "--is-ancestor", base, tip).Run(); err != nil {
+	if err := exec.Command("git", "-C", repoRoot, "merge-base", "--is-ancestor", base, tip).Run(); err != nil { //nolint:gosec // repoRoot loaded from sextantd config, not user input
 		return 0, false
 	}
-	out, err := exec.Command("git", "-C", repoRoot, "rev-list", "--count", base+".."+tip).Output()
+	out, err := exec.Command("git", "-C", repoRoot, "rev-list", "--count", base+".."+tip).Output() //nolint:gosec // repoRoot loaded from sextantd config, not user input
 	if err != nil {
 		return 0, true
 	}
@@ -513,4 +531,66 @@ func truncate(s string, n int) string {
 		return s[:n]
 	}
 	return "..." + s[len(s)-n+3:]
+}
+
+// collectAgentChecks scans every registered agent via list_agents and
+// runs the shared runAgentCheck (from agents_check.go) against each.
+// Maps the AgentCheck verdict to a CheckResult so doctor's table
+// renders the same way as the host checks. Per
+// `plans/issues/feat-sextant-doctor-agents.md`.
+func collectAgentChecks(ctx context.Context) ([]CheckResult, error) {
+	cli, _, err := connectAgent(ctx, globalFlags.configDir)
+	if err != nil {
+		return nil, fmt.Errorf("connect: %w", err)
+	}
+	defer cli.Close() //nolint:errcheck // best-effort close
+
+	var listResp sextantproto.ListAgentsResponse
+	if err := cli.RPC(ctx, rpc.VerbListAgents,
+		sextantproto.ListAgentsRequest{}, &listResp); err != nil {
+		return nil, fmt.Errorf("list_agents: %w", err)
+	}
+
+	checker := &clientChecker{cli: cli}
+	out := make([]CheckResult, 0, len(listResp.Agents))
+	for _, a := range listResp.Agents {
+		// Skip archived by default — they're terminal-by-design; the
+		// signal is the running set drifting, not archived clutter.
+		if a.Lifecycle == string(sextantproto.LifecycleArchived) {
+			continue
+		}
+		check := runAgentCheck(ctx, checker, a.UUID.String())
+		out = append(out, agentCheckToResult(a.Name, check))
+	}
+	return out, nil
+}
+
+// agentCheckToResult projects an AgentCheck verdict into a
+// CheckResult row for the doctor table. Mapping:
+//
+//	healthy       → StatusPass
+//	paused        → StatusWarn (operator-paused, recoverable)
+//	ended/crashed → StatusFail
+//	stale_record  → StatusFail
+//	rpc_error     → StatusFail
+//	archived      → StatusWarn (we skip archived above; this is the catchall)
+func agentCheckToResult(name string, check AgentCheck) CheckResult {
+	status := StatusFail
+	switch check.Verdict {
+	case "healthy":
+		status = StatusPass
+	case "paused", "archived":
+		status = StatusWarn
+	}
+	detail := fmt.Sprintf("lifecycle=%s", check.Lifecycle)
+	if check.Verdict != "healthy" {
+		detail = fmt.Sprintf("verdict=%s lifecycle=%s", check.Verdict, check.Lifecycle)
+	}
+	return CheckResult{
+		Kind:   "agent",
+		Check:  name,
+		Status: status,
+		Detail: detail,
+		Remedy: check.Remedy,
+	}
 }

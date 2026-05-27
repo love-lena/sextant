@@ -29,22 +29,6 @@ type pruneFixture struct {
 	audits        *[]worktree.PruneAudit
 }
 
-func buildPruneFixture(t *testing.T) pruneFixture {
-	t.Helper()
-	mgr, reg, _, repo := buildManager(t)
-
-	archiveRoot := filepath.Join(t.TempDir(), "worktree-archive")
-	audits := []worktree.PruneAudit{}
-	return pruneFixture{
-		mgr:           mgr,
-		reg:           reg,
-		repo:          repo,
-		worktreesRoot: mgr.WorktreesRoot(),
-		archiveRoot:   archiveRoot,
-		audits:        &audits,
-	}
-}
-
 // seedWorktree creates a worktree via the manager and back-dates its
 // LastActivity in KV to `age` ago. Returns the on-disk path.
 func seedWorktree(t *testing.T, fx *pruneFixture, name string, age time.Duration) string {

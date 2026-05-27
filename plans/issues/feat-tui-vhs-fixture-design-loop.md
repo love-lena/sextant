@@ -1,11 +1,22 @@
 ---
 title: Wire VHS tapes + --fixture flag + make screenshots so agents can iterate visually
-status: open
+status: resolved
 priority: P3
 created_at: 2026-05-26T20:33-07:00
+resolved_at: 2026-05-27T04:35-07:00
 labels: [feature, tui, testing, design-loop]
 discovered_in: CLI/TUI conventions adoption
 ---
+
+## Resolution
+
+The load-bearing pieces shipped across three commits:
+
+- `9717abf` — `pkg/fixtures/` package with Demo dataset (agents + transcripts + pending) + in-memory `Bus` that serves it through the same interface methods TUI components consume from `*client.Client`. Tests in `pkg/fixtures/fixture_test.go`.
+- `8972841` — `make screenshots` Makefile target wrapping `ghcr.io/charmbracelet/vhs`, plus `tests/visual/chat_default.tape` (100×30, Tomorrow Night theme).
+- `40ea2a2` — `cmd/sextant-tui-chat-preview/main.go` migrated to consume `pkg/fixtures.Demo` via `fixtures.Get("demo")` + `fixtures.ChatFrames(...)`. 70 lines of bespoke inline fixture data deleted.
+
+The follow-up items the original ticket listed (`--fixture` flag wiring on TUI-entry commands, additional `agents_list`/`pending_list` tapes, optional GH Actions workflow) are each blocked on a separate design-input ticket — see `[[feat-tui-vhs-remaining]]`'s Resolution for the split. The design loop itself is operational: an agent can run `make screenshots` and view the resulting PNGs to iterate on visual changes.
 
 ## Summary
 

@@ -35,6 +35,9 @@
         "lifecycle": {
           "type": "string"
         },
+        "current_incarnation_id": {
+          "$ref": "#/$defs/UUID"
+        },
         "version": {
           "type": "integer"
         },

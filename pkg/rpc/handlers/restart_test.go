@@ -196,6 +196,173 @@ func TestRestartAgentRollsBackLifecycleOnIncarnationPersistFailure(t *testing.T)
 	}
 }
 
+// TestRestartAgentRespectsConcurrentArchive pins the Codex
+// adversarial-review finding: if archive_agent (or any other writer)
+// flips the definition to archived between restart's initial Get and
+// its final Put, the restart handler must NOT overwrite the archive
+// with `lifecycle=running` + a fresh CurrentIncarnationID. Without
+// the re-read-and-check guard, restart would resurrect a stopped
+// agent and undo the operator's archive decision.
+func TestRestartAgentRespectsConcurrentArchive(t *testing.T) {
+	deps, defs, incs, runner, _ := buildDeps(t)
+
+	// Spawn the agent so the rest of the restart flow has live state.
+	spawnH := handlers.NewSpawnAgent(deps)
+	cap := &captureEmit{}
+	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+		Name: "beta", Template: "default",
+	}), cap.emit()); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	var spawnResp sextantproto.SpawnAgentResponse
+	if err := json.Unmarshal(cap.resp.Result, &spawnResp); err != nil {
+		t.Fatalf("decode spawn: %v", err)
+	}
+
+	// Race injection: on the new-incarnation persist (incs Put call 3,
+	// per the existing rollback test's sequence comment), simulate
+	// archive_agent racing in by writing an archived def directly into
+	// the defs bucket. The restart's re-read after this Put must see
+	// the archive and rollback.
+	incs.putHook = func(_ string, callIdx int) error {
+		if callIdx == 3 {
+			entry, err := defs.Get(context.Background(), spawnResp.AgentID.String())
+			if err != nil {
+				return nil // best-effort race injection
+			}
+			var current sextantproto.AgentDefinition
+			if err := json.Unmarshal(entry.Value(), &current); err != nil {
+				return nil
+			}
+			current.Lifecycle = sextantproto.LifecycleArchived
+			current.Version++
+			raw, err := json.Marshal(current)
+			if err != nil {
+				return nil
+			}
+			_, _ = defs.Put(context.Background(), spawnResp.AgentID.String(), raw)
+		}
+		return nil
+	}
+
+	restartH := handlers.NewRestartAgent(handlers.RestartDeps{
+		Definitions:   defs,
+		Incarnations:  incs,
+		Containers:    runner,
+		CA:            deps.CA,
+		WorkspaceRoot: deps.WorkspaceRoot,
+		HostID:        deps.HostID,
+		NATSURL:       deps.NATSURL,
+		NATSUser:      deps.NATSUser,
+		NATSPassword:  deps.NATSPassword,
+		MCPURL:        deps.MCPURL,
+		Issuer:        deps.Issuer,
+	})
+	rcap := &captureEmit{}
+	if err := restartH(context.Background(), makeReq(t, sextantproto.RestartAgentRequest{
+		AgentID: spawnResp.AgentID,
+	}), rcap.emit()); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if rcap.resp.Error == nil {
+		t.Fatal("expected an error — restart must refuse to overwrite the concurrent archive")
+	}
+
+	// Definition must still be archived. If restart's final Put had
+	// gone through with lifecycle=running, this assertion would fail.
+	defSnap := defs.snapshot()
+	var def sextantproto.AgentDefinition
+	if err := json.Unmarshal(defSnap[spawnResp.AgentID.String()], &def); err != nil {
+		t.Fatalf("decode def: %v", err)
+	}
+	if def.Lifecycle != sextantproto.LifecycleArchived {
+		t.Errorf("def.Lifecycle = %s, want archived (restart must not resurrect)",
+			def.Lifecycle)
+	}
+}
+
+// TestRestartAgentRespectsConcurrentKill pins the 6th-round Codex
+// finding: the archive guard alone isn't enough, because kill_agent
+// flips the def to LifecycleDefined (not archived). Without the
+// revision-mismatch check, restart's CAS would overwrite the
+// kill with `lifecycle=running` and a fresh CurrentIncarnationID.
+//
+// The revision check catches every external writer, regardless of
+// whether they moved the lifecycle to archived or defined. The
+// rollback returns the new container.
+func TestRestartAgentRespectsConcurrentKill(t *testing.T) {
+	deps, defs, incs, runner, _ := buildDeps(t)
+
+	spawnH := handlers.NewSpawnAgent(deps)
+	cap := &captureEmit{}
+	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+		Name: "gamma", Template: "default",
+	}), cap.emit()); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	var spawnResp sextantproto.SpawnAgentResponse
+	if err := json.Unmarshal(cap.resp.Result, &spawnResp); err != nil {
+		t.Fatalf("decode spawn: %v", err)
+	}
+
+	// On the new-incarnation persist (incs Put call 3), simulate
+	// kill_agent racing in. Kill's signature: flip def to
+	// LifecycleDefined and bump the revision.
+	incs.putHook = func(_ string, callIdx int) error {
+		if callIdx == 3 {
+			entry, err := defs.Get(context.Background(), spawnResp.AgentID.String())
+			if err != nil {
+				return nil
+			}
+			var current sextantproto.AgentDefinition
+			if err := json.Unmarshal(entry.Value(), &current); err != nil {
+				return nil
+			}
+			current.Lifecycle = sextantproto.LifecycleDefined
+			current.Version++
+			raw, err := json.Marshal(current)
+			if err != nil {
+				return nil
+			}
+			_, _ = defs.Put(context.Background(), spawnResp.AgentID.String(), raw)
+		}
+		return nil
+	}
+
+	restartH := handlers.NewRestartAgent(handlers.RestartDeps{
+		Definitions:   defs,
+		Incarnations:  incs,
+		Containers:    runner,
+		CA:            deps.CA,
+		WorkspaceRoot: deps.WorkspaceRoot,
+		HostID:        deps.HostID,
+		NATSURL:       deps.NATSURL,
+		NATSUser:      deps.NATSUser,
+		NATSPassword:  deps.NATSPassword,
+		MCPURL:        deps.MCPURL,
+		Issuer:        deps.Issuer,
+	})
+	rcap := &captureEmit{}
+	if err := restartH(context.Background(), makeReq(t, sextantproto.RestartAgentRequest{
+		AgentID: spawnResp.AgentID,
+	}), rcap.emit()); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if rcap.resp.Error == nil {
+		t.Fatal("expected an error — restart must refuse to overwrite the concurrent kill")
+	}
+
+	defSnap := defs.snapshot()
+	var def sextantproto.AgentDefinition
+	if err := json.Unmarshal(defSnap[spawnResp.AgentID.String()], &def); err != nil {
+		t.Fatalf("decode def: %v", err)
+	}
+	if def.Lifecycle != sextantproto.LifecycleDefined {
+		t.Errorf("def.Lifecycle = %s, want defined (restart must not resurrect a killed agent)",
+			def.Lifecycle)
+	}
+}
+
 // TestRestartForwardsAPIKey pins [[bug-restart-no-api-key-forwarding]]:
 // the restart handler must forward ANTHROPIC_API_KEY from the daemon's
 // own env into the new container's env, the same way spawn does. Pre-

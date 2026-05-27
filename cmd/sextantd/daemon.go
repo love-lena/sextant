@@ -88,6 +88,12 @@ type daemon struct {
 	// in doShutdown.
 	controlRT *controlRuntime
 
+	// lifecycleRT watches `agents.*.lifecycle` and updates the agent
+	// record so list_agents reflects the latest transition. Built after
+	// rpcRT (we need its operator NATS conn + agent_definitions KV).
+	// See plans/issues/bug-agents-list-stale-lifecycle.md.
+	lifecycleRT *sextantd.LifecycleWatcher
+
 	shutdownOnce sync.Once
 	shutdownErr  error
 }
@@ -378,7 +384,7 @@ func (d *daemon) Start(ctx context.Context) error {
 	// surface would be incomplete) but a per-tick prune error is
 	// logged inside the loop.
 	if worktreeRT != nil {
-		if err := worktreeRT.startPruneLoop(d.supCtx); err != nil {
+		if err := worktreeRT.startPruneLoop(d.supCtx); err != nil { //nolint:contextcheck // d.supCtx is the daemon supervisor's long-lived context — distinct from the bootstrap ctx by design
 			_ = spawnRT.containers.Close()
 			_ = rpcRT.stopRPC()
 			_ = mcpRT.stop(ctx)
@@ -432,6 +438,29 @@ func (d *daemon) Start(ctx context.Context) error {
 	}
 	d.mu.Lock()
 	d.controlRT = controlRT
+	d.mu.Unlock()
+
+	// 15. Lifecycle watcher — subscribes to agents.*.lifecycle so the
+	// agent record reflects sidecar-driven transitions (ended / crashed
+	// / paused / archived) that the spawn/restart/kill handlers don't
+	// produce.
+	lifecycleRT, err := sextantd.NewLifecycleWatcher(rpcRT.nc, rpcRT.agentDefsKV)
+	if err != nil {
+		_ = controlRT.stop()
+		_ = spawnRT.containers.Close()
+		_ = rpcRT.stopRPC()
+		_ = mcpRT.stop(ctx)
+		if d.supCancel != nil {
+			d.supCancel()
+		}
+		d.closeSocket()
+		_ = sextantd.RemoveRuntimeInfo(d.cfg.Paths.RuntimeFile)
+		_ = d.stopClickHouseNow(ctx)
+		_ = d.stopNATSNow(ctx)
+		return fmt.Errorf("start lifecycle watcher: %w", err)
+	}
+	d.mu.Lock()
+	d.lifecycleRT = lifecycleRT
 	d.mu.Unlock()
 
 	log.Printf("sextantd: ready (nats=%s clickhouse=%s control=%s rpc=sextant.rpc.* mcp=%s)",
@@ -489,6 +518,8 @@ func (d *daemon) doShutdown() error {
 	d.spawnRT = nil
 	controlRT := d.controlRT
 	d.controlRT = nil
+	lifecycleRT := d.lifecycleRT
+	d.lifecycleRT = nil
 	worktreeRT := d.worktreeRT
 	d.worktreeRT = nil
 	d.mu.Unlock()
@@ -497,6 +528,11 @@ func (d *daemon) doShutdown() error {
 		// Independent of the supervisors so it can drain before NATS
 		// goes away (the unsubscribe needs a live conn).
 		worktreeRT.stopPruneLoop()
+	}
+	if lifecycleRT != nil {
+		if err := lifecycleRT.Stop(); err != nil {
+			errs = append(errs, fmt.Errorf("lifecycle watcher stop: %w", err))
+		}
 	}
 	if controlRT != nil {
 		if err := controlRT.stop(); err != nil {

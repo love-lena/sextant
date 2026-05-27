@@ -237,6 +237,10 @@ func (a kvMutableAdapter) Put(ctx context.Context, key string, value []byte) (ui
 	return a.kv.Put(ctx, key, value)
 }
 
+func (a kvMutableAdapter) Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error) {
+	return a.kv.Update(ctx, key, value, revision)
+}
+
 func (a kvMutableAdapter) Delete(ctx context.Context, key string, opts ...jetstream.KVDeleteOpt) error {
 	return a.kv.Delete(ctx, key, opts...)
 }

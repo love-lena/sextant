@@ -44,6 +44,7 @@ export interface AgentDefinition {
   tools?: string[];
   host_pin?: string;
   lifecycle: string;
+  current_incarnation_id?: UUID;
   version: number;
   created_at: Timestamp;
   updated_at: Timestamp;
@@ -124,6 +125,21 @@ export interface AgentIncarnation {
   state: string;
   exit_code?: number;
   jwt_key_id?: string;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "ArchiveAgentRequest".
+ */
+export interface ArchiveAgentRequest {
+  agent_id: UUID;
+  grace_seconds?: number;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "ArchiveAgentResponse".
+ */
+export interface ArchiveAgentResponse {
+  ok: boolean;
 }
 /**
  * This interface was referenced by `SextantProtoBundle`'s JSON-Schema

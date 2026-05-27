@@ -1,11 +1,29 @@
 ---
 title: sextant agents check <ref> — one-shot agent health probe with verdict + remedy
-status: open
+status: resolved
 priority: P2
 created_at: 2026-05-26T15:05-07:00
+resolved_at: 2026-05-26T23:35-07:00
 labels: [feature, cli, operator-experience, self-serve]
 discovered_in: chat TUI Checkpoint C — operator had no built-in "what's wrong with this agent" command
 ---
+
+## Resolution
+
+`sextant agents check <ref>` lives at `cmd/sextant/agents_check.go`. Probes (in order):
+
+1. `resolveAgentRef` — covers name/UUID resolution + not_found path.
+2. `get_agent_status` RPC — pulls the agent record's lifecycle (kept fresh by the LifecycleWatcher from `[[bug-agents-list-stale-lifecycle]]`).
+
+Synthesizes one of: `healthy`, `ended` (lifecycle ended/crashed), `paused`, `archived`, `stale_record` (defined / unknown), `not_found`, `rpc_error`. Each non-healthy verdict ships a remedy command the operator can copy-paste.
+
+`--json` emits a stable `AgentCheck` schema for scripting.
+
+The container-presence + heartbeat-freshness probes the ticket also enumerated are deferred to `[[feat-prompt-agent-heartbeat-staleness]]` (heartbeat cache) — once that cache exists the check picks up another field. Container probe (`docker ps`-equivalent) is filed separately if needed.
+
+Tests in `agents_check_test.go` cover every verdict branch (5 lifecycles + not_found + rpc_error) plus the JSON / text rendering shapes.
+
+The bulk variant ships as `sextant doctor --agents` ([[feat-sextant-doctor-agents]]) sharing the same `runAgentCheck` helper.
 
 ## Summary
 

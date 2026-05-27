@@ -1,57 +1,19 @@
+// status.go owns `doStatus` — the testable body of `sextant daemon
+// status`. The cobra wiring lives in daemon.go.
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
-	"os"
 	"time"
 
 	"github.com/love-lena/sextant/pkg/sextantd"
 )
 
-// runStatus implements `sextant status`. It surfaces the daemon's
-// runtime.json contents in a human-readable table (or JSON via --json)
-// and uses exit codes to signal liveness so it composes well with
-// shell scripts and supervisors:
-//
-//	0 — running and PID is alive
-//	1 — no runtime.json OR runtime.json points at a dead PID
-//
-// Plan: plans/issues/feat-daemon-lifecycle-ergonomics.md (fix #3).
-func runStatus(_ context.Context, args []string) error {
-	fs := flag.NewFlagSet("sextant status", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	configDir := fs.String("config-dir", "", "config directory (default ~/.config/sextant)")
-	dataDir := fs.String("data-dir", "", "data directory (default ~/.local/share/sextant)")
-	asJSON := fs.Bool("json", false, "emit machine-parseable JSON")
-	help := fs.Bool("help", false, "print help")
-	if err := fs.Parse(args); err != nil {
-		return errUserUsage(fmt.Sprintf("parse flags: %v", err))
-	}
-	if *help {
-		fmt.Println(statusUsage)
-		return nil
-	}
-
-	cfg, err := loadDaemonConfig(*configDir, *dataDir)
-	if err != nil {
-		return err
-	}
-	return doStatus(os.Stdout, cfg, *asJSON)
-}
-
-const statusUsage = `usage: sextant status [--config-dir DIR] [--data-dir DIR] [--json]
-
-Reads runtime.json, probes the recorded PID with signal 0, and prints a
-table. Exit 0 if alive, 1 if not running or stale.`
-
 // statusRow is the JSON shape returned by --json. Mirrors the human
-// table 1:1 so an operator who's debugged the text output can pivot to
-// scripting without re-learning the field names.
+// table 1:1.
 type statusRow struct {
 	Daemon      daemonStatusJSON `json:"daemon"`
 	NATS        subprocessJSON   `json:"nats"`
@@ -80,7 +42,7 @@ type mcpStatusJSON struct {
 	Stdio string `json:"stdio,omitempty"`
 }
 
-// doStatus is the testable body of `sextant status`. Returns
+// doStatus is the testable body of `sextant daemon status`. Returns
 // errStatusNotRunning when the daemon is not up so the dispatcher can
 // translate to exit code 1.
 func doStatus(w io.Writer, cfg sextantd.Config, asJSON bool) error {
@@ -118,7 +80,6 @@ func doStatus(w io.Writer, cfg sextantd.Config, asJSON bool) error {
 		return errStatusNotRunning
 	}
 
-	// Update log path with whatever runtime.json may have advertised.
 	logPath = daemonLogPath(cfg.Paths.DataDir, st.Info)
 	uptime := time.Since(st.Info.StartedAt).Round(time.Second)
 	if asJSON {
@@ -165,8 +126,6 @@ func defaultStr(s, fallback string) string {
 func emitStatusJSON(w io.Writer, row statusRow) {
 	raw, err := json.MarshalIndent(row, "", "  ")
 	if err != nil {
-		// MarshalIndent can only fail on a programming-level type error
-		// here; nothing meaningful to recover from.
 		printf(w, "{\"error\":\"marshal: %v\"}\n", err)
 		return
 	}
