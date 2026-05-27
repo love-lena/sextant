@@ -1,0 +1,117 @@
+---
+title: Adopt JSON envelope contract + exit code 10 (no-results) for CLI output
+status: open
+priority: P3
+created_at: 2026-05-26T20:33-07:00
+labels: [feature, cli, output-protocol]
+discovered_in: CLI/TUI conventions adoption
+---
+
+## Summary
+
+`conventions/tui-conventions.md` (Tier 0 → JSON contract) pins a
+stable output protocol:
+
+```json
+{
+  "data": [...],
+  "meta": {"version": 1, "command": "queue list"}
+}
+```
+
+Errors get an envelope too, on stderr with non-zero exit:
+
+```json
+{"error": {"code": "AGENT_NOT_FOUND", "message": "no agent with id xyz"}}
+```
+
+Schema rules: fields can be added, never removed or renamed; types
+don't change; enums grow but don't reorder. Breaking changes bump
+`meta.version`. Error codes are stable; messages are human and can
+change.
+
+The conventions doc also pins **exit code 10 = no results found** as
+distinct from real errors (so shell loops can branch on it).
+
+Current state:
+
+- `cmd/sextant/agents.go:625` (`writeJSON`) emits the raw proto
+  response with no envelope. Same for every other `--json` path.
+- `cmd/sextant/main.go:134` defines exit codes 0 (`exitOK`), 1
+  (`exitUser`), 2 (`exitSystem`). No exit code 10.
+- `specs/cli/commands.md` § "Exit codes" only documents 0/1/2.
+
+## Fix shape
+
+1. Define a small `pkg/cliout/envelope.go` package:
+
+   ```go
+   type Envelope struct {
+       Data any      `json:"data"`
+       Meta MetaInfo `json:"meta"`
+   }
+
+   type MetaInfo struct {
+       Version int    `json:"version"`
+       Command string `json:"command"`
+   }
+
+   type ErrorEnvelope struct {
+       Error ErrorInfo `json:"error"`
+   }
+
+   type ErrorInfo struct {
+       Code    string `json:"code"`    // stable, screaming-snake
+       Message string `json:"message"` // human-readable
+   }
+   ```
+
+2. Wrap every `--json` emission site in `cmd/sextant/` with
+   `EnvelopeFromCommand(cmd, data)`. The `command` field should
+   resolve to the canonical dotted command path (`agents.list`,
+   `pending.list`, etc.).
+
+3. Wrap every error path that exits non-zero with the error
+   envelope when `--json` is set. Define stable codes for the common
+   shapes: `AGENT_NOT_FOUND`, `DAEMON_UNREACHABLE`, `INVALID_REF`,
+   `RPC_TIMEOUT`, `USAGE_ERROR`, `NO_RESULTS`.
+
+4. Add `exitNoResults = 10` to `cmd/sextant/main.go` and thread it
+   through commands that can legitimately return zero results
+   (`agents list`, `pending list`, `audit query`, `tail`-with-bound,
+   `traces show` when the trace doesn't exist). Use a sentinel
+   error type (`errNoResults`) so `exitCodeFor` can branch on it.
+
+5. Update `specs/cli/commands.md` § "Exit codes" to document
+   exit code 10 alongside 0/1/2.
+
+## Schema evolution rule
+
+A new field on `Envelope.Data` or any payload struct is additive.
+Renames, removals, or enum reorderings require bumping
+`meta.version` and gating on a CLI flag (`--meta-version=2`) for at
+least one release. Codify in `pkg/cliout/doc.go`.
+
+## Acceptance
+
+- `sextant agents list --json` output matches:
+  `{"data":[...], "meta":{"version":1, "command":"agents.list"}}`.
+- `sextant agents show 00000000-... --json` (nonexistent agent) writes
+  `{"error":{"code":"AGENT_NOT_FOUND","message":"..."}}` to stderr,
+  exits 1.
+- `sextant pending list --json` with no pending requests writes
+  `{"data":[], "meta":...}` to stdout, exits 10.
+- `specs/cli/commands.md` § "Exit codes" lists 10.
+- One test per error code asserts both envelope shape and exit code.
+
+## Open
+
+- Should the envelope ride a top-level `--meta-version` flag, or
+  always emit `version: 1` and bump implicitly when we change shape?
+  Lean implicit-bump until v2 forces the issue.
+
+## Related
+
+- `conventions/tui-conventions.md` § "Tier 0 → JSON contract"
+- `specs/cli/commands.md` § "Output formats" / "Exit codes"
+- [[feat-cli-cobra-fang-migration]]
