@@ -1,8 +1,9 @@
 ---
 title: Sidecar NATS client doesn't reconnect after DISCONNECT — agent goes deaf to the bus
-status: open
+status: fixed
 priority: P1
 created_at: 2026-05-26T17:30-07:00
+fixed_in: de15098
 labels: [bug, sidecar, nats, resilience, network]
 discovered_in: chat TUI Checkpoint C — laptop slept, came back, assistant agent stopped responding; daemon and container still healthy
 ---
