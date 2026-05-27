@@ -1,11 +1,21 @@
 ---
 title: agents list / show lifecycle field is stale — doesn't reflect lifecycle envelopes
-status: open
+status: resolved
 priority: P1
 created_at: 2026-05-26T15:05-07:00
+resolved_at: 2026-05-26T22:00-07:00
 labels: [bug, daemon, observability, operator-experience]
 discovered_in: chat TUI Checkpoint C — agent `2b5fcfe4-…` showed `lifecycle: running` in `agents list` but had emitted `transition=ended` on its own lifecycle stream ~14h earlier
 ---
+
+## Resolution
+
+Branch `feat/agents-list-lifecycle-v2`, target main.
+
+- `pkg/sextantd/lifecycle_watcher.go` — `LifecycleWatcher` subscribes to `agents.*.lifecycle`, decodes each envelope, maps the transition to a `LifecycleState`, and updates the agent record in the `agent_definitions` KV. Drops unknown-agent envelopes; no-ops on `turn_ended` and unknown future transitions; no-ops when the record already holds the target state (avoids version-churning spawn/restart writes).
+- `pkg/sextantproto/agent.go` — adds `LifecycleEndedState` and `LifecycleCrashedState` so the record can carry the terminal transitions (suffixed `…State` to avoid colliding with `LifecycleEnded` the wire `LifecycleEvent`).
+- `cmd/sextantd/daemon.go` — wires `lifecycleRT` into Start (after rpcRT/spawnRT/controlRT) and stops it in doShutdown ahead of the conn close.
+- Tests: `lifecycle_watcher_test.go` exercises the handler directly against a fake KV — covers the four state-changing transitions, turn_ended no-op, unknown-agent drop, version bump, and idempotent-skip. Mock-based rather than a full natsboot harness; the original integration-shaped test had a NATS connectivity issue that needs separate debugging (see [[bug-natsboot-test-harness-flake]]).
 
 ## Summary
 

@@ -12,12 +12,22 @@ const (
 	LifecycleRunning  LifecycleState = "running"
 	LifecyclePaused   LifecycleState = "paused"
 	LifecycleArchived LifecycleState = "archived"
+	// LifecycleEndedState is the terminal "sidecar exited cleanly"
+	// state. The daemon's lifecycle watcher writes this when the
+	// sidecar publishes `transition=ended` on agents.<uuid>.lifecycle.
+	// Suffixed "...State" because LifecycleEnded names a LifecycleEvent
+	// in payloads.go; both share the wire string "ended".
+	LifecycleEndedState LifecycleState = "ended"
+	// LifecycleCrashedState is the terminal "sidecar exited with failure"
+	// state — set when the sidecar publishes `transition=crashed`.
+	LifecycleCrashedState LifecycleState = "crashed"
 )
 
 // IsValid reports whether s is a recognized LifecycleState.
 func (s LifecycleState) IsValid() bool {
 	switch s {
-	case LifecycleDefined, LifecycleRunning, LifecyclePaused, LifecycleArchived:
+	case LifecycleDefined, LifecycleRunning, LifecyclePaused, LifecycleArchived,
+		LifecycleEndedState, LifecycleCrashedState:
 		return true
 	default:
 		return false
