@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
+	"github.com/love-lena/sextant/pkg/cliout"
 	"github.com/love-lena/sextant/pkg/client"
 	"github.com/love-lena/sextant/pkg/rpc"
 	"github.com/love-lena/sextant/pkg/sextantd"
@@ -107,7 +107,7 @@ func newAgentsListCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if globalFlags.asJSON {
-				return writeJSON(out, resp)
+				return writeJSON(cmd, out, resp)
 			}
 			if len(resp.Agents) == 0 {
 				_, err := fmt.Fprintln(out, "no agents")
@@ -151,7 +151,7 @@ func newAgentsShowCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if globalFlags.asJSON {
-				return writeJSON(out, resp.Status)
+				return writeJSON(cmd, out, resp.Status)
 			}
 			printf(out, "UUID:      %s\n", resp.Status.UUID)
 			printf(out, "Name:      %s\n", resp.Status.Name)
@@ -194,7 +194,7 @@ func newAgentsSpawnCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if globalFlags.asJSON {
-				return writeJSON(out, resp)
+				return writeJSON(cmd, out, resp)
 			}
 			printf(out, "agent_id: %s\n", resp.AgentID)
 			return nil
@@ -273,7 +273,7 @@ func newAgentsKillCmd() *cobra.Command {
 		}
 		out := cmd.OutOrStdout()
 		if globalFlags.asJSON {
-			return writeJSON(out, resp)
+			return writeJSON(cmd, out, resp)
 		}
 		if resp.OK {
 			_, err = fmt.Fprintln(out, "ok")
@@ -331,7 +331,7 @@ func newAgentsRestartCmd() *cobra.Command {
 		}
 		out := cmd.OutOrStdout()
 		if globalFlags.asJSON {
-			return writeJSON(out, resp)
+			return writeJSON(cmd, out, resp)
 		}
 		if resp.OK {
 			_, err = fmt.Fprintf(out, "agent_id: %s\n", resp.AgentID)
@@ -380,7 +380,7 @@ agent currently in lifecycle=defined.`,
 			if !proceed {
 				return nil
 			}
-			return runAgentsArchiveAllDead(ctx, cmd.OutOrStdout(), cli)
+			return runAgentsArchiveAllDead(ctx, cmd, cmd.OutOrStdout(), cli)
 		}
 		if len(args) != 1 {
 			return errUserUsage("sextant agents archive <agent> | --all-dead")
@@ -405,7 +405,7 @@ agent currently in lifecycle=defined.`,
 		}
 		out := cmd.OutOrStdout()
 		if globalFlags.asJSON {
-			return writeJSON(out, resp)
+			return writeJSON(cmd, out, resp)
 		}
 		if resp.OK {
 			_, err = fmt.Fprintln(out, "ok")
@@ -422,7 +422,7 @@ agent currently in lifecycle=defined.`,
 // runAgentsArchiveAllDead lists every agent in lifecycle=defined and
 // issues an archive_agent RPC for each. Failures on individual agents
 // are logged but don't abort the loop.
-func runAgentsArchiveAllDead(ctx context.Context, out io.Writer, cli *client.Client) error {
+func runAgentsArchiveAllDead(ctx context.Context, cmd *cobra.Command, out io.Writer, cli *client.Client) error {
 	var listResp sextantproto.ListAgentsResponse
 	listCtx, listCancel := context.WithTimeout(ctx, 30*time.Second)
 	err := cli.RPC(listCtx, rpc.VerbListAgents, sextantproto.ListAgentsRequest{
@@ -452,7 +452,7 @@ func runAgentsArchiveAllDead(ctx context.Context, out io.Writer, cli *client.Cli
 		results = append(results, r)
 	}
 	if globalFlags.asJSON {
-		return writeJSON(out, results)
+		return writeJSON(cmd, out, results)
 	}
 	if len(results) == 0 {
 		_, err := fmt.Fprintln(out, "no defined agents to archive")
@@ -544,7 +544,7 @@ func newAgentsPromptCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if globalFlags.asJSON {
-				return writeJSON(out, resp)
+				return writeJSON(cmd, out, resp)
 			}
 			if resp.OK {
 				_, err = fmt.Fprintln(out, "ok")
@@ -554,14 +554,17 @@ func newAgentsPromptCmd() *cobra.Command {
 	}
 }
 
-// writeJSON pretty-prints v to w with a trailing newline.
-func writeJSON(w io.Writer, v any) error {
-	raw, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	_, err = fmt.Fprintln(w, string(raw))
-	return err
+// writeJSON wraps the payload v in the stable cliout envelope contract
+// and writes it pretty-printed to w with a trailing newline. The cobra
+// command's path becomes `meta.command` so downstream scripts can
+// branch on which verb produced the envelope.
+//
+// Per `feat-cli-output-protocol.md`. Centralized here (vs each verb
+// importing pkg/cliout directly) so the call-site signature change
+// stays one mechanical perl sweep instead of N edits — and so a
+// future schema bump touches one line, not every emission site.
+func writeJSON(cmd *cobra.Command, w io.Writer, v any) error {
+	return cliout.WriteEnvelope(w, cliout.EnvelopeFromCommand(cmd, v))
 }
 
 // ensureNotEmpty is a tiny helper for usage-error reporting.

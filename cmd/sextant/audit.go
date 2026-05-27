@@ -73,7 +73,7 @@ func newAuditQueryCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if globalFlags.asJSON {
-				return writeJSON(out, resp)
+				return writeJSON(cmd, out, resp)
 			}
 			if len(resp.Rows) == 0 {
 				_, err := fmt.Fprintln(out, "no audit rows")

@@ -52,12 +52,12 @@ func newTemplatesReloadCmd() *cobra.Command {
 			out := cmd.OutOrStdout()
 			if resp.Error != "" {
 				if globalFlags.asJSON {
-					return writeJSON(out, resp)
+					return writeJSON(cmd, out, resp)
 				}
 				return fmt.Errorf("daemon: %s", resp.Error)
 			}
 			if globalFlags.asJSON {
-				return writeJSON(out, resp)
+				return writeJSON(cmd, out, resp)
 			}
 			_, err = fmt.Fprintf(out, "synced %d template(s)\n", resp.Count)
 			return err

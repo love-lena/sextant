@@ -72,7 +72,7 @@ func newFilesReadCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if globalFlags.asJSON {
-				return writeJSON(out, resp)
+				return writeJSON(cmd, out, resp)
 			}
 			_, err = out.Write(resp.Content)
 			return err
@@ -106,7 +106,7 @@ func newFilesLsCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if globalFlags.asJSON {
-				return writeJSON(out, resp)
+				return writeJSON(cmd, out, resp)
 			}
 			tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
 			for _, e := range resp.Entries {
