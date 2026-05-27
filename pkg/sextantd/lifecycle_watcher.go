@@ -120,26 +120,6 @@ type LifecycleWatcher struct {
 
 	mu  sync.Mutex
 	sub *nats.Subscription
-
-	// currentIncarnation tracks the most recent live IncarnationID for
-	// each agent (recorded when transition=started/resumed/restarted
-	// arrives). Terminal envelopes (ended/crashed/paused) from any
-	// non-matching IncarnationID get dropped — this is the
-	// stale-incarnation filter Codex flagged: after restart_agent
-	// publishes a fresh `started`, a delayed `ended` from the prior
-	// (now-stopped) incarnation must not rewrite the record away
-	// from running.
-	//
-	// Held under mu. Grows monotonically per-agent — never shrunk;
-	// archive_agent and kill_agent don't go through this path, so
-	// entries linger until process restart. That's fine: the map
-	// stores one UUID per agent, and entries are overwritten by the
-	// next start.
-	//
-	// Warm-up: when an agent has no entry (daemon restart with
-	// pre-existing live agents), incoming envelopes are allowed
-	// through. The next `started` envelope establishes the baseline.
-	currentIncarnation map[uuid.UUID]uuid.UUID
 }
 
 // NewLifecycleWatcher subscribes to `agents.*.lifecycle` and returns a
@@ -221,69 +201,32 @@ func (w *LifecycleWatcher) handle(msg *nats.Msg) {
 		// turn_ended or an unknown future transition. No-op.
 		return
 	}
-	if isIncarnationStarting(payload.Transition) {
-		// `started` / `resumed` / `restarted` establish the new live
-		// incarnation. Subsequent terminal envelopes from any OTHER
-		// incarnation for this agent are stale and will be dropped.
-		w.recordCurrentIncarnation(payload.AgentUUID, payload.IncarnationID)
-	} else if !w.isCurrentIncarnation(payload.AgentUUID, payload.IncarnationID) {
-		// Terminal envelope (ended / crashed / paused / archived) from
-		// a non-current incarnation. Drop — the most common case is a
-		// restart_agent's prior incarnation finally publishing its
-		// `ended` after the daemon swapped to a fresh incarnation
-		// that is already `running`. Without this guard the watcher
-		// would rewrite the live agent's record to `ended`. See the
-		// Codex follow-up review finding 2.
-		log.Printf("sextantd: lifecycle watcher: drop stale %s envelope for agent=%s incarnation=%s (current incarnation differs)",
-			payload.Transition, payload.AgentUUID, payload.IncarnationID)
-		return
-	}
-	if err := w.applyTransition(payload.AgentUUID.String(), state); err != nil {
+	if err := w.applyTransition(payload.AgentUUID.String(), payload.IncarnationID, state); err != nil {
 		log.Printf("sextantd: lifecycle watcher: apply %s/%s: %v",
 			payload.AgentUUID, payload.Transition, err)
 	}
 }
 
-// isIncarnationStarting reports whether the given transition signals
-// that a fresh incarnation is now live — i.e. the IncarnationID
-// carried by the envelope should be recorded as the current live one
-// for the agent. `started` is the spawn-time signal; `resumed` and
-// `restarted` are sidecar-driven equivalents.
-func isIncarnationStarting(t sextantproto.LifecycleEvent) bool {
-	switch t {
-	case sextantproto.LifecycleStarted,
-		sextantproto.LifecycleResumedEvent,
-		sextantproto.LifecycleRestartedEvent:
-		return true
+// watcherShouldDropForIncarnation reports whether the watcher should
+// drop a lifecycle envelope based on the incarnation match. Returns
+// true (drop) when the def carries a known CurrentIncarnationID AND
+// it differs from the envelope's IncarnationID. Returns false (apply)
+// when:
+//
+//   - def.CurrentIncarnationID is zero (uuid.Nil) — pre-incarnation-
+//     field installs OR agents whose def was last touched before
+//     spawn/restart populated the field. Warm-up: trust the bus.
+//   - envelope IncarnationID matches def.CurrentIncarnationID.
+//   - envelope IncarnationID is zero — shouldn't happen on the bus,
+//     but we don't block on the case.
+func watcherShouldDropForIncarnation(current, envelope uuid.UUID) bool {
+	if current == uuid.Nil {
+		return false
 	}
-	return false
-}
-
-// recordCurrentIncarnation marks `incarnation` as the most-recent live
-// incarnation for `agent`. Any prior incarnation IDs are overwritten.
-// Safe to call from the NATS dispatcher goroutine — internal map is
-// mu-protected.
-func (w *LifecycleWatcher) recordCurrentIncarnation(agent, incarnation uuid.UUID) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.currentIncarnation == nil {
-		w.currentIncarnation = map[uuid.UUID]uuid.UUID{}
+	if envelope == uuid.Nil {
+		return false
 	}
-	w.currentIncarnation[agent] = incarnation
-}
-
-// isCurrentIncarnation reports whether `incarnation` matches the most-
-// recently-recorded live incarnation for `agent`. When the watcher
-// has no record for the agent (warm-up case after a daemon restart),
-// returns true so the incoming envelope is allowed through.
-func (w *LifecycleWatcher) isCurrentIncarnation(agent, incarnation uuid.UUID) bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	current, ok := w.currentIncarnation[agent]
-	if !ok {
-		return true
-	}
-	return current == incarnation
+	return current != envelope
 }
 
 // applyTransition reads the current AgentDefinition, decides whether
@@ -292,6 +235,10 @@ func (w *LifecycleWatcher) isCurrentIncarnation(agent, incarnation uuid.UUID) bo
 // by a stale sidecar lifecycle envelope. Returns nil on:
 //
 //   - unknown agent (the watcher does not repopulate purged records)
+//   - stale incarnation (envelope from a non-current incarnation —
+//     gated on def.CurrentIncarnationID, the authoritative anchor
+//     spawn/restart set before the new sidecar's `started` reaches
+//     the bus)
 //   - idempotent target (current state already matches)
 //   - terminal-priority guard (current state is archived; the
 //     operator's explicit terminal — see watcherShouldYield)
@@ -302,7 +249,7 @@ func (w *LifecycleWatcher) isCurrentIncarnation(agent, incarnation uuid.UUID) bo
 //   - decode failure
 //   - persistent CAS conflict (>watcherCASRetries collisions)
 //   - any other KV error
-func (w *LifecycleWatcher) applyTransition(key string, state sextantproto.LifecycleState) error {
+func (w *LifecycleWatcher) applyTransition(key string, envelopeIncarnation uuid.UUID, state sextantproto.LifecycleState) error {
 	ctx, cancel := context.WithTimeout(context.Background(), watcherUpdateTimeout)
 	defer cancel()
 
@@ -320,6 +267,18 @@ func (w *LifecycleWatcher) applyTransition(key string, state sextantproto.Lifecy
 		var def sextantproto.AgentDefinition
 		if err := json.Unmarshal(entry.Value(), &def); err != nil {
 			return fmt.Errorf("decode %s: %w", key, err)
+		}
+		if watcherShouldDropForIncarnation(def.CurrentIncarnationID, envelopeIncarnation) {
+			// Stale envelope from a non-current incarnation. The most
+			// common case is a restart_agent's prior incarnation
+			// publishing its delayed terminal envelope after the
+			// daemon swapped to a fresh incarnation. spawn / restart
+			// set def.CurrentIncarnationID before the new sidecar's
+			// `started` reaches the bus, so we can drop with confidence
+			// here instead of trusting bus-derived in-memory state.
+			log.Printf("sextantd: lifecycle watcher: drop stale envelope for agent=%s envelope_incarnation=%s current_incarnation=%s",
+				key, envelopeIncarnation, def.CurrentIncarnationID)
+			return nil
 		}
 		if def.Lifecycle == state {
 			// No change — skip the write so spawn/restart's
