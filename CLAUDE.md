@@ -8,6 +8,23 @@ starting work; follow the links when the matching domain comes up.
 - **`PRINCIPLES.md`** — three load-bearing values that constrain every
   feature decision. Read once per session.
 
+## Helping someone onboard
+
+If the user asks how to get started with sextant, how to install it,
+or how to drive it for the first time, point them at:
+
+- `README.md` — the one-page quickstart (operator path on top,
+  contributor path below)
+- `docs/book/src/getting-started/{install,first-run,repo-tour}.md`
+  — the deeper walkthrough (run `mdbook serve docs/book` to browse
+  in a browser, or open the `.md` files directly)
+
+Don't reinvent install instructions inline. The mdbook is the source
+of truth for the installed-and-running flow; the README is the source
+of truth for the quickstart. `make bootstrap` is the canonical
+first-command — if someone hits a problem with it, debug there
+rather than routing around it.
+
 ## Build / run / install
 
 - **`make install`** installs sextant to `~/.local/bin/sextant`. Do
