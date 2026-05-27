@@ -67,6 +67,8 @@ func runDoctor(ctx context.Context, args []string) error {
 	configDir := fs.String("config-dir", "", "config directory (default ~/.config/sextant)")
 	dataDir := fs.String("data-dir", "", "data directory (default ~/.local/share/sextant)")
 	asJSON := fs.Bool("json", false, "emit machine-parseable JSON")
+	preflight := fs.Bool("preflight", false, "host-dep checks only (skips config, daemon, NATS, ClickHouse)")
+	contributor := fs.Bool("contributor", false, "additionally check contributor deps (go, node, npm)")
 	help := fs.Bool("help", false, "print help")
 	if err := fs.Parse(args); err != nil {
 		return errUserUsage(fmt.Sprintf("parse flags: %v", err))
@@ -81,7 +83,12 @@ func runDoctor(ctx context.Context, args []string) error {
 		return err
 	}
 
-	results := collectChecks(ctx, cfgDir, dataDirAbs)
+	var results []CheckResult
+	if *preflight {
+		results = collectHostDepChecks(ctx, *contributor, exec.LookPath, defaultDockerInfo, defaultRunCmd)
+	} else {
+		results = collectChecks(ctx, cfgDir, dataDirAbs, *contributor)
+	}
 	failed := emit(os.Stdout, results, *asJSON)
 	if failed {
 		return errDoctorFailures
@@ -89,17 +96,26 @@ func runDoctor(ctx context.Context, args []string) error {
 	return nil
 }
 
-const doctorUsage = `usage: sextant doctor [--config-dir PATH] [--data-dir PATH] [--json]
+const doctorUsage = `usage: sextant doctor [--config-dir PATH] [--data-dir PATH] [--json] [--preflight] [--contributor]
 
 Runs health diagnostics against the installation rooted at the given
 config and data dirs (defaults: ~/.config/sextant, ~/.local/share/sextant).
+
+--preflight runs only host-dep checks (nats-server, clickhouse, docker)
+and skips anything that needs config to exist. Use it before
+sextant init has ever been run, or from scripts/bootstrap.sh.
+
+--contributor additionally checks deps needed to build sextant from
+source (go, node, npm). Off by default; operators using installed
+binaries don't need it.
 
 Exit code 0 on all-pass (or only "not running" warnings), 2 on failure.`
 
 // collectChecks runs every diagnostic and returns the rows in display
 // order. We try to keep each check side-effect-free.
-func collectChecks(ctx context.Context, cfgDir, dataDir string) []CheckResult {
+func collectChecks(ctx context.Context, cfgDir, dataDir string, contributor bool) []CheckResult {
 	var out []CheckResult
+	out = append(out, collectHostDepChecks(ctx, contributor, exec.LookPath, defaultDockerInfo, defaultRunCmd)...)
 
 	sextantdTomlPath := filepath.Join(cfgDir, "sextantd.toml")
 	cfg, cfgErr := sextantd.LoadConfig(sextantdTomlPath)
