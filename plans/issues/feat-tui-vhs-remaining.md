@@ -1,11 +1,22 @@
 ---
 title: VHS design loop — remaining wiring (--fixture flag, agents_list + pending_list tapes, chat-preview migration)
-status: open
+status: resolved
 priority: P3
 created_at: 2026-05-26T23:55-07:00
+resolved_at: 2026-05-27T04:30-07:00
 labels: [feature, tui, testing, design-loop, follow-up]
 discovered_in: feat-tui-vhs-fixture-design-loop landed in two passes — pkg/fixtures + Makefile target + first tape shipped on main; this ticket tracks what's left
 ---
+
+## Resolution
+
+The `cmd/sextant-tui-chat-preview/main.go` migration to `pkg/fixtures.Demo` landed (this commit) — the preview binary and `tests/visual/chat_default.tape` now share the same dataset via `fixtures.Get("demo")` + `fixtures.ChatFrames(...)`. The previous 70+ lines of inline bespoke fixture data are gone.
+
+Remaining items from this ticket split off to their own follow-ups since they're each design-or-architecture-blocked rather than pure execution:
+
+- **`--fixture <name>` flag on TUI-entry commands** — pairs with `[[feat-cli-output-protocol-tail-and-errors]]` (needs-input on tail's NDJSON shape) since both rewrite the same RunE bodies. Filed as part of that ticket's queue.
+- **`tests/visual/agents_list.tape` + `pending_list.tape`** — gated on `[[feat-cli-i-flag-tier1-tier2]]` (needs-input) for `pending list -i`. Will land alongside that work.
+- **`.github/workflows/screenshots.yml`** — optional per the original ticket; can ship anytime, no design dependency.
 
 ## Summary
 
