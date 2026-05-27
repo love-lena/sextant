@@ -24,13 +24,13 @@ import (
 // directly would force callers to populate fields irrelevant to
 // restart; the narrower bundle keeps the wiring honest.
 type RestartDeps struct {
-	Definitions   AgentMutableKV
-	Incarnations  AgentMutableKV
-	Containers    ContainerRunner
+	Definitions  AgentMutableKV
+	Incarnations AgentMutableKV
+	Containers   ContainerRunner
 	// Volumes lets restart re-attach (and, on first spawn after a
 	// claude_seed change, populate) the per-agent claude_seed volume.
 	// May be nil in tests that don't exercise the seed flow.
-	Volumes      VolumeManager
+	Volumes VolumeManager
 	// Templates is required when seed mode is "copy-on-spawn" so the
 	// restart path can re-resolve claude_seed / claude_seed_mode and
 	// re-attach the named volume. May be nil; restart will then fall
