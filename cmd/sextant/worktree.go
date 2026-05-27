@@ -51,7 +51,7 @@ func newWorktreeListCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if globalFlags.asJSON {
-				return writeJSON(out, resp)
+				return writeJSON(cmd, out, resp)
 			}
 			if len(resp.Worktrees) == 0 {
 				_, err := fmt.Fprintln(out, "no worktrees")
@@ -95,7 +95,7 @@ func newWorktreeCreateCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if globalFlags.asJSON {
-				return writeJSON(out, resp)
+				return writeJSON(cmd, out, resp)
 			}
 			printf(out, "name:   %s\n", resp.Worktree.Name)
 			printf(out, "path:   %s\n", resp.Worktree.Path)
@@ -130,7 +130,7 @@ func newWorktreeDestroyCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if globalFlags.asJSON {
-				return writeJSON(out, resp)
+				return writeJSON(cmd, out, resp)
 			}
 			if resp.OK {
 				_, err = fmt.Fprintln(out, "ok")
@@ -167,7 +167,7 @@ func newWorktreeMergeCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if globalFlags.asJSON {
-				return writeJSON(out, resp)
+				return writeJSON(cmd, out, resp)
 			}
 			if resp.OK {
 				printf(out, "merged %s into %s\n", resp.Branch, resp.Target)
@@ -207,7 +207,7 @@ func newWorktreeDiffCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if globalFlags.asJSON {
-				return writeJSON(out, resp)
+				return writeJSON(cmd, out, resp)
 			}
 			_, _ = io.WriteString(out, resp.Diff)
 			if !strings.HasSuffix(resp.Diff, "\n") {
@@ -257,7 +257,7 @@ also remove on-disk dirs without a registry entry (requires --apply).`,
 			}
 			out := cmd.OutOrStdout()
 			if globalFlags.asJSON {
-				return writeJSON(out, resp)
+				return writeJSON(cmd, out, resp)
 			}
 			if resp.Error != "" {
 				return fmt.Errorf("daemon: %s", resp.Error)

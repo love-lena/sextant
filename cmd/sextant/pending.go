@@ -126,7 +126,7 @@ func newPendingListCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if globalFlags.asJSON {
-				return writeJSON(out, unanswered)
+				return writeJSON(cmd, out, unanswered)
 			}
 			if len(unanswered) == 0 {
 				_, err := fmt.Fprintln(out, "no pending requests")
@@ -234,7 +234,7 @@ func publishUserInputResponse(cmd *cobra.Command, requestID uuid.UUID, payload s
 	}
 	out := cmd.OutOrStdout()
 	if globalFlags.asJSON {
-		return writeJSON(out, payload)
+		return writeJSON(cmd, out, payload)
 	}
 	_, err = fmt.Fprintln(out, "ok")
 	return err

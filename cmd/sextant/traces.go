@@ -46,7 +46,7 @@ func newTracesShowCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if globalFlags.asJSON {
-				return writeJSON(out, resp)
+				return writeJSON(cmd, out, resp)
 			}
 			return renderSpanTree(out, resp.Spans)
 		},

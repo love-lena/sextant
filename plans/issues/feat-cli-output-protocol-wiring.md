@@ -1,11 +1,35 @@
 ---
 title: Wire cmd/sextant --json sites + error paths through pkg/cliout envelopes
-status: open
+status: in-progress
 priority: P3
 created_at: 2026-05-27T00:05-07:00
 labels: [feature, cli, output-protocol, follow-up]
 discovered_in: feat-cli-output-protocol landed pkg/cliout but the subagent stalled before wiring the cmd/sextant CLI sites
+
 ---
+
+## Progress (2026-05-27)
+
+`writeJSON` (cmd/sextant/agents.go) now wraps payloads in
+`cliout.Envelope` via `cliout.EnvelopeFromCommand(cmd, v)` — every
+`writeJSON(cmd, out, payload)` call now emits `{data: payload, meta:
+{version: 1, command: "agents.list"}}`. Call sites swept across
+`cmd/sextant/*.go`.
+
+Remaining work, filed as separate follow-ups:
+
+- **Bespoke JSON writers** (agents_check.go `renderAgentCheck`,
+  tail.go's `renderTailEnvelope`) still emit raw payload JSON. Move
+  them through the envelope or document why they're exempt.
+- **Error envelope on `--json`** — error returns from RunE still
+  surface as plain text errors. Wrap with `cliout.WriteErrorEnvelope`
+  when `globalFlags.asJSON` is set.
+- **Exit code 10 for empty results** — `exitNoResults` sentinel,
+  thread through `agents list`, `pending list`, `audit query`,
+  `events tail`-with-bound, `traces show` when the trace is missing.
+- **`specs/cli/commands.md` § "Exit codes"** to document 10.
+
+See [[feat-cli-output-protocol-tail-and-errors]] and [[feat-cli-exit-code-no-results]] for the split.
 
 ## Summary
 

@@ -92,7 +92,7 @@ of streaming.`,
 				return fmt.Errorf("exec_in_container: %w", err)
 			}
 			if globalFlags.asJSON {
-				if err := writeJSON(cmd.OutOrStdout(), resp); err != nil {
+				if err := writeJSON(cmd, cmd.OutOrStdout(), resp); err != nil {
 					return err
 				}
 				if resp.ExitCode != 0 {
