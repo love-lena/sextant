@@ -29,17 +29,16 @@ jobs:
           cache: true
 
       - name: install golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
           install-mode: binary
           # We invoke golangci-lint via `make lint-go`, not the action's
           # own run step. Just install the binary on PATH.
           args: --version
-          # The maintained action handles checksum drift and CDN
-          # hiccups internally; the curl|sh install.sh path that lived
-          # here previously failed intermittently on golangci-lint
-          # release-asset checksum verification.
+          # v7 is the first major that supports golangci-lint v2.x;
+          # the prior curl|sh install.sh path failed intermittently
+          # on release-asset checksum verification.
 
       - name: install nilaway
         run: go install go.uber.org/nilaway/cmd/nilaway@latest
