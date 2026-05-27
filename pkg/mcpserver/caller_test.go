@@ -43,17 +43,17 @@ func TestCallerID(t *testing.T) {
 
 func TestCapForToolKnownTools(t *testing.T) {
 	cases := map[string]string{
-		ToolSendMessage: CapSendMessage,
-		ToolBroadcast:   CapBroadcast,
-		ToolListAgents:  CapReadAgents,
-		ToolAgentStatus: CapReadAgents,
-		ToolQueryAudit:  CapReadHistory,
-		ToolSpawnAgent:  CapControlSpawn,
+		ToolSendMessage:  CapSendMessage,
+		ToolBroadcast:    CapBroadcast,
+		ToolListAgents:   CapReadAgents,
+		ToolAgentStatus:  CapReadAgents,
+		ToolQueryAudit:   CapReadHistory,
+		ToolSpawnAgent:   CapControlSpawn,
 		ToolKillAgent:    CapControlKill,
 		ToolArchiveAgent: CapControlArchive,
 		ToolPromptAgent:  CapControlPrompt,
-		ToolEmitEvent:   CapEmitEvent,
-		ToolGetMetric:   CapReadMetrics,
+		ToolEmitEvent:    CapEmitEvent,
+		ToolGetMetric:    CapReadMetrics,
 	}
 	for tool, want := range cases {
 		if got := CapForTool(tool); got != want {

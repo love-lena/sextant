@@ -33,15 +33,15 @@ type WorktreePruneRequest struct {
 // worktree.PruneReport but renders the times the CLI cares about as
 // JSON-friendly types.
 type WorktreePruneResponse struct {
-	Archived       int                `json:"archived"`
-	Deleted        int                `json:"deleted"`
-	Skipped        int                `json:"skipped"`
-	OrphansDeleted int                `json:"orphans_deleted"`
-	OrphansKept    int                `json:"orphans_kept"`
+	Archived       int                 `json:"archived"`
+	Deleted        int                 `json:"deleted"`
+	Skipped        int                 `json:"skipped"`
+	OrphansDeleted int                 `json:"orphans_deleted"`
+	OrphansKept    int                 `json:"orphans_kept"`
 	Plans          []WorktreePrunePlan `json:"plans,omitempty"`
-	Errors         []string           `json:"errors,omitempty"`
-	DryRun         bool               `json:"dry_run,omitempty"`
-	Error          string             `json:"error,omitempty"`
+	Errors         []string            `json:"errors,omitempty"`
+	DryRun         bool                `json:"dry_run,omitempty"`
+	Error          string              `json:"error,omitempty"`
 	// ArchiveAge and DeleteAge echo the resolved policy thresholds so
 	// the CLI can print "would archive >14d, delete >30d" alongside
 	// the per-worktree decisions.
