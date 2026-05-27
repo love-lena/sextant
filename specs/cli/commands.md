@@ -183,6 +183,7 @@ Component health diagnostics — reports status of NATS, ClickHouse, sextantd, s
 - `0` — success
 - `1` — user error (bad args, agent not found, etc.)
 - `2` — system error (daemon unreachable, RPC timeout, etc.)
+- `10` — no results found (distinct from real errors so shell loops can branch). Verbs that surface empty-result-set as 10: `sextant agents list`, `sextant pending list`. More to follow.
 
 ## Open
 

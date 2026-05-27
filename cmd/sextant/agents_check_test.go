@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/love-lena/sextant/pkg/cliout"
 	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
@@ -138,11 +139,22 @@ func TestRenderAgentCheckJSONShape(t *testing.T) {
 		Verdict:   "healthy",
 	}
 	var buf bytes.Buffer
-	if err := renderAgentCheck(&buf, check, true); err != nil {
+	cmd := newAgentsCheckCmd()
+	if err := renderAgentCheck(cmd, &buf, check, true); err != nil {
 		t.Fatalf("render: %v", err)
 	}
+	var env cliout.Envelope
+	if err := json.Unmarshal(buf.Bytes(), &env); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	if env.Meta.Version != cliout.EnvelopeVersion {
+		t.Errorf("Meta.Version = %d, want %d", env.Meta.Version, cliout.EnvelopeVersion)
+	}
+	// Round-trip the envelope's data into AgentCheck via JSON since the
+	// envelope's Data is typed `any`.
+	dataRaw, _ := json.Marshal(env.Data)
 	var got AgentCheck
-	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+	if err := json.Unmarshal(dataRaw, &got); err != nil {
 		t.Fatalf("decode rendered JSON: %v", err)
 	}
 	if got.UUID != id || got.Verdict != "healthy" {
@@ -200,7 +212,8 @@ func TestRenderAgentCheckTextShape(t *testing.T) {
 		UpdatedAt: time.Now(),
 	}
 	var buf bytes.Buffer
-	if err := renderAgentCheck(&buf, check, false); err != nil {
+	cmd := newAgentsCheckCmd()
+	if err := renderAgentCheck(cmd, &buf, check, false); err != nil {
 		t.Fatalf("render: %v", err)
 	}
 	got := buf.String()

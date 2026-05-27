@@ -1,11 +1,26 @@
 ---
 title: Output protocol — add exit code 10 (no results) sentinel + thread through list-style verbs
-status: open
+status: resolved
 priority: P3
 created_at: 2026-05-27T03:20-07:00
+resolved_at: 2026-05-27T03:30-07:00
 labels: [feature, cli, output-protocol, follow-up]
 discovered_in: feat-cli-output-protocol-wiring landed the data envelope sweep but didn't wire the exit-code-10 path
+
 ---
+
+## Resolution
+
+`exitNoResults = 10` lives in `cmd/sextant/main.go` alongside the existing `exitOK`/`exitUser`/`exitSystem`. `errNoResults` is the sentinel verbs return when the query returned zero rows but no actual error occurred; `exitCodeFor` checks for it before any other branch.
+
+`shouldSuppressErrorBanner` recognizes the sentinel too — verbs that return it have already printed their `"no agents"` / `"no pending requests"` line on stdout, so fang's `sextant: <err>` stderr banner would be noise.
+
+Wired into:
+
+- `sextant agents list` — empty result returns errNoResults after printing `"no agents"` (or empty envelope under `--json`).
+- `sextant pending list` — same.
+
+`specs/cli/commands.md` § "Exit codes" updated with the row for 10 and the list of verbs that surface it. More list-style verbs (audit query, events tail with `--for`, traces show) can adopt the sentinel as needed; the plumbing is in place.
 
 ## Summary
 

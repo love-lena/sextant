@@ -7,7 +7,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"time"
@@ -16,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/love-lena/sextant/pkg/client"
+	"github.com/love-lena/sextant/pkg/cliout"
 	"github.com/love-lena/sextant/pkg/rpc"
 	"github.com/love-lena/sextant/pkg/sextantproto"
 )
@@ -62,7 +62,7 @@ bulk version that scans every registered agent.`,
 			defer cli.Close() //nolint:errcheck // best-effort close
 
 			check := runAgentCheck(ctx, &clientChecker{cli: cli}, args[0])
-			return renderAgentCheck(cmd.OutOrStdout(), check, globalFlags.asJSON)
+			return renderAgentCheck(cmd, cmd.OutOrStdout(), check, globalFlags.asJSON)
 		},
 	}
 }
@@ -122,16 +122,12 @@ func runAgentCheck(ctx context.Context, ch agentChecker, ref string) AgentCheck 
 	return out
 }
 
-// renderAgentCheck writes the check verdict to w. JSON mode emits the
-// AgentCheck struct verbatim; text mode renders a small table.
-func renderAgentCheck(w io.Writer, check AgentCheck, asJSON bool) error {
+// renderAgentCheck writes the check verdict to w. JSON mode wraps the
+// AgentCheck in the cliout envelope (`{data: AgentCheck, meta:...}`);
+// text mode renders a small table.
+func renderAgentCheck(cmd *cobra.Command, w io.Writer, check AgentCheck, asJSON bool) error {
 	if asJSON {
-		raw, err := json.Marshal(check)
-		if err != nil {
-			return err
-		}
-		_, err = fmt.Fprintln(w, string(raw))
-		return err
+		return cliout.WriteEnvelope(w, cliout.EnvelopeFromCommand(cmd, check))
 	}
 	if check.UUID == uuid.Nil {
 		printf(w, "agent: %s\n", check.Ref)

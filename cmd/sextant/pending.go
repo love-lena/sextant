@@ -126,11 +126,19 @@ func newPendingListCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if globalFlags.asJSON {
-				return writeJSON(cmd, out, unanswered)
+				if err := writeJSON(cmd, out, unanswered); err != nil {
+					return err
+				}
+				if len(unanswered) == 0 {
+					return errNoResults
+				}
+				return nil
 			}
 			if len(unanswered) == 0 {
-				_, err := fmt.Fprintln(out, "no pending requests")
-				return err
+				if _, err := fmt.Fprintln(out, "no pending requests"); err != nil {
+					return err
+				}
+				return errNoResults
 			}
 			tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
 			println(tw, "REQUEST_ID\tFROM\tURGENCY\tQUESTION")

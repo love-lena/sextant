@@ -68,11 +68,23 @@ func errorBanner(w io.Writer, _ fang.Styles, err error) {
 var errSilentExit = errors.New("silent exit")
 
 // Exit codes per specs/cli/commands.md.
+//
+// 10 (exitNoResults) is the "empty result set" sentinel — distinct
+// from real errors so shell loops can branch on it
+// (`if foo; then ...; elif [ $? -eq 10 ]; then ...`). Per
+// conventions/tui-conventions.md § "Tier 0 → Exit codes".
 const (
-	exitOK     = 0
-	exitUser   = 1
-	exitSystem = 2
+	exitOK        = 0
+	exitUser      = 1
+	exitSystem    = 2
+	exitNoResults = 10
 )
+
+// errNoResults is the sentinel a verb returns when its query returned
+// zero rows but no actual error occurred. main() maps this to
+// exitNoResults; the verb is responsible for printing the user-visible
+// "no results" line first (or nothing, for --json).
+var errNoResults = errors.New("no results")
 
 // usageError carries a free-form user-error message. main() inspects via
 // errors.As to map it to exit code 1.

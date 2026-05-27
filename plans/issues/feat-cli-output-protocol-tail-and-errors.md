@@ -7,16 +7,16 @@ labels: [feature, cli, output-protocol, follow-up]
 discovered_in: feat-cli-output-protocol-wiring landed the writeJSON sweep but two corners still emit raw payloads — agents_check.go (renderAgentCheck) and tail.go (renderTailEnvelope) — and the --json error paths still surface as plain text
 ---
 
-## Summary
+## Progress (2026-05-27)
 
-`writeJSON` now routes through `cliout.WriteEnvelope`. But two callsites carry their own bespoke `--json` renderers and didn't get swept:
+`agents_check.go::renderAgentCheck` swept — now wraps the AgentCheck
+in `cliout.WriteEnvelope`. Test updated to decode through `cliout.Envelope`.
 
-1. **`cmd/sextant/agents_check.go::renderAgentCheck`** — uses its own `json.Marshal(check)` to emit a raw `AgentCheck` payload. Should emit `{data: AgentCheck, meta: …}`.
-2. **`cmd/sextant/tail.go::renderTailEnvelope`** — emits raw envelope NDJSON. **Special case**: tail's NDJSON contract may justify staying raw (it's not a single response, it's a stream). Decide explicitly: either wrap each line in `cliout.Envelope` (NDJSON of envelopes, `meta.command = "events.tail"` repeated per line) or document why tail stays raw.
+Remaining:
 
-Plus the bigger work the parent ticket flagged:
+1. **`cmd/sextant/tail.go::renderTailEnvelope`** — emits raw envelope NDJSON. **Special case**: tail's NDJSON contract may justify staying raw (it's not a single response, it's a stream). Decide explicitly: either wrap each line in `cliout.Envelope` (NDJSON of envelopes, `meta.command = "events.tail"` repeated per line) or document why tail stays raw.
 
-3. **Error paths under `--json`** — RunE error returns flow into the cobra default error printer, which writes plain text to stderr. With `globalFlags.asJSON` set the CLI should instead emit `cliout.WriteErrorEnvelope(stderr, code, msg)`. Stable codes already exist in `pkg/cliout/envelope.go` (`CodeAgentNotFound`, `CodeDaemonUnreachable`, etc.). Map each error path.
+2. **Error paths under `--json`** — RunE error returns flow into the cobra default error printer, which writes plain text to stderr. With `globalFlags.asJSON` set the CLI should instead emit `cliout.WriteErrorEnvelope(stderr, code, msg)`. Stable codes already exist in `pkg/cliout/envelope.go` (`CodeAgentNotFound`, `CodeDaemonUnreachable`, etc.). Map each error path.
 
 ## Fix shape
 
