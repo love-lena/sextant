@@ -41,7 +41,7 @@ func TestPromptAgentRejectsTerminalLifecycle(t *testing.T) {
 		{
 			name:       "paused",
 			lifecycle:  sextantproto.LifecyclePaused,
-			wantRemedy: "sextant agents resume",
+			wantRemedy: "sextant agents restart",
 			wantCode:   sextantproto.ErrCodeAgentNotReachable,
 		},
 		{

@@ -108,7 +108,9 @@ func runAgentCheck(ctx context.Context, ch agentChecker, ref string) AgentCheck 
 		out.Remedy = fmt.Sprintf("sextant agents restart %s", id)
 	case string(sextantproto.LifecyclePaused):
 		out.Verdict = "paused"
-		out.Remedy = fmt.Sprintf("sextant agents resume %s", id)
+		// No `sextant agents resume` verb today — restart is the only
+		// real recovery. See [[feat-agents-resume-verb]] follow-up.
+		out.Remedy = fmt.Sprintf("sextant agents restart %s", id)
 	case string(sextantproto.LifecycleArchived):
 		out.Verdict = "archived"
 		out.Remedy = "spawn a new agent instead"

@@ -102,6 +102,37 @@ func TestRootCmdWiring(t *testing.T) {
 	}
 }
 
+// TestRemedyVerbsResolveInCobraTree pins Codex's defense-in-depth ask:
+// every remedy command the CLI emits in structured errors and check
+// verdicts must resolve to a real command in the cobra tree. Catches
+// the class of bug Codex flagged where `agents resume` was suggested
+// as the paused-agent remedy but never registered as a verb.
+//
+// New remedies added in handler / verdict / timeout error paths must
+// add their verb path here. Run `rg "sextant agents|sextant doctor|sextant daemon" pkg cmd`
+// after adding a new remedy to confirm coverage.
+func TestRemedyVerbsResolveInCobraTree(t *testing.T) {
+	remedyPaths := [][]string{
+		{"agents", "list"},
+		{"agents", "restart"},
+		{"agents", "check"},
+		{"doctor"},
+		{"daemon", "start"},
+	}
+	root := newRootCmd()
+	for _, path := range remedyPaths {
+		t.Run(strings.Join(path, "."), func(t *testing.T) {
+			c, _, err := root.Find(path)
+			if err != nil {
+				t.Fatalf("remedy verb %v does not resolve: %v", path, err)
+			}
+			if c == nil || c.Name() != path[len(path)-1] {
+				t.Fatalf("remedy verb %v resolved to wrong command (got %v)", path, c)
+			}
+		})
+	}
+}
+
 // TestRootHelpRuns verifies `sextant --help` exits cleanly (no error
 // banner, no missing command). Smoke test for the Fang integration.
 func TestRootHelpRuns(t *testing.T) {
