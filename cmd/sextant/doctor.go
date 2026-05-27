@@ -101,7 +101,7 @@ const doctorUsage = `usage: sextant doctor [--config-dir PATH] [--data-dir PATH]
 Runs health diagnostics against the installation rooted at the given
 config and data dirs (defaults: ~/.config/sextant, ~/.local/share/sextant).
 
---preflight runs only host-dep checks (nats-server, clickhouse, docker)
+--preflight runs only host-dep checks (nats-server, clickhouse, docker binary + daemon)
 and skips anything that needs config to exist. Use it before
 sextant init has ever been run, or from scripts/bootstrap.sh.
 
