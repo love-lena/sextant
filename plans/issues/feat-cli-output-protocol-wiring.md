@@ -1,10 +1,19 @@
 ---
 title: Wire cmd/sextant --json sites + error paths through pkg/cliout envelopes
-status: in-progress
+status: resolved
 priority: P3
 created_at: 2026-05-27T00:05-07:00
+resolved_at: 2026-05-27T04:00-07:00
 labels: [feature, cli, output-protocol, follow-up]
 discovered_in: feat-cli-output-protocol landed pkg/cliout but the subagent stalled before wiring the cmd/sextant CLI sites
+
+---
+
+## Resolution
+
+`writeJSON` rewritten to take a `*cobra.Command` and emit the cliout envelope (`e916508`). Every callsite swept; tests pass. `agents check`'s bespoke renderer now goes through the envelope too (`0ebae51`).
+
+The remaining sub-pieces (tail.go NDJSON decision, error envelope on `--json` errors) are split off to [[feat-cli-output-protocol-tail-and-errors]] (needs-input).
 
 ---
 
