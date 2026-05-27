@@ -133,13 +133,13 @@ func newPendingListCmd() *cobra.Command {
 				return err
 			}
 			tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
-			fmt.Fprintln(tw, "REQUEST_ID\tFROM\tURGENCY\tQUESTION")
+			println(tw, "REQUEST_ID\tFROM\tURGENCY\tQUESTION")
 			for _, r := range unanswered {
 				q := r.Question
 				if len(q) > 60 {
 					q = q[:60] + "…"
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.RequestID, r.FromUUID, r.Urgency, q)
+				printf(tw, "%s\t%s\t%s\t%s\n", r.RequestID, r.FromUUID, r.Urgency, q)
 			}
 			return tw.Flush()
 		},

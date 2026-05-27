@@ -21,6 +21,6 @@ func doRestart(w io.Writer, cfg sextantd.Config, stopTimeout, startTimeout time.
 			return fmt.Errorf("stop phase: %w", err)
 		}
 	}
-	fmt.Fprintf(w, "starting…\n")
+	printf(w, "starting…\n")
 	return doStart(w, cfg, startTimeout)
 }

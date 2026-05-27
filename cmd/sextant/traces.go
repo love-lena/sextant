@@ -111,6 +111,6 @@ func printSpan(w io.Writer, s sextantproto.TraceSpan, depth int) {
 	if s.StatusCode != "" && s.StatusCode != "STATUS_CODE_OK" && s.StatusCode != "OK" {
 		status = " [" + s.StatusCode + "]"
 	}
-	fmt.Fprintf(w, "%s%s%s (%s) %s\n",
+	printf(w, "%s%s%s (%s) %s\n",
 		indent, s.SpanName, status, dur, s.SpanID)
 }

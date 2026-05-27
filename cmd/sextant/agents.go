@@ -114,9 +114,9 @@ func newAgentsListCmd() *cobra.Command {
 				return err
 			}
 			tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
-			fmt.Fprintln(tw, "UUID\tNAME\tTEMPLATE\tLIFECYCLE\tVERSION\tUPDATED")
+			println(tw, "UUID\tNAME\tTEMPLATE\tLIFECYCLE\tVERSION\tUPDATED")
 			for _, a := range resp.Agents {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\n",
+				printf(tw, "%s\t%s\t%s\t%s\t%d\t%s\n",
 					a.UUID, a.Name, a.Template, a.Lifecycle, a.Version,
 					a.UpdatedAt.Format(time.RFC3339))
 			}
@@ -153,11 +153,11 @@ func newAgentsShowCmd() *cobra.Command {
 			if globalFlags.asJSON {
 				return writeJSON(out, resp.Status)
 			}
-			fmt.Fprintf(out, "UUID:      %s\n", resp.Status.UUID)
-			fmt.Fprintf(out, "Name:      %s\n", resp.Status.Name)
-			fmt.Fprintf(out, "Lifecycle: %s\n", resp.Status.Lifecycle)
-			fmt.Fprintf(out, "Version:   %d\n", resp.Status.Version)
-			fmt.Fprintf(out, "Updated:   %s\n", resp.Status.UpdatedAt.Format(time.RFC3339))
+			printf(out, "UUID:      %s\n", resp.Status.UUID)
+			printf(out, "Name:      %s\n", resp.Status.Name)
+			printf(out, "Lifecycle: %s\n", resp.Status.Lifecycle)
+			printf(out, "Version:   %d\n", resp.Status.Version)
+			printf(out, "Updated:   %s\n", resp.Status.UpdatedAt.Format(time.RFC3339))
 			return nil
 		},
 	}
@@ -196,7 +196,7 @@ func newAgentsSpawnCmd() *cobra.Command {
 			if globalFlags.asJSON {
 				return writeJSON(out, resp)
 			}
-			fmt.Fprintf(out, "agent_id: %s\n", resp.AgentID)
+			printf(out, "agent_id: %s\n", resp.AgentID)
 			return nil
 		},
 	}
@@ -460,9 +460,9 @@ func runAgentsArchiveAllDead(ctx context.Context, out io.Writer, cli *client.Cli
 	}
 	for _, r := range results {
 		if r.OK {
-			fmt.Fprintf(out, "archived %s (%s)\n", r.Name, r.UUID)
+			printf(out, "archived %s (%s)\n", r.Name, r.UUID)
 		} else {
-			fmt.Fprintf(out, "FAILED  %s (%s): %s\n", r.Name, r.UUID, r.Error)
+			printf(out, "FAILED  %s (%s): %s\n", r.Name, r.UUID, r.Error)
 		}
 	}
 	return nil

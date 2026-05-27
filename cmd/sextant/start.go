@@ -29,13 +29,13 @@ func doStart(w io.Writer, cfg sextantd.Config, timeout time.Duration) error {
 	st, err := readDaemonState(cfg.Paths.RuntimeFile)
 	switch {
 	case err == nil && st.Alive:
-		fmt.Fprintf(w, "daemon already running (pid %d) — use sextant daemon restart to replace\n", st.Info.PID)
+		printf(w, "daemon already running (pid %d) — use sextant daemon restart to replace\n", st.Info.PID)
 		return nil
 	case err == nil && !st.Alive:
 		if rmErr := sextantd.RemoveRuntimeInfo(cfg.Paths.RuntimeFile); rmErr != nil {
 			return fmt.Errorf("remove stale runtime.json: %w", rmErr)
 		}
-		fmt.Fprintf(w, "removed stale runtime.json (pid %d not running)\n", st.Info.PID)
+		printf(w, "removed stale runtime.json (pid %d not running)\n", st.Info.PID)
 	case errors.Is(err, errDaemonNotRunning):
 		// Fresh start. Nothing to do.
 	default:
@@ -51,14 +51,14 @@ func doStart(w io.Writer, cfg sextantd.Config, timeout time.Duration) error {
 	// 2b. Zombie check.
 	orphans, scanErr := findOrphanSextantd(bin, 0)
 	if scanErr != nil {
-		fmt.Fprintf(w, "warning: orphan scan failed: %v (continuing)\n", scanErr)
+		printf(w, "warning: orphan scan failed: %v (continuing)\n", scanErr)
 	}
 	if len(orphans) > 0 {
-		fmt.Fprintf(w, "found orphan sextantd process(es) without runtime.json:\n")
+		printf(w, "found orphan sextantd process(es) without runtime.json:\n")
 		for _, pid := range orphans {
-			fmt.Fprintf(w, "  pid %d  %s\n", pid, bin)
+			printf(w, "  pid %d  %s\n", pid, bin)
 		}
-		fmt.Fprintf(w, "run `sextant daemon stop` to clean them up, then retry `sextant daemon start`.\n")
+		printf(w, "run `sextant daemon stop` to clean them up, then retry `sextant daemon start`.\n")
 		return fmt.Errorf("orphan sextantd detected (pid %v)", orphans)
 	}
 
@@ -91,7 +91,7 @@ func doStart(w io.Writer, cfg sextantd.Config, timeout time.Duration) error {
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
-	fmt.Fprintf(w, "starting %s%s\n", bin, formatArgs(cmdArgs))
+	printf(w, "starting %s%s\n", bin, formatArgs(cmdArgs))
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start sextantd: %w", err)
 	}
@@ -104,14 +104,14 @@ func doStart(w io.Writer, cfg sextantd.Config, timeout time.Duration) error {
 	if err != nil {
 		lines, tailErr := tailLogLines(logPath, 50)
 		if tailErr == nil && len(lines) > 0 {
-			fmt.Fprintf(w, "\n--- tail of %s ---\n", logPath)
+			printf(w, "\n--- tail of %s ---\n", logPath)
 			printLines(w, lines)
-			fmt.Fprintf(w, "--- end log ---\n")
+			printf(w, "--- end log ---\n")
 		}
 		return fmt.Errorf("daemon failed to start: %w", err)
 	}
 
-	fmt.Fprintf(w, "daemon up (pid %d, log: %s)\n", final.Info.PID, logPath)
+	printf(w, "daemon up (pid %d, log: %s)\n", final.Info.PID, logPath)
 	return nil
 }
 

@@ -48,7 +48,7 @@ func newDestructiveFlags(cmd *cobra.Command) *destructiveFlags {
 // message so the operator sees the exact resource being targeted.
 func (f *destructiveFlags) confirm(cmd *cobra.Command, action string) (bool, error) {
 	if f.dryRun {
-		fmt.Fprintf(cmd.ErrOrStderr(), "[dry-run] would %s\n", action)
+		printf(cmd.ErrOrStderr(), "[dry-run] would %s\n", action)
 		return false, nil
 	}
 	if !f.yes {

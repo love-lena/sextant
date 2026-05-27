@@ -114,7 +114,7 @@ func newFilesLsCmd() *cobra.Command {
 				if e.IsDir {
 					marker = "/"
 				}
-				fmt.Fprintf(tw, "%s%s\n", e.Name, marker)
+				printf(tw, "%s%s\n", e.Name, marker)
 			}
 			return tw.Flush()
 		},
@@ -192,7 +192,7 @@ func tailOnce(ctx context.Context, w io.Writer, cli *client.Client, id uuid.UUID
 		*seen = append((*seen)[:0], cur...)
 	default:
 		if !asJSON {
-			fmt.Fprintf(w, "[file truncated, resetting]\n")
+			printf(w, "[file truncated, resetting]\n")
 		}
 		if _, err := w.Write(cur); err != nil {
 			return err
