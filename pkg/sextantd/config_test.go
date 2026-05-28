@@ -162,6 +162,32 @@ func TestShipperConfigResolveDefaultsAutoSupervise(t *testing.T) {
 	}
 }
 
+func TestLifecycleConfigDefaults(t *testing.T) {
+	var c LifecycleConfig
+	s, g, d, r := c.Resolved()
+	if s != DefaultHeartbeatStaleness {
+		t.Errorf("staleness = %s, want %s", s, DefaultHeartbeatStaleness)
+	}
+	if g != DefaultHeartbeatStartupGrace {
+		t.Errorf("grace = %s, want %s", g, DefaultHeartbeatStartupGrace)
+	}
+	if d != DefaultContainerWatcherDebounce {
+		t.Errorf("debounce = %s, want %s", d, DefaultContainerWatcherDebounce)
+	}
+	if !r {
+		t.Error("reconcile = false, want true (nil should default true)")
+	}
+}
+
+func TestLifecycleConfigReconcileOptOut(t *testing.T) {
+	f := false
+	c := LifecycleConfig{ReconcileOnStartup: &f}
+	_, _, _, r := c.Resolved()
+	if r {
+		t.Error("reconcile = true, want false (explicit opt-out)")
+	}
+}
+
 func TestRuntimeInfoRoundtrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "runtime.json")

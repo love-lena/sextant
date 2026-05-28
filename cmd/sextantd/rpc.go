@@ -29,6 +29,12 @@ type rpcRuntime struct {
 	chConn      driver.Conn
 	agentDefsKV jetstream.KeyValue
 
+	// heartbeats is the L1 heartbeat cache wired into prompt_agent.
+	// Nil when the cache failed to start (daemon continues; guard skipped).
+	heartbeats            handlers.HeartbeatLookup
+	heartbeatStaleness    time.Duration
+	heartbeatStartupGrace time.Duration
+
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -193,6 +199,9 @@ func (r *rpcRuntime) registerLifecycleVerbs(ca *authjwt.CA, spawnRT *spawnRuntim
 			Kind: sextantproto.AddressDaemon,
 			ID:   "daemon",
 		},
+		Heartbeats:            r.heartbeats,
+		HeartbeatStaleness:    r.heartbeatStaleness,
+		HeartbeatStartupGrace: r.heartbeatStartupGrace,
 	})); err != nil {
 		return err
 	}

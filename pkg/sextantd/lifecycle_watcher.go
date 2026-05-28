@@ -121,8 +121,9 @@ type LifecycleWatcher struct {
 	nc   *nats.Conn
 	defs LifecycleDefinitionsKV
 
-	mu  sync.Mutex
-	sub *nats.Subscription
+	mu        sync.Mutex
+	sub       *nats.Subscription
+	observers []LifecycleObserver
 }
 
 // NewLifecycleWatcher subscribes to `agents.*.lifecycle` and returns a
@@ -207,7 +208,9 @@ func (w *LifecycleWatcher) handle(msg *nats.Msg) {
 	if err := w.applyTransition(payload.AgentUUID.String(), payload.IncarnationID, state); err != nil {
 		log.Printf("sextantd: lifecycle watcher: apply %s/%s: %v",
 			payload.AgentUUID, payload.Transition, err)
+		return
 	}
+	w.fireObservers(payload)
 }
 
 // watcherShouldDropForIncarnation reports whether the watcher should
@@ -348,4 +351,33 @@ func watcherShouldYield(current, proposed sextantproto.LifecycleState) bool {
 // the call site doesn't import that error directly.
 func isCASConflict(err error) bool {
 	return errors.Is(err, jetstream.ErrKeyExists)
+}
+
+// LifecycleObserver is called after the watcher successfully applies
+// a lifecycle envelope to the KV. Observers run synchronously on the
+// dispatcher goroutine; keep them fast.
+type LifecycleObserver func(sextantproto.LifecyclePayload)
+
+// RegisterLifecycleObserver appends an observer. Call before the watcher
+// starts receiving traffic (typically immediately after NewLifecycleWatcher).
+// Not safe to call concurrently with handle().
+func RegisterLifecycleObserver(w *LifecycleWatcher, o LifecycleObserver) {
+	if w == nil || o == nil {
+		return
+	}
+	w.mu.Lock()
+	w.observers = append(w.observers, o)
+	w.mu.Unlock()
+}
+
+// fireObservers calls each registered observer with the successfully-applied
+// payload. Observers are copied under the lock so new registrations during
+// dispatch cannot race.
+func (w *LifecycleWatcher) fireObservers(p sextantproto.LifecyclePayload) {
+	w.mu.Lock()
+	obs := append([]LifecycleObserver(nil), w.observers...) // copy under lock
+	w.mu.Unlock()
+	for _, o := range obs {
+		o(p)
+	}
 }

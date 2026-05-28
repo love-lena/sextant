@@ -338,6 +338,94 @@ func TestLifecycleWatcherWarmUpAllowsFirstEnvelope(t *testing.T) {
 	}
 }
 
+// TestRegisterLifecycleObserverNilSafe asserts that RegisterLifecycleObserver
+// is a no-op when either argument is nil — the daemon may call it with a nil
+// watcher if startup fails gracefully.
+func TestRegisterLifecycleObserverNilSafe(t *testing.T) {
+	// nil watcher — must not panic
+	RegisterLifecycleObserver(nil, func(sextantproto.LifecyclePayload) {})
+	// nil observer — must not panic
+	w := &LifecycleWatcher{defs: newFakeLifecycleKV()}
+	RegisterLifecycleObserver(w, nil)
+	if len(w.observers) != 0 {
+		t.Errorf("observers = %d, want 0 (nil observer must not be appended)", len(w.observers))
+	}
+}
+
+// TestLifecycleObserverFiresAfterApply asserts that a registered observer is
+// called once for each successful state-changing transition, and NOT called
+// for a no-op transition (turn_ended).
+func TestLifecycleObserverFiresAfterApply(t *testing.T) {
+	kv := newFakeLifecycleKV()
+	id := uuid.New()
+	inc := uuid.New()
+	kv.seedDefinitionWithIncarnation(t, id, "obs-test", sextantproto.LifecycleRunning, 1, inc)
+
+	var mu sync.Mutex
+	var fired []sextantproto.LifecyclePayload
+
+	w := &LifecycleWatcher{defs: kv}
+	RegisterLifecycleObserver(w, func(p sextantproto.LifecyclePayload) {
+		mu.Lock()
+		fired = append(fired, p)
+		mu.Unlock()
+	})
+
+	// State-changing transition: observer should fire.
+	w.handle(envelopeForWithIncarnation(t, id, inc, sextantproto.LifecycleEnded))
+
+	mu.Lock()
+	n := len(fired)
+	mu.Unlock()
+	if n != 1 {
+		t.Fatalf("observer fired %d times after ended transition, want 1", n)
+	}
+	mu.Lock()
+	got := fired[0]
+	mu.Unlock()
+	if got.AgentUUID != id {
+		t.Errorf("observer payload AgentUUID = %s, want %s", got.AgentUUID, id)
+	}
+	if got.Transition != sextantproto.LifecycleEnded {
+		t.Errorf("observer payload Transition = %q, want ended", got.Transition)
+	}
+}
+
+// TestLifecycleObserverDoesNotFireOnNoOp asserts that turn_ended (a no-op
+// transition) does NOT trigger observers.
+func TestLifecycleObserverDoesNotFireOnNoOp(t *testing.T) {
+	kv := newFakeLifecycleKV()
+	id := uuid.New()
+	kv.seedDefinition(t, id, "obs-noop", sextantproto.LifecycleRunning, 1)
+
+	fired := 0
+	w := &LifecycleWatcher{defs: kv}
+	RegisterLifecycleObserver(w, func(sextantproto.LifecyclePayload) { fired++ })
+
+	w.handle(envelopeFor(t, id, sextantproto.LifecycleTurnEnded))
+	if fired != 0 {
+		t.Errorf("observer fired %d times for turn_ended, want 0", fired)
+	}
+}
+
+// TestLifecycleObserverDoesNotFireOnApplyError asserts that when applyTransition
+// fails (e.g. CAS conflict budget exhausted), observers are NOT called.
+func TestLifecycleObserverDoesNotFireOnApplyError(t *testing.T) {
+	kv := newFakeLifecycleKV()
+	id := uuid.New()
+	kv.seedDefinition(t, id, "obs-err", sextantproto.LifecycleRunning, 1)
+	kv.conflictsRemaining = watcherCASRetries + 5 // force all retries to fail
+
+	fired := 0
+	w := &LifecycleWatcher{defs: kv}
+	RegisterLifecycleObserver(w, func(sextantproto.LifecyclePayload) { fired++ })
+
+	w.handle(envelopeFor(t, id, sextantproto.LifecycleEnded))
+	if fired != 0 {
+		t.Errorf("observer fired %d times despite apply error, want 0", fired)
+	}
+}
+
 // --- helpers ---------------------------------------------------------
 
 func envelopeFor(t *testing.T, id uuid.UUID, transition sextantproto.LifecycleEvent) *nats.Msg {

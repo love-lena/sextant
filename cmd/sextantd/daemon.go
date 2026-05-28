@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -16,6 +17,7 @@ import (
 	"github.com/love-lena/sextant/pkg/clickhouseboot"
 	"github.com/love-lena/sextant/pkg/natsboot"
 	"github.com/love-lena/sextant/pkg/sextantd"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 	"github.com/love-lena/sextant/pkg/shipperboot"
 	"github.com/love-lena/sextant/pkg/supervisor"
 	"github.com/love-lena/sextant/pkg/version"
@@ -93,6 +95,17 @@ type daemon struct {
 	// rpcRT (we need its operator NATS conn + agent_definitions KV).
 	// See plans/issues/bug-agents-list-stale-lifecycle.md.
 	lifecycleRT *sextantd.LifecycleWatcher
+
+	// heartbeats is the L1 heartbeat cache. Set after startRPC; nil when
+	// cache init fails (daemon continues, prompt_agent skips the guard).
+	heartbeats *sextantd.HeartbeatCache
+
+	// containerWatcher is the L3 docker-event watcher. Set after the
+	// spawn runtime exists; nil when disabled. containerWatcherCtx
+	// cancels it; containerWatcherDone is closed when the goroutine exits.
+	containerWatcher     *sextantd.ContainerWatcher
+	containerWatcherCtx  context.CancelFunc
+	containerWatcherDone chan struct{}
 
 	shutdownOnce sync.Once
 	shutdownErr  error
@@ -463,6 +476,75 @@ func (d *daemon) Start(ctx context.Context) error {
 	d.lifecycleRT = lifecycleRT
 	d.mu.Unlock()
 
+	// 16. Heartbeat cache (L1 of agent-lifecycle truth).
+	staleness, grace, debounce, reconcileOK := d.cfg.Lifecycle.Resolved()
+
+	heartbeats, err := sextantd.NewHeartbeatCache(rpcRT.nc)
+	if err != nil {
+		// Best-effort: log + continue. The lifecycle watcher and L3 still
+		// provide truth-keeping without the heartbeat staleness guard.
+		log.Printf("sextantd: heartbeat cache: %v", err)
+	} else {
+		d.mu.Lock()
+		d.heartbeats = heartbeats
+		d.mu.Unlock()
+		// Wire into rpcRT so prompt_agent picks up the heartbeat guard.
+		rpcRT.heartbeats = heartbeats
+		rpcRT.heartbeatStaleness = staleness
+		rpcRT.heartbeatStartupGrace = grace
+	}
+
+	// 17. Container watcher (L3 of agent-lifecycle truth).
+
+	publishLifecycle := func(pctx context.Context, env sextantproto.Envelope) error {
+		var p sextantproto.LifecyclePayload
+		if err := json.Unmarshal(env.Payload, &p); err != nil {
+			return fmt.Errorf("decode synthetic lifecycle payload: %w", err)
+		}
+		raw, err := json.Marshal(env)
+		if err != nil {
+			return fmt.Errorf("marshal synthetic lifecycle envelope: %w", err)
+		}
+		subject := "agents." + p.AgentUUID.String() + ".lifecycle"
+		return rpcRT.nc.Publish(subject, raw)
+	}
+
+	cw := sextantd.NewContainerWatcher(spawnRT.containers, publishLifecycle,
+		sextantd.WithDebounce(debounce))
+	cwCtx, cwCancel := context.WithCancel(context.Background()) //nolint:contextcheck // container watcher outlives Start's ctx
+	cwDone := make(chan struct{})
+	go func() {
+		defer close(cwDone)
+		if err := cw.Run(cwCtx); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("sextantd: container watcher exited: %v", err)
+		}
+	}()
+	d.mu.Lock()
+	d.containerWatcher = cw
+	d.containerWatcherCtx = cwCancel
+	d.containerWatcherDone = cwDone
+	d.mu.Unlock()
+
+	// Hook the watcher's cancel-on-terminal mechanism off LifecycleWatcher.
+	sextantd.RegisterLifecycleObserver(lifecycleRT, cw.OnSidecarLifecycle)
+
+	// 18. Reconciler (L2). One-shot at startup. Failure is non-fatal —
+	// the watcher + L3 still converge.
+	if reconcileOK {
+		r := &sextantd.Reconciler{
+			Defs:    rpcRT.agentDefsKV,
+			Mgr:     spawnRT.containers,
+			Publish: publishLifecycle,
+			HostID:  spawnRT.hostID,
+		}
+		if res, err := r.Run(ctx); err != nil {
+			log.Printf("sextantd: reconciler: %v", err)
+		} else if res.Published > 0 {
+			log.Printf("sextantd: reconciler: scanned=%d running=%d missing=%d published=%d",
+				res.Scanned, res.RunningRecords, res.MissingContainers, res.Published)
+		}
+	}
+
 	log.Printf("sextantd: ready (nats=%s clickhouse=%s control=%s rpc=sextant.rpc.* mcp=%s)",
 		natsSrv.Address(), chSrv.TCPAddress(), d.cfg.Daemon.ControlSocket, mcpRT.server.HTTPURL())
 	return nil
@@ -522,12 +604,34 @@ func (d *daemon) doShutdown() error {
 	d.lifecycleRT = nil
 	worktreeRT := d.worktreeRT
 	d.worktreeRT = nil
+	heartbeats := d.heartbeats
+	d.heartbeats = nil
+	cwCancel := d.containerWatcherCtx
+	d.containerWatcherCtx = nil
+	cwDone := d.containerWatcherDone
+	d.containerWatcherDone = nil
 	d.mu.Unlock()
 	if worktreeRT != nil {
 		// Stop the prune ticker + unsubscribe the control subject.
 		// Independent of the supervisors so it can drain before NATS
 		// goes away (the unsubscribe needs a live conn).
 		worktreeRT.stopPruneLoop()
+	}
+	// Stop the L3 container watcher first (it subscribes to docker events
+	// via spawnRT.containers; spawnRT.containers.Close() comes later).
+	if cwCancel != nil {
+		cwCancel()
+		if cwDone != nil {
+			select {
+			case <-cwDone:
+			case <-ctx.Done():
+			}
+		}
+	}
+	if heartbeats != nil {
+		if err := heartbeats.Stop(); err != nil {
+			errs = append(errs, fmt.Errorf("heartbeat cache stop: %w", err))
+		}
 	}
 	if lifecycleRT != nil {
 		if err := lifecycleRT.Stop(); err != nil {
