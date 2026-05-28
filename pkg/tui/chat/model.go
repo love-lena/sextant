@@ -60,9 +60,13 @@ type SendFunc func(text string)
 
 // RestartFunc is the callback the host invokes when a RestartRequestedMsg
 // is received. program.go wires this against the Bus.RestartAgent RPC.
-// Errors are swallowed — the watcher publishes "restarted" and the model
-// re-enables input automatically.
-type RestartFunc func(agentID uuid.UUID)
+// The returned tea.Cmd runs the RPC asynchronously and emits a
+// restartFailedMsg{Err} on failure so the model can surface an inline
+// banner; on success the watcher publishes "restarted" and the model
+// re-enables input automatically. Hosts that don't care about the cmd
+// (e.g. tests) may ignore it; the standalone wrapper threads it back
+// into bubbletea so the message lands in Update.
+type RestartFunc func(agentID uuid.UUID) tea.Cmd
 
 // Model is the bubbletea reducer state. Use New to construct, then
 // WithTurns to seed any pre-existing transcript before passing to
@@ -104,7 +108,27 @@ type Model struct {
 	// the source path didn't supply it (older tests, synthetic
 	// lifecycleMsgs) — renderers must fall back gracefully.
 	lastLifecycleTs time.Time
+
+	// lastError carries the most recent restart_agent error message so
+	// the host can render an inline banner above the stream pane. Set
+	// when a restartFailedMsg lands; cleared on the next lifecycleMsg
+	// (which usually means the restart eventually succeeded out of band)
+	// or after restartErrorTTL by a self-issued tick.
+	//
+	// errorSeq is bumped every time lastError changes; the trailing
+	// tea.Tick carries the seq it was issued for and only clears
+	// lastError if the seq still matches — otherwise a second failure
+	// (which bumps the seq) would be wrongly cleared by the first
+	// timer's tick.
+	lastError string
+	errorSeq  int
 }
+
+// restartErrorTTL is how long the banner sticks before auto-clearing.
+// Chosen as a balance: long enough that an operator glancing back at the
+// terminal still catches the error, short enough that a stale message
+// doesn't outlive the daemon recovering.
+const restartErrorTTL = 5 * time.Second
 
 // New returns a *Model with default styles/keys, mode=NORMAL,
 // focus area = FocusComposer (compose-first), selection=0.
@@ -236,6 +260,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastLifecycle = msg.Payload
 		m.lastLifecycleTs = msg.Ts
 		m.hasLifecycle = true
+		// Any lifecycle progress supersedes a stale restart-error
+		// banner: if the daemon is now publishing transitions again,
+		// the operator doesn't need the previous failure stuck on the
+		// header. Bump errorSeq too so any in-flight timeout tick is
+		// rendered inert.
+		if m.lastError != "" {
+			m.lastError = ""
+			m.errorSeq++
+		}
+		return m, nil
+	case restartFailedMsg:
+		m.lastError = msg.Err
+		m.errorSeq++
+		seq := m.errorSeq
+		return m, tea.Tick(restartErrorTTL, func(time.Time) tea.Msg {
+			return restartErrorTimeoutMsg{Seq: seq}
+		})
+	case restartErrorTimeoutMsg:
+		// Only clear if the seq still matches — otherwise a newer error
+		// (or a clear via lifecycleMsg) has already moved on, and this
+		// stale tick must not wipe the current banner.
+		if msg.Seq == m.errorSeq && m.lastError != "" {
+			m.lastError = ""
+		}
 		return m, nil
 	case subscriptionEndedMsg:
 		// Upstream channel closed — usually the daemon went away or the
@@ -257,7 +305,15 @@ func (m *Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.gPending = false
 
 	// R restarts the agent — only meaningful (and only handled) when lost.
+	// Pressing R while a previous failure banner is up clears the banner
+	// and retries (errorSeq is bumped so any in-flight timeout tick is
+	// inert against the next attempt); a fresh failure rebumps the seq
+	// and starts its own timeout.
 	if m.inputDisabled() && key.Matches(msg, m.keys.NormalRestart) {
+		if m.lastError != "" {
+			m.lastError = ""
+			m.errorSeq++
+		}
 		return m, func() tea.Msg {
 			return RestartRequestedMsg{AgentID: m.opts.AgentID}
 		}

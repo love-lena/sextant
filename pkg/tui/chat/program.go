@@ -120,14 +120,22 @@ func makeSendHook(ctx context.Context, bus Bus, id uuid.UUID) SendFunc {
 
 // makeRestartHook returns a RestartFunc that issues restart_agent via
 // the Bus. On success: the watcher publishes "restarted" and the model
-// re-enables input automatically. On error: logged so the operator can
-// see *something* without the prompt area unlocking — file
-// [[feat-tui-chat-restart-error-banner]] tracks the inline banner that
-// will eventually replace this log statement.
+// re-enables input automatically. On error: logged (daemon-log
+// forensics still works) and an inline-banner message is returned as a
+// tea.Cmd so the chat reducer can surface the failure to the operator
+// — see [[feat-tui-chat-restart-error-banner]].
+//
+// The Cmd runs the RPC inside the bubbletea goroutine pool rather than
+// blocking the reducer; on success it returns nil (no message) and on
+// failure it returns a restartFailedMsg the reducer turns into a banner.
 func makeRestartHook(ctx context.Context, bus Bus) RestartFunc {
-	return func(agentID uuid.UUID) {
-		if err := bus.RestartAgent(ctx, agentID); err != nil {
-			log.Printf("chat: restart_agent %s: %v (re-press R to retry)", agentID, err)
+	return func(agentID uuid.UUID) tea.Cmd {
+		return func() tea.Msg {
+			if err := bus.RestartAgent(ctx, agentID); err != nil {
+				log.Printf("chat: restart_agent %s: %v (re-press R to retry)", agentID, err)
+				return restartFailedMsg{Err: err.Error()}
+			}
+			return nil
 		}
 	}
 }

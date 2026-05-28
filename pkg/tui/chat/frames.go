@@ -39,6 +39,24 @@ type subscriptionEndedMsg struct {
 	Source string // "frames" or "lifecycle"
 }
 
+// restartFailedMsg is dispatched by the restart hook (program.go's
+// makeRestartHook) when restart_agent returns an RPC error. The
+// reducer stores Err in Model.lastError so the host can render an
+// inline banner above the stream — see
+// [[feat-tui-chat-restart-error-banner]] for the rationale.
+type restartFailedMsg struct {
+	Err string
+}
+
+// restartErrorTimeoutMsg is the self-issued tea.Tick that auto-clears
+// the banner after restartErrorTTL. Seq matches the Model.errorSeq the
+// tick was scheduled against; if the seq has since changed (i.e. a
+// second restart failure overwrote the banner) the tick is a stale
+// no-op.
+type restartErrorTimeoutMsg struct {
+	Seq int
+}
+
 // pumpFrames returns a tea.Cmd that blocks on one message from `ch`
 // and dispatches it as a frameMsg. The reducer re-issues this Cmd
 // after every receive so the program keeps draining the channel.

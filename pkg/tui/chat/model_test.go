@@ -297,6 +297,134 @@ func TestChatLostStateBlocksInsert(t *testing.T) {
 	}
 }
 
+// TestRestartFailedMsgSetsBannerAndSchedulesTimeout pins the inline-
+// banner state for feat-tui-chat-restart-error-banner: a
+// restartFailedMsg must populate Model.lastError, bump errorSeq, and
+// schedule a tea.Tick that eventually fires a restartErrorTimeoutMsg.
+func TestRestartFailedMsgSetsBannerAndSchedulesTimeout(t *testing.T) {
+	t.Parallel()
+	m := New(Options{AgentName: "alpha"})
+	prevSeq := m.errorSeq
+	_, cmd := m.Update(restartFailedMsg{Err: "daemon unreachable"})
+	if m.lastError != "daemon unreachable" {
+		t.Errorf("lastError = %q, want %q", m.lastError, "daemon unreachable")
+	}
+	if m.errorSeq == prevSeq {
+		t.Error("errorSeq did not advance on restartFailedMsg")
+	}
+	if cmd == nil {
+		t.Fatal("restartFailedMsg produced no cmd; want a tea.Tick")
+	}
+	// The tick carries the current seq; cmd() blocks for restartErrorTTL
+	// so we don't drive it here — just assert via TestRestartTimeoutMsg
+	// below that the message shape clears the banner.
+}
+
+// TestRestartTimeoutMsgClearsBannerWhenSeqMatches asserts the auto-clear:
+// a restartErrorTimeoutMsg whose Seq matches Model.errorSeq wipes
+// lastError. A stale tick (mismatched Seq) is a no-op so a later failure
+// doesn't get clobbered by an earlier failure's timer.
+func TestRestartTimeoutMsgClearsBannerWhenSeqMatches(t *testing.T) {
+	t.Parallel()
+	m := New(Options{AgentName: "alpha"})
+	m.Update(restartFailedMsg{Err: "first"})
+	seq := m.errorSeq
+
+	// Stale tick (older seq) — banner must stay.
+	m.Update(restartErrorTimeoutMsg{Seq: seq - 1})
+	if m.lastError == "" {
+		t.Error("stale timeout tick cleared banner; want banner to persist")
+	}
+
+	// Matching tick — banner clears.
+	m.Update(restartErrorTimeoutMsg{Seq: seq})
+	if m.lastError != "" {
+		t.Errorf("matching timeout tick left banner = %q, want empty", m.lastError)
+	}
+}
+
+// TestLifecycleMsgClearsRestartBanner asserts that any subsequent
+// lifecycle envelope supersedes a stale restart-error banner — once
+// the daemon is publishing transitions again, the operator doesn't
+// need the previous failure stuck on the header.
+func TestLifecycleMsgClearsRestartBanner(t *testing.T) {
+	t.Parallel()
+	m := New(Options{AgentName: "alpha"})
+	m.Update(restartFailedMsg{Err: "boom"})
+	if m.lastError == "" {
+		t.Fatal("precondition: banner not set")
+	}
+	m.Update(lifecycleMsg{Payload: sextantproto.LifecyclePayload{
+		Transition: sextantproto.LifecycleRestartedEvent,
+	}})
+	if m.lastError != "" {
+		t.Errorf("lifecycleMsg did not clear banner: lastError = %q", m.lastError)
+	}
+}
+
+// TestRWhileBannerUpClearsAndRetries exercises the retry path: when an
+// operator presses R while the error banner is showing AND the agent
+// is still in the lost state, the banner clears and a fresh
+// RestartRequestedMsg is emitted so the host re-issues restart_agent.
+func TestRWhileBannerUpClearsAndRetries(t *testing.T) {
+	t.Parallel()
+	agentID := uuid.New()
+	m := New(Options{AgentName: "alpha", AgentID: agentID})
+	// Put the model into the lost state (so R is bound to restart) and
+	// then simulate a previous failure leaving the banner up.
+	m.Update(lifecycleMsg{Payload: sextantproto.LifecyclePayload{
+		Transition: sextantproto.LifecycleLostEvent,
+	}})
+	m.Update(restartFailedMsg{Err: "daemon down"})
+	if m.lastError == "" {
+		t.Fatal("precondition: banner not set after restartFailedMsg")
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("R")})
+	if m.lastError != "" {
+		t.Errorf("R press did not clear banner: lastError = %q", m.lastError)
+	}
+	if cmd == nil {
+		t.Fatal("R press produced no cmd; want RestartRequestedMsg")
+	}
+	req, ok := cmd().(RestartRequestedMsg)
+	if !ok {
+		t.Fatalf("R press cmd msg type = %T, want RestartRequestedMsg", cmd())
+	}
+	if req.AgentID != agentID {
+		t.Errorf("RestartRequestedMsg.AgentID = %s, want %s", req.AgentID, agentID)
+	}
+}
+
+// TestRestartErrorBannerRendersInChrome verifies the visual surface:
+// the standalone wrapper paints the error message in the chrome rows
+// when Model.lastError is set, and omits it otherwise. We don't pin
+// exact styling here — color attribution is theme-dependent — but we
+// do assert the message string lands in the rendered output.
+func TestRestartErrorBannerRendersInChrome(t *testing.T) {
+	t.Parallel()
+	m := New(Options{AgentName: "alpha"})
+	s := NewStandalone(m)
+	s.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	// No error → no banner string.
+	if got := s.View(); strings.Contains(got, "restart failed") {
+		t.Errorf("clean render contains banner text; want absent\n%s", got)
+	}
+
+	m.Update(restartFailedMsg{Err: "daemon unreachable"})
+	got := s.View()
+	if !strings.Contains(got, "restart failed:") {
+		t.Errorf("banner prefix missing from rendered output:\n%s", got)
+	}
+	if !strings.Contains(got, "daemon unreachable") {
+		t.Errorf("banner error text missing from rendered output:\n%s", got)
+	}
+	if !strings.Contains(got, "press R to retry") {
+		t.Errorf("banner retry hint missing from rendered output:\n%s", got)
+	}
+}
+
 func TestChatTUIReadModeDisallowsInsert(t *testing.T) {
 	t.Parallel()
 	m := New(Options{AgentName: "alice", Read: true}).WithTurns(seedTurns())
