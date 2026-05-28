@@ -28,6 +28,12 @@ import (
 // Exposed because test helpers (mWithSize in view_test.go) need to
 // simulate the same outer-chrome reservation to reproduce
 // pre-refactor render dimensions.
+//
+// Note: the restart-error banner (rendered when Model.lastError is
+// non-empty) is overlaid in place of the blank-gap row before the
+// status bar; it does NOT reserve an extra row. That keeps the
+// content rect dimensions stable across error states so the stream
+// pane doesn't jiggle when the banner appears/disappears.
 const HostChromeReserved = 4
 
 // Standalone wraps a *Model with the chrome (header, status bar)
@@ -67,10 +73,13 @@ func (s *Standalone) Init() tea.Cmd { return s.host.Init() }
 // tea.Quit and forwards WindowSizeMsg → SetSize on the inner).
 // RestartRequestedMsg is intercepted here and dispatched to the
 // inner model's restart hook (wired by program.go against the Bus).
+// The hook returns a tea.Cmd that runs the RPC and emits
+// restartFailedMsg on failure; threading that cmd back into bubbletea
+// is what surfaces the error banner via the model's Update.
 func (s *Standalone) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if req, ok := msg.(RestartRequestedMsg); ok {
 		if fn := s.inner.restart; fn != nil {
-			fn(req.AgentID)
+			return s, fn(req.AgentID)
 		}
 		return s, nil
 	}
@@ -92,18 +101,58 @@ func (s *Standalone) Inner() *Model { return s.inner }
 // content-rect height — the host's chromeReserved was already
 // subtracted before SetSize on the component) and the
 // component-rendered content.
+//
+// When Model.lastError is non-empty, an error banner replaces the
+// blank-gap row before the status bar so the row count (and therefore
+// the component's content rect) stays constant — see HostChromeReserved.
 func (s *Standalone) renderChrome(width, _ int, content string) string {
 	if width <= 0 {
 		width = 80
 	}
 	header := s.renderHeader(width)
 	status := s.renderStatusBar(width)
+	gap := ""
+	if banner := s.renderRestartErrorBanner(width); banner != "" {
+		gap = banner
+	}
 	// Layout (top to bottom):
-	//   header line + thin rule below   (2 rows)
-	//   component content area          (variable)
-	//   blank gap                       (1 row)
-	//   status bar                      (1 row)
-	return strings.Join([]string{header, content, "", status}, "\n")
+	//   header line + thin rule below            (2 rows)
+	//   component content area                   (variable)
+	//   blank gap OR error banner (mutually exclusive, 1 row)
+	//   status bar                               (1 row)
+	return strings.Join([]string{header, content, gap, status}, "\n")
+}
+
+// renderRestartErrorBanner returns the inline banner for the most
+// recent restart_agent failure, or "" if none is active. Rendered in
+// the destructive role tone so it reads as a dismissable error, not
+// a steady-state warning. Width-aware: the message is truncated with
+// an ellipsis if it would overflow the row.
+//
+// The banner replaces the blank-gap row above the status bar (see
+// renderChrome) so it doesn't change the content rect's height.
+func (s *Standalone) renderRestartErrorBanner(width int) string {
+	m := s.inner
+	if m.lastError == "" {
+		return ""
+	}
+	prefix := " restart failed: "
+	suffix := "  (press R to retry)"
+	avail := width - lipgloss.Width(prefix) - lipgloss.Width(suffix)
+	if avail < 1 {
+		avail = 1
+	}
+	msg := m.lastError
+	if lipgloss.Width(msg) > avail {
+		// Truncate at rune boundary, leave room for the ellipsis.
+		runes := []rune(msg)
+		if avail > 1 {
+			msg = string(runes[:avail-1]) + "…"
+		} else {
+			msg = "…"
+		}
+	}
+	return m.styles.Destructive.Render(prefix + msg + suffix)
 }
 
 // renderHeader draws the lifecycle status dot + agent name + lifecycle
