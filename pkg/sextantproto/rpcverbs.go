@@ -425,3 +425,25 @@ type WorktreeDiffRequest struct {
 type WorktreeDiffResponse struct {
 	Diff string `json:"diff"`
 }
+
+// GetVersionRequest is the get_version request payload. The verb takes
+// no arguments today; the struct exists so a future bump can add fields
+// without breaking wire shape.
+type GetVersionRequest struct{}
+
+// GetVersionResponse is the get_version reply payload. The shape lets
+// `sextant doctor` print a one-line CLI/daemon comparison and warn when
+// the operator forgot to restart the daemon after `make install`.
+//
+// DaemonVersion mirrors `pkg/version.Version` on the daemon side.
+// ProtoVersion mirrors `pkg/sextantproto.ProtoVersion`.
+// Commit is the short git SHA (`pkg/version.Commit`).
+// StartedAt is the daemon process start time (captured in Start).
+// PID is the daemon process ID at the time of the call.
+type GetVersionResponse struct {
+	DaemonVersion string    `json:"daemon_version"`
+	Commit        string    `json:"commit"`
+	ProtoVersion  string    `json:"proto_version"`
+	StartedAt     time.Time `json:"started_at"`
+	PID           int64     `json:"pid"`
+}
