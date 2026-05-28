@@ -3,13 +3,31 @@ title: Output protocol — sweep bespoke JSON writers + wrap error paths under -
 status: open
 priority: P3
 created_at: 2026-05-27T03:20-07:00
-labels: [feature, cli, output-protocol, follow-up, needs-input]
+labels: [feature, cli, output-protocol, follow-up]
 discovered_in: feat-cli-output-protocol-wiring landed the writeJSON sweep but two corners still emit raw payloads — agents_check.go (renderAgentCheck) and tail.go (renderTailEnvelope) — and the --json error paths still surface as plain text
 ---
 
-## Needs Lena's input
+## Decision (2026-05-28)
 
-The agents_check piece landed (commit `0ebae51`). What remains has a real design call: **tail.go's NDJSON stream** — wrap each envelope in `cliout.Envelope` (NDJSON of envelopes, `meta.command` repeated per line) or document tail as the exception because it's a stream not a single response. Backward-compat for the existing consumers piping `sextant tail` into `jq` depends on the answer.
+`sextant tail` (and any future bus-passthrough stream command)
+**stays raw** as a deliberate, documented exception. Each line is
+already a self-describing `sextantproto.Envelope` carrying its
+own `proto_version`; wrapping in `cliout.Envelope` would be
+envelope-in-envelope without signal. Rationale in
+[`plans/rfc-cliout-envelope-role.md`](../rfc-cliout-envelope-role.md):
+the wrapper is useful for commands that don't naturally emit JSON
+(`--json` is a "make this scriptable" mode); commands that
+fundamentally emit data don't need it.
+
+Remaining work is documentation-only:
+
+1. Add a section to `pkg/cliout/doc.go` describing the
+   data-emitter exception and naming `sextant tail` as the
+   canonical example.
+2. Add a note to `specs/cli/commands.md`'s `tail` section
+   documenting the exception for operator-facing context.
+3. Add a `--raw` is not needed sentence — raw IS the default; no
+   flag required.
 
 The error-envelope half is pure execution and could ship anytime; not blocking on input. Splitting into [[feat-cli-output-protocol-error-envelope]] when picked up.
 

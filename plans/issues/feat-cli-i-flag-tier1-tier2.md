@@ -1,13 +1,41 @@
 ---
 title: Wire -i flag for Tier 1 component TUIs, sextant tui launcher, and Tier 2 dash
-status: open
+status: resolved
 priority: P3
 created_at: 2026-05-26T20:33-07:00
-labels: [feature, cli, tui, architecture, needs-input]
+resolved_at: 2026-05-28T10:54-07:00
+labels: [feature, cli, tui, architecture]
 discovered_in: CLI/TUI conventions adoption
 ---
 
-## Needs Lena's input
+## Resolution (2026-05-28)
+
+Decisions baked in during the 2026-05-28 walkthrough. Split into
+three implementation tickets that can land independently:
+
+- **[[feat-cli-iflag-tier1-components]]** — `init()`-time registry
+  in `pkg/tui/component/` + `-i` flag on Tier 1 cobra commands.
+- **[[feat-sextant-tui-discovery]]** — `sextant tui` Huh menu
+  driven by the registry.
+- **[[feat-sextant-dash-multipane]]** — `sextant dash` with
+  Stickers + BubbleZone (mouse-on by default). Default config TOML
+  at `cmd/sextant/dash-default-config.toml` (embedded via
+  `//go:embed`), `~/.config/sextant/config.toml` override,
+  `--dump-default-config` flag to print the embedded default.
+
+Decisions captured:
+
+- Dash composes registered components automatically; embedded
+  default TOML + user override (with `--dump-default-config` to
+  print the default). The TOML lives at
+  `cmd/sextant/dash-default-config.toml` so contributors can
+  reference + copy it directly.
+- Components self-register via `init()` rather than a central
+  registry file.
+- `sextant tui` reads the registry (not hard-coded).
+- BubbleZone ships in v1 — mouse-on by default in the dash.
+
+## Original open questions (preserved for context)
 
 This ticket bundles three architecturally-distinct pieces (Tier 1 `-i` flag, Tier 1 discovery `sextant tui`, Tier 2 `sextant dash`) that share infrastructure but make different design tradeoffs. Foundations now landed (`pkg/theme`, `pkg/tui/component`, `pkg/fixtures`, cobra-fang); ready to decide how to land the rest.
 

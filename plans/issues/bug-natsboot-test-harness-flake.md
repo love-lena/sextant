@@ -1,15 +1,48 @@
 ---
 title: natsboot-backed integration tests fail with "nats: connection closed" inside subscription handler
-status: open
+status: wontfix
 priority: P3
 created_at: 2026-05-26T22:00-07:00
-labels: [bug, test, natsboot, jetstream, observability, needs-input]
+resolved_at: 2026-05-28T11:13-07:00
+labels: [bug, test, natsboot, jetstream, observability, reference]
 discovered_in: writing TestLifecycleWatcherUpdatesAgentRecord — the natsboot harness boots, the test's own Put succeeds, but the watcher's NATS callback handler hits `nats: connection closed` on its Get against the same `defs jetstream.KeyValue` handle
 ---
 
-## Needs Lena's input
+## ⚠️ Reference — do not re-discover this the hard way
 
-The ticket lists four hypotheses for the failure mode — JetStream-from-NATS-dispatcher reentry, ctx capture in the JS KV handle, auth flap, concurrent goroutine. Picking which to investigate first (or whether to dodge the issue with a different harness shape) is a judgment call on engineering time vs. test-coverage value; the lifecycle watcher's behavior is already verified via the fake-KV unit test in `bug-agents-list-stale-lifecycle`.
+**TL;DR — if you're writing an integration test and reach for
+`natsboot.Start + Bootstrap + jetstream.New + KeyValue + a NATS
+subscription whose callback reads the KV`, it's broken. Use the
+daemon-level harness from `cmd/sextantd/sextantd_test.go` instead.**
+
+The combination above deterministically fails with
+`nats: connection closed` inside the subscription callback's KV
+Get, even though the test's foreground Put against the same handle
+succeeds. Diagnostic detail + hypotheses are preserved below for
+anyone who wants to investigate properly.
+
+## Decision (2026-05-28): wontfix
+
+Dodge, don't investigate. Reasoning:
+
+- The lifecycle watcher's behavior is already verified via the
+  fake-KV unit test in [[bug-agents-list-stale-lifecycle]]'s
+  resolution. No functional coverage gap exists — only a
+  harness gap.
+- The existing `cmd/sextantd/sextantd_test.go` harness (full
+  daemon Start path) works fine and doesn't hit this issue.
+  Future integration tests should model on that shape.
+- Investigation cost (reverse-engineering nats.go reentry
+  semantics OR rebuilding the harness shape) is real engineering
+  time for P3 value. Not worth it unless a future test genuinely
+  needs the narrow harness shape and can't be served by the
+  daemon harness.
+
+If you DO need to reopen this — because a future test really
+does require `natsboot + JS subscription + JS KV reads` together
+and the daemon harness doesn't cut it — the most likely root
+cause is **hypothesis (1)** below (JetStream-from-NATS-dispatcher
+reentry). Start there.
 
 ## Summary
 
