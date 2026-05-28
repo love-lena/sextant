@@ -14,6 +14,16 @@ starting work; follow the links when the matching domain comes up.
   `main` — not for code, not for docs, not for spec/plan notes.
   Self-approved fast-merges are fine; bypassing the PR path is not.
   See `conventions/git-workflow.md` for the workflow.
+- **Never use `gh pr merge --admin`** or the web UI's "Merge
+  without waiting for requirements" button. Branch protection on
+  `main` is configured with `enforce_admins: true` so every merge
+  — including the repo owner's — must pass the required CI checks
+  (`lint + test (Go)`, `lint + test (TypeScript)`, `sidecar image
+  build + smoke`, `changelog entry required`). The `--admin`
+  override is a manual escape hatch the human owner uses
+  deliberately in genuine emergencies, NOT a thing Claude reaches
+  for. If CI fails: fix the underlying issue and push a new
+  commit, don't bypass.
 - **Semver bumps follow the semantic rule:** does an operator
   running the binary see different behavior? If yes, bump per
   [semver.org](https://semver.org):
