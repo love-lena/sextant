@@ -379,6 +379,26 @@ func (d *daemon) Start(ctx context.Context) error {
 	d.worktreeRT = worktreeRT
 	d.mu.Unlock()
 
+	// 11b. Heartbeat cache (L1 of agent-lifecycle truth). Built BEFORE
+	// registerLifecycleVerbs so the prompt_agent handler captures a
+	// non-nil HeartbeatLookup in its PromptDeps closure. The cache only
+	// needs the operator NATS conn (already up via rpcRT).
+	staleness, grace, _, _ := d.cfg.Lifecycle.Resolved()
+	heartbeats, err := sextantd.NewHeartbeatCache(rpcRT.nc)
+	if err != nil {
+		// Best-effort: log + continue with a nil cache. prompt_agent's
+		// guard is gated on a non-nil Heartbeats; the lifecycle watcher
+		// and L3 still provide truth-keeping without it.
+		log.Printf("sextantd: heartbeat cache: %v", err)
+	} else {
+		d.mu.Lock()
+		d.heartbeats = heartbeats
+		d.mu.Unlock()
+		rpcRT.heartbeats = heartbeats
+		rpcRT.heartbeatStaleness = staleness
+		rpcRT.heartbeatStartupGrace = grace
+	}
+
 	// 12. Register the lifecycle verbs on the RPC server now that the
 	// spawn runtime exists. Also hand the same dep bag to the MCP
 	// server so the agent path uses the same backend.
@@ -482,25 +502,8 @@ func (d *daemon) Start(ctx context.Context) error {
 	d.lifecycleRT = lifecycleRT
 	d.mu.Unlock()
 
-	// 16. Heartbeat cache (L1 of agent-lifecycle truth).
-	staleness, grace, debounce, reconcileOK := d.cfg.Lifecycle.Resolved()
-
-	heartbeats, err := sextantd.NewHeartbeatCache(rpcRT.nc)
-	if err != nil {
-		// Best-effort: log + continue. The lifecycle watcher and L3 still
-		// provide truth-keeping without the heartbeat staleness guard.
-		log.Printf("sextantd: heartbeat cache: %v", err)
-	} else {
-		d.mu.Lock()
-		d.heartbeats = heartbeats
-		d.mu.Unlock()
-		// Wire into rpcRT so prompt_agent picks up the heartbeat guard.
-		rpcRT.heartbeats = heartbeats
-		rpcRT.heartbeatStaleness = staleness
-		rpcRT.heartbeatStartupGrace = grace
-	}
-
-	// 17. Container watcher (L3 of agent-lifecycle truth).
+	// 16. Container watcher (L3 of agent-lifecycle truth).
+	_, _, debounce, reconcileOK := d.cfg.Lifecycle.Resolved()
 
 	publishLifecycle := func(pctx context.Context, env sextantproto.Envelope) error {
 		var p sextantproto.LifecyclePayload
@@ -538,7 +541,7 @@ func (d *daemon) Start(ctx context.Context) error {
 	// Hook the watcher's cancel-on-terminal mechanism off LifecycleWatcher.
 	sextantd.RegisterLifecycleObserver(lifecycleRT, cw.OnSidecarLifecycle)
 
-	// 18. Reconciler (L2). One-shot at startup. Failure is non-fatal —
+	// 17. Reconciler (L2). One-shot at startup. Failure is non-fatal —
 	// the watcher + L3 still converge.
 	if reconcileOK {
 		r := &sextantd.Reconciler{
