@@ -11,6 +11,16 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
 ## [Unreleased]
 
 ### Added
+- **`sextant dash` flagship multi-pane TUI** — composes registered
+  Tier 1 components into a Stickers flex layout with BubbleZone
+  mouse click regions. Default pane layout is embedded as
+  `dash-default-config.toml`; `~/.config/sextant/config.toml`
+  overrides when present. `sextant dash --dump-default-config`
+  prints the embedded default. Tab / Shift+Tab cycles focus;
+  number keys + mouse click also work. Inter-pane routing via
+  the existing `OpenMsg` / `LoadMsg` component convention.
+  Pending pane is a placeholder until `feat-tui-pending-component`
+  lands.
 - **`sextant tui` Huh-driven discovery menu** — lists every Tier 1
   component registered via `pkg/tui/component`'s registry and
   launches the corresponding `-i` surface on selection. New
