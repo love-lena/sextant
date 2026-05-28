@@ -83,6 +83,16 @@ func NewArchiveAgent(deps ArchiveDeps) rpc.Handler {
 			return emitErr(emit, sextantproto.ErrCodeInternal,
 				fmt.Sprintf("decode definition: %v", err))
 		}
+		// initialDefRevision pins the revision we just read so the
+		// final def write (step 5) can refuse to clobber a concurrent
+		// restart_agent / kill_agent / update_agent commit. Mirrors
+		// the kill_agent migration in commit ceb0bb2; symmetric to the
+		// CAS guard restart_agent already has against archive.
+		// Without this, archive would walk a stale def for ~ms while
+		// stopping the live container, then plain-Put lifecycle=archived
+		// over whatever a concurrent restart_agent / update_agent
+		// committed in that window.
+		initialDefRevision := defEntry.Revision()
 
 		// 3. Idempotent on already-archived.
 		if def.Lifecycle == sextantproto.LifecycleArchived {
@@ -117,12 +127,27 @@ func NewArchiveAgent(deps ArchiveDeps) rpc.Handler {
 			}
 		}
 
-		// 5. Flip the definition to archived. This is the step that
-		// releases the name — agentNameInUse skips archived entries.
+		// 5. Flip the definition to archived via CAS. This is the step
+		// that releases the name — agentNameInUse skips archived
+		// entries. CAS on initialDefRevision so a concurrent
+		// restart_agent / kill_agent / update_agent commit between
+		// step 2's Get and this write is detected: we BAIL rather
+		// than overwrite their intent. No side-effect rollback is
+		// needed (the incarnation stop is already terminal — see the
+		// ticket's "BAIL still makes sense" reasoning).
 		def.Lifecycle = sextantproto.LifecycleArchived
 		def.Version++
 		def.UpdatedAt = sextantproto.AtTimestamp(now)
-		if err := putJSON(ctx, deps.Definitions, args.AgentID.String(), def); err != nil {
+		raw, mErr := json.Marshal(def)
+		if mErr != nil {
+			return emitErr(emit, sextantproto.ErrCodeInternal,
+				fmt.Sprintf("marshal definition: %v", mErr))
+		}
+		if _, err := deps.Definitions.Update(ctx, args.AgentID.String(), raw, initialDefRevision); err != nil {
+			if errors.Is(err, jetstream.ErrKeyExists) {
+				return emitErr(emit, sextantproto.ErrCodeBadRequest,
+					fmt.Sprintf("agent %s definition changed during archive (concurrent restart/kill/update); re-issue archive if still appropriate", args.AgentID))
+			}
 			return emitErr(emit, sextantproto.ErrCodeInternal,
 				fmt.Sprintf("flip lifecycle to archived: %v", err))
 		}
