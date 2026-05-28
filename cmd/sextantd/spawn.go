@@ -42,6 +42,14 @@ type spawnRuntime struct {
 	mcpURL       string
 	issuer       string
 	workspaceDir string
+	// agentsDataRoot is the host directory under which the spawn
+	// handler stages per-agent state that the operator needs to read
+	// directly — today only the Claude Code SDK session JSONL bind
+	// mount described in `plans/issues/feat-agents-context-view.md`.
+	// Built once at daemon start as <DataDir>/agents and threaded into
+	// every SpawnDeps so the host path is stable across the daemon's
+	// process lifetime.
+	agentsDataRoot string
 	// testRunLabel, when non-empty, stamps sextant.test_run=<value> on
 	// every spawned container so the orphan-tripwire test can scope
 	// its check to containers this daemon instance created. Sourced
@@ -123,6 +131,12 @@ func (d *daemon) buildSpawnRuntime(ctx context.Context, nc *nats.Conn, agentDefs
 		return nil, fmt.Errorf("mkdir workspace root: %w", err)
 	}
 
+	agentsDataRoot := filepath.Join(d.cfg.Paths.DataDir, "agents")
+	if err := os.MkdirAll(agentsDataRoot, 0o750); err != nil {
+		_ = mgr.Close()
+		return nil, fmt.Errorf("mkdir agents data root: %w", err)
+	}
+
 	return &spawnRuntime{
 		containers:   mgr,
 		defsKV:       agentDefsKV,
@@ -133,10 +147,11 @@ func (d *daemon) buildSpawnRuntime(ctx context.Context, nc *nats.Conn, agentDefs
 		natsUser:     creds.User,
 		natsPassword: creds.Password,
 		// mcpURL is populated by setMCPURL after the MCP server binds.
-		mcpURL:       "",
-		issuer:       "sextantd@" + hostID,
-		workspaceDir: workspaceRoot,
-		testRunLabel: os.Getenv("SEXTANT_TEST_RUN_LABEL"),
+		mcpURL:         "",
+		issuer:         "sextantd@" + hostID,
+		workspaceDir:   workspaceRoot,
+		agentsDataRoot: agentsDataRoot,
+		testRunLabel:   os.Getenv("SEXTANT_TEST_RUN_LABEL"),
 	}, nil
 }
 
@@ -168,23 +183,24 @@ func (r *spawnRuntime) asSpawnDeps(chConn driver.Conn) handlers.SpawnDeps {
 		hist = chHistoryWriter{conn: chConn}
 	}
 	return handlers.SpawnDeps{
-		Definitions:   kvMutableAdapter{kv: r.defsKV},
-		Incarnations:  kvMutableAdapter{kv: r.incsKV},
-		Templates:     r.templatesKV,
-		Containers:    r.containers,
-		Volumes:       r.containers, // *containermgr.Manager satisfies VolumeManager too
-		CA:            nil,          // populated by callers (RPC fills it from d.ca; same handle).
-		History:       hist,
-		WorkspaceRoot: r.workspaceDir,
-		Worktree:      r.worktree,
-		RepoRoot:      r.repoRoot,
-		HostID:        r.hostID,
-		NATSURL:       r.natsURL,
-		NATSUser:      r.natsUser,
-		NATSPassword:  r.natsPassword,
-		MCPURL:        r.mcpURL,
-		Issuer:        r.issuer,
-		TestRunLabel:  r.testRunLabel,
+		Definitions:    kvMutableAdapter{kv: r.defsKV},
+		Incarnations:   kvMutableAdapter{kv: r.incsKV},
+		Templates:      r.templatesKV,
+		Containers:     r.containers,
+		Volumes:        r.containers, // *containermgr.Manager satisfies VolumeManager too
+		CA:             nil,          // populated by callers (RPC fills it from d.ca; same handle).
+		History:        hist,
+		WorkspaceRoot:  r.workspaceDir,
+		AgentsDataRoot: r.agentsDataRoot,
+		Worktree:       r.worktree,
+		RepoRoot:       r.repoRoot,
+		HostID:         r.hostID,
+		NATSURL:        r.natsURL,
+		NATSUser:       r.natsUser,
+		NATSPassword:   r.natsPassword,
+		MCPURL:         r.mcpURL,
+		Issuer:         r.issuer,
+		TestRunLabel:   r.testRunLabel,
 	}
 }
 

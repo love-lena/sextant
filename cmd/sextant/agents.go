@@ -51,6 +51,7 @@ aliases scheduled for removal in v0.2.`,
 	cmd.AddCommand(newAgentsChatCmd())
 	cmd.AddCommand(newAgentsExecCmd())
 	cmd.AddCommand(newAgentsCheckCmd())
+	cmd.AddCommand(newAgentsContextCmd())
 	return cmd
 }
 
