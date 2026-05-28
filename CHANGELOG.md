@@ -16,6 +16,18 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   stop`, `daemon restart` now render a `huh.NewConfirm` prompt when
   stdin is a TTY and neither `--yes` nor `--dry-run` is set.
   Non-TTY callers still get the existing `--yes`-required error.
+- **Tier 1 `-i` / `--tui` flag + component registry** — `sextant
+  agents list -i` and `sextant agents show <id> -i` launch the
+  existing agents TUI inline; `sextant pending list -i` and
+  `sextant traces show <id> -i` accept the flag but surface a
+  clear "not yet implemented" pointer at the follow-up tickets
+  ([[feat-tui-pending-component]], [[feat-tui-traces-component]]).
+  New `pkg/tui/component` registry (`Register` / `List`)
+  underpins the wiring; each component package self-registers via
+  `init()` (`pkg/tui/chat`, `pkg/tui/agents`). The legacy
+  `cmd/sextant-tui-agents/` binary now wraps `pkg/tui/agents` as a
+  thin standalone. Foundation for upcoming `sextant tui`
+  discovery menu and `sextant dash` multipane.
 
 ### Changed
 - Bump `@anthropic-ai/claude-agent-sdk` 0.3.150 → 0.3.154 in the

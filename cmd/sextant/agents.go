@@ -93,8 +93,12 @@ func connectAgent(ctx context.Context, configDir string) (*client.Client, sextan
 }
 
 // newAgentsListCmd — `sextant agents list`.
+//
+// The `-i` / `--tui` flag (wired by addAgentsListIFlag) swaps the
+// static text output for the interactive agents Component from
+// `pkg/tui/agents`. See iflag.go for the wiring contract.
 func newAgentsListCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List known agents",
 		Args:  cobra.NoArgs,
@@ -136,11 +140,17 @@ func newAgentsListCmd() *cobra.Command {
 			return tw.Flush()
 		},
 	}
+	addAgentsListIFlag(cmd)
+	return cmd
 }
 
 // newAgentsShowCmd — `sextant agents show <agent>`.
+//
+// The `-i` / `--tui` flag (wired by addAgentsShowIFlag) opens the
+// interactive agents Component seeded on the requested agent. See
+// iflag.go.
 func newAgentsShowCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "show <agent>",
 		Short: "Detailed status for one agent",
 		Args:  cobra.ExactArgs(1),
@@ -174,6 +184,8 @@ func newAgentsShowCmd() *cobra.Command {
 			return nil
 		},
 	}
+	addAgentsShowIFlag(cmd)
+	return cmd
 }
 
 // newAgentsCreateCmd — `sextant agents create <name> --template T`.

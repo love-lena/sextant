@@ -1,10 +1,7 @@
-// model_test.go — unit tests for the sextant-tui-agents Bubble Tea
-// model. Drives the reducer directly with crafted messages; does NOT
-// boot NATS. The model uses an agentBus interface so we can substitute
-// a fake here.
-//
-// Plan: plans/bootstrap.md#M13
-package main
+// model_test.go — unit tests for the agents Component. Drives the
+// reducer directly with crafted messages; does NOT boot NATS. The model
+// uses an agents.Bus interface so we can substitute a fake here.
+package agents
 
 import (
 	"context"
@@ -18,9 +15,10 @@ import (
 
 	"github.com/love-lena/sextant/pkg/client"
 	"github.com/love-lena/sextant/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/tui/component"
 )
 
-// fakeBus implements agentBus. Each method has knobs so individual
+// fakeBus implements Bus for tests. Each method has knobs so individual
 // tests can pin behavior without juggling channels they don't care about.
 type fakeBus struct {
 	mu sync.Mutex
@@ -108,14 +106,18 @@ func summaryWithUUID(name string, id uuid.UUID) sextantproto.AgentSummary {
 	}
 }
 
+// Compile-time assertion that *Model satisfies component.Component.
+// If the interface gains a method, this line breaks at build time.
+var _ component.Component = (*Model)(nil)
+
 func TestAgentsLoadedPopulatesList(t *testing.T) {
 	bus := &fakeBus{rpcResp: sextantproto.ListAgentsResponse{
 		Agents: []sextantproto.AgentSummary{summary("alpha", "running", "claude-coder")},
 	}}
-	m := newModel(bus, "lena")
+	m := New(Options{Bus: bus, Operator: "lena"})
 	now := time.Now()
 	got, _ := m.Update(agentsLoadedMsg{agents: bus.rpcResp.Agents, at: now})
-	mm := got.(*model)
+	mm := got.(*Model)
 	if len(mm.agents) != 1 || mm.agents[0].Name != "alpha" {
 		t.Fatalf("agents not populated: %+v", mm.agents)
 	}
@@ -128,16 +130,16 @@ func TestAgentsLoadedPopulatesList(t *testing.T) {
 }
 
 func TestAgentsLoadedSurfacesRPCError(t *testing.T) {
-	m := newModel(&fakeBus{}, "lena")
+	m := New(Options{Bus: &fakeBus{}, Operator: "lena"})
 	got, _ := m.Update(agentsLoadedMsg{err: errors.New("boom"), at: time.Now()})
-	mm := got.(*model)
+	mm := got.(*Model)
 	if mm.errMsg == "" {
 		t.Fatal("errMsg should be populated on RPC error")
 	}
 }
 
 func TestArrowKeysMoveCursorWithinBounds(t *testing.T) {
-	m := newModel(&fakeBus{}, "lena")
+	m := New(Options{Bus: &fakeBus{}, Operator: "lena"})
 	m.agents = []sextantproto.AgentSummary{
 		summaryWithUUID("a", uuid.New()),
 		summaryWithUUID("b", uuid.New()),
@@ -161,7 +163,7 @@ func TestArrowKeysMoveCursorWithinBounds(t *testing.T) {
 		if tc.key == "down" || tc.key == "up" {
 			out, _ = m.Update(specialKey(tc.key))
 		}
-		mm := out.(*model)
+		mm := out.(*Model)
 		if mm.cursor != tc.want {
 			t.Fatalf("after %q: cursor = %d, want %d", tc.key, mm.cursor, tc.want)
 		}
@@ -171,7 +173,7 @@ func TestArrowKeysMoveCursorWithinBounds(t *testing.T) {
 
 func TestEnterTriggersPutKVWithSelectedAgentUUID(t *testing.T) {
 	bus := &fakeBus{}
-	m := newModel(bus, "lena")
+	m := New(Options{Bus: bus, Operator: "lena"})
 	id := uuid.MustParse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 	m.agents = []sextantproto.AgentSummary{summaryWithUUID("alpha", id)}
 
@@ -191,8 +193,8 @@ func TestEnterTriggersPutKVWithSelectedAgentUUID(t *testing.T) {
 		t.Fatalf("PutKV calls = %d, want 1", len(calls))
 	}
 	got := calls[0]
-	if got.bucket != uiStateBucket {
-		t.Errorf("bucket = %q, want %q", got.bucket, uiStateBucket)
+	if got.bucket != UIStateBucket {
+		t.Errorf("bucket = %q, want %q", got.bucket, UIStateBucket)
 	}
 	wantKey := "lena.selected_agent"
 	if got.key != wantKey {
@@ -205,10 +207,9 @@ func TestEnterTriggersPutKVWithSelectedAgentUUID(t *testing.T) {
 
 func TestEnterWithoutAgentsIsNoop(t *testing.T) {
 	bus := &fakeBus{}
-	m := newModel(bus, "lena")
+	m := New(Options{Bus: bus, Operator: "lena"})
 	_, cmd := m.Update(specialKey("enter"))
 	if cmd != nil {
-		// Some commands are pure no-ops; ensure we don't actually call PutKV.
 		_ = cmd()
 	}
 	if len(bus.putCallsCopy()) != 0 {
@@ -220,7 +221,7 @@ func TestRRefreshIssuesListAgentsRPC(t *testing.T) {
 	bus := &fakeBus{rpcResp: sextantproto.ListAgentsResponse{
 		Agents: []sextantproto.AgentSummary{summary("alpha", "running", "")},
 	}}
-	m := newModel(bus, "lena")
+	m := New(Options{Bus: bus, Operator: "lena"})
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
 	if cmd == nil {
 		t.Fatal("'r' must issue an RPC command")
@@ -239,57 +240,58 @@ func TestRRefreshIssuesListAgentsRPC(t *testing.T) {
 }
 
 func TestHelpToggleAndEscClose(t *testing.T) {
-	m := newModel(&fakeBus{}, "lena")
+	m := New(Options{Bus: &fakeBus{}, Operator: "lena"})
 	out, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
-	mm := out.(*model)
+	mm := out.(*Model)
 	if !mm.helpOpen {
 		t.Fatal("? should open help")
 	}
 	out, _ = mm.Update(specialKey("esc"))
-	mm = out.(*model)
+	mm = out.(*Model)
 	if mm.helpOpen {
 		t.Fatal("esc should close help")
 	}
 }
 
 func TestSelectedAgentMsgUpdatesModel(t *testing.T) {
-	m := newModel(&fakeBus{}, "lena")
+	m := New(Options{Bus: &fakeBus{}, Operator: "lena"})
 	out, _ := m.Update(selectedAgentMsg{value: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"})
-	mm := out.(*model)
+	mm := out.(*Model)
 	if mm.selected != "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" {
 		t.Fatalf("selected = %q", mm.selected)
 	}
 }
 
 func TestPendingDeltaClampsAtZero(t *testing.T) {
-	m := newModel(&fakeBus{}, "lena")
+	m := New(Options{Bus: &fakeBus{}, Operator: "lena"})
 	out, _ := m.Update(pendingDeltaMsg{delta: 2})
-	mm := out.(*model)
+	mm := out.(*Model)
 	if mm.pending != 2 {
 		t.Fatalf("pending = %d, want 2", mm.pending)
 	}
 	out, _ = mm.Update(pendingDeltaMsg{delta: -5})
-	mm = out.(*model)
+	mm = out.(*Model)
 	if mm.pending != 0 {
 		t.Fatalf("pending = %d, want 0 (clamped)", mm.pending)
 	}
 }
 
-func TestQuitKeyEmitsQuitCmd(t *testing.T) {
-	m := newModel(&fakeBus{}, "lena")
+func TestQuitKeyEmitsDoneMsg(t *testing.T) {
+	m := New(Options{Bus: &fakeBus{}, Operator: "lena"})
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 	if cmd == nil {
-		t.Fatal("q must emit tea.Quit")
+		t.Fatal("q must emit a cmd")
 	}
-	// Quit is a func that returns tea.QuitMsg{}.
-	if _, ok := cmd().(tea.QuitMsg); !ok {
-		t.Fatalf("q cmd did not return tea.QuitMsg")
+	// Component contract: q emits DoneMsg (host translates to tea.Quit).
+	got := cmd()
+	if _, ok := got.(component.DoneMsg); !ok {
+		t.Fatalf("q cmd returned %T, want component.DoneMsg", got)
 	}
 }
 
 func TestViewRendersWithoutPanic(t *testing.T) {
-	m := newModel(&fakeBus{}, "lena")
-	m.width, m.height = 100, 30
+	m := New(Options{Bus: &fakeBus{}, Operator: "lena"})
+	m.SetSize(100, 30)
 	if got := m.View(); got == "" {
 		t.Fatal("empty view")
 	}
@@ -307,39 +309,58 @@ func TestViewRendersWithoutPanic(t *testing.T) {
 	}
 }
 
-func TestSanitizeOperator(t *testing.T) {
-	cases := map[string]string{
-		"lena":          "lena",
-		"lena.dev":      "lena_dev",
-		"User Name":     "User_Name",
-		"alice@example": "alice_example",
-		"":              "",
-	}
-	for in, want := range cases {
-		if got := sanitizeOperator(in); got != want {
-			t.Errorf("sanitizeOperator(%q) = %q, want %q", in, got, want)
-		}
+// TestLoadMsgSeedsCursorOnNextLoad verifies that a LoadMsg arriving
+// before agentsLoadedMsg lands seeds the cursor on the requested
+// agent — the path `sextant agents show <id> -i` relies on.
+func TestLoadMsgSeedsCursorOnNextLoad(t *testing.T) {
+	bus := &fakeBus{}
+	m := New(Options{Bus: bus, Operator: "lena"})
+	target := uuid.MustParse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+
+	// LoadMsg seeds initialSelectedID; agentsLoadedMsg should then move
+	// the cursor onto that row.
+	out, _ := m.Update(component.LoadMsg{ID: target.String()})
+	m = out.(*Model)
+	out, _ = m.Update(agentsLoadedMsg{
+		agents: []sextantproto.AgentSummary{
+			summaryWithUUID("a", uuid.New()),
+			summaryWithUUID("b", target),
+			summaryWithUUID("c", uuid.New()),
+		},
+		at: time.Now(),
+	})
+	mm := out.(*Model)
+	if mm.cursor != 1 {
+		t.Fatalf("cursor = %d, want 1 (target seeded by LoadMsg)", mm.cursor)
 	}
 }
 
-func TestResolveOperatorPrefersFlag(t *testing.T) {
-	got, err := resolveOperator("explicit")
-	if err != nil {
-		t.Fatalf("resolveOperator: %v", err)
+// TestFocusAndBlur verifies the Component focus contract.
+func TestFocusAndBlur(t *testing.T) {
+	m := New(Options{Bus: &fakeBus{}, Operator: "lena"})
+	if m.Focused() {
+		t.Fatal("new model should not be focused")
 	}
-	if got != "explicit" {
-		t.Fatalf("got %q, want %q", got, "explicit")
+	if cmd := m.Focus(); cmd != nil {
+		t.Errorf("Focus() returned non-nil cmd; want nil for this model")
+	}
+	if !m.Focused() {
+		t.Fatal("Focus() did not set focused bit")
+	}
+	m.Blur()
+	if m.Focused() {
+		t.Fatal("Blur() did not clear focused bit")
 	}
 }
 
-func TestResolveOperatorFallsBackToEnv(t *testing.T) {
-	t.Setenv("SEXTANT_OPERATOR", "from-env")
-	got, err := resolveOperator("")
-	if err != nil {
-		t.Fatalf("resolveOperator: %v", err)
+// TestShortHelpAndFullHelpNonEmpty smoke-tests the help surfaces.
+func TestShortHelpAndFullHelpNonEmpty(t *testing.T) {
+	m := New(Options{Bus: &fakeBus{}, Operator: "lena"})
+	if len(m.ShortHelp()) == 0 {
+		t.Error("ShortHelp returned empty slice")
 	}
-	if got != "from-env" {
-		t.Fatalf("got %q, want %q", got, "from-env")
+	if len(m.FullHelp()) == 0 {
+		t.Error("FullHelp returned empty slice")
 	}
 }
 
