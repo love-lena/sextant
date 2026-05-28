@@ -106,6 +106,15 @@ func runAgentCheck(ctx context.Context, ch agentChecker, ref string) AgentCheck 
 		string(sextantproto.LifecycleCrashedState):
 		out.Verdict = "ended"
 		out.Remedy = fmt.Sprintf("sextant agents restart %s", id)
+	case string(sextantproto.LifecycleLostState):
+		// `lost` is daemon-inferred death (kill -9, OOM, host crash, or
+		// docker daemon restart under a running sidecar). Restart with
+		// --preserve-session keeps the agent's session token; the
+		// container itself is gone regardless. See
+		// [[feat-agents-resume-verb]] for true session-preserving
+		// resume.
+		out.Verdict = "lost"
+		out.Remedy = fmt.Sprintf("sextant agents restart %s --preserve-session", id)
 	case string(sextantproto.LifecyclePaused):
 		out.Verdict = "paused"
 		// No `sextant agents resume` verb today — restart is the only

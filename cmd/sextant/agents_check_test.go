@@ -76,6 +76,7 @@ func TestRunAgentCheckTerminalLifecycle(t *testing.T) {
 		{"paused", sextantproto.LifecyclePaused, "paused", "sextant agents restart"},
 		{"archived", sextantproto.LifecycleArchived, "archived", "spawn a new agent"},
 		{"defined", sextantproto.LifecycleDefined, "stale_record", "sextant agents restart"},
+		{"lost", sextantproto.LifecycleLostState, "lost", "--preserve-session"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
