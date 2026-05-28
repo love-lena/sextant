@@ -20,6 +20,9 @@
         "updated_at": {
           "type": "string",
           "format": "date-time"
+        },
+        "heartbeat": {
+          "$ref": "#/$defs/HeartbeatSnapshot"
         }
       },
       "additionalProperties": false,
@@ -42,6 +45,25 @@
       "type": "object",
       "required": [
         "status"
+      ]
+    },
+    "HeartbeatSnapshot": {
+      "properties": {
+        "last_seen": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "age_seconds": {
+          "type": "number"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "source"
       ]
     },
     "UUID": {

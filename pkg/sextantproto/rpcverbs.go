@@ -49,8 +49,16 @@ type AgentSummary struct {
 }
 
 // GetAgentStatusRequest is the get_agent_status request payload.
+//
+// IncludeHeartbeat asks the daemon to attach the latest heartbeat
+// observation from the in-memory HeartbeatCache (L1 freshness signal).
+// Defaults to false so existing callers keep their narrow response
+// shape; `sextant agents check` opts in to drive the defense-in-depth
+// `degraded` verdict per
+// `plans/issues/feat-agents-check-heartbeat-secondary-signal.md`.
 type GetAgentStatusRequest struct {
-	AgentID uuid.UUID `json:"agent_id"`
+	AgentID          uuid.UUID `json:"agent_id"`
+	IncludeHeartbeat bool      `json:"include_heartbeat,omitempty"`
 }
 
 // GetAgentStatusResponse is the get_agent_status reply payload.
@@ -59,12 +67,32 @@ type GetAgentStatusResponse struct {
 }
 
 // AgentStatus is the per-agent snapshot returned by get_agent_status.
+//
+// Heartbeat is populated only when the request set IncludeHeartbeat=true.
+// Nil means either the caller did not ask, or the cache has no entry
+// for this agent (e.g., never seen a heartbeat, or the daemon's cache
+// is not wired).
 type AgentStatus struct {
-	UUID      uuid.UUID `json:"uuid"`
-	Name      string    `json:"name"`
-	Lifecycle string    `json:"lifecycle"`
-	Version   uint64    `json:"version"`
-	UpdatedAt time.Time `json:"updated_at"`
+	UUID      uuid.UUID          `json:"uuid"`
+	Name      string             `json:"name"`
+	Lifecycle string             `json:"lifecycle"`
+	Version   uint64             `json:"version"`
+	UpdatedAt time.Time          `json:"updated_at"`
+	Heartbeat *HeartbeatSnapshot `json:"heartbeat,omitempty"`
+}
+
+// HeartbeatSnapshot is the freshness shape attached to AgentStatus when
+// the caller opts in via GetAgentStatusRequest.IncludeHeartbeat.
+//
+//   - LastSeen / AgeSeconds: set when the daemon's HeartbeatCache has
+//     observed at least one heartbeat for this agent.
+//   - Source: "cache" when the snapshot came from the in-memory cache,
+//     "none" when the cache had no entry. Forward-compat for a future
+//     KV-backed source ("kv") without changing the wire shape.
+type HeartbeatSnapshot struct {
+	LastSeen   *time.Time `json:"last_seen,omitempty"`
+	AgeSeconds *float64   `json:"age_seconds,omitempty"`
+	Source     string     `json:"source"`
 }
 
 // ReadFileRequest is the read_file request payload. M7 handler is a stub

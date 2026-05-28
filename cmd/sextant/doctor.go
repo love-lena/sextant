@@ -569,6 +569,8 @@ func collectAgentChecks(ctx context.Context) ([]CheckResult, error) {
 // CheckResult row for the doctor table. Mapping:
 //
 //	healthy       → StatusPass
+//	degraded      → StatusWarn (lifecycle=running but heartbeat stale —
+//	                defense-in-depth signal, not a confirmed failure)
 //	paused        → StatusWarn (operator-paused, recoverable)
 //	ended/crashed → StatusFail
 //	stale_record  → StatusFail
@@ -579,7 +581,7 @@ func agentCheckToResult(name string, check AgentCheck) CheckResult {
 	switch check.Verdict {
 	case "healthy":
 		status = StatusPass
-	case "paused", "archived":
+	case "degraded", "paused", "archived":
 		status = StatusWarn
 	}
 	detail := fmt.Sprintf("lifecycle=%s", check.Lifecycle)

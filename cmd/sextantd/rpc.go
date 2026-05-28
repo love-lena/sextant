@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
@@ -113,7 +114,14 @@ func (d *daemon) startRPC(ctx context.Context) (*rpcRuntime, error) {
 		return nil, fmt.Errorf("rpc: build server: %w", err)
 	}
 
-	if err := registerInitialVerbs(srv, kv, chConn); err != nil {
+	rt := &rpcRuntime{
+		server:      srv,
+		nc:          nc,
+		chConn:      chConn,
+		agentDefsKV: kv,
+	}
+
+	if err := registerInitialVerbs(srv, kv, chConn, rt.heartbeatLookup()); err != nil {
 		_ = chConn.Close()
 		nc.Close()
 		return nil, fmt.Errorf("rpc: register handlers: %w", err)
@@ -131,15 +139,35 @@ func (d *daemon) startRPC(ctx context.Context) (*rpcRuntime, error) {
 			log.Printf("sextantd: rpc.Server.Run: %v", err)
 		}
 	}()
+	rt.cancel = cancel
+	rt.done = done
 
-	return &rpcRuntime{
-		server:      srv,
-		nc:          nc,
-		chConn:      chConn,
-		agentDefsKV: kv,
-		cancel:      cancel,
-		done:        done,
-	}, nil
+	return rt, nil
+}
+
+// heartbeatLookup returns a HeartbeatLookup that resolves through
+// r.heartbeats at call time. The cache is installed *after* startRPC
+// (see daemon.go step 11b), so get_agent_status — registered up front
+// in registerInitialVerbs — needs this late-binding adapter to find
+// the cache once it lands. Returns a non-nil adapter; LastSeen falls
+// through to (zero, false) until r.heartbeats is set.
+func (r *rpcRuntime) heartbeatLookup() handlers.HeartbeatLookup {
+	return rpcHeartbeatLookup{rt: r}
+}
+
+// rpcHeartbeatLookup is the late-binding adapter described on
+// rpcRuntime.heartbeatLookup. It reads r.heartbeats each call so the
+// daemon's startup ordering (register handlers, then install cache)
+// doesn't bake a nil into the handler closure.
+type rpcHeartbeatLookup struct {
+	rt *rpcRuntime
+}
+
+func (l rpcHeartbeatLookup) LastSeen(id uuid.UUID) (time.Time, bool) {
+	if l.rt == nil || l.rt.heartbeats == nil {
+		return time.Time{}, false
+	}
+	return l.rt.heartbeats.LastSeen(id)
 }
 
 // registerInitialVerbs installs the verbs that have no container-runtime
@@ -148,11 +176,20 @@ func (d *daemon) startRPC(ctx context.Context) (*rpcRuntime, error) {
 // only, no container deps). The container-touching verbs (read_file,
 // list_dir, stat, exec_in_container, restart_agent) wait for the spawn
 // runtime in registerLifecycleVerbs.
-func registerInitialVerbs(srv *rpc.Server, kv handlers.AgentKV, chConn handlers.QueryHistoryDB) error {
+//
+// heartbeats is the late-binding HeartbeatLookup wrapper (see
+// rpcRuntime.heartbeatLookup): the real cache is installed in
+// daemon.go step 11b, after this function runs. Nil is acceptable —
+// get_agent_status simply skips the heartbeat annotation when callers
+// don't ask for it (the only at-startup callers are tests).
+func registerInitialVerbs(srv *rpc.Server, kv handlers.AgentKV, chConn handlers.QueryHistoryDB, heartbeats handlers.HeartbeatLookup) error {
 	if err := srv.Register(rpc.VerbListAgents, handlers.NewListAgents(kv)); err != nil {
 		return err
 	}
-	if err := srv.Register(rpc.VerbGetAgentStatus, handlers.NewGetAgentStatus(kv)); err != nil {
+	if err := srv.Register(rpc.VerbGetAgentStatus, handlers.NewGetAgentStatusWithDeps(handlers.GetAgentStatusDeps{
+		KV:         kv,
+		Heartbeats: heartbeats,
+	})); err != nil {
 		return err
 	}
 	if err := srv.Register(rpc.VerbQueryHistory, handlers.NewQueryHistory(chConn)); err != nil {

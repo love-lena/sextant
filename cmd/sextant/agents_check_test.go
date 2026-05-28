@@ -163,6 +163,102 @@ func TestRenderAgentCheckJSONShape(t *testing.T) {
 	}
 }
 
+// TestRunAgentCheckDegradedOnStaleHeartbeat — lifecycle=running but
+// the daemon's HeartbeatCache reading is older than the staleness
+// threshold → verdict=degraded with the `daemon logs` remedy. This is
+// the defense-in-depth signal added per
+// `plans/issues/feat-agents-check-heartbeat-secondary-signal.md`.
+func TestRunAgentCheckDegradedOnStaleHeartbeat(t *testing.T) {
+	id := uuid.New()
+	staleAge := 90.0 // seconds; well over the 30s default
+	ch := &fakeAgentChecker{
+		ID: id,
+		Status: sextantproto.AgentStatus{
+			UUID:      id,
+			Name:      "epsilon",
+			Lifecycle: string(sextantproto.LifecycleRunning),
+			Version:   1,
+			UpdatedAt: time.Now(),
+			Heartbeat: &sextantproto.HeartbeatSnapshot{
+				AgeSeconds: &staleAge,
+				Source:     "cache",
+			},
+		},
+	}
+	got := runAgentCheck(context.Background(), ch, "epsilon")
+	if got.Verdict != "degraded" {
+		t.Errorf("Verdict = %q, want degraded", got.Verdict)
+	}
+	if !strings.Contains(got.Remedy, "sextant daemon logs") {
+		t.Errorf("Remedy = %q, want sextant daemon logs mention", got.Remedy)
+	}
+	if got.HeartbeatAge == nil {
+		t.Fatal("HeartbeatAge must be populated when daemon returned one")
+	}
+	if *got.HeartbeatAge < 30*time.Second {
+		t.Errorf("HeartbeatAge = %s, want >30s", got.HeartbeatAge)
+	}
+}
+
+// TestRunAgentCheckHealthyWithFreshHeartbeat — lifecycle=running plus a
+// fresh heartbeat keeps the existing healthy verdict.
+func TestRunAgentCheckHealthyWithFreshHeartbeat(t *testing.T) {
+	id := uuid.New()
+	freshAge := 3.0 // seconds
+	ch := &fakeAgentChecker{
+		ID: id,
+		Status: sextantproto.AgentStatus{
+			UUID:      id,
+			Name:      "zeta",
+			Lifecycle: string(sextantproto.LifecycleRunning),
+			Heartbeat: &sextantproto.HeartbeatSnapshot{
+				AgeSeconds: &freshAge,
+				Source:     "cache",
+			},
+		},
+	}
+	got := runAgentCheck(context.Background(), ch, "zeta")
+	if got.Verdict != "healthy" {
+		t.Errorf("Verdict = %q, want healthy", got.Verdict)
+	}
+	if got.Remedy != "" {
+		t.Errorf("Remedy = %q, want empty for healthy", got.Remedy)
+	}
+}
+
+// TestRunAgentCheckHealthyWhenNoHeartbeatSignal — daemon returned a
+// snapshot with Source="none" (cache miss) or no snapshot at all:
+// runAgentCheck must NOT downgrade to degraded. The KV record is
+// trusted as primary; heartbeat is only a downgrade signal when it
+// affirmatively says "stale".
+func TestRunAgentCheckHealthyWhenNoHeartbeatSignal(t *testing.T) {
+	id := uuid.New()
+	cases := []struct {
+		name string
+		hb   *sextantproto.HeartbeatSnapshot
+	}{
+		{"snapshot_nil", nil},
+		{"source_none", &sextantproto.HeartbeatSnapshot{Source: "none"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ch := &fakeAgentChecker{
+				ID: id,
+				Status: sextantproto.AgentStatus{
+					UUID:      id,
+					Name:      "eta",
+					Lifecycle: string(sextantproto.LifecycleRunning),
+					Heartbeat: tc.hb,
+				},
+			}
+			got := runAgentCheck(context.Background(), ch, "eta")
+			if got.Verdict != "healthy" {
+				t.Errorf("Verdict = %q, want healthy", got.Verdict)
+			}
+		})
+	}
+}
+
 // TestAgentCheckToResult covers the projection of AgentCheck verdicts
 // into the doctor CheckResult shape used by `doctor --agents`. The
 // mapping decides which agents the table flags red vs yellow.
@@ -172,6 +268,7 @@ func TestAgentCheckToResult(t *testing.T) {
 		wantStatus CheckStatus
 	}{
 		{"healthy", StatusPass},
+		{"degraded", StatusWarn},
 		{"paused", StatusWarn},
 		{"archived", StatusWarn},
 		{"ended", StatusFail},

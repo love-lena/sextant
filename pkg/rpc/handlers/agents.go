@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
@@ -88,10 +89,37 @@ func NewListAgents(kv AgentKV) rpc.Handler {
 	}
 }
 
+// GetAgentStatusDeps is the dep bag for the get_agent_status handler.
+// KV is required (the canonical agent record source); Heartbeats and Now
+// are optional and only used when a request opts into IncludeHeartbeat.
+//
+// Heartbeats can be nil — the handler still serves the L0 KV record,
+// just without the freshness annotation. That matches the daemon's
+// fail-soft posture when the cache failed to start.
+type GetAgentStatusDeps struct {
+	KV         AgentKV
+	Heartbeats HeartbeatLookup
+	Now        func() time.Time
+}
+
 // NewGetAgentStatus returns a Handler for the get_agent_status verb.
 // On a missing agent the handler emits an RPCError with code
 // "agent_not_found" — M7 acceptance asserts this is the 404 path.
+//
+// When the request sets IncludeHeartbeat=true and a HeartbeatLookup is
+// wired, the response's AgentStatus.Heartbeat is populated with the
+// last observed timestamp + age. Defense-in-depth for
+// `sextant agents check` per
+// `plans/issues/feat-agents-check-heartbeat-secondary-signal.md`.
 func NewGetAgentStatus(kv AgentKV) rpc.Handler {
+	return NewGetAgentStatusWithDeps(GetAgentStatusDeps{KV: kv})
+}
+
+// NewGetAgentStatusWithDeps is the dep-bag form. Existing callers that
+// only care about the KV record keep the narrow NewGetAgentStatus
+// signature; sextantd opts in to the dep bag to wire the heartbeat
+// cache.
+func NewGetAgentStatusWithDeps(deps GetAgentStatusDeps) rpc.Handler {
 	return func(ctx context.Context, req sextantproto.Envelope, emit func(sextantproto.RPCResponse)) error {
 		var args sextantproto.GetAgentStatusRequest
 		if err := json.Unmarshal(req.Payload, &args); err != nil {
@@ -101,7 +129,7 @@ func NewGetAgentStatus(kv AgentKV) rpc.Handler {
 		if args.AgentID == uuid.Nil {
 			return emitErr(emit, sextantproto.ErrCodeBadRequest, "agent_id is required")
 		}
-		entry, err := kv.Get(ctx, args.AgentID.String())
+		entry, err := deps.KV.Get(ctx, args.AgentID.String())
 		if err != nil {
 			if errors.Is(err, jetstream.ErrKeyNotFound) {
 				return emitErr(emit, sextantproto.ErrCodeAgentNotFound,
@@ -115,15 +143,42 @@ func NewGetAgentStatus(kv AgentKV) rpc.Handler {
 			return emitErr(emit, sextantproto.ErrCodeInternal,
 				fmt.Sprintf("decode agent_definitions/%s: %v", args.AgentID, err))
 		}
-		return emitOK(emit, sextantproto.GetAgentStatusResponse{
-			Status: sextantproto.AgentStatus{
-				UUID:      def.UUID,
-				Name:      def.Name,
-				Lifecycle: string(def.Lifecycle),
-				Version:   def.Version,
-				UpdatedAt: def.UpdatedAt.Time,
-			},
-		})
+		status := sextantproto.AgentStatus{
+			UUID:      def.UUID,
+			Name:      def.Name,
+			Lifecycle: string(def.Lifecycle),
+			Version:   def.Version,
+			UpdatedAt: def.UpdatedAt.Time,
+		}
+		if args.IncludeHeartbeat {
+			status.Heartbeat = buildHeartbeatSnapshot(deps, def.UUID)
+		}
+		return emitOK(emit, sextantproto.GetAgentStatusResponse{Status: status})
+	}
+}
+
+// buildHeartbeatSnapshot projects the cache lookup into the wire shape.
+// Always returns a non-nil snapshot when the caller asked, so the
+// "source" field is always set — that lets clients distinguish "the
+// cache had nothing for this agent" from "the daemon doesn't have a
+// cache wired" by inspecting the source.
+func buildHeartbeatSnapshot(deps GetAgentStatusDeps, id uuid.UUID) *sextantproto.HeartbeatSnapshot {
+	if deps.Heartbeats == nil {
+		return &sextantproto.HeartbeatSnapshot{Source: "none"}
+	}
+	last, ok := deps.Heartbeats.LastSeen(id)
+	if !ok {
+		return &sextantproto.HeartbeatSnapshot{Source: "none"}
+	}
+	nowFn := deps.Now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	age := nowFn().Sub(last).Seconds()
+	return &sextantproto.HeartbeatSnapshot{
+		LastSeen:   &last,
+		AgeSeconds: &age,
+		Source:     "cache",
 	}
 }
 
