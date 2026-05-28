@@ -10,6 +10,14 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
 
 ## [Unreleased]
 
+### Changed
+- Bump `@anthropic-ai/claude-agent-sdk` 0.3.150 → 0.3.154 in the
+  sidecar workspace. Notable upstream changes: parity with Claude
+  Code v2.1.153 (0.3.153); fix for stdio MCP servers being
+  incorrectly restarted on every reconcile pass (0.3.154); new
+  `SessionStart` `reloadSkills` + `MessageDisplay` hook events
+  (0.3.152) — sextant doesn't currently consume the hook API.
+
 ### Added
 - `sextant version` and `sextantd version` subcommands print the binary
   version + git short SHA, populated at build time via `-ldflags` from
