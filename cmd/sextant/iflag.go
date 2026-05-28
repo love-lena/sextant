@@ -1,0 +1,205 @@
+// iflag.go owns the `-i` / `--tui` flag wiring for Tier 1 cobra
+// commands. The flag mounts the corresponding component (from
+// `pkg/tui/component`'s registry) via `component.Host` instead of
+// printing the static text output.
+//
+// Resolves plans/issues/feat-cli-iflag-tier1-components.md.
+//
+// Today the wired commands are:
+//
+//   - sextant agents list -i        → pkg/tui/agents.Model
+//   - sextant agents show <id> -i   → pkg/tui/agents.Model, seeded
+//     with the requested UUID via LoadMsg.
+//
+// Future wiring (skipped because the matching Component doesn't yet
+// exist — file a follow-up before unsticking):
+//
+//   - sextant pending list -i       → needs pkg/tui/pending.Model
+//     (no such package yet; pending today is a non-interactive RPC
+//     snapshot).
+//   - sextant traces show <id> -i   → needs pkg/tui/traces.Model
+//     (no such package yet; traces today renders a static span tree).
+//   - sextant agents context <id> -i → ships with
+//     [[feat-agents-context-view]]; not wired here.
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/spf13/cobra"
+
+	"github.com/love-lena/sextant/pkg/tui/agents"
+)
+
+// tuiLauncher is the seam tests substitute to assert that the `-i`
+// path was taken without booting a tea.Program. Production code uses
+// runAgentsListTUI; tests overwrite this with a recorder.
+type tuiLauncher interface {
+	RunAgentsList(ctx context.Context, configDir, selectedID string) error
+}
+
+// realTUI is the live launcher; tests overwrite via newAgentsListIRunE's
+// injection seam below.
+type realTUI struct{}
+
+func (realTUI) RunAgentsList(ctx context.Context, configDir, selectedID string) error {
+	return runAgentsListTUI(ctx, configDir, selectedID)
+}
+
+// activeTUILauncher is the swappable seam; tests overwrite it.
+var activeTUILauncher tuiLauncher = realTUI{}
+
+// resolveOperatorIdentity is a tiny copy of the operator-name resolver
+// used by cmd/sextant-tui-agents/main.go. Threaded through here so the
+// `-i` path produces the same ui_state.<operator>.selected_agent KV
+// writes as the standalone binary.
+func resolveOperatorIdentity() string {
+	// Cheap fallback chain: $SEXTANT_OPERATOR → $USER → "operator".
+	// The standalone binary has a more elaborate flow including
+	// os/user.Current(); the `-i` path matches that via runtime
+	// resolution in the agents.New call site below if/when we wire a
+	// per-command --operator flag. For now, env-first matches the 95%
+	// case (operators run sextant as themselves).
+	if v := envOrEmpty("SEXTANT_OPERATOR"); v != "" {
+		return sanitizeOperatorName(v)
+	}
+	if v := envOrEmpty("USER"); v != "" {
+		return sanitizeOperatorName(v)
+	}
+	return "operator"
+}
+
+func envOrEmpty(name string) string {
+	return os.Getenv(name)
+}
+
+// sanitizeOperatorName is the same regex sweep cmd/sextant-tui-agents
+// uses. Kept local to the cmd/sextant package so importing the standalone
+// binary's package main isn't necessary.
+func sanitizeOperatorName(s string) string {
+	out := make([]rune, 0, len(s))
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9',
+			r == '_', r == '-':
+			out = append(out, r)
+		default:
+			out = append(out, '_')
+		}
+	}
+	return string(out)
+}
+
+// runAgentsListTUI dials the daemon, builds the agents Component, and
+// runs it under tea.NewProgram. Mirrors cmd/sextant-tui-agents/main.go
+// minus the flag parsing — the cobra layer already gave us configDir.
+func runAgentsListTUI(ctx context.Context, configDir, selectedID string) error {
+	cli, _, err := connectAgent(ctx, configDir)
+	if err != nil {
+		return err
+	}
+	defer cli.Close() //nolint:errcheck // best-effort close
+
+	m := agents.New(agents.Options{
+		Bus:        cli,
+		Operator:   resolveOperatorIdentity(),
+		SelectedID: selectedID,
+	})
+	var standalone tea.Model
+	if selectedID != "" {
+		standalone = agents.NewStandaloneWithInitialLoad(m, selectedID)
+	} else {
+		standalone = agents.NewStandalone(m)
+	}
+	prog := tea.NewProgram(standalone, tea.WithAltScreen(), tea.WithContext(ctx))
+	agents.SetSender(prog.Send)
+
+	if _, err := prog.Run(); err != nil {
+		return fmt.Errorf("tui: %w", err)
+	}
+	return nil
+}
+
+// addAgentsListIFlag installs `-i` / `--tui` on `agents list` and
+// hooks it before the RunE so the TUI takes over when set. Called
+// from newAgentsListCmd in agents.go.
+func addAgentsListIFlag(cmd *cobra.Command) {
+	var interactive bool
+	cmd.Flags().BoolVarP(&interactive, "tui", "i", false,
+		"open the interactive TUI instead of printing the list")
+	originalRunE := cmd.RunE
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		if interactive {
+			return activeTUILauncher.RunAgentsList(cmd.Context(), globalFlags.configDir, "")
+		}
+		return originalRunE(cmd, args)
+	}
+}
+
+// addAgentsShowIFlag installs `-i` / `--tui` on `agents show <id>`.
+// The positional <id> seeds the TUI's cursor via LoadMsg.
+func addAgentsShowIFlag(cmd *cobra.Command) {
+	var interactive bool
+	cmd.Flags().BoolVarP(&interactive, "tui", "i", false,
+		"open the interactive agents TUI seeded on this agent")
+	originalRunE := cmd.RunE
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		if interactive {
+			ctx := cmd.Context()
+			cli, _, err := connectAgent(ctx, globalFlags.configDir)
+			if err != nil {
+				return err
+			}
+			id, resolveErr := resolveAgentRef(ctx, cli, args[0])
+			_ = cli.Close()
+			if resolveErr != nil {
+				return errUserUsage(fmt.Sprintf("agent: %v", resolveErr))
+			}
+			return activeTUILauncher.RunAgentsList(ctx, globalFlags.configDir, id.String())
+		}
+		return originalRunE(cmd, args)
+	}
+}
+
+// addPendingListIFlagFollowUp installs a `-i` flag on `pending list`
+// that returns a clear "not yet implemented" error pointing at the
+// follow-up ticket. Keeps the flag discoverable in `--help` so the
+// operator's muscle memory works once the Component lands.
+func addPendingListIFlagFollowUp(cmd *cobra.Command) {
+	var interactive bool
+	cmd.Flags().BoolVarP(&interactive, "tui", "i", false,
+		"(not yet implemented; see plans/issues/feat-tui-pending-component.md)")
+	originalRunE := cmd.RunE
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		if interactive {
+			return errUserUsage(
+				"pending list -i: pkg/tui/pending Component not yet implemented; " +
+					"see plans/issues/feat-tui-pending-component.md",
+			)
+		}
+		return originalRunE(cmd, args)
+	}
+}
+
+// addTracesShowIFlagFollowUp is the traces equivalent of
+// addPendingListIFlagFollowUp.
+func addTracesShowIFlagFollowUp(cmd *cobra.Command) {
+	var interactive bool
+	cmd.Flags().BoolVarP(&interactive, "tui", "i", false,
+		"(not yet implemented; see plans/issues/feat-tui-traces-component.md)")
+	originalRunE := cmd.RunE
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		if interactive {
+			return errUserUsage(
+				"traces show -i: pkg/tui/traces Component not yet implemented; " +
+					"see plans/issues/feat-tui-traces-component.md",
+			)
+		}
+		return originalRunE(cmd, args)
+	}
+}

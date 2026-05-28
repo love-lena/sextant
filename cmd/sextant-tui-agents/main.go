@@ -1,23 +1,12 @@
-// sextant-tui-agents is the M13 first-TUI binary: a Bubble Tea agent
-// list driven by pkg/client. Lists every AgentDefinition (via list_agents
-// RPC), re-fetches on `agents.*.lifecycle` envelopes, counts pending
-// user-input requests, and writes the cursor's UUID to the
-// `ui_state.<operator>.selected_agent` KV on Enter.
+// sextant-tui-agents is the standalone agents-list TUI binary, kept
+// for backwards-compat with operators wired up to it. The implementation
+// lives in `pkg/tui/agents`; this main.go is a thin wrapper that dials
+// the daemon, constructs the Component, and hands it to
+// `tea.NewProgram` via the package's NewStandalone helper.
 //
-// See conventions/tui-conventions.md for the keymap and ui.state.* key
-// format; model.go for the reducer; theme.go for the local Lipgloss
-// palette.
-//
-// Size budget: the M13 spec says "~150 LOC; demonstrates the 'minimal
-// TUI' pattern". main.go (this file) is ~130 LOC of non-comment code.
-// model.go runs longer (~330 LOC) because it implements the full
-// conventions keymap + three background subscriptions + the KV watcher;
-// each one is a few lines but they add up. The "minimal TUI pattern" is
-// faithfully demonstrated by main.go alone (flag parsing → client dial
-// → tea.NewProgram); model.go is the reusable boilerplate every later
-// TUI will import patterns from.
-//
-// Plan: plans/bootstrap.md#M13
+// The same Component is also reachable via `sextant agents list -i`,
+// which is the canonical operator-facing entry point. This standalone
+// binary will be deprecated once the `-i` flag is the documented path.
 package main
 
 import (
@@ -35,6 +24,7 @@ import (
 
 	"github.com/love-lena/sextant/pkg/client"
 	"github.com/love-lena/sextant/pkg/sextantd"
+	"github.com/love-lena/sextant/pkg/tui/agents"
 )
 
 func main() {
@@ -64,9 +54,10 @@ func run() error {
 	}
 	defer func() { _ = cli.Close() }()
 
-	m := newModel(cli, op)
-	prog := tea.NewProgram(m, tea.WithAltScreen())
-	teaProgramSendOrNoop = func(msg tea.Msg) { prog.Send(msg) }
+	m := agents.New(agents.Options{Bus: cli, Operator: op})
+	standalone := agents.NewStandalone(m)
+	prog := tea.NewProgram(standalone, tea.WithAltScreen())
+	agents.SetSender(prog.Send)
 
 	if _, err := prog.Run(); err != nil {
 		return fmt.Errorf("tea run: %w", err)
@@ -103,8 +94,7 @@ func sanitizeOperator(s string) string {
 
 // dialDaemon connects via the sextantd-managed runtime info so the TUI
 // hits the auto-allocated NATS port the daemon recorded. Mirrors the
-// connectAgent pattern in cmd/sextant/agents.go — the placeholder
-// client.toml port is not what the daemon actually binds to.
+// connectAgent pattern in cmd/sextant/agents.go.
 func dialDaemon(ctx context.Context, configDir string) (*client.Client, error) {
 	if configDir == "" {
 		d, _, err := sextantd.DefaultPaths()

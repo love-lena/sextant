@@ -1,10 +1,10 @@
-// theme.go — local Lipgloss styles for sextant-tui-agents.
+// theme.go — local Lipgloss styles for the agents Component.
 //
 // Role tokens live in `pkg/theme/`. This file binds them into the
 // local `theme` struct the model layer consults. Adding a new style
 // here means picking a role from `pkg/theme.Theme`, not introducing
 // a bare palette index.
-package main
+package agents
 
 import (
 	"github.com/charmbracelet/lipgloss"
@@ -12,7 +12,7 @@ import (
 	"github.com/love-lena/sextant/pkg/theme"
 )
 
-// theme holds the local style table. Fields are populated from
+// localTheme holds the local style table. Fields are populated from
 // `pkg/theme.Theme` via themeFor.
 type localTheme struct {
 	title     lipgloss.Style
@@ -25,11 +25,10 @@ type localTheme struct {
 	errorBar  lipgloss.Style
 }
 
-// defaultTheme returns the M13 baseline styles hydrated from
-// `pkg/theme`'s built-in adaptive theme. Tests and standalone runs
-// land here; an operator who sets `theme = "..."` in
-// `~/.config/sextant/config.toml` gets their loaded scheme via
-// themeFor.
+// defaultTheme returns the baseline styles hydrated from `pkg/theme`'s
+// built-in adaptive theme. Tests and standalone runs land here; an
+// operator who sets `theme = "..."` in `~/.config/sextant/config.toml`
+// gets their loaded scheme via themeFor.
 func defaultTheme() localTheme { return themeFor(theme.DefaultTheme()) }
 
 // themeFor binds a `pkg/theme.Theme` into the local style table.
