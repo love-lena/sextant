@@ -11,6 +11,19 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
 ## [Unreleased]
 
 ### Added
+
+### Changed
+
+### Fixed
+
+## [0.3.0] — 2026-05-28
+
+Interactive surfaces (`tui`, `dash`, `agents context`) plus the
+version-observability tooling that this release-cut workflow itself
+relies on. MINOR bump: everything below is additive — no verb, flag,
+output format, or wire shape was removed.
+
+### Added
 - **`sextant dash` flagship multi-pane TUI** — composes registered
   Tier 1 components into a Stickers flex layout with BubbleZone
   mouse click regions. Default pane layout is embedded as
@@ -26,42 +39,6 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   launches the corresponding `-i` surface on selection. New
   components appear automatically as they self-register via
   `init()`.
-- **TTY interactive confirm for destructive verbs** — `agents stop`,
-  `agents restart`, `agents archive` (incl. `--all-dead`), `daemon
-  stop`, `daemon restart` now render a `huh.NewConfirm` prompt when
-  stdin is a TTY and neither `--yes` nor `--dry-run` is set.
-  Non-TTY callers still get the existing `--yes`-required error.
-- **Tier 1 `-i` / `--tui` flag + component registry** — `sextant
-  agents list -i` and `sextant agents show <id> -i` launch the
-  existing agents TUI inline; `sextant pending list -i` and
-  `sextant traces show <id> -i` accept the flag but surface a
-  clear "not yet implemented" pointer at the follow-up tickets
-  ([[feat-tui-pending-component]], [[feat-tui-traces-component]]).
-  New `pkg/tui/component` registry (`Register` / `List`)
-  underpins the wiring; each component package self-registers via
-  `init()` (`pkg/tui/chat`, `pkg/tui/agents`). The legacy
-  `cmd/sextant-tui-agents/` binary now wraps `pkg/tui/agents` as a
-  thin standalone. Foundation for upcoming `sextant tui`
-  discovery menu and `sextant dash` multipane.
-
-### Changed
-- Bump `@anthropic-ai/claude-agent-sdk` 0.3.150 → 0.3.154 in the
-  sidecar workspace. Notable upstream changes: parity with Claude
-  Code v2.1.153 (0.3.153); fix for stdio MCP servers being
-  incorrectly restarted on every reconcile pass (0.3.154); new
-  `SessionStart` `reloadSkills` + `MessageDisplay` hook events
-  (0.3.152) — sextant doesn't currently consume the hook API.
-- Bump `@types/node` 22.19.19 → 25.9.1 in the sidecar workspace.
-  Major bump of the Node.js typings package; runtime stays on
-  Node 22 per `engines.node`. CI confirms clean tsc build of
-  both the sidecar entrypoint and `clients/typescript`.
-- Bump `typescript` 5.6.3 → 6.0.3 across the workspace. Major
-  compiler upgrade; both `clients/typescript` and the sidecar
-  entrypoint compile clean under TS 6 with no diagnostics. The
-  99-test sidecar vitest suite + 19-test clients/typescript
-  suite both pass.
-
-### Added
 - **`sextant agents context <agent>` (Phase A)** — operator surface
   for inspecting an agent's SDK session in raw form. CLI dump +
   `--follow` (tail) + `--mode=<raw|conversation|tools|thinking|usage|tree>`
@@ -79,6 +56,22 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   version, daemon PID, and start time. Warns when CLI and daemon
   versions diverge (the common case after `make install` without
   a daemon restart).
+- **TTY interactive confirm for destructive verbs** — `agents stop`,
+  `agents restart`, `agents archive` (incl. `--all-dead`), `daemon
+  stop`, `daemon restart` now render a `huh.NewConfirm` prompt when
+  stdin is a TTY and neither `--yes` nor `--dry-run` is set.
+  Non-TTY callers still get the existing `--yes`-required error.
+- **Tier 1 `-i` / `--tui` flag + component registry** — `sextant
+  agents list -i` and `sextant agents show <id> -i` launch the
+  existing agents TUI inline; `sextant pending list -i` and
+  `sextant traces show <id> -i` accept the flag but surface a
+  clear "not yet implemented" pointer at the follow-up tickets
+  ([[feat-tui-pending-component]], [[feat-tui-traces-component]]).
+  New `pkg/tui/component` registry (`Register` / `List`)
+  underpins the wiring; each component package self-registers via
+  `init()` (`pkg/tui/chat`, `pkg/tui/agents`). The legacy
+  `cmd/sextant-tui-agents/` binary now wraps `pkg/tui/agents` as a
+  thin standalone.
 - `sextant version` and `sextantd version` subcommands print the binary
   version + git short SHA, populated at build time via `-ldflags` from
   the top-level `VERSION` file.
@@ -88,10 +81,29 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   `dev` / `unknown` for `go run` paths).
 
 ### Changed
-- `pkg/sextantproto/doc.go::ProtoVersion` realigned to `0.2.0` to track
-  the binary version.
-- TypeScript client (`clients/typescript/src/envelope.ts`) `PROTO_VERSION`
-  realigned to `0.2.0`.
+- **Protocol version → `0.3.0`** — `pkg/sextantproto.ProtoVersion`
+  and the TypeScript client's `PROTO_VERSION` both advance to track
+  the binary semver. The wire surface changed additively this cycle
+  (new `get_version` RPC; new optional `session_log` field on the
+  `get_agent_status` response), so the bump is informational, not a
+  break. (A follow-up will split the proto version onto its own line
+  — see CLAUDE.md § "Versioning + PR policy".)
+- Bump `@anthropic-ai/claude-agent-sdk` 0.3.150 → 0.3.154 in the
+  sidecar workspace. Notable upstream changes: parity with Claude
+  Code v2.1.153 (0.3.153); fix for stdio MCP servers being
+  incorrectly restarted on every reconcile pass (0.3.154); new
+  `SessionStart` `reloadSkills` + `MessageDisplay` hook events
+  (0.3.152) — sextant doesn't currently consume the hook API.
+- Bump `@types/node` 22.19.19 → 25.9.1 in the sidecar workspace.
+  Major bump of the Node.js typings package; runtime stays on
+  Node 22 per `engines.node`. CI confirms clean tsc build of
+  both the sidecar entrypoint and `clients/typescript`.
+- Bump `typescript` 5.6.3 → 6.0.3 across the workspace. Major
+  compiler upgrade; both `clients/typescript` and the sidecar
+  entrypoint compile clean under TS 6 with no diagnostics. The
+  99-test sidecar vitest suite + 19-test clients/typescript
+  suite both pass. (Build-tooling major; not an operator-facing
+  change, so no MAJOR bump of the binary.)
 
 ### Fixed
 - **`kill_agent` retries on CAS conflict** —
@@ -175,5 +187,6 @@ untagged releases (`v0.1.x` informal) lacked.
   through #12). Documented in `plans/issues/` with deferred /
   resolved tickets cross-linked.
 
-[Unreleased]: https://github.com/love-lena/sextant/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/love-lena/sextant/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/love-lena/sextant/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/love-lena/sextant/releases/tag/v0.2.0
