@@ -171,6 +171,7 @@ func collectChecks(ctx context.Context, cfgDir, dataDir string, contributor bool
 	}
 
 	runtime, runtimeErr := sextantd.ReadRuntimeInfo(cfg.Paths.RuntimeFile)
+	daemonReachable := false
 	switch {
 	case runtimeErr == nil:
 		out = append(out, CheckResult{
@@ -181,6 +182,7 @@ func collectChecks(ctx context.Context, cfgDir, dataDir string, contributor bool
 		out = append(out, checkControlSocket(cfg.Daemon.ControlSocket))
 		out = append(out, checkNATS(ctx, runtime.NATSAddr))
 		out = append(out, checkClickHouseAddr(runtime.ClickHouseTCP))
+		daemonReachable = true
 	case errors.Is(runtimeErr, os.ErrNotExist) || strings.Contains(runtimeErr.Error(), "no such file"):
 		out = append(out, CheckResult{
 			Kind: "daemon", Check: cfg.Paths.RuntimeFile,
@@ -193,6 +195,12 @@ func collectChecks(ctx context.Context, cfgDir, dataDir string, contributor bool
 			Status: StatusFail, Detail: runtimeErr.Error(),
 		})
 	}
+
+	// Versions section. CLI row always renders so an offline doctor run
+	// still reports what the local binary thinks it is. Daemon row needs
+	// a live RPC surface, so we only query when the daemon checks above
+	// say it's reachable.
+	out = append(out, collectVersionChecks(ctx, daemonReachable)...)
 	return out
 }
 
@@ -531,6 +539,116 @@ func truncate(s string, n int) string {
 		return s[:n]
 	}
 	return "..." + s[len(s)-n+3:]
+}
+
+// collectVersionChecks emits the "Versions:" rows for the doctor table.
+// The CLI row is unconditional (the binary running doctor always knows
+// its own version). The daemon row + mismatch warning need a live RPC
+// surface; when daemonReachable is false, we still emit a placeholder
+// row that explains we couldn't query, and skip the mismatch detection.
+//
+// Mismatch detection compares the trimmed daemon and CLI version strings
+// — the warning is what makes this useful, per the originating spec:
+// after `make install` without a daemon restart the operator's CLI runs
+// the new binary but the daemon is still on the old one.
+//
+// Per plans/issues/feat-doctor-show-daemon-version.md.
+func collectVersionChecks(ctx context.Context, daemonReachable bool) []CheckResult {
+	out := make([]CheckResult, 0, 3)
+	out = append(out, CheckResult{
+		Kind:   "version",
+		Check:  "cli",
+		Status: StatusPass,
+		Detail: formatBuildLine(version.Version, version.Commit, 0, time.Time{}),
+	})
+	if !daemonReachable {
+		out = append(out, CheckResult{
+			Kind:   "version",
+			Check:  "daemon",
+			Status: StatusNotRunning,
+			Detail: "daemon not reachable; can't query get_version",
+			Remedy: remedyStartDaemon,
+		})
+		return out
+	}
+	resp, err := queryDaemonVersion(ctx)
+	if err != nil {
+		out = append(out, CheckResult{
+			Kind:   "version",
+			Check:  "daemon",
+			Status: StatusFail,
+			Detail: fmt.Sprintf("get_version rpc: %v", err),
+		})
+		return out
+	}
+	out = append(out, CheckResult{
+		Kind:   "version",
+		Check:  "daemon",
+		Status: StatusPass,
+		Detail: formatBuildLine(resp.DaemonVersion, resp.Commit, resp.PID, resp.StartedAt),
+	})
+	if mismatchRow, mismatch := versionMismatch(version.Version, resp.DaemonVersion); mismatch {
+		out = append(out, mismatchRow)
+	}
+	return out
+}
+
+// queryDaemonVersion opens a one-shot client, calls get_version, and
+// returns the decoded response. Kept narrow so the RPC dependency is
+// only paid when the daemon row actually needs it.
+func queryDaemonVersion(ctx context.Context) (sextantproto.GetVersionResponse, error) {
+	cli, _, err := connectAgent(ctx, globalFlags.configDir)
+	if err != nil {
+		return sextantproto.GetVersionResponse{}, fmt.Errorf("connect: %w", err)
+	}
+	defer cli.Close() //nolint:errcheck // best-effort close
+	var resp sextantproto.GetVersionResponse
+	if err := cli.RPC(ctx, rpc.VerbGetVersion, sextantproto.GetVersionRequest{}, &resp); err != nil {
+		return sextantproto.GetVersionResponse{}, err
+	}
+	return resp, nil
+}
+
+// formatBuildLine renders a single "build identifier" cell:
+//
+//	<version> (sha <short>)                        — for the CLI row
+//	<version> (sha <short>, pid N, started <rfc3339>) — for the daemon row
+//
+// The two shapes share a function so the column layout stays aligned
+// and tests can pin the exact string. Empty commit renders as "unknown".
+// Zero startedAt suppresses the pid/started suffix.
+func formatBuildLine(ver, commit string, pid int64, startedAt time.Time) string {
+	if commit == "" {
+		commit = "unknown"
+	}
+	if startedAt.IsZero() {
+		return fmt.Sprintf("%s (sha %s)", ver, commit)
+	}
+	return fmt.Sprintf("%s (sha %s, pid %d, started %s)",
+		ver, commit, pid, startedAt.UTC().Format(time.RFC3339))
+}
+
+// versionMismatch returns a warn-status CheckResult when cliVer and
+// daemonVer differ. The remedy points at `sextant daemon restart`,
+// which is the canonical fix after `make install` — the operator's CLI
+// got the new binary but the daemon process is still the pre-install
+// one. The detail line mirrors the spec verbatim so an operator
+// grepping logs can match on a stable string.
+//
+// Returns (zero, false) when the versions match; the caller skips the
+// row entirely on the matching path.
+func versionMismatch(cliVer, daemonVer string) (CheckResult, bool) {
+	if cliVer == daemonVer {
+		return CheckResult{}, false
+	}
+	return CheckResult{
+		Kind:   "version",
+		Check:  "mismatch",
+		Status: StatusWarn,
+		Detail: fmt.Sprintf("CLI %s / daemon %s — run `sextant daemon restart`",
+			cliVer, daemonVer),
+		Remedy: "sextant daemon restart",
+	}, true
 }
 
 // collectAgentChecks scans every registered agent via list_agents and

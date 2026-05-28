@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/love-lena/sextant/pkg/version"
 )
@@ -57,8 +58,12 @@ func TestDoctorAgainstFreshInit(t *testing.T) {
 	if failures != 0 {
 		t.Errorf("expected zero failures, got %d (%+v)", failures, results)
 	}
-	if notRunning != 1 {
-		t.Errorf("expected exactly one 'not-running' row, got %d", notRunning)
+	// Two not-running rows on a fresh init without a started daemon:
+	// the existing `daemon` row plus the `version`/daemon row added by
+	// the get_version surface — both surface the "no daemon yet" state
+	// with a start-daemon remedy.
+	if notRunning != 2 {
+		t.Errorf("expected exactly two 'not-running' rows (daemon + version/daemon), got %d", notRunning)
 	}
 }
 
@@ -441,6 +446,85 @@ func TestDoctorPreflightReturnsOnlyHostDepRows(t *testing.T) {
 		if r.Kind != "host-dep" {
 			t.Errorf("preflight returned non-host-dep row: kind=%s check=%s", r.Kind, r.Check)
 		}
+	}
+}
+
+// TestDoctorFormatBuildLine pins the version cell shape — operators and
+// scripts grep on this format. CLI row (no startedAt) shows
+// "<ver> (sha <short>)"; daemon row adds the pid + RFC3339 start time.
+func TestDoctorFormatBuildLine(t *testing.T) {
+	cliLine := formatBuildLine("v0.2.0", "abc1234", 0, time.Time{})
+	if cliLine != "v0.2.0 (sha abc1234)" {
+		t.Errorf("cli line = %q, want %q", cliLine, "v0.2.0 (sha abc1234)")
+	}
+	started := time.Date(2026, 5, 28, 10, 32, 11, 0, time.UTC)
+	daemonLine := formatBuildLine("v0.2.0", "abc1234", 12345, started)
+	want := "v0.2.0 (sha abc1234, pid 12345, started 2026-05-28T10:32:11Z)"
+	if daemonLine != want {
+		t.Errorf("daemon line = %q, want %q", daemonLine, want)
+	}
+	// Empty commit falls back to "unknown" so a binary built without
+	// -ldflags still renders a meaningful row.
+	emptyCommitLine := formatBuildLine("dev", "", 0, time.Time{})
+	if emptyCommitLine != "dev (sha unknown)" {
+		t.Errorf("empty-commit line = %q, want %q", emptyCommitLine, "dev (sha unknown)")
+	}
+}
+
+// TestDoctorVersionMismatch covers the warn-with-remedy path the issue
+// (`plans/issues/feat-doctor-show-daemon-version.md`) specifies: a CLI
+// running newer than the daemon (the common shape after `make install`
+// without `daemon restart`) prints the mismatch warning that names both
+// versions and tells the operator what to run.
+func TestDoctorVersionMismatch(t *testing.T) {
+	row, mismatch := versionMismatch("v0.2.0", "v0.1.7")
+	if !mismatch {
+		t.Fatal("versionMismatch returned false for differing versions")
+	}
+	if row.Status != StatusWarn {
+		t.Errorf("status = %q, want warn", row.Status)
+	}
+	if row.Kind != "version" || row.Check != "mismatch" {
+		t.Errorf("kind/check = %q/%q, want version/mismatch", row.Kind, row.Check)
+	}
+	if !strings.Contains(row.Detail, "CLI v0.2.0") || !strings.Contains(row.Detail, "daemon v0.1.7") {
+		t.Errorf("detail %q missing version pair", row.Detail)
+	}
+	if !strings.Contains(row.Detail, "sextant daemon restart") {
+		t.Errorf("detail %q missing remedy hint", row.Detail)
+	}
+	if row.Remedy == "" {
+		t.Error("remedy must be populated so emit() renders the arrow line")
+	}
+}
+
+// TestDoctorVersionMatchEmitsNoWarning — when CLI and daemon report the
+// same version, versionMismatch returns (zero, false) so the doctor
+// table stays quiet. Guards against the warning becoming a permanent nag.
+func TestDoctorVersionMatchEmitsNoWarning(t *testing.T) {
+	row, mismatch := versionMismatch("v0.2.0", "v0.2.0")
+	if mismatch {
+		t.Errorf("versionMismatch returned true for matching versions; row=%+v", row)
+	}
+}
+
+// TestDoctorCollectVersionChecksOfflineEmitsCLIOnly — when the daemon
+// isn't reachable (no runtime.json) collectVersionChecks still emits
+// the CLI row, plus a daemon-not-running row with the start-daemon
+// remedy. No mismatch warning when we can't query.
+func TestDoctorCollectVersionChecksOfflineEmitsCLIOnly(t *testing.T) {
+	rows := collectVersionChecks(context.Background(), false)
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2 (cli + daemon-not-running)", len(rows))
+	}
+	if rows[0].Kind != "version" || rows[0].Check != "cli" || rows[0].Status != StatusPass {
+		t.Errorf("CLI row = %+v", rows[0])
+	}
+	if rows[1].Kind != "version" || rows[1].Check != "daemon" || rows[1].Status != StatusNotRunning {
+		t.Errorf("daemon row = %+v", rows[1])
+	}
+	if rows[1].Remedy != remedyStartDaemon {
+		t.Errorf("daemon row remedy = %q, want %q", rows[1].Remedy, remedyStartDaemon)
 	}
 }
 

@@ -230,6 +230,22 @@ export interface GetAgentStatusResponse {
 }
 /**
  * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "GetVersionRequest".
+ */
+export interface GetVersionRequest {}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "GetVersionResponse".
+ */
+export interface GetVersionResponse {
+  daemon_version: string;
+  commit: string;
+  proto_version: string;
+  started_at: string;
+  pid: number;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
  * via the `definition` "HeartbeatPayload".
  */
 export interface HeartbeatPayload {

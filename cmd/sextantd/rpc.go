@@ -121,7 +121,7 @@ func (d *daemon) startRPC(ctx context.Context) (*rpcRuntime, error) {
 		agentDefsKV: kv,
 	}
 
-	if err := registerInitialVerbs(srv, kv, chConn, rt.heartbeatLookup()); err != nil {
+	if err := registerInitialVerbs(srv, kv, chConn, rt.heartbeatLookup(), d.startedAt); err != nil {
 		_ = chConn.Close()
 		nc.Close()
 		return nil, fmt.Errorf("rpc: register handlers: %w", err)
@@ -182,7 +182,11 @@ func (l rpcHeartbeatLookup) LastSeen(id uuid.UUID) (time.Time, bool) {
 // daemon.go step 11b, after this function runs. Nil is acceptable —
 // get_agent_status simply skips the heartbeat annotation when callers
 // don't ask for it (the only at-startup callers are tests).
-func registerInitialVerbs(srv *rpc.Server, kv handlers.AgentKV, chConn handlers.QueryHistoryDB, heartbeats handlers.HeartbeatLookup) error {
+//
+// startedAt is the daemon process start time, captured at the top of
+// daemon.Start. The get_version handler closes over it so each call
+// reports the actual boot time rather than the time-of-call.
+func registerInitialVerbs(srv *rpc.Server, kv handlers.AgentKV, chConn handlers.QueryHistoryDB, heartbeats handlers.HeartbeatLookup, startedAt time.Time) error {
 	if err := srv.Register(rpc.VerbListAgents, handlers.NewListAgents(kv)); err != nil {
 		return err
 	}
@@ -199,6 +203,9 @@ func registerInitialVerbs(srv *rpc.Server, kv handlers.AgentKV, chConn handlers.
 		return err
 	}
 	if err := srv.Register(rpc.VerbQueryTrace, handlers.NewQueryTrace(chConn)); err != nil {
+		return err
+	}
+	if err := srv.Register(rpc.VerbGetVersion, handlers.NewGetVersion(handlers.VersionDeps{StartedAt: startedAt})); err != nil {
 		return err
 	}
 	return nil
