@@ -14,10 +14,31 @@ starting work; follow the links when the matching domain comes up.
   `main` — not for code, not for docs, not for spec/plan notes.
   Self-approved fast-merges are fine; bypassing the PR path is not.
   See `conventions/git-workflow.md` for the workflow.
-- **Semver is bumped per [semver.org](https://semver.org).** Breaking
-  changes bump MAJOR, additive features bump MINOR, bug-only changes
-  bump PATCH. Bump as part of the PR that introduces the change; do
-  not batch bumps.
+- **Semver bumps follow the semantic rule:** does an operator
+  running the binary see different behavior? If yes, bump per
+  [semver.org](https://semver.org):
+  - **MAJOR** — backwards-incompatible change.
+  - **MINOR** — additive feature (new flag, new verb, new RPC).
+  - **PATCH** — bug fix or behavior-affecting code change with no
+    new feature surface.
+  Bump as part of the PR that introduces the change; don't batch
+  bumps. Bump-classification ambiguity → favor the larger bump.
+- **When NOT to bump.** A PR that touches only repo metadata or
+  documentation doesn't bump. Specifically:
+  - `docs/**` (mdbook), `plans/**` (specs + tickets),
+    `conventions/**`, `.github/**`, `.claude/**`,
+    `tests/visual/**` (VHS fixtures), `*.md` at repo root.
+  - Pure test-file changes (`*_test.go`) — tests describe
+    behavior but don't ship.
+- **When to bump.** Any change under `cmd/**`, `pkg/**` (non-test),
+  `images/**`, `clients/**`, `Makefile`, `go.mod`, `go.sum`,
+  `pkg/sextantproto/schemas/**`, or `VERSION` itself.
+- **Changelog is load-bearing.** `CHANGELOG.md` follows
+  [Keep a Changelog](https://keepachangelog.com). Every bumping
+  PR adds an entry under `## [Unreleased]` in the appropriate
+  section (Added / Changed / Deprecated / Removed / Fixed /
+  Security). CI gates this — a PR touching the
+  bump-required paths above without a CHANGELOG.md edit fails.
 - The top-level `VERSION` file is the **source of truth** for the
   binary semver. `make install` / `make build` plumb it into
   `pkg/version.Version` via `-ldflags`. `sextant version` and
