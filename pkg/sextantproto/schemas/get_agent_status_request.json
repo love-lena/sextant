@@ -7,6 +7,9 @@
       "properties": {
         "agent_id": {
           "$ref": "#/$defs/UUID"
+        },
+        "include_heartbeat": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false,

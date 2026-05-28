@@ -206,6 +206,127 @@ func TestGetAgentStatusRejectsZeroUUID(t *testing.T) {
 	}
 }
 
+// TestGetAgentStatusIncludeHeartbeatFresh — IncludeHeartbeat=true with a
+// fresh heartbeat returns a non-nil HeartbeatSnapshot whose AgeSeconds
+// reflects the cache reading. The CLI uses this to issue `degraded`.
+//
+// Uses the shared `fakeHeartbeats` (declared in prompt_test.go) keyed
+// by uuid; the agent-specific lookup keeps the test deterministic.
+func TestGetAgentStatusIncludeHeartbeatFresh(t *testing.T) {
+	id := uuid.New()
+	def := sextantproto.AgentDefinition{
+		UUID:      id,
+		Name:      "alpha",
+		Lifecycle: sextantproto.LifecycleRunning,
+		Version:   1,
+		UpdatedAt: sextantproto.NowTimestamp(),
+	}
+	raw, _ := json.Marshal(def)
+	kv := &fakeKV{entries: map[string][]byte{id.String(): raw}}
+	fixedNow := time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC)
+	hb := &fakeHeartbeats{lastSeen: map[uuid.UUID]time.Time{id: fixedNow.Add(-5 * time.Second)}}
+	h := handlers.NewGetAgentStatusWithDeps(handlers.GetAgentStatusDeps{
+		KV:         kv,
+		Heartbeats: hb,
+		Now:        func() time.Time { return fixedNow },
+	})
+	cap := &captureEmit{}
+	req := makeReq(t, sextantproto.GetAgentStatusRequest{AgentID: id, IncludeHeartbeat: true})
+	if err := h(context.Background(), req, cap.emit()); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if cap.resp.Error != nil {
+		t.Fatalf("Error = %v", cap.resp.Error)
+	}
+	var resp sextantproto.GetAgentStatusResponse
+	if err := json.Unmarshal(cap.resp.Result, &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Status.Heartbeat == nil {
+		t.Fatal("Heartbeat must be set when IncludeHeartbeat=true and cache has entry")
+	}
+	if resp.Status.Heartbeat.Source != "cache" {
+		t.Errorf("Source = %q, want cache", resp.Status.Heartbeat.Source)
+	}
+	if resp.Status.Heartbeat.AgeSeconds == nil {
+		t.Fatal("AgeSeconds must be set for cache hit")
+	}
+	if got := *resp.Status.Heartbeat.AgeSeconds; got != 5.0 {
+		t.Errorf("AgeSeconds = %v, want 5", got)
+	}
+}
+
+// TestGetAgentStatusIncludeHeartbeatMiss — cache has no entry; the
+// snapshot is still returned but Source="none" and AgeSeconds=nil.
+// The CLI treats this the same as "no signal" and keeps the original
+// verdict.
+func TestGetAgentStatusIncludeHeartbeatMiss(t *testing.T) {
+	id := uuid.New()
+	def := sextantproto.AgentDefinition{
+		UUID:      id,
+		Name:      "beta",
+		Lifecycle: sextantproto.LifecycleRunning,
+		Version:   1,
+		UpdatedAt: sextantproto.NowTimestamp(),
+	}
+	raw, _ := json.Marshal(def)
+	kv := &fakeKV{entries: map[string][]byte{id.String(): raw}}
+	// Empty lastSeen map → LastSeen returns (zero, false) for any id.
+	hb := &fakeHeartbeats{lastSeen: map[uuid.UUID]time.Time{}}
+	h := handlers.NewGetAgentStatusWithDeps(handlers.GetAgentStatusDeps{KV: kv, Heartbeats: hb})
+	cap := &captureEmit{}
+	req := makeReq(t, sextantproto.GetAgentStatusRequest{AgentID: id, IncludeHeartbeat: true})
+	if err := h(context.Background(), req, cap.emit()); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if cap.resp.Error != nil {
+		t.Fatalf("Error = %v", cap.resp.Error)
+	}
+	var resp sextantproto.GetAgentStatusResponse
+	if err := json.Unmarshal(cap.resp.Result, &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Status.Heartbeat == nil {
+		t.Fatal("Heartbeat must be set when IncludeHeartbeat=true (even on miss)")
+	}
+	if resp.Status.Heartbeat.Source != "none" {
+		t.Errorf("Source = %q, want none", resp.Status.Heartbeat.Source)
+	}
+	if resp.Status.Heartbeat.AgeSeconds != nil {
+		t.Errorf("AgeSeconds = %v, want nil on cache miss", *resp.Status.Heartbeat.AgeSeconds)
+	}
+}
+
+// TestGetAgentStatusOmitsHeartbeatWhenNotRequested — the default
+// (IncludeHeartbeat=false) keeps the legacy shape. Existing scripts
+// must not see a new field unless they opt in.
+func TestGetAgentStatusOmitsHeartbeatWhenNotRequested(t *testing.T) {
+	id := uuid.New()
+	def := sextantproto.AgentDefinition{
+		UUID:      id,
+		Name:      "gamma",
+		Lifecycle: sextantproto.LifecycleRunning,
+		Version:   1,
+		UpdatedAt: sextantproto.NowTimestamp(),
+	}
+	raw, _ := json.Marshal(def)
+	kv := &fakeKV{entries: map[string][]byte{id.String(): raw}}
+	hb := &fakeHeartbeats{lastSeen: map[uuid.UUID]time.Time{id: time.Now()}}
+	h := handlers.NewGetAgentStatusWithDeps(handlers.GetAgentStatusDeps{KV: kv, Heartbeats: hb})
+	cap := &captureEmit{}
+	req := makeReq(t, sextantproto.GetAgentStatusRequest{AgentID: id})
+	if err := h(context.Background(), req, cap.emit()); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var resp sextantproto.GetAgentStatusResponse
+	if err := json.Unmarshal(cap.resp.Result, &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Status.Heartbeat != nil {
+		t.Errorf("Heartbeat = %+v, want nil when IncludeHeartbeat=false", resp.Status.Heartbeat)
+	}
+}
+
 func TestReadFileStubReturnsNotImplemented(t *testing.T) {
 	// NewReadFileStub is kept for callers that want a fast stub without
 	// wiring the M12 container-exec backend. The real NewReadFile (with
