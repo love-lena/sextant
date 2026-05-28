@@ -25,7 +25,7 @@ func newTracesCmd() *cobra.Command {
 }
 
 func newTracesShowCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "show <trace_id>",
 		Short: "Render a distributed trace as a span tree",
 		Args:  cobra.ExactArgs(1),
@@ -51,6 +51,8 @@ func newTracesShowCmd() *cobra.Command {
 			return renderSpanTree(out, resp.Spans)
 		},
 	}
+	addTracesShowIFlagFollowUp(cmd)
+	return cmd
 }
 
 // renderSpanTree projects spans into a parent→children index, then
