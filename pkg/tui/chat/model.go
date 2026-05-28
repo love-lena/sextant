@@ -98,6 +98,12 @@ type Model struct {
 	// been seen yet — host renders a muted dot in that case.
 	lastLifecycle sextantproto.LifecyclePayload
 	hasLifecycle  bool
+	// lastLifecycleTs is the envelope wire timestamp for the most
+	// recent lifecycle. Used by the header to render a relative-time
+	// suffix on terminal states (`ended (12m ago)`). Zero value when
+	// the source path didn't supply it (older tests, synthetic
+	// lifecycleMsgs) — renderers must fall back gracefully.
+	lastLifecycleTs time.Time
 }
 
 // New returns a *Model with default styles/keys, mode=NORMAL,
@@ -228,6 +234,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// render a status dot (feat-chat-tui-status-dot). --tail close
 		// lives in program.go.
 		m.lastLifecycle = msg.Payload
+		m.lastLifecycleTs = msg.Ts
 		m.hasLifecycle = true
 		return m, nil
 	case subscriptionEndedMsg:

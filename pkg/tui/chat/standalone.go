@@ -1,11 +1,14 @@
 package chat
 
 import (
+	"fmt"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/love-lena/sextant/pkg/sextantproto"
 	"github.com/love-lena/sextant/pkg/tui/component"
 )
 
@@ -103,14 +106,20 @@ func (s *Standalone) renderChrome(width, _ int, content string) string {
 	return strings.Join([]string{header, content, "", status}, "\n")
 }
 
-// renderHeader draws the lifecycle status dot + agent name + optional
-// branch + thin rule. The dot reflects the most recent lifecycle
-// envelope (feat-chat-tui-status-dot):
+// renderHeader draws the lifecycle status dot + agent name + lifecycle
+// state word + optional branch + thin rule. The dot reflects the most
+// recent lifecycle envelope (feat-chat-tui-status-dot):
 //
 //	green  — started / resumed / restarted / turn_ended
 //	yellow — paused / archived
 //	red    — ended / crashed
 //	muted  — no lifecycle envelope seen yet
+//
+// The state word ("running", "ended", "lost", …) is rendered next to
+// the name (feat-tui-chat-header-name-and-lifecycle) and shares the
+// dot's role-class color so the two read as a single signal. Terminal
+// states append a relative-time suffix sourced from the envelope's
+// wire timestamp (`ended (12m ago)`).
 //
 // Moved here from view.go: pre-refactor it lived on Model.View; per
 // the Component contract the host owns chrome.
@@ -119,6 +128,9 @@ func (s *Standalone) renderHeader(width int) string {
 	dot := s.renderLifecycleDot()
 	name := m.styles.HeaderName.Render(m.opts.AgentName)
 	line := dot + " " + name
+	if state := s.renderLifecycleStateWord(); state != "" {
+		line += " " + m.styles.Muted.Render("·") + " " + state
+	}
 	if m.opts.Branch != "" {
 		line += "  " + m.styles.HeaderBranch.Render("⎇ "+m.opts.Branch)
 	}
@@ -167,6 +179,94 @@ func (s *Standalone) lifecycleDotRoleClass() string {
 		return "lost"
 	default:
 		return "muted"
+	}
+}
+
+// lifecycleStateWord returns the plain-text state word displayed in
+// the header next to the agent name. Sourced from
+// `m.lastLifecycle.State`, falling back to `Transition` when State is
+// empty (matching how the dot color picker tolerates a missing field).
+// Returns empty when no envelope has been seen yet — the header omits
+// the `· <state>` segment in that case.
+func (s *Standalone) lifecycleStateWord() string {
+	m := s.inner
+	if !m.hasLifecycle {
+		return ""
+	}
+	if word := string(m.lastLifecycle.State); word != "" {
+		return word
+	}
+	return string(m.lastLifecycle.Transition)
+}
+
+// renderLifecycleStateWord paints the state word in the same role-
+// class color as the dot, with a relative-time suffix on terminal
+// transitions (`ended (12m ago)`, `lost (just now)`). Returns the
+// styled segment ready to drop into the header line, or empty string
+// when no envelope has been seen.
+func (s *Standalone) renderLifecycleStateWord() string {
+	m := s.inner
+	word := s.lifecycleStateWord()
+	if word == "" {
+		return ""
+	}
+	text := word
+	if isTerminalLifecycleTransition(m.lastLifecycle.Transition) {
+		if rel := relativeTimeAgo(m.lastLifecycleTs, time.Now()); rel != "" {
+			text = word + " (" + rel + ")"
+		}
+	}
+	var style lipgloss.Style
+	switch s.lifecycleDotRoleClass() {
+	case "success":
+		style = m.styles.Success
+	case "attention":
+		style = m.styles.Attention
+	case "destructive":
+		style = m.styles.Destructive
+	case "lost":
+		style = m.styles.Lost
+	default:
+		style = m.styles.Muted
+	}
+	return style.Render(text)
+}
+
+// isTerminalLifecycleTransition reports whether a transition leaves
+// the agent in a non-running state that warrants a "how long ago"
+// annotation. `archived` and `ended` are clean stops; `crashed` and
+// `lost` are failure modes — all four read more clearly with a
+// relative timestamp.
+func isTerminalLifecycleTransition(t sextantproto.LifecycleEvent) bool {
+	switch t {
+	case sextantproto.LifecycleEnded,
+		sextantproto.LifecycleCrashedEvent,
+		sextantproto.LifecycleLostEvent,
+		sextantproto.LifecycleArchivedEvent:
+		return true
+	}
+	return false
+}
+
+// relativeTimeAgo formats `now - ts` as a short human string ("just
+// now", "12m ago", "3h ago", "2d ago"). Returns empty when ts is the
+// zero value (caller should omit the suffix entirely in that case).
+// Future timestamps fall through to "just now" — clock skew is more
+// common than time-travel.
+func relativeTimeAgo(ts, now time.Time) string {
+	if ts.IsZero() {
+		return ""
+	}
+	d := now.Sub(ts)
+	switch {
+	case d < 45*time.Second:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 	}
 }
 
