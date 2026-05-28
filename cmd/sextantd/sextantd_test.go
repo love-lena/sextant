@@ -207,6 +207,16 @@ func startDaemonHarness(t *testing.T) *daemonHarness {
 	// Override the MCP HTTP port to 0 (kernel-picked) so back-to-back
 	// daemon tests don't collide on the default 5172.
 	cfg.MCP.HTTPPort = 0
+	// Quiet the L2 reconciler in tests. The reconciler legitimately
+	// performs read-modify-write on agent definitions; under the test
+	// matrix's tight spawn → prompt → kill loop, the reconciler's
+	// startup pass can race kill_agent's CAS Update and flake the
+	// integration tests. Production kill now retries on CAS conflict
+	// (see bug-kill-agent-cas-flakes-integration-tests), but disabling
+	// the reconciler in tests removes the flake source entirely as a
+	// belt-and-suspenders guard against future regressions.
+	reconcileOff := false
+	cfg.Lifecycle.ReconcileOnStartup = &reconcileOff
 	if err := sextantd.SaveConfig(cfgPath, cfg); err != nil {
 		t.Fatalf("SaveConfig (tightened): %v", err)
 	}
