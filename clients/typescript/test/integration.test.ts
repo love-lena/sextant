@@ -17,6 +17,7 @@ import {
   KIND_RPC_RESPONSE,
   KVCASConflictError,
   KVKeyNotFoundError,
+  PROTO_VERSION,
   RPCError,
   RPCTimeoutError,
   connectWithConfig,
@@ -178,7 +179,7 @@ describe("rpc", () => {
         const reply = {
           id: randomUUID(),
           ts: new Date().toISOString().replace("Z", "000Z"),
-          proto_version: "1.0",
+          proto_version: PROTO_VERSION,
           from: { kind: "daemon", id: "daemon-test" },
           trace_id: req.trace_id,
           span_id: randomUUID(),
@@ -214,7 +215,7 @@ describe("rpc", () => {
         const reply = {
           id: randomUUID(),
           ts: new Date().toISOString().replace("Z", "000Z"),
-          proto_version: "1.0",
+          proto_version: PROTO_VERSION,
           from: { kind: "daemon", id: "daemon-test" },
           trace_id: req.trace_id,
           span_id: randomUUID(),

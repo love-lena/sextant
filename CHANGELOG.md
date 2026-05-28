@@ -1,0 +1,74 @@
+# Changelog
+
+All notable changes to sextant are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+See `CLAUDE.md` § "Versioning + PR policy" for the bump-classification rule
+and the path-based scope (when an entry is required vs. when a PR is exempt).
+
+## [Unreleased]
+
+### Added
+- `sextant version` and `sextantd version` subcommands print the binary
+  version + git short SHA, populated at build time via `-ldflags` from
+  the top-level `VERSION` file.
+- `CHANGELOG.md` (this file) + CI gate that fails PRs touching
+  bump-required paths without a changelog entry.
+- `pkg/version` package exposing `Version` and `Commit` vars (defaults:
+  `dev` / `unknown` for `go run` paths).
+
+### Changed
+- `pkg/sextantproto/doc.go::ProtoVersion` realigned to `0.2.0` to track
+  the binary version.
+- TypeScript client (`clients/typescript/src/envelope.ts`) `PROTO_VERSION`
+  realigned to `0.2.0`.
+
+## [0.2.0] — 2026-05-28
+
+First tagged baseline. Establishes the version surface that prior
+untagged releases (`v0.1.x` informal) lacked.
+
+### Added
+- **Agent lifecycle truth** — heartbeat cache, startup reconciler,
+  container watcher (PR #2, PR #3). `lost` transition added as a
+  fourth terminal state; `LifecyclePayload.source` field carries the
+  reporter discriminator.
+- **Chat TUI lifecycle word** — header renders the lifecycle state
+  next to the existing color-coded dot (PR #9), with relative-time
+  suffix on terminal states (`ended (12m ago)`).
+- **Chat TUI restart error banner** — inline banner surfaces
+  `restart_agent` RPC failures when the lost-state TUI has input
+  disabled (PR #10).
+- **`agents check` heartbeat secondary signal** — `get_agent_status`
+  extended with `IncludeHeartbeat` flag; `agents check` returns
+  `degraded` when lifecycle is `running` but the heartbeat is stale
+  (PR #11).
+
+### Changed
+- **CLI verb migration** (PR #12, breaking-compatible via aliases):
+  `agents spawn → agents create`, `agents kill → agents stop`,
+  `audit query → audit list`, `worktree destroy → worktree delete`.
+  Old verbs continue working as aliases for one release.
+- Conventions doc adopts the closed-exception verb-vocabulary list
+  (`restart`, `archive`, `prompt`, `answer`, `defer`, `escalate`,
+  `tail`, `merge`, `diff` allowed as exceptions to default CRUD).
+
+### Fixed
+- **`archive_agent` CAS write** (PR #8) — prevents concurrent
+  `restart_agent` / `kill_agent` / `update_agent` from clobbering an
+  archive's def commit. Completes the handler-CAS sweep started for
+  `restart_agent` and `kill_agent`.
+- **Nilaway false positives in `pkg/tui/chat/`** (PR #7) — explicit
+  slice init in `wordWrap` / `wrapWithFirstWidth` / `FramesToTurns`;
+  guard on `lastAgentTurnIndex`. CI gate for `make lint-nilaway`
+  restored (was silently disabled by a prior install step).
+
+### Internal
+- 7 PRs merged in a single dispatch session on 2026-05-27/28 (PRs #6
+  through #12). Documented in `plans/issues/` with deferred /
+  resolved tickets cross-linked.
+
+[Unreleased]: https://github.com/love-lena/sextant/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/love-lena/sextant/releases/tag/v0.2.0

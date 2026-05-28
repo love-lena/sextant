@@ -91,14 +91,22 @@ ts-build: ts-install
 
 ## build — compile every command under cmd/.
 #
-# GIT_SHA captures the workspace HEAD at build time and gets baked into
-# pkg/version.GitSHA via -ldflags. `sextant doctor` reads this back to detect
-# stale installed binaries (issue: feat-doctor-stale-binary-detection). The
-# `?=` lets CI / packagers override (e.g. set to the source tarball's SHA).
-# Falls back to empty when not in a git checkout — doctor treats empty as
-# "skip the staleness check" rather than an error.
-GIT_SHA ?= $(shell git rev-parse HEAD 2>/dev/null)
-BUILD_LDFLAGS := -X github.com/love-lena/sextant/pkg/version.GitSHA=$(GIT_SHA)
+# VERSION is read from the top-level VERSION file (source of truth per
+# feat-semver-versioning); GIT_SHORT is `git rev-parse --short HEAD`; GIT_SHA
+# is the full HEAD. All three are baked into pkg/version via -ldflags so
+# `sextant version`, `sextantd version`, and `sextant doctor` (staleness
+# check) all see consistent values. The `?=` lets CI / packagers override.
+# Each falls back to a safe default when the source is missing:
+#   - VERSION file missing → "dev"
+#   - not a git checkout    → "unknown" (and empty GIT_SHA → doctor skips
+#     the staleness check rather than erroring).
+VERSION   ?= $(shell cat VERSION 2>/dev/null || echo dev)
+GIT_SHA   ?= $(shell git rev-parse HEAD 2>/dev/null)
+GIT_SHORT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+BUILD_LDFLAGS := \
+  -X github.com/love-lena/sextant/pkg/version.Version=$(VERSION) \
+  -X github.com/love-lena/sextant/pkg/version.Commit=$(GIT_SHORT) \
+  -X github.com/love-lena/sextant/pkg/version.GitSHA=$(GIT_SHA)
 
 build: $(BIN_DIR)
 	@if [ -z "$(CMDS)" ]; then echo "no cmds to build yet"; exit 0; fi
