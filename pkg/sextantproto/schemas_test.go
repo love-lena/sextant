@@ -66,6 +66,9 @@ func TestSchemasOnDisk(t *testing.T) {
 		"query_audit_response.json":       false,
 		"query_trace_request.json":        false,
 		"query_trace_response.json":       false,
+		// Diagnostic verb (feat-doctor-show-daemon-version).
+		"get_version_request.json":  false,
+		"get_version_response.json": false,
 	}
 	for _, e := range entries {
 		if e.IsDir() {

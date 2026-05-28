@@ -35,6 +35,11 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   suite both pass.
 
 ### Added
+- **`sextant doctor` daemon version surface** — `doctor` now queries
+  a new `get_version` RPC and prints CLI + daemon version, proto
+  version, daemon PID, and start time. Warns when CLI and daemon
+  versions diverge (the common case after `make install` without
+  a daemon restart).
 - `sextant version` and `sextantd version` subcommands print the binary
   version + git short SHA, populated at build time via `-ldflags` from
   the top-level `VERSION` file.

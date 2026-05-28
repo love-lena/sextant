@@ -29,6 +29,15 @@ func CapFor(verb string) string {
 		return "control.worktree"
 	case VerbWorktreeList, VerbWorktreeDiff:
 		return "read.worktrees"
+	case VerbGetVersion:
+		// get_version is a diagnostic verb — `sextant doctor` calls it
+		// to compare CLI and daemon builds. The reply carries no agent
+		// state, only build metadata; an operator with operator creds
+		// can already read more sensitive surfaces. Returning "" keeps
+		// the verb in the same lane as "no capability required" for
+		// M7's AllowAll checker, and gives M10 an obvious slot to wire
+		// a per-verb policy without changing this signature.
+		return ""
 	default:
 		return ""
 	}
@@ -61,6 +70,11 @@ const (
 	VerbWorktreeList    = "worktree_list"
 	VerbWorktreeMerge   = "worktree_merge"
 	VerbWorktreeDiff    = "worktree_diff"
+	// Diagnostic verb. Implementation in pkg/rpc/handlers/version.go.
+	// Surfaces daemon build + proto + pid + start time so `sextant
+	// doctor` can flag CLI/daemon drift after `make install` without a
+	// daemon restart. See plans/issues/feat-doctor-show-daemon-version.md.
+	VerbGetVersion = "get_version"
 )
 
 // QueryHistoryDefaultLimit is the row cap when the request omits Limit.

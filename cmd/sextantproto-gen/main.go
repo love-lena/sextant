@@ -104,6 +104,9 @@ func main() {
 		{"worktree_merge_response", &sextantproto.WorktreeMergeResponse{}},
 		{"worktree_diff_request", &sextantproto.WorktreeDiffRequest{}},
 		{"worktree_diff_response", &sextantproto.WorktreeDiffResponse{}},
+		// Diagnostic verb (feat-doctor-show-daemon-version).
+		{"get_version_request", &sextantproto.GetVersionRequest{}},
+		{"get_version_response", &sextantproto.GetVersionResponse{}},
 	}
 
 	for _, e := range entries {
