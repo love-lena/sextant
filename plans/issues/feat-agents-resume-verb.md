@@ -3,11 +3,23 @@ title: True `sextant agents resume <uuid>` — restore a paused agent without lo
 status: open
 priority: P3
 created_at: 2026-05-27T10:45-07:00
-labels: [feature, cli, agents, lifecycle, needs-input]
+labels: [feature, cli, agents, lifecycle, deferred]
 discovered_in: Codex adversarial review caught that the paused-agent remedy referenced `sextant agents resume`, a command that doesn't exist; the immediate fix re-pointed the remedy at `agents restart`, but restart is lossy for the paused → running transition (drops session, spawns a fresh incarnation)
 ---
 
-## Needs Lena's input
+## Deferred (2026-05-27)
+
+**Decision: defer until `pause` itself ships.** Nothing in the
+daemon today produces `LifecyclePaused` — there is no `pause_agent`
+RPC, no kill-with-pause path, no `agents pause` verb. The state is
+dead-code in the proto. The current remedy in
+`pkg/rpc/handlers/prompt.go`, `cmd/sextant/agents_check.go`, and
+`cmd/sextant/chat.go` points at `sextant agents restart` — lossy
+(drops session, spawns a fresh incarnation) but functional. That's
+acceptable until a real operator workflow surfaces a pause
+requirement; revisit then.
+
+## Original open questions (preserved for context)
 
 Three questions before this becomes implementable, all about scope vs. the current architecture:
 

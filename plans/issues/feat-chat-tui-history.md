@@ -7,6 +7,17 @@ labels: [feature, tui, chat, data-model, needs-input]
 discovered_in: chat TUI Checkpoint C — operator closed chat, reopened, got an empty stream until the agent emitted a new frame
 ---
 
+## Deferred (2026-05-27)
+
+The chat-vs-context split was discussed and the **context half**
+shipped via [[feat-agents-context-view]]. The chat half — including
+this ticket's open questions about history source-of-truth, replay
+scope, and "chat" vs "context" surface boundaries — is **deferred
+pending Lena's broader chat-design conversation**. Don't pick this
+up without that conversation; the open questions below are real
+and the wrong answer locks the chat surface into the wrong data
+model. Ship the context surface first; chat follows.
+
 ## Summary
 
 `sextant conversation <agent>` currently subscribes to the agent's `frames` + `lifecycle` subjects starting at "now". On reopen, no prior turns appear — the operator sees an empty stream until fresh activity arrives. This is a real feature gap: chat history clearly exists somewhere (the events are on JetStream, persisted in ClickHouse), but the chat doesn't show it.
