@@ -43,7 +43,7 @@ func TestStreamFixture(t *testing.T) {
 	}
 	defer func() { _ = f.Close() }()
 
-	var events []sessionlog.Event
+	events := make([]sessionlog.Event, 0, 13)
 	for ev := range sessionlog.Stream(f) {
 		events = append(events, ev)
 	}

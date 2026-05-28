@@ -211,6 +211,7 @@ export interface AgentStatus {
   version: number;
   updated_at: string;
   heartbeat?: HeartbeatSnapshot;
+  session_log?: SessionLogInfo;
 }
 /**
  * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
@@ -220,6 +221,14 @@ export interface HeartbeatSnapshot {
   last_seen?: string;
   age_seconds?: number;
   source: string;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "SessionLogInfo".
+ */
+export interface SessionLogInfo {
+  projects_dir?: string;
+  session_id?: string;
 }
 /**
  * This interface was referenced by `SextantProtoBundle`'s JSON-Schema

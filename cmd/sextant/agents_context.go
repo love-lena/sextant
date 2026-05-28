@@ -410,6 +410,11 @@ type usageTracker struct {
 // writeLineUsage prints one line per assistant turn with the per-turn
 // + running totals. Non-assistant events are skipped.
 func writeLineUsage(out io.Writer, ev sessionlog.Event, t *usageTracker) error {
+	if t == nil {
+		// Defensive — callers in usage mode always supply a tracker, but
+		// nilaway can't prove the cross-mode invariant in renderEvents.
+		return nil
+	}
 	m, ok := ev.(sessionlog.AssistantMessage)
 	if !ok {
 		return nil
