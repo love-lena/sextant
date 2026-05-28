@@ -290,13 +290,14 @@ func (w *LifecycleWatcher) applyTransition(key string, envelopeIncarnation uuid.
 			return nil
 		}
 		if watcherShouldYield(def.Lifecycle, state) {
-			// The current record is in a terminal state the watcher
-			// must not demote (archived is operator-explicit). Drop the
-			// envelope — a stale sidecar "ended" arriving after the
-			// operator archived the agent would otherwise rewrite the
-			// record to ended, releasing the name-uniqueness lock
-			// incorrectly. See feat-cli-output-protocol /
-			// the Codex adversarial-review finding that flagged this.
+			// Two cases:
+			//   1. Current is archived (operator-explicit terminal).
+			//      A stale sidecar "ended" arriving after archive
+			//      would otherwise release the name-uniqueness lock.
+			//   2. Current is ended/crashed and the proposed state is
+			//      `lost`. The sidecar already observed the cause;
+			//      daemon-inferred absence must not clobber that.
+			// See watcherShouldYield for the rule.
 			return nil
 		}
 		def.Lifecycle = state
