@@ -131,6 +131,11 @@ sextant install itself).`,
 	// `plans/issues/feat-sextant-tui-discovery.md`.
 	cmd.AddCommand(newTUICmd())
 
+	// Flagship multi-pane TUI — composes registered Tier 1 components
+	// into a Stickers flex layout with BubbleZone mouse regions. Per
+	// `plans/issues/feat-sextant-dash-multipane.md`.
+	cmd.AddCommand(newDashCmd())
+
 	// Backwards-compat aliases — each prints a stderr deprecation note
 	// pointing at the new home. Removed one minor release after landing.
 	cmd.AddCommand(newAskAliasCmd())
