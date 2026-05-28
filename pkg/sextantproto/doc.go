@@ -9,6 +9,12 @@ package sextantproto
 
 // ProtoVersion is the current envelope protocol version. Minor bumps are
 // additive only; major bumps require a parallel subject namespace.
-const ProtoVersion = "1.0"
+//
+// Aligned with the binary semver in the top-level VERSION file so a single
+// number tracks both surfaces during the pre-1.0 stabilization phase. Once
+// the wire format and the binary semver have meaningfully different
+// evolution rates we may split them — see follow-up ticket on wire-format
+// negotiation.
+const ProtoVersion = "0.2.0"
 
 //go:generate go run github.com/love-lena/sextant/cmd/sextantproto-gen -out ./schemas

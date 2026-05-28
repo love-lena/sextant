@@ -188,7 +188,7 @@ func TestRootHelpRuns(t *testing.T) {
 }
 
 // TestVersionCmdPrintsVersion ensures the singleton `version` command
-// writes a non-empty line.
+// writes a non-empty line. Format-specific assertions live in version_test.go.
 func TestVersionCmdPrintsVersion(t *testing.T) {
 	root := newRootCmd()
 	root.SetArgs([]string{"version"})
@@ -197,7 +197,7 @@ func TestVersionCmdPrintsVersion(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("Execute version: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "sextant ") {
-		t.Errorf("version output missing 'sextant ' prefix: %q", stdout.String())
+	if stdout.Len() == 0 {
+		t.Errorf("version output was empty")
 	}
 }

@@ -39,6 +39,22 @@ Branches are created from `main`. Long-lived feature branches are discouraged; p
 - Co-authored-by trailers for AI-generated commits: `Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>`.
 - Reference issues/specs with `Spec: specs/components/nats.md` or `Plan: plans/bootstrap.md#M2` lines in the body when relevant.
 
+## PR-only policy
+
+**Every change lands via a pull request.** This applies uniformly:
+
+- Code changes, doc-only changes, spec/plan edits, ticket files —
+  all go through a PR.
+- Self-approved fast-merges are fine when the change is small and
+  the author is the only meaningful reviewer; what's not fine is
+  pushing straight to `main`.
+- The PR is the audit trail. CI checks, review comments, and the
+  merge commit's metadata all live there; direct commits skip that
+  trail.
+
+See `CLAUDE.md` § "Versioning + PR policy" for the companion semver
+rule (every bump rides the PR that introduces the change).
+
 ## Merging
 
 Merges into `main` are serialized via the `locks.merge` NATS KV key (bucket `locks`, key `merge`, TTL 5 min). Only one merge at a time prevents conflicts from cascading. The lock value is the holder's UUID/host + a unix-nano timestamp so a crashed holder is identifiable in `worktree_list` output and `audit.worktree_merge` envelopes.
