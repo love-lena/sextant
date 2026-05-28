@@ -83,6 +83,18 @@ type SpawnDeps struct {
 	CA            *authjwt.CA
 	History       HistoryWriter
 	WorkspaceRoot string
+	// AgentsDataRoot is the host directory under which the spawn
+	// handler creates per-agent state dirs the operator needs to
+	// reach directly — today only the Claude Code SDK session JSONL
+	// under <root>/<uuid>/claude-projects/, bind-mounted at
+	// /home/agent/.claude/projects/ inside the container so the
+	// SDK's session writer ends up writing to a host-readable path.
+	// See plans/issues/feat-agents-context-view.md.
+	//
+	// When empty, the bind mount is skipped — older spawn paths and
+	// unit tests that don't care about session-log visibility leave
+	// this unset and behave as before.
+	AgentsDataRoot string
 	// Worktree, when non-nil, is used to materialize the /workspace
 	// mount for templates whose `mounts` field includes "worktree".
 	// When nil or when the template doesn't request a worktree, the
@@ -412,6 +424,29 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 			ContainerPath: "/home/agent/.gitconfig",
 			ReadOnly:      true,
 		})
+		// Per-agent host dir for the Claude Code SDK's session JSONL.
+		// Mounted at /home/agent/.claude/projects so the SDK writer
+		// inside the container produces files the host can read
+		// directly (no docker cp, no container exec). The mount
+		// overlays on top of the claude_seed volume's /home/agent/.claude
+		// — Docker resolves the deepest-prefix mount per path, so a
+		// write under /home/agent/.claude/projects/ hits this bind
+		// while everything else under /home/agent/.claude/ still hits
+		// the seed volume. Skipped when AgentsDataRoot is empty
+		// (legacy spawn paths + unit tests).
+		// See plans/issues/feat-agents-context-view.md.
+		if deps.AgentsDataRoot != "" {
+			projectsHost, projectsCleanup, err := ensureAgentProjectsDir(deps.AgentsDataRoot, agentUUID)
+			if err != nil {
+				return emitErr(emit, sextantproto.ErrCodeInternal,
+					fmt.Sprintf("create claude-projects dir: %v", err))
+			}
+			pushRollback(projectsCleanup)
+			mounts = append(mounts, containermgr.MountSpec{
+				HostPath:      projectsHost,
+				ContainerPath: "/home/agent/.claude/projects",
+			})
+		}
 		// Template-opt-in: bind-mount the host's ~/.ssh read-only at
 		// /home/agent/.ssh so the agent can authenticate to GitHub for
 		// `git push`. Only fires when the template lists "ssh" in
@@ -584,6 +619,49 @@ func cloneStringMap(in map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+// ensureAgentProjectsDir creates <root>/<uuid>/claude-projects/ with
+// mode 0o700. Returns the host path + a rollback closure that removes
+// the dir tree (only safe pre-spawn — once the SDK starts writing
+// session JSONL files, rollback should still be fine because the
+// rollback only fires when the spawn itself fails before reply).
+//
+// Mode 0o700 because the JSONL contains the operator's prompts and
+// tool outputs verbatim; same posture as ~/.claude/projects/ on the
+// host. The parent <root>/<uuid>/ is created mode 0o750 (the same
+// posture used by the M11 spawn-workspaces dir) so other operator
+// tools can stat it but not list contents.
+func ensureAgentProjectsDir(root string, agentUUID uuid.UUID) (string, func(), error) {
+	if root == "" {
+		return "", nil, fmt.Errorf("agents data root is empty")
+	}
+	agentDir := filepath.Join(root, agentUUID.String())
+	if err := os.MkdirAll(agentDir, 0o750); err != nil {
+		return "", nil, fmt.Errorf("mkdir %s: %w", agentDir, err)
+	}
+	projects := filepath.Join(agentDir, "claude-projects")
+	if err := os.MkdirAll(projects, 0o700); err != nil {
+		return "", nil, fmt.Errorf("mkdir %s: %w", projects, err)
+	}
+	cleanup := func() {
+		// Only remove the claude-projects subtree on rollback — the
+		// parent agent dir is shared with any other per-agent state
+		// future PRs may stage under it.
+		_ = os.RemoveAll(projects)
+	}
+	return projects, cleanup, nil
+}
+
+// AgentProjectsDir returns the host path of the per-agent
+// claude-projects directory created by ensureAgentProjectsDir. The
+// get_agent_status handler uses this to surface the path back to the
+// operator without re-implementing the layout rule.
+func AgentProjectsDir(root string, agentUUID uuid.UUID) string {
+	if root == "" {
+		return ""
+	}
+	return filepath.Join(root, agentUUID.String(), "claude-projects")
 }
 
 // ensureWorkspaceDir creates ~/.local/share/sextant/spawn-workspaces/<uuid>/

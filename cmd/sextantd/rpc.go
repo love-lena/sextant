@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -121,7 +122,15 @@ func (d *daemon) startRPC(ctx context.Context) (*rpcRuntime, error) {
 		agentDefsKV: kv,
 	}
 
-	if err := registerInitialVerbs(srv, kv, chConn, rt.heartbeatLookup(), d.startedAt); err != nil {
+	// agentsDataRoot mirrors what buildSpawnRuntime computes for the
+	// spawn handler — surfaced here so get_agent_status can publish
+	// the per-agent claude-projects host path back to the operator.
+	// See plans/issues/feat-agents-context-view.md and the matching
+	// MkdirAll in buildSpawnRuntime that owns directory creation
+	// (this call is read-only on the layout).
+	agentsDataRoot := filepath.Join(d.cfg.Paths.DataDir, "agents")
+
+	if err := registerInitialVerbs(srv, kv, chConn, rt.heartbeatLookup(), d.startedAt, agentsDataRoot); err != nil {
 		_ = chConn.Close()
 		nc.Close()
 		return nil, fmt.Errorf("rpc: register handlers: %w", err)
@@ -186,13 +195,18 @@ func (l rpcHeartbeatLookup) LastSeen(id uuid.UUID) (time.Time, bool) {
 // startedAt is the daemon process start time, captured at the top of
 // daemon.Start. The get_version handler closes over it so each call
 // reports the actual boot time rather than the time-of-call.
-func registerInitialVerbs(srv *rpc.Server, kv handlers.AgentKV, chConn handlers.QueryHistoryDB, heartbeats handlers.HeartbeatLookup, startedAt time.Time) error {
+//
+// agentsDataRoot is the per-agent runtime root (`<DataDir>/agents`);
+// get_agent_status uses it to compute the claude-projects host path
+// the operator's `agents context` verb reads from.
+func registerInitialVerbs(srv *rpc.Server, kv handlers.AgentKV, chConn handlers.QueryHistoryDB, heartbeats handlers.HeartbeatLookup, startedAt time.Time, agentsDataRoot string) error {
 	if err := srv.Register(rpc.VerbListAgents, handlers.NewListAgents(kv)); err != nil {
 		return err
 	}
 	if err := srv.Register(rpc.VerbGetAgentStatus, handlers.NewGetAgentStatusWithDeps(handlers.GetAgentStatusDeps{
-		KV:         kv,
-		Heartbeats: heartbeats,
+		KV:             kv,
+		Heartbeats:     heartbeats,
+		AgentsDataRoot: agentsDataRoot,
 	})); err != nil {
 		return err
 	}
