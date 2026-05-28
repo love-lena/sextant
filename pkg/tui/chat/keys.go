@@ -9,13 +9,13 @@ import "github.com/charmbracelet/bubbles/key"
 // shown — no busy legend of inert hotkeys.
 type keyMap struct {
 	// NORMAL mode
-	NormalUp     key.Binding
-	NormalDown   key.Binding
-	NormalTop    key.Binding // 'gg' (two-key)
-	NormalBottom key.Binding // 'G'
-	NormalInsert   key.Binding // 'i'
-	NormalQuit     key.Binding // 'q' / ctrl+c
-	NormalRestart  key.Binding // 'R' — restart the agent (only active in lost state)
+	NormalUp      key.Binding
+	NormalDown    key.Binding
+	NormalTop     key.Binding // 'gg' (two-key)
+	NormalBottom  key.Binding // 'G'
+	NormalInsert  key.Binding // 'i'
+	NormalQuit    key.Binding // 'q' / ctrl+c
+	NormalRestart key.Binding // 'R' — restart the agent (only active in lost state)
 
 	// INSERT mode
 	InsertSend    key.Binding // enter

@@ -31,8 +31,8 @@ type Styles struct {
 
 	// Lost is the distinct bright-red dot for the "lost" lifecycle state.
 	// Separate from Destructive so the two can diverge visually if needed.
-	Lost  lipgloss.Style // agent lost — bright red; distinct from Destructive
-	Muted lipgloss.Style // de-emphasized text (timestamps, branch, hints)
+	Lost         lipgloss.Style // agent lost — bright red; distinct from Destructive
+	Muted        lipgloss.Style // de-emphasized text (timestamps, branch, hints)
 	HeaderName   lipgloss.Style // agent name in header
 	HeaderBranch lipgloss.Style // branch ref next to name
 

@@ -729,7 +729,7 @@ func isVolumeNotFound(err error) bool {
 // Event is the projection ContainerWatcher consumers receive.
 type Event struct {
 	ContainerID string
-	Action      string    // "die", "start", etc.
+	Action      string // "die", "start", etc.
 	Time        time.Time
 	Labels      map[string]string
 }

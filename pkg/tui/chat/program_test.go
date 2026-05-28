@@ -8,7 +8,7 @@ import (
 )
 
 type fakeBus struct {
-	sent     []string
+	sent      []string
 	restarted []uuid.UUID
 }
 

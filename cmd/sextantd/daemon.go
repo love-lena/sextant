@@ -149,6 +149,12 @@ func newDaemon(cfg sextantd.Config) (*daemon, error) {
 //     restart-on-failure with backoff + quarantine is in effect.
 //
 // On any startup error, Start rolls back partial state.
+//
+// The bootstrap ctx is intentionally distinct from d.supCtx (the daemon's
+// long-lived supervisor context); sub-contexts that must outlive Start
+// derive from d.supCtx instead.
+//
+//nolint:contextcheck // see comment above
 func (d *daemon) Start(ctx context.Context) error {
 	d.startedAt = time.Now().UTC()
 	log.Printf("sextantd: starting (config=%s data=%s)",
@@ -227,7 +233,7 @@ func (d *daemon) Start(ctx context.Context) error {
 	// 7. Hand the running subprocesses to the supervisors. The
 	// supervisor's first StartFn invocation reuses the already-running
 	// subprocess via the "preStarted" hook so we don't double-start.
-	d.supCtx, d.supCancel = context.WithCancel(context.Background())
+	d.supCtx, d.supCancel = context.WithCancel(context.Background()) //nolint:contextcheck // supervisors outlive Start's bootstrap ctx by design
 
 	natsSup, err := d.buildNATSSupervisor(natsSrv)
 	if err != nil {
@@ -511,7 +517,11 @@ func (d *daemon) Start(ctx context.Context) error {
 
 	cw := sextantd.NewContainerWatcher(spawnRT.containers, publishLifecycle,
 		sextantd.WithDebounce(debounce))
-	cwCtx, cwCancel := context.WithCancel(context.Background()) //nolint:contextcheck // container watcher outlives Start's ctx
+	// Derive from d.supCtx (the daemon's long-lived supervisor context) so
+	// the container watcher outlives Start's bootstrap ctx but is still
+	// cancelled when the daemon stops. doShutdown also calls cwCancel
+	// explicitly for the deterministic ordering before containermgr.Close.
+	cwCtx, cwCancel := context.WithCancel(d.supCtx) //nolint:contextcheck // see comment above
 	cwDone := make(chan struct{})
 	go func() {
 		defer close(cwDone)
