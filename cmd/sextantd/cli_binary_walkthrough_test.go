@@ -67,11 +67,14 @@ func TestM12CLIBinaryWalkthroughAcceptance(t *testing.T) {
 
 	// 1. agents create --json (renamed from `spawn` per the
 	// closed-exception verb policy; `spawn` remains as an alias).
+	// All --json output is wrapped in pkg/cliout.Envelope since
+	// commit e916508 (May 27); we decode through Data into the
+	// underlying response shape.
 	{
 		out := runSextantCmd(t, sextantBin, configDir, 60*time.Second, 0,
 			"agents", "create", "walkthru-bin", "--template", "default", "--json")
 		var resp sextantproto.SpawnAgentResponse
-		if err := json.Unmarshal(out, &resp); err != nil {
+		if err := decodeCLIEnvelope(out, &resp); err != nil {
 			t.Fatalf("decode create json: %v\nstdout=%q", err, out)
 		}
 		if resp.AgentID == uuid.Nil {
@@ -86,7 +89,7 @@ func TestM12CLIBinaryWalkthroughAcceptance(t *testing.T) {
 		out := runSextantCmd(t, sextantBin, configDir, 30*time.Second, 0,
 			"agents", "list", "--json")
 		var resp sextantproto.ListAgentsResponse
-		if err := json.Unmarshal(out, &resp); err != nil {
+		if err := decodeCLIEnvelope(out, &resp); err != nil {
 			t.Fatalf("decode list json: %v\nstdout=%q", err, out)
 		}
 		found := false
@@ -108,7 +111,7 @@ func TestM12CLIBinaryWalkthroughAcceptance(t *testing.T) {
 		out := runSextantCmd(t, sextantBin, configDir, 30*time.Second, 0,
 			"agents", "show", agentID.String(), "--json")
 		var status sextantproto.AgentStatus
-		if err := json.Unmarshal(out, &status); err != nil {
+		if err := decodeCLIEnvelope(out, &status); err != nil {
 			t.Fatalf("decode show json: %v\nstdout=%q", err, out)
 		}
 		if status.UUID != agentID || status.Lifecycle != "running" {
@@ -178,21 +181,29 @@ func TestM12CLIBinaryWalkthroughAcceptance(t *testing.T) {
 	}
 
 	// 9. pending list — empty queue; verifies snapshot path works.
+	// Empty results surface as exit code 10 (NO_RESULTS) per the
+	// `feat(cli): exit code 10` sweep (commit 0ebae51); stdout still
+	// carries the JSON envelope with `data: []`. Both the exit code
+	// and the body shape are asserted.
 	{
-		out := runSextantCmd(t, sextantBin, configDir, 30*time.Second, 0,
+		out, _, code := runSextantCmdRaw(t, sextantBin, configDir, 30*time.Second,
 			"pending", "list", "--json")
-		// JSON output is `[]` or a list. Empty is fine.
+		if code != 0 && code != 10 {
+			t.Fatalf("pending list exit=%d, want 0 or 10 (NO_RESULTS)\nstdout=%q", code, out)
+		}
 		var arr []map[string]any
-		if err := json.Unmarshal(out, &arr); err != nil {
+		if err := decodeCLIEnvelope(out, &arr); err != nil {
 			t.Fatalf("decode pending list: %v\nstdout=%q", err, out)
 		}
 	}
 
 	// 10. agents stop — verb returns ok, container disappears. The
 	// verb was renamed from `kill` per the closed-exception verb
-	// policy; `kill` remains as an alias.
+	// policy; `kill` remains as an alias. Destructive ops gate behind
+	// `--yes` since the destructive-flags sweep; pass it so the test
+	// matches the operator path with explicit confirmation.
 	runSextantCmd(t, sextantBin, configDir, 30*time.Second, 0,
-		"agents", "stop", agentID.String())
+		"agents", "stop", agentID.String(), "--yes")
 	if err := waitForContainerGone(dockerBin, handlers.LabelAgentUUID, agentID.String(), 20*time.Second); err != nil {
 		t.Fatalf("container still present after `sextant agents stop`: %v", err)
 	}
@@ -202,11 +213,16 @@ func TestM12CLIBinaryWalkthroughAcceptance(t *testing.T) {
 	// not started here. The CLI is expected to print "no audit rows"
 	// in text mode or an empty list in JSON mode; what we assert is
 	// the verb exits 0. Renamed from `query`.
+	//
+	// The audit list verb skips the cliout envelope wrap and prints
+	// the response shape directly because audit-list rows are a
+	// stable scripting surface that predates the envelope sweep. We
+	// decode straight into QueryAuditResponse here.
 	{
 		out := runSextantCmd(t, sextantBin, configDir, 30*time.Second, 0,
 			"audit", "list", "--since", "5m", "--json")
 		var resp sextantproto.QueryAuditResponse
-		if err := json.Unmarshal(out, &resp); err != nil {
+		if err := decodeCLIPayload(out, &resp); err != nil {
 			t.Fatalf("decode audit list json: %v\nstdout=%q", err, out)
 		}
 		// resp.Rows may be nil OR an empty slice — the wire shape says
@@ -315,3 +331,44 @@ func injectConfigDir(args []string, configDir string) []string {
 
 // Avoid "declared but not used" if a future refactor drops a usage.
 var _ = fmt.Sprintf
+
+// decodeCLIEnvelope decodes a cliout-wrapped --json response into v.
+// Every `sextant <verb> --json` site (except a small set of stable
+// scripting surfaces that bypass the wrap — see decodeCLIPayload) emits
+//
+//	{"data": <payload>, "meta": {"version": 1, "command": "..."}}
+//
+// since commit e916508. The test asserts on the inner payload so we
+// decode through `data`. Defined here (not in cliout) because cmd
+// packages can't import each other and the test fixture is throwaway.
+func decodeCLIEnvelope(raw []byte, v any) error {
+	var env struct {
+		Data json.RawMessage `json:"data"`
+		Meta struct {
+			Version int    `json:"version"`
+			Command string `json:"command"`
+		} `json:"meta"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return fmt.Errorf("decode envelope wrapper: %w", err)
+	}
+	if len(env.Data) == 0 {
+		return fmt.Errorf("envelope has empty data field")
+	}
+	if err := json.Unmarshal(env.Data, v); err != nil {
+		return fmt.Errorf("decode envelope data: %w", err)
+	}
+	return nil
+}
+
+// decodeCLIPayload decodes a CLI --json response that bypasses the
+// cliout envelope wrap (e.g. `audit list` writes its response shape
+// directly because the audit-row schema is a stable scripting surface
+// that predates the envelope sweep). Equivalent to json.Unmarshal but
+// named for symmetry with decodeCLIEnvelope at the call sites.
+func decodeCLIPayload(raw []byte, v any) error {
+	if err := json.Unmarshal(raw, v); err != nil {
+		return fmt.Errorf("decode payload: %w", err)
+	}
+	return nil
+}
