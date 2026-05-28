@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"fmt"
+	"log"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
@@ -118,11 +119,16 @@ func makeSendHook(ctx context.Context, bus Bus, id uuid.UUID) SendFunc {
 }
 
 // makeRestartHook returns a RestartFunc that issues restart_agent via
-// the Bus. Errors are swallowed — the watcher publishes "restarted"
-// and the model re-enables input automatically.
+// the Bus. On success: the watcher publishes "restarted" and the model
+// re-enables input automatically. On error: logged so the operator can
+// see *something* without the prompt area unlocking — file
+// [[feat-tui-chat-restart-error-banner]] tracks the inline banner that
+// will eventually replace this log statement.
 func makeRestartHook(ctx context.Context, bus Bus) RestartFunc {
 	return func(agentID uuid.UUID) {
-		_ = bus.RestartAgent(ctx, agentID)
+		if err := bus.RestartAgent(ctx, agentID); err != nil {
+			log.Printf("chat: restart_agent %s: %v (re-press R to retry)", agentID, err)
+		}
 	}
 }
 
