@@ -62,7 +62,15 @@ func (s *Standalone) Init() tea.Cmd { return s.host.Init() }
 
 // Update routes through the host (which translates DoneMsg →
 // tea.Quit and forwards WindowSizeMsg → SetSize on the inner).
+// RestartRequestedMsg is intercepted here and dispatched to the
+// inner model's restart hook (wired by program.go against the Bus).
 func (s *Standalone) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if req, ok := msg.(RestartRequestedMsg); ok {
+		if fn := s.inner.restart; fn != nil {
+			fn(req.AgentID)
+		}
+		return s, nil
+	}
 	_, cmd := s.host.Update(msg)
 	return s, cmd
 }
@@ -132,6 +140,8 @@ func (s *Standalone) renderLifecycleDot() string {
 		return m.styles.Attention.Render(dot)
 	case "destructive":
 		return m.styles.Destructive.Render(dot)
+	case "lost":
+		return m.styles.Lost.Render(dot)
 	default:
 		return m.styles.Muted.Render(dot)
 	}
@@ -153,6 +163,8 @@ func (s *Standalone) lifecycleDotRoleClass() string {
 		return "attention"
 	case "ended", "crashed":
 		return "destructive"
+	case "lost":
+		return "lost"
 	default:
 		return "muted"
 	}

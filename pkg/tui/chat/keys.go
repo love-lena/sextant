@@ -13,8 +13,9 @@ type keyMap struct {
 	NormalDown   key.Binding
 	NormalTop    key.Binding // 'gg' (two-key)
 	NormalBottom key.Binding // 'G'
-	NormalInsert key.Binding // 'i'
-	NormalQuit   key.Binding // 'q' / ctrl+c
+	NormalInsert   key.Binding // 'i'
+	NormalQuit     key.Binding // 'q' / ctrl+c
+	NormalRestart  key.Binding // 'R' — restart the agent (only active in lost state)
 
 	// INSERT mode
 	InsertSend    key.Binding // enter
@@ -30,6 +31,7 @@ func defaultKeys() keyMap {
 		NormalBottom:  key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom")),
 		NormalInsert:  key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "edit")),
 		NormalQuit:    key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
+		NormalRestart: key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "restart")),
 		InsertSend:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("↵", "send")),
 		InsertNewline: key.NewBinding(key.WithKeys("shift+enter"), key.WithHelp("⇧↵", "newline")),
 		InsertExit:    key.NewBinding(key.WithKeys("esc"), key.WithHelp("Esc", "back")),

@@ -8,11 +8,17 @@ import (
 )
 
 type fakeBus struct {
-	sent []string
+	sent     []string
+	restarted []uuid.UUID
 }
 
 func (f *fakeBus) SendPrompt(_ context.Context, _ uuid.UUID, text string) error {
 	f.sent = append(f.sent, text)
+	return nil
+}
+
+func (f *fakeBus) RestartAgent(_ context.Context, id uuid.UUID) error {
+	f.restarted = append(f.restarted, id)
 	return nil
 }
 

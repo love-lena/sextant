@@ -8,12 +8,18 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/love-lena/sextant/pkg/client"
+	"github.com/love-lena/sextant/pkg/rpc"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
 // Bus is the surface program.go needs from a pkg/client.Client. Defined
 // as an interface so tests can wire a fake without booting NATS.
 type Bus interface {
 	SendPrompt(ctx context.Context, agent uuid.UUID, text string) error
+	// RestartAgent triggers a restart_agent RPC with PreserveSession=true.
+	// Errors are logged/dropped — the watcher publishes "restarted" when
+	// the new incarnation starts and the model re-enables input then.
+	RestartAgent(ctx context.Context, agent uuid.UUID) error
 }
 
 // RunConfig collects every parameter Run needs. The frames/lifecycle
@@ -44,6 +50,7 @@ type RunConfig struct {
 func Run(cfg RunConfig) error {
 	m := New(Options{
 		AgentName: cfg.AgentName,
+		AgentID:   cfg.AgentID,
 		Branch:    cfg.Branch,
 		Read:      cfg.Read,
 	})
@@ -52,6 +59,7 @@ func Run(cfg RunConfig) error {
 	}
 	if !cfg.Read && cfg.Bus != nil {
 		m = m.WithSendHook(makeSendHook(cfg.Ctx, cfg.Bus, cfg.AgentID))
+		m = m.WithRestartHook(makeRestartHook(cfg.Ctx, cfg.Bus))
 	}
 	standalone := NewStandalone(m)
 	prog := tea.NewProgram(standalone, tea.WithAltScreen(), tea.WithContext(cfg.Ctx))
@@ -109,6 +117,15 @@ func makeSendHook(ctx context.Context, bus Bus, id uuid.UUID) SendFunc {
 	}
 }
 
+// makeRestartHook returns a RestartFunc that issues restart_agent via
+// the Bus. Errors are swallowed — the watcher publishes "restarted"
+// and the model re-enables input automatically.
+func makeRestartHook(ctx context.Context, bus Bus) RestartFunc {
+	return func(agentID uuid.UUID) {
+		_ = bus.RestartAgent(ctx, agentID)
+	}
+}
+
 // clientBus adapts *client.Client to the Bus interface. Lives here so
 // the rest of the package never imports pkg/client directly (except
 // frames.go, which only uses client.Message).
@@ -123,6 +140,10 @@ func NewClientBus(cli *client.Client) Bus { return &clientBus{cli: cli} }
 
 func (b *clientBus) SendPrompt(ctx context.Context, id uuid.UUID, text string) error {
 	return sendPromptRPC(ctx, b.cli, id, text)
+}
+
+func (b *clientBus) RestartAgent(ctx context.Context, id uuid.UUID) error {
+	return restartAgentRPC(ctx, b.cli, id)
 }
 
 // sendPromptRPC is split out so the test can call the Bus seam in
@@ -141,6 +162,20 @@ func sendPromptRPC(ctx context.Context, cli *client.Client, id uuid.UUID, text s
 	}
 	if !resp.OK {
 		return fmt.Errorf("prompt_agent: daemon returned ok=false")
+	}
+	return nil
+}
+
+// restartAgentRPC is split out analogously to sendPromptRPC. Calls
+// restart_agent with PreserveSession=true (spec §6).
+func restartAgentRPC(ctx context.Context, cli *client.Client, id uuid.UUID) error {
+	req := sextantproto.RestartAgentRequest{AgentID: id, PreserveSession: true}
+	var resp sextantproto.RestartAgentResponse
+	if err := cli.RPC(ctx, rpc.VerbRestartAgent, req, &resp); err != nil {
+		return err
+	}
+	if !resp.OK {
+		return fmt.Errorf("restart_agent: daemon returned ok=false")
 	}
 	return nil
 }
