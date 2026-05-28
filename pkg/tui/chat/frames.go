@@ -2,6 +2,7 @@ package chat
 
 import (
 	"encoding/json"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -20,8 +21,15 @@ type frameMsg struct {
 // reducer uses Transition for status-bar indicators and "ended" to
 // surface a closing UI hint (Task 10 implements the auto-close on
 // --tail).
+//
+// Ts carries the envelope's wire timestamp so the header can render a
+// relative-time suffix on terminal states (`ended (12m ago)`). Zero
+// value when the source envelope wasn't available (e.g. test paths
+// that construct lifecycleMsg directly) — renderers must fall back
+// gracefully.
 type lifecycleMsg struct {
 	Payload sextantproto.LifecyclePayload
+	Ts      time.Time
 }
 
 // subscriptionEndedMsg fires when one of the source channels closes
@@ -64,7 +72,7 @@ func pumpLifecycle(ch <-chan client.Message) tea.Cmd {
 			return pumpLifecycle(ch)()
 		}
 		_ = msg.Ack()
-		return lifecycleMsg{Payload: p}
+		return lifecycleMsg{Payload: p, Ts: msg.Envelope.Ts.Time}
 	}
 }
 
