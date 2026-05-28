@@ -39,6 +39,9 @@ jobs:
           # checksum + caching, which the prior curl|sh approach
           # couldn't do reliably (release-asset SHA drift).
 
+      - name: install nilaway
+        run: go install go.uber.org/nilaway/cmd/nilaway@latest
+
       - name: make lint-nilaway test-go
         run: make lint-nilaway test-go
 
