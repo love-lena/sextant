@@ -17,6 +17,10 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   incorrectly restarted on every reconcile pass (0.3.154); new
   `SessionStart` `reloadSkills` + `MessageDisplay` hook events
   (0.3.152) — sextant doesn't currently consume the hook API.
+- Bump `@types/node` 22.19.19 → 25.9.1 in the sidecar workspace.
+  Major bump of the Node.js typings package; runtime stays on
+  Node 22 per `engines.node`. CI confirms clean tsc build of
+  both the sidecar entrypoint and `clients/typescript`.
 
 ### Added
 - `sextant version` and `sextantd version` subcommands print the binary
