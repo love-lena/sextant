@@ -24,38 +24,45 @@ starting work; follow the links when the matching domain comes up.
   deliberately in genuine emergencies, NOT a thing Claude reaches
   for. If CI fails: fix the underlying issue and push a new
   commit, don't bypass.
-- **Semver bumps follow the semantic rule:** does an operator
-  running the binary see different behavior? If yes, bump per
-  [semver.org](https://semver.org):
-  - **MAJOR** — backwards-incompatible change.
-  - **MINOR** — additive feature (new flag, new verb, new RPC).
-  - **PATCH** — bug fix or behavior-affecting code change with no
-    new feature surface.
-  Bump as part of the PR that introduces the change; don't batch
-  bumps. Bump-classification ambiguity → favor the larger bump.
-- **When NOT to bump.** A PR that touches only repo metadata or
-  documentation doesn't bump. Specifically:
-  - `docs/**` (mdbook), `plans/**` (specs + tickets),
+- **Feature PRs do NOT touch `VERSION`. Releases are cut, not
+  accrued.** A normal PR adds its `CHANGELOG.md` entry under
+  `## [Unreleased]` and stops there. The `VERSION` bump + tag
+  happen later on a dedicated `release: cut vX.Y.Z` PR. Per-PR
+  bumps just guarantee merge conflicts on the most-contended
+  one-line file in the repo; `[Unreleased]` is what decouples
+  "change described" from "version cut." Full rationale +
+  workflow: **`conventions/versioning.md`**.
+- **The bump is read off the changelog, not chosen by feel.** At
+  cut time: any `Removed` (or behavior-breaking `Changed`) →
+  **MAJOR**; else any `Added` → **MINOR**; else (only `Fixed` /
+  non-breaking `Changed`) → **PATCH**. Classification test is
+  *observability, not diff size*: does someone who only runs the
+  binary notice, and does it break a working invocation? A 2k-line
+  internal refactor with no observable change is PATCH-or-nothing;
+  a one-char default-flag change is MAJOR. Ambiguity → larger bump.
+- **Changelog entry IS required per PR** (this is unchanged and
+  CI-gated). `CHANGELOG.md` follows
+  [Keep a Changelog](https://keepachangelog.com); add to the right
+  `## [Unreleased]` subsection (Added / Changed / Deprecated /
+  Removed / Fixed / Security). A PR touching a **shipping path**
+  without a `CHANGELOG.md` edit fails the `changelog entry
+  required` check.
+  - **Shipping paths** (entry required): `cmd/**`, `pkg/**`
+    (non-test), `images/**`, `clients/**`, `Makefile`, `go.mod`,
+    `go.sum`, `pkg/sextantproto/schemas/**`, `VERSION`.
+  - **Metadata paths** (no entry needed): `docs/**`, `plans/**`,
     `conventions/**`, `.github/**`, `.claude/**`,
-    `tests/visual/**` (VHS fixtures), `*.md` at repo root.
-  - Pure test-file changes (`*_test.go`) — tests describe
-    behavior but don't ship.
-- **When to bump.** Any change under `cmd/**`, `pkg/**` (non-test),
-  `images/**`, `clients/**`, `Makefile`, `go.mod`, `go.sum`,
-  `pkg/sextantproto/schemas/**`, or `VERSION` itself.
-- **Changelog is load-bearing.** `CHANGELOG.md` follows
-  [Keep a Changelog](https://keepachangelog.com). Every bumping
-  PR adds an entry under `## [Unreleased]` in the appropriate
-  section (Added / Changed / Deprecated / Removed / Fixed /
-  Security). CI gates this — a PR touching the
-  bump-required paths above without a CHANGELOG.md edit fails.
-- The top-level `VERSION` file is the **source of truth** for the
-  binary semver. `make install` / `make build` plumb it into
-  `pkg/version.Version` via `-ldflags`. `sextant version` and
-  `sextantd version` surface the value at runtime.
-- `pkg/sextantproto/envelope.go::ProtoVersion` currently tracks the
-  same number; if the wire format and the binary semver diverge,
-  split them and file a follow-up for wire-format negotiation.
+    `tests/visual/**`, root `*.md`, and pure `*_test.go` changes.
+- **There are four version surfaces; don't assume they move
+  together.** `VERSION` → `pkg/version.Version` is the **operator
+  contract** (the source of truth, plumbed via `-ldflags`, shown by
+  `sextant version`). `sextantproto.ProtoVersion` + the TS
+  `PROTO_VERSION` are the **wire contract**. `clients/typescript`'s
+  `package.json` is the **library contract**. The sidecar self-report
+  is its own string. They are *currently* partially coupled and
+  partially stale — the target model (each line bumped by its own
+  contract's breakage) and the decoupling follow-up live in
+  `conventions/versioning.md`.
 
 ## Helping someone onboard
 
@@ -99,6 +106,9 @@ manages cleanup.
 - `conventions/operator-experience.md` — CLI ergonomics, diagnostic
   surface design, recurring failure-mode patterns
 - `conventions/git-workflow.md` — branch, commit, PR conventions
+- `conventions/versioning.md` — the four version surfaces, the
+  observability-based bump test, and the release-cut workflow;
+  read before bumping a version or cutting a release
 
 ## Tickets
 
