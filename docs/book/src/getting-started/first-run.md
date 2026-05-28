@@ -6,7 +6,7 @@ The four-step flow from a fresh install to a running agent:
 sextant init           # generate config + CA keys + default template
 sextant daemon start   # detach sextantd (writes log to ~/.local/share/sextant/sextantd.log)
 sextant doctor         # confirm the stack is healthy
-sextant agents spawn assistant --template default
+sextant agents create assistant --template default
 ```
 
 `sextant daemon start` is the recommended way to bring the daemon up —
@@ -83,16 +83,16 @@ Health diagnostics, defined at `cmd/sextant/doctor.go:46`. It checks:
 
 Exit code `0` if everything is green, `2` if any check fails (`cmd/sextant/main.go:104-108`).
 
-## Spawning your first agent
+## Creating your first agent
 
 ```bash
-sextant agents spawn assistant --template default
+sextant agents create assistant --template default
 sextant agents list
 sextant agents chat assistant "Hello, can you summarize this repo?"
 sextant agents chat assistant --tail
 ```
 
-`spawn` instantiates the `default` template (which references the sidecar image), creates an agent record in the `agent_definitions` NATS KV bucket, allocates a new incarnation, issues a JWT, and starts the container with the right env vars and mounts. See [Agent lifecycle](../architecture/lifecycle.md) for the full sequence.
+`create` instantiates the `default` template (which references the sidecar image), creates an agent record in the `agent_definitions` NATS KV bucket, allocates a new incarnation, issues a JWT, and starts the container with the right env vars and mounts. See [Agent lifecycle](../architecture/lifecycle.md) for the full sequence. (The legacy spelling `sextant agents spawn` resolves to the same command via a one-release alias, scheduled for removal in v0.2.)
 
 `sextant agents chat <agent>` opens the chat TUI; passing a positional
 text argument switches to one-shot mode (send + wait for `turn_ended`

@@ -155,7 +155,7 @@ func runAgentCheck(ctx context.Context, ch agentChecker, ref string) AgentCheck 
 		out.Remedy = fmt.Sprintf("sextant agents restart %s", id)
 	case string(sextantproto.LifecycleArchived):
 		out.Verdict = "archived"
-		out.Remedy = "spawn a new agent instead"
+		out.Remedy = "create a new agent instead"
 	case string(sextantproto.LifecycleDefined):
 		out.Verdict = "stale_record"
 		out.Remedy = fmt.Sprintf("sextant agents restart %s", id)

@@ -26,20 +26,25 @@ import (
 // newAgentsCmd builds the `sextant agents` parent command and registers
 // every verb under it. Verbs:
 //
-//	list, show, spawn, kill, restart, archive, prompt, chat, exec.
+//	list, show, create, stop, restart, archive, prompt, chat, exec.
+//
+// Legacy aliases (`spawn`→`create`, `kill`→`stop`) are kept on the verb
+// definitions for one release per the closed-exception verb policy in
+// conventions/tui-conventions.md.
 func newAgentsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "agents",
 		Short: "Agent operations",
-		Long: `Spawn, inspect, prompt, and control agents managed by sextantd.
+		Long: `Create, inspect, prompt, and control agents managed by sextantd.
 
-Common verbs: list, show, spawn, kill, restart, archive, prompt, chat,
-exec.`,
+Common verbs: list, show, create, stop, restart, archive, prompt, chat,
+exec. The legacy spellings ` + "`spawn`" + ` and ` + "`kill`" + ` still resolve via
+aliases scheduled for removal in v0.2.`,
 	}
 	cmd.AddCommand(newAgentsListCmd())
 	cmd.AddCommand(newAgentsShowCmd())
-	cmd.AddCommand(newAgentsSpawnCmd())
-	cmd.AddCommand(newAgentsKillCmd())
+	cmd.AddCommand(newAgentsCreateCmd())
+	cmd.AddCommand(newAgentsStopCmd())
 	cmd.AddCommand(newAgentsRestartCmd())
 	cmd.AddCommand(newAgentsArchiveCmd())
 	cmd.AddCommand(newAgentsPromptCmd())
@@ -171,16 +176,22 @@ func newAgentsShowCmd() *cobra.Command {
 	}
 }
 
-// newAgentsSpawnCmd — `sextant agents spawn <name> --template T`.
-func newAgentsSpawnCmd() *cobra.Command {
+// newAgentsCreateCmd — `sextant agents create <name> --template T`.
+//
+// Renamed from `spawn` per the closed-exception verb policy
+// (plans/issues/feat-cli-verb-vocabulary-decision.md). The old verb is
+// kept as a cobra Alias for one release; tests guard the alias resolution
+// against accidental removal.
+func newAgentsCreateCmd() *cobra.Command {
 	var template, host string
 	cmd := &cobra.Command{
-		Use:   "spawn <name>",
-		Short: "Create + start a new agent",
-		Args:  cobra.ExactArgs(1),
+		Use:     "create <name>",
+		Aliases: []string{"spawn"},
+		Short:   "Create + start a new agent (alias: spawn, scheduled for removal in v0.2)",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if strings.TrimSpace(args[0]) == "" {
-				return errUserUsage(`sextant agents spawn <name> --template T [--host H]`)
+				return errUserUsage(`sextant agents create <name> --template T [--host H]`)
 			}
 			ctx := cmd.Context()
 			cli, _, err := connectAgent(ctx, globalFlags.configDir)
@@ -214,20 +225,27 @@ func newAgentsSpawnCmd() *cobra.Command {
 	return cmd
 }
 
-// newAgentsKillCmd — `sextant agents kill <agent> [--grace 10s] [--archive]`.
+// newAgentsStopCmd — `sextant agents stop <agent> [--grace 10s] [--archive]`.
 //
-// The `--archive` flag pairs the kill with an archive_agent RPC against
+// Renamed from `kill` per the closed-exception verb policy
+// (plans/issues/feat-cli-verb-vocabulary-decision.md). The current
+// implementation is a graceful container stop with name release, not a
+// SIGKILL — `stop` is the friendlier accuracy fix and mirrors
+// `daemon stop`. The old verb is kept as a cobra Alias for one release.
+//
+// The `--archive` flag pairs the stop with an archive_agent RPC against
 // the same UUID so the agent's name is released back into the
 // uniqueness pool immediately. Without it the agent stays in
 // lifecycle=defined and its name remains claimed — see
 // plans/issues/bug-kill-doesnt-release-name.md.
-func newAgentsKillCmd() *cobra.Command {
+func newAgentsStopCmd() *cobra.Command {
 	var grace time.Duration
 	var archive bool
 	cmd := &cobra.Command{
-		Use:   "kill <agent>",
-		Short: "Terminate a running agent",
-		Args:  cobra.ExactArgs(1),
+		Use:     "stop <agent>",
+		Aliases: []string{"kill"},
+		Short:   "Gracefully stop a running agent (alias: kill, scheduled for removal in v0.2)",
+		Args:    cobra.ExactArgs(1),
 	}
 	destructive := newDestructiveFlags(cmd)
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
@@ -243,9 +261,9 @@ func newAgentsKillCmd() *cobra.Command {
 			return errUserUsage(fmt.Sprintf("agent: %v", err))
 		}
 
-		action := fmt.Sprintf("kill agent %s (%s)", args[0], id)
+		action := fmt.Sprintf("stop agent %s (%s)", args[0], id)
 		if archive {
-			action = fmt.Sprintf("kill + archive agent %s (%s)", args[0], id)
+			action = fmt.Sprintf("stop + archive agent %s (%s)", args[0], id)
 		}
 		proceed, err := destructive.confirm(cmd, action)
 		if err != nil {
@@ -273,10 +291,10 @@ func newAgentsKillCmd() *cobra.Command {
 				&archiveResp)
 			cancelArchive()
 			if archiveErr != nil {
-				return fmt.Errorf("kill ok but archive failed: %w", archiveErr)
+				return fmt.Errorf("stop ok but archive failed: %w", archiveErr)
 			}
 			if !archiveResp.OK {
-				return fmt.Errorf("kill ok but archive returned ok=false")
+				return fmt.Errorf("stop ok but archive returned ok=false")
 			}
 		}
 		out := cmd.OutOrStdout()

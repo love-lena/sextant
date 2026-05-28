@@ -85,7 +85,7 @@ CLI conventions:
 - Default output is human-readable; paginate through `less -FX` when interactive.
 - Exit codes: 0 success, 1 user error, 2 system error.
 - Long-running commands print status to stderr, results to stdout.
-- Canonical shape: `sextant <noun> <verb>` (e.g. `sextant agents spawn`).
+- Canonical shape: `sextant <noun> <verb>` (e.g. `sextant agents create`).
 
 `ui.state.*` keys: per-operator, sanitized to `[a-zA-Z0-9_-]+`. See [Bus subjects](../protocols/bus-subjects.md) §`ui.state.*` for the on-the-wire key shape.
 

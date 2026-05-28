@@ -9,7 +9,7 @@ git clone git@github.com:love-lena/sextant.git
 cd sextant
 make bootstrap                   # installs host deps, builds, installs, runs `sextant init`
 sextant daemon start             # bring up the daemon
-sextant agents spawn assistant --template default
+sextant agents create assistant --template default
 sextant agents chat assistant
 ```
 

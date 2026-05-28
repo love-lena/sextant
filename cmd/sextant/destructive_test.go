@@ -15,14 +15,14 @@ import (
 func TestDestructiveConfirmRefusesWithoutYes(t *testing.T) {
 	cmd := &cobra.Command{Use: "test"}
 	flags := newDestructiveFlags(cmd)
-	_, err := flags.confirm(cmd, "kill agent foo")
+	_, err := flags.confirm(cmd, "stop agent foo")
 	if err == nil {
 		t.Fatalf("expected refusal, got nil")
 	}
 	if !errors.Is(err, errDestructiveNoYes) {
 		t.Errorf("error = %v, want wrapping errDestructiveNoYes", err)
 	}
-	for _, want := range []string{"kill agent foo", "--yes", "--dry-run"} {
+	for _, want := range []string{"stop agent foo", "--yes", "--dry-run"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q missing %q", err, want)
 		}

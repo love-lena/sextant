@@ -18,7 +18,7 @@ model = "claude-opus-4-7[1m]"
 permission_ceiling = "auto"
 ```
 
-This is what `sextant agents spawn <name> --template default` consumes.
+This is what `sextant agents create <name> --template default` consumes.
 
 ## Full schema
 
@@ -125,7 +125,7 @@ or use the MCP `templates_reload` tool from inside an agent with `control.templa
 3. Adjust `permissions` to the smallest set that lets the agent do its job.
 4. If the agent needs custom slash commands or hooks, prepare a host dir and point `claude_seed` at it.
 5. `sextant templates reload`.
-6. `sextant agents spawn <name> --template <name>`.
+6. `sextant agents create <name> --template <name>`.
 
 ## Spawned worktree naming
 

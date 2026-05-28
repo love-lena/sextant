@@ -29,7 +29,7 @@ If ClickHouse is unreachable, the shipper spills to a local BoltDB buffer (`~/.l
 operator CLI  ──RPC──▶  sextantd  ──SELECT──▶  ClickHouse
 ```
 
-History queries (`sextant audit query`, `sextant traces show <trace_id>`, `sextant agents show ...`) are RPCs on `sextant.rpc.<verb>`. The handler in `sextantd` runs a parametrised SELECT against ClickHouse and returns the rows. Catalog: `pkg/rpc/handlers/{query_history,query_audit,query_trace}.go`. Verb names: `query_history`, `query_audit`, `query_trace`.
+History queries (`sextant audit list`, `sextant traces show <trace_id>`, `sextant agents show ...`) are RPCs on `sextant.rpc.<verb>`. The handler in `sextantd` runs a parametrised SELECT against ClickHouse and returns the rows. Catalog: `pkg/rpc/handlers/{query_history,query_audit,query_trace}.go`. Verb names: `query_history`, `query_audit`, `query_trace`. (The CLI verb `audit query` was renamed to `audit list` on 2026-05-27; the wire RPC verb keeps its `query_audit` name.)
 
 ## Control path — agent lifecycle
 
@@ -39,7 +39,7 @@ operator CLI ──RPC──▶ sextantd ──Docker SDK──▶ Docker daemon
                   └──Issue JWT──▶ pkg/authjwt
 ```
 
-`sextant agents spawn`:
+`sextant agents create`:
 
 1. CLI calls `spawn_agent` RPC.
 2. `pkg/rpc/handlers/spawn.go` looks up the template in NATS KV.

@@ -65,19 +65,20 @@ func TestM12CLIBinaryWalkthroughAcceptance(t *testing.T) {
 		}
 	})
 
-	// 1. agents spawn --json
+	// 1. agents create --json (renamed from `spawn` per the
+	// closed-exception verb policy; `spawn` remains as an alias).
 	{
 		out := runSextantCmd(t, sextantBin, configDir, 60*time.Second, 0,
-			"agents", "spawn", "walkthru-bin", "--template", "default", "--json")
+			"agents", "create", "walkthru-bin", "--template", "default", "--json")
 		var resp sextantproto.SpawnAgentResponse
 		if err := json.Unmarshal(out, &resp); err != nil {
-			t.Fatalf("decode spawn json: %v\nstdout=%q", err, out)
+			t.Fatalf("decode create json: %v\nstdout=%q", err, out)
 		}
 		if resp.AgentID == uuid.Nil {
-			t.Fatal("spawn returned zero UUID")
+			t.Fatal("create returned zero UUID")
 		}
 		agentID = resp.AgentID
-		t.Logf("M12 CLI walkthrough: spawned agent uuid=%s", agentID)
+		t.Logf("M12 CLI walkthrough: created agent uuid=%s", agentID)
 	}
 
 	// 2. agents list --json — the new agent must show up.
@@ -187,24 +188,26 @@ func TestM12CLIBinaryWalkthroughAcceptance(t *testing.T) {
 		}
 	}
 
-	// 10. agents kill — verb returns ok, container disappears.
+	// 10. agents stop — verb returns ok, container disappears. The
+	// verb was renamed from `kill` per the closed-exception verb
+	// policy; `kill` remains as an alias.
 	runSextantCmd(t, sextantBin, configDir, 30*time.Second, 0,
-		"agents", "kill", agentID.String())
+		"agents", "stop", agentID.String())
 	if err := waitForContainerGone(dockerBin, handlers.LabelAgentUUID, agentID.String(), 20*time.Second); err != nil {
-		t.Fatalf("container still present after `sextant agents kill`: %v", err)
+		t.Fatalf("container still present after `sextant agents stop`: %v", err)
 	}
 
-	// 11. audit query — verb is wired; the row count is zero in the
+	// 11. audit list — verb is wired; the row count is zero in the
 	// test harness because the shipper runs out-of-process and is
 	// not started here. The CLI is expected to print "no audit rows"
 	// in text mode or an empty list in JSON mode; what we assert is
-	// the verb exits 0.
+	// the verb exits 0. Renamed from `query`.
 	{
 		out := runSextantCmd(t, sextantBin, configDir, 30*time.Second, 0,
-			"audit", "query", "--since", "5m", "--json")
+			"audit", "list", "--since", "5m", "--json")
 		var resp sextantproto.QueryAuditResponse
 		if err := json.Unmarshal(out, &resp); err != nil {
-			t.Fatalf("decode audit query json: %v\nstdout=%q", err, out)
+			t.Fatalf("decode audit list json: %v\nstdout=%q", err, out)
 		}
 		// resp.Rows may be nil OR an empty slice — the wire shape says
 		// "always present" but encoding/json round-trips nil to "null"
