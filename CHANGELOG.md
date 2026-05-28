@@ -21,6 +21,11 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   Major bump of the Node.js typings package; runtime stays on
   Node 22 per `engines.node`. CI confirms clean tsc build of
   both the sidecar entrypoint and `clients/typescript`.
+- Bump `typescript` 5.6.3 → 6.0.3 across the workspace. Major
+  compiler upgrade; both `clients/typescript` and the sidecar
+  entrypoint compile clean under TS 6 with no diagnostics. The
+  99-test sidecar vitest suite + 19-test clients/typescript
+  suite both pass.
 
 ### Added
 - `sextant version` and `sextantd version` subcommands print the binary
