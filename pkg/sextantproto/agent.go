@@ -21,13 +21,18 @@ const (
 	// LifecycleCrashedState is the terminal "sidecar exited with failure"
 	// state — set when the sidecar publishes `transition=crashed`.
 	LifecycleCrashedState LifecycleState = "crashed"
+	// LifecycleLostState is the daemon-inferred terminal state set when
+	// the container is absent and no sidecar lifecycle was observed.
+	// Distinct from LifecycleCrashedState which requires the sidecar to
+	// publish. Published by the reconciler (L2) or container watcher (L3).
+	LifecycleLostState LifecycleState = "lost"
 )
 
 // IsValid reports whether s is a recognized LifecycleState.
 func (s LifecycleState) IsValid() bool {
 	switch s {
 	case LifecycleDefined, LifecycleRunning, LifecyclePaused, LifecycleArchived,
-		LifecycleEndedState, LifecycleCrashedState:
+		LifecycleEndedState, LifecycleCrashedState, LifecycleLostState:
 		return true
 	default:
 		return false

@@ -6,6 +6,9 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/google/uuid"
+
+	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
 func seedTurns() []Turn {
@@ -237,6 +240,60 @@ func TestInsertEnter_EmptyDraftIsNoop(t *testing.T) {
 	}
 	if m.Mode() != ModeInsert {
 		t.Errorf("empty enter stayed in INSERT? mode=%v", m.Mode())
+	}
+}
+
+func TestChatLostStateDisablesInput(t *testing.T) {
+	t.Parallel()
+	m := New(Options{AgentName: "alpha"})
+	if m.inputDisabled() {
+		t.Error("inputDisabled returned true before any lifecycle envelope")
+	}
+	m.Update(lifecycleMsg{Payload: sextantproto.LifecyclePayload{
+		Transition: sextantproto.LifecycleLostEvent,
+	}})
+	if !m.inputDisabled() {
+		t.Error("inputDisabled returned false after lost envelope")
+	}
+	m.Update(lifecycleMsg{Payload: sextantproto.LifecyclePayload{
+		Transition: sextantproto.LifecycleRestartedEvent,
+	}})
+	if m.inputDisabled() {
+		t.Error("inputDisabled returned true after restarted envelope (should re-enable)")
+	}
+}
+
+func TestChatLostStateBindsRToRestart(t *testing.T) {
+	t.Parallel()
+	agentID := uuid.New()
+	m := New(Options{AgentName: "alpha", AgentID: agentID})
+	m.Update(lifecycleMsg{Payload: sextantproto.LifecyclePayload{
+		Transition: sextantproto.LifecycleLostEvent,
+	}})
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("R")})
+	if cmd == nil {
+		t.Fatal("R key produced no command in lost state")
+	}
+	msg := cmd()
+	req, ok := msg.(RestartRequestedMsg)
+	if !ok {
+		t.Fatalf("cmd msg type = %T, want RestartRequestedMsg", msg)
+	}
+	if req.AgentID != agentID {
+		t.Errorf("RestartRequestedMsg.AgentID = %s, want %s", req.AgentID, agentID)
+	}
+}
+
+func TestChatLostStateBlocksInsert(t *testing.T) {
+	t.Parallel()
+	m := New(Options{AgentName: "alpha"})
+	m.Update(lifecycleMsg{Payload: sextantproto.LifecyclePayload{
+		Transition: sextantproto.LifecycleLostEvent,
+	}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	if m.Mode() == ModeInsert {
+		t.Error("entered INSERT mode while lost; should be blocked")
 	}
 }
 

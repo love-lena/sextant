@@ -22,6 +22,9 @@
         },
         "exit_code": {
           "type": "integer"
+        },
+        "source": {
+          "type": "string"
         }
       },
       "additionalProperties": false,

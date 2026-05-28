@@ -31,6 +31,7 @@ func TestMapLifecycleTransitionExhaustive(t *testing.T) {
 		{sextantproto.LifecycleArchivedEvent, sextantproto.LifecycleArchived, true},
 		{sextantproto.LifecycleRestartedEvent, sextantproto.LifecycleRunning, true},
 		{sextantproto.LifecycleCrashedEvent, sextantproto.LifecycleCrashedState, true},
+		{sextantproto.LifecycleLostEvent, sextantproto.LifecycleLostState, true},
 		{sextantproto.LifecycleTurnEnded, "", false},
 		{sextantproto.LifecycleEvent("future_event"), "", false},
 	}
@@ -177,6 +178,37 @@ func TestLifecycleWatcherDoesNotClobberArchived(t *testing.T) {
 	}
 }
 
+// TestWatcherShouldYield covers the yield-guard rules:
+//  1. archived always yields, regardless of proposed state.
+//  2. ended/crashed yield when proposed is lost (sidecar-observed outranks
+//     daemon-inferred absence).
+//  3. lost over running does not yield (daemon inference applies when there
+//     is no stronger observed state).
+//  4. running over lost does not yield (recovery path must be allowed).
+func TestWatcherShouldYield(t *testing.T) {
+	cases := []struct {
+		name     string
+		current  sextantproto.LifecycleState
+		proposed sextantproto.LifecycleState
+		want     bool
+	}{
+		{"lost over ended yields", sextantproto.LifecycleEndedState, sextantproto.LifecycleLostState, true},
+		{"lost over crashed yields", sextantproto.LifecycleCrashedState, sextantproto.LifecycleLostState, true},
+		{"lost over running does not yield", sextantproto.LifecycleRunning, sextantproto.LifecycleLostState, false},
+		{"running over lost does not yield (recovery)", sextantproto.LifecycleLostState, sextantproto.LifecycleRunning, false},
+		{"archived over anything yields", sextantproto.LifecycleArchived, sextantproto.LifecycleLostState, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := watcherShouldYield(tc.current, tc.proposed)
+			if got != tc.want {
+				t.Errorf("watcherShouldYield(%q, %q) = %v, want %v",
+					tc.current, tc.proposed, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestLifecycleWatcherCASRetriesOnConflict pins the retry path: when
 // a concurrent writer slips a write in between the watcher's Get and
 // Update, the watcher gets ErrKeyExists from Update and retries with
@@ -303,6 +335,94 @@ func TestLifecycleWatcherWarmUpAllowsFirstEnvelope(t *testing.T) {
 
 	if got := kv.currentLifecycle(t, id); got != sextantproto.LifecycleEndedState {
 		t.Errorf("Lifecycle = %q, want ended (warm-up: no recorded incarnation, allow)", got)
+	}
+}
+
+// TestRegisterLifecycleObserverNilSafe asserts that RegisterLifecycleObserver
+// is a no-op when either argument is nil — the daemon may call it with a nil
+// watcher if startup fails gracefully.
+func TestRegisterLifecycleObserverNilSafe(t *testing.T) {
+	// nil watcher — must not panic
+	RegisterLifecycleObserver(nil, func(sextantproto.LifecyclePayload) {})
+	// nil observer — must not panic
+	w := &LifecycleWatcher{defs: newFakeLifecycleKV()}
+	RegisterLifecycleObserver(w, nil)
+	if len(w.observers) != 0 {
+		t.Errorf("observers = %d, want 0 (nil observer must not be appended)", len(w.observers))
+	}
+}
+
+// TestLifecycleObserverFiresAfterApply asserts that a registered observer is
+// called once for each successful state-changing transition, and NOT called
+// for a no-op transition (turn_ended).
+func TestLifecycleObserverFiresAfterApply(t *testing.T) {
+	kv := newFakeLifecycleKV()
+	id := uuid.New()
+	inc := uuid.New()
+	kv.seedDefinitionWithIncarnation(t, id, "obs-test", sextantproto.LifecycleRunning, 1, inc)
+
+	var mu sync.Mutex
+	var fired []sextantproto.LifecyclePayload
+
+	w := &LifecycleWatcher{defs: kv}
+	RegisterLifecycleObserver(w, func(p sextantproto.LifecyclePayload) {
+		mu.Lock()
+		fired = append(fired, p)
+		mu.Unlock()
+	})
+
+	// State-changing transition: observer should fire.
+	w.handle(envelopeForWithIncarnation(t, id, inc, sextantproto.LifecycleEnded))
+
+	mu.Lock()
+	n := len(fired)
+	mu.Unlock()
+	if n != 1 {
+		t.Fatalf("observer fired %d times after ended transition, want 1", n)
+	}
+	mu.Lock()
+	got := fired[0]
+	mu.Unlock()
+	if got.AgentUUID != id {
+		t.Errorf("observer payload AgentUUID = %s, want %s", got.AgentUUID, id)
+	}
+	if got.Transition != sextantproto.LifecycleEnded {
+		t.Errorf("observer payload Transition = %q, want ended", got.Transition)
+	}
+}
+
+// TestLifecycleObserverDoesNotFireOnNoOp asserts that turn_ended (a no-op
+// transition) does NOT trigger observers.
+func TestLifecycleObserverDoesNotFireOnNoOp(t *testing.T) {
+	kv := newFakeLifecycleKV()
+	id := uuid.New()
+	kv.seedDefinition(t, id, "obs-noop", sextantproto.LifecycleRunning, 1)
+
+	fired := 0
+	w := &LifecycleWatcher{defs: kv}
+	RegisterLifecycleObserver(w, func(sextantproto.LifecyclePayload) { fired++ })
+
+	w.handle(envelopeFor(t, id, sextantproto.LifecycleTurnEnded))
+	if fired != 0 {
+		t.Errorf("observer fired %d times for turn_ended, want 0", fired)
+	}
+}
+
+// TestLifecycleObserverDoesNotFireOnApplyError asserts that when applyTransition
+// fails (e.g. CAS conflict budget exhausted), observers are NOT called.
+func TestLifecycleObserverDoesNotFireOnApplyError(t *testing.T) {
+	kv := newFakeLifecycleKV()
+	id := uuid.New()
+	kv.seedDefinition(t, id, "obs-err", sextantproto.LifecycleRunning, 1)
+	kv.conflictsRemaining = watcherCASRetries + 5 // force all retries to fail
+
+	fired := 0
+	w := &LifecycleWatcher{defs: kv}
+	RegisterLifecycleObserver(w, func(sextantproto.LifecyclePayload) { fired++ })
+
+	w.handle(envelopeFor(t, id, sextantproto.LifecycleEnded))
+	if fired != 0 {
+		t.Errorf("observer fired %d times despite apply error, want 0", fired)
 	}
 }
 

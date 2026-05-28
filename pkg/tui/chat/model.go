@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/google/uuid"
 
 	"github.com/love-lena/sextant/pkg/sextantproto"
 	"github.com/love-lena/sextant/pkg/tui/component"
@@ -36,16 +37,32 @@ const (
 
 // Options configure a chat Model. AgentName/Branch are header chrome;
 // Read disables INSERT (and hides the composer in view.go).
+// AgentID is used to populate RestartRequestedMsg when the operator
+// presses R in the lost state.
 type Options struct {
 	AgentName string
+	AgentID   uuid.UUID
 	Branch    string
 	Read      bool
+}
+
+// RestartRequestedMsg is emitted when the operator presses R while the
+// chat believes the agent is lost. program.go translates this into a
+// restart_agent RPC.
+type RestartRequestedMsg struct {
+	AgentID uuid.UUID
 }
 
 // SendFunc is the callback the model invokes when the operator hits
 // Enter in INSERT. The receiver is responsible for dispatching the
 // prompt_agent RPC; program.go wires this against pkg/client in T10.
 type SendFunc func(text string)
+
+// RestartFunc is the callback the host invokes when a RestartRequestedMsg
+// is received. program.go wires this against the Bus.RestartAgent RPC.
+// Errors are swallowed — the watcher publishes "restarted" and the model
+// re-enables input automatically.
+type RestartFunc func(agentID uuid.UUID)
 
 // Model is the bubbletea reducer state. Use New to construct, then
 // WithTurns to seed any pre-existing transcript before passing to
@@ -72,6 +89,7 @@ type Model struct {
 	keys           keyMap
 	composer       textarea.Model
 	send           SendFunc
+	restart        RestartFunc
 	componentFocus bool // tracks the Component.Focused() bit, independent of intra-component focus
 
 	// lastLifecycle is the most recent lifecycle envelope received via
@@ -125,6 +143,14 @@ func (m *Model) WithSendHook(fn SendFunc) *Model {
 	return m
 }
 
+// WithRestartHook installs the callback invoked when a
+// RestartRequestedMsg is handled by the host. program.go wires this
+// against Bus.RestartAgent.
+func (m *Model) WithRestartHook(fn RestartFunc) *Model {
+	m.restart = fn
+	return m
+}
+
 // WithTurns seeds the transcript. Selection is set to the last turn
 // index (used when focus=FocusStream), but focus itself is left as-is
 // (FocusComposer by default from New, so callers open compose-first).
@@ -145,6 +171,16 @@ func (m *Model) FocusArea() FocusArea { return m.focus }
 func (m *Model) Selection() int       { return m.selection }
 func (m *Model) Turns() []Turn        { return m.turns }
 func (m *Model) IsRead() bool         { return m.opts.Read }
+
+// inputDisabled reports whether the chat should reject prompt input.
+// True only while we believe the agent is `lost` and waiting for a
+// post-restart `started` envelope.
+func (m *Model) inputDisabled() bool {
+	if !m.hasLifecycle {
+		return false
+	}
+	return m.lastLifecycle.Transition == sextantproto.LifecycleLostEvent
+}
 
 // Draft returns the current composer text. Exposed for tests.
 func (m *Model) Draft() string { return m.composer.Value() }
@@ -212,6 +248,14 @@ func (m *Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// 'gg' is two-key; clear the pending flag on anything else.
 	gPending := m.gPending
 	m.gPending = false
+
+	// R restarts the agent — only meaningful (and only handled) when lost.
+	if m.inputDisabled() && key.Matches(msg, m.keys.NormalRestart) {
+		return m, func() tea.Msg {
+			return RestartRequestedMsg{AgentID: m.opts.AgentID}
+		}
+	}
+
 	switch {
 	case key.Matches(msg, m.keys.NormalQuit):
 		// Don't call tea.Quit directly — emit a DoneMsg intent so the
@@ -249,7 +293,7 @@ func (m *Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.gPending = true
 		}
-	case !m.opts.Read && key.Matches(msg, m.keys.NormalInsert):
+	case !m.opts.Read && !m.inputDisabled() && key.Matches(msg, m.keys.NormalInsert):
 		// Snapshot the pre-INSERT focus + selection so Esc can restore it.
 		m.savedFocus = m.focus
 		m.savedSelection = m.selection
@@ -400,6 +444,11 @@ func (m *Model) updateInsert(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.composer.Blur()
 		return m, nil
 	case key.Matches(msg, m.keys.InsertSend):
+		// Defense in depth: insert shouldn't be reachable when disabled,
+		// but guard here too so no prompts go through if it somehow is.
+		if m.inputDisabled() {
+			return m, nil
+		}
 		text := strings.TrimSpace(m.composer.Value())
 		if text == "" {
 			// Empty draft: no-op. Stay in INSERT — the operator likely

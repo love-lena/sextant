@@ -49,6 +49,7 @@ const watcherUpdateTimeout = 5 * time.Second
 //	crashed   → crashed
 //	paused    → paused
 //	archived  → archived
+//	lost      → lost
 //	turn_ended (and everything else) → no-op
 //
 // Exported so callers (and tests) can pin the mapping without re-reading
@@ -67,6 +68,8 @@ func MapLifecycleTransition(t sextantproto.LifecycleEvent) (sextantproto.Lifecyc
 		return sextantproto.LifecyclePaused, true
 	case sextantproto.LifecycleArchivedEvent:
 		return sextantproto.LifecycleArchived, true
+	case sextantproto.LifecycleLostEvent:
+		return sextantproto.LifecycleLostState, true
 	default:
 		// LifecycleTurnEnded and any unknown future event.
 		return "", false
@@ -118,8 +121,9 @@ type LifecycleWatcher struct {
 	nc   *nats.Conn
 	defs LifecycleDefinitionsKV
 
-	mu  sync.Mutex
-	sub *nats.Subscription
+	mu        sync.Mutex
+	sub       *nats.Subscription
+	observers []LifecycleObserver
 }
 
 // NewLifecycleWatcher subscribes to `agents.*.lifecycle` and returns a
@@ -204,7 +208,9 @@ func (w *LifecycleWatcher) handle(msg *nats.Msg) {
 	if err := w.applyTransition(payload.AgentUUID.String(), payload.IncarnationID, state); err != nil {
 		log.Printf("sextantd: lifecycle watcher: apply %s/%s: %v",
 			payload.AgentUUID, payload.Transition, err)
+		return
 	}
+	w.fireObservers(payload)
 }
 
 // watcherShouldDropForIncarnation reports whether the watcher should
@@ -287,13 +293,14 @@ func (w *LifecycleWatcher) applyTransition(key string, envelopeIncarnation uuid.
 			return nil
 		}
 		if watcherShouldYield(def.Lifecycle, state) {
-			// The current record is in a terminal state the watcher
-			// must not demote (archived is operator-explicit). Drop the
-			// envelope — a stale sidecar "ended" arriving after the
-			// operator archived the agent would otherwise rewrite the
-			// record to ended, releasing the name-uniqueness lock
-			// incorrectly. See feat-cli-output-protocol /
-			// the Codex adversarial-review finding that flagged this.
+			// Two cases:
+			//   1. Current is archived (operator-explicit terminal).
+			//      A stale sidecar "ended" arriving after archive
+			//      would otherwise release the name-uniqueness lock.
+			//   2. Current is ended/crashed and the proposed state is
+			//      `lost`. The sidecar already observed the cause;
+			//      daemon-inferred absence must not clobber that.
+			// See watcherShouldYield for the rule.
 			return nil
 		}
 		def.Lifecycle = state
@@ -320,22 +327,22 @@ func (w *LifecycleWatcher) applyTransition(key string, envelopeIncarnation uuid.
 }
 
 // watcherShouldYield reports whether the watcher must NOT overwrite
-// the current lifecycle with the proposed new state. The rule the
-// codex adversarial review pinned: operator-explicit terminals
-// (archived) outrank sidecar-driven transitions (ended/crashed).
+// the current lifecycle with the proposed new state. Two rules:
 //
-// Specifically: if the current state is archived, the watcher yields
-// to whatever set it (archive_agent). The watcher's incoming
-// envelope is necessarily from a prior incarnation at that point —
-// the agent can't be both archived and still running.
-//
-// `crashed` / `ended` are NOT in the yield set because the operator
-// can legitimately want to know that the agent's last incarnation
-// crashed even after spawn flipped it back to running on a restart;
-// that's the watcher's main job. The archive case is the one that
-// needs special handling.
-func watcherShouldYield(current sextantproto.LifecycleState, _ sextantproto.LifecycleState) bool {
-	return current == sextantproto.LifecycleArchived
+//  1. Operator-explicit `archived` outranks every sidecar-driven or
+//     daemon-inferred transition (existing rule).
+//  2. Sidecar-observed terminals (`ended`, `crashed`) outrank
+//     daemon-inferred `lost` — observed cause beats inferred absence.
+func watcherShouldYield(current, proposed sextantproto.LifecycleState) bool {
+	if current == sextantproto.LifecycleArchived {
+		return true
+	}
+	if proposed == sextantproto.LifecycleLostState &&
+		(current == sextantproto.LifecycleEndedState ||
+			current == sextantproto.LifecycleCrashedState) {
+		return true
+	}
+	return false
 }
 
 // isCASConflict reports whether the given error indicates that the
@@ -344,4 +351,33 @@ func watcherShouldYield(current sextantproto.LifecycleState, _ sextantproto.Life
 // the call site doesn't import that error directly.
 func isCASConflict(err error) bool {
 	return errors.Is(err, jetstream.ErrKeyExists)
+}
+
+// LifecycleObserver is called after the watcher successfully applies
+// a lifecycle envelope to the KV. Observers run synchronously on the
+// dispatcher goroutine; keep them fast.
+type LifecycleObserver func(sextantproto.LifecyclePayload)
+
+// RegisterLifecycleObserver appends an observer. Call before the watcher
+// starts receiving traffic (typically immediately after NewLifecycleWatcher).
+// Not safe to call concurrently with handle().
+func RegisterLifecycleObserver(w *LifecycleWatcher, o LifecycleObserver) {
+	if w == nil || o == nil {
+		return
+	}
+	w.mu.Lock()
+	w.observers = append(w.observers, o)
+	w.mu.Unlock()
+}
+
+// fireObservers calls each registered observer with the successfully-applied
+// payload. Observers are copied under the lock so new registrations during
+// dispatch cannot race.
+func (w *LifecycleWatcher) fireObservers(p sextantproto.LifecyclePayload) {
+	w.mu.Lock()
+	obs := append([]LifecycleObserver(nil), w.observers...) // copy under lock
+	w.mu.Unlock()
+	for _, o := range obs {
+		o(p)
+	}
 }

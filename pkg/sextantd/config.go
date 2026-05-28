@@ -23,6 +23,7 @@ type Config struct {
 	Shipper    ShipperConfig    `toml:"shipper"`
 	Paths      PathsConfig      `toml:"paths"`
 	Worktree   WorktreeConfig   `toml:"worktree"`
+	Lifecycle  LifecycleConfig  `toml:"lifecycle"`
 	Log        LogConfig        `toml:"log"`
 }
 
@@ -107,6 +108,55 @@ type WorktreeConfig struct {
 // every few minutes". Operators can override via [worktree]
 // prune_interval = "..." in sextantd.toml.
 const DefaultPruneInterval = 6 * time.Hour
+
+// LifecycleConfig governs the daemon's three-layer agent-lifecycle
+// truth-keeping: heartbeat staleness guard at prompt_agent (L1),
+// startup container reconciler (L2), and docker-event watcher (L3).
+//
+//   - HeartbeatStaleness: prompt_agent refuses agents whose last
+//     heartbeat is older than this. Default 30s.
+//   - HeartbeatStartupGrace: while no heartbeat has been seen, accept
+//     prompt_agent if def.UpdatedAt is within this window. Default 60s.
+//   - ContainerWatcherDebounce: the L3 watcher waits this long after a
+//     docker `die` event before publishing `transition=lost`, in case
+//     the sidecar publishes a clean terminal first. Default 5s.
+//   - ReconcileOnStartup gates whether L2 runs at sextantd: ready. nil
+//     defaults to true.
+type LifecycleConfig struct {
+	HeartbeatStaleness       Duration `toml:"heartbeat_staleness"`
+	HeartbeatStartupGrace    Duration `toml:"heartbeat_startup_grace"`
+	ContainerWatcherDebounce Duration `toml:"container_watcher_debounce"`
+	ReconcileOnStartup       *bool    `toml:"reconcile_on_startup"`
+}
+
+// Defaults to use when fields are zero/nil.
+const (
+	DefaultHeartbeatStaleness       = 30 * time.Second
+	DefaultHeartbeatStartupGrace    = 60 * time.Second
+	DefaultContainerWatcherDebounce = 5 * time.Second
+)
+
+// Resolved returns the durations and reconcile flag with defaults
+// substituted for zero/nil fields.
+func (l LifecycleConfig) Resolved() (staleness, grace, debounce time.Duration, reconcile bool) {
+	staleness = l.HeartbeatStaleness.AsDuration()
+	if staleness <= 0 {
+		staleness = DefaultHeartbeatStaleness
+	}
+	grace = l.HeartbeatStartupGrace.AsDuration()
+	if grace <= 0 {
+		grace = DefaultHeartbeatStartupGrace
+	}
+	debounce = l.ContainerWatcherDebounce.AsDuration()
+	if debounce <= 0 {
+		debounce = DefaultContainerWatcherDebounce
+	}
+	reconcile = true
+	if l.ReconcileOnStartup != nil {
+		reconcile = *l.ReconcileOnStartup
+	}
+	return
+}
 
 // DaemonConfig governs the daemon process itself.
 type DaemonConfig struct {
