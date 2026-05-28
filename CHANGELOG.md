@@ -10,6 +10,13 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
 
 ## [Unreleased]
 
+### Added
+- **TTY interactive confirm for destructive verbs** — `agents stop`,
+  `agents restart`, `agents archive` (incl. `--all-dead`), `daemon
+  stop`, `daemon restart` now render a `huh.NewConfirm` prompt when
+  stdin is a TTY and neither `--yes` nor `--dry-run` is set.
+  Non-TTY callers still get the existing `--yes`-required error.
+
 ### Changed
 - Bump `@anthropic-ai/claude-agent-sdk` 0.3.150 → 0.3.154 in the
   sidecar workspace. Notable upstream changes: parity with Claude
