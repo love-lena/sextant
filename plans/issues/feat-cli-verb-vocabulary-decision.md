@@ -1,11 +1,37 @@
 ---
 title: Decide whether existing domain verbs fold into list/show/create/update/delete/run
-status: open
+status: resolved
 priority: P3
 created_at: 2026-05-26T20:33-07:00
-labels: [feature, cli, needs-input, command-design]
+resolved_at: 2026-05-28T11:11-07:00
+labels: [feature, cli, command-design]
 discovered_in: CLI/TUI conventions adoption
+fixed_in: 335a16d
 ---
+
+## Resolution (2026-05-28)
+
+**Option C: closed-exception list.** Decision made 2026-05-27;
+implementation shipped via PR #12 (commit `335a16d`,
+`feat(cli): rename four verbs to default CRUD vocabulary`).
+
+Four renames landed with one-release backwards-compat aliases:
+
+| Old | New |
+|-----|-----|
+| `agents spawn` | `agents create` |
+| `agents kill` | `agents stop` |
+| `audit query` | `audit list` |
+| `worktree destroy` | `worktree delete` |
+
+Approved exceptions (kept as-is): `restart`, `archive`, `prompt`,
+`answer`, `defer`, `escalate`, `tail`, `merge`, `diff`. Each
+domain verb in the exception list names a first-class operator
+concept that would lose meaning under `update --kind=X`.
+
+Conventions doc updated: `conventions/tui-conventions.md` §
+"Closed-exception verb vocabulary". New exceptions require a
+needs-input ticket per the conventions doc's rule.
 
 ## Summary
 

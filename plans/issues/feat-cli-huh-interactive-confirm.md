@@ -3,13 +3,24 @@ title: Add Huh interactive confirmation to destructive verbs (TTY path)
 status: open
 priority: P3
 created_at: 2026-05-26T23:50-07:00
-labels: [feature, cli, safety, polish, charm, needs-input]
+labels: [feature, cli, safety, polish, charm]
 discovered_in: implementing feat-cli-destructive-op-flags — shipped --dry-run + --yes but skipped the TTY+Huh interactive confirm; charmbracelet/huh isn't in go.mod yet
 ---
 
-## Needs Lena's input
+## Decision (2026-05-27)
 
-`charmbracelet/huh` isn't in `go.mod` today — despite the cobra-fang migration's plan to add it. Pulling it in is a deliberate dependency decision (size, alternative confirm libraries, whether a hand-rolled prompt is enough). Implementation is mechanical once the call is made.
+**Ship Huh.** Decision made 2026-05-27 during the dispatch-readiness
+walkthrough. `charmbracelet/huh` joins go.mod; destructive verbs
+(`agents stop`, `agents restart`, `agents archive` incl.
+`--all-dead`, `daemon stop`, `daemon restart`) render a TTY confirm
+on stdin when no `--yes` / `--dry-run` is set.
+
+The destructive-verb set above already reflects the verb-migration
+(PR #12 — `kill` → `stop`).
+
+Implementation is mechanical now that the dep call is made; ready
+to dispatch as a subagent. The "Fix shape" section below describes
+the wiring against `cmd/sextant/destructive.go::destructiveFlags.confirm`.
 
 ## Summary
 
