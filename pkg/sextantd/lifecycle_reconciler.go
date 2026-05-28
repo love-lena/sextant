@@ -58,8 +58,12 @@ type Reconciler struct {
 	Defs ReconcilerDefsKV
 	// Mgr is the container runtime used to list live sidecars on this host.
 	Mgr ContainerLister
-	// Publish delivers a synthetic lifecycle envelope to the bus.
-	// The LifecycleWatcher's subject handler writes the state to KV.
+	// Publish delivers a synthetic lifecycle envelope to the bus. The
+	// closure is responsible for deriving the NATS subject from the
+	// envelope's payload — typically `agents.<payload.AgentUUID>.lifecycle`
+	// — because Envelope itself does not carry a Subject field. The
+	// LifecycleWatcher reads the subject-routed envelope and writes the
+	// state to KV under its CAS + yield guards.
 	Publish func(ctx context.Context, env sextantproto.Envelope) error
 	// HostID is the daemon's host identifier, used to filter containers
 	// to only those belonging to this host via LabelHostID.
