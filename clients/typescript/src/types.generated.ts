@@ -198,6 +198,7 @@ export interface ExecInContainerResponse {
  */
 export interface GetAgentStatusRequest {
   agent_id: UUID;
+  include_heartbeat?: boolean;
 }
 /**
  * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
@@ -209,6 +210,16 @@ export interface AgentStatus {
   lifecycle: string;
   version: number;
   updated_at: string;
+  heartbeat?: HeartbeatSnapshot;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "HeartbeatSnapshot".
+ */
+export interface HeartbeatSnapshot {
+  last_seen?: string;
+  age_seconds?: number;
+  source: string;
 }
 /**
  * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
