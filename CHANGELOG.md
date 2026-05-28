@@ -25,6 +25,34 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
 - TypeScript client (`clients/typescript/src/envelope.ts`) `PROTO_VERSION`
   realigned to `0.2.0`.
 
+### Fixed
+- **`kill_agent` retries on CAS conflict** —
+  [[bug-kill-agent-cas-flakes-integration-tests]]. The kill handler's
+  final def-write now retries up to 3 times against concurrent
+  legitimate writers (the daemon's L2 reconciler and lifecycle
+  watcher) instead of bailing immediately on every CAS conflict.
+  Container Stop runs exactly once before the retry loop — kill_agent
+  alone among the CAS-migrated handlers retries because its side
+  effect is idempotent in practice (a stopped container can be
+  stopped again as a no-op), while restart_agent / archive_agent
+  keep their BAIL-with-rollback shape. The retry budget mirrors
+  `lifecycle_watcher.go`'s `watcherCASRetries`. Fixes the six
+  `cmd/sextantd` integration-test flakes
+  (`TestM12CLIBinaryWalkthroughAcceptance`, `TestM12CLIWalkthroughAcceptance`,
+  `TestSidecarSDKDriverMockRoundTrip`, `TestSidecarSDKDriverMockErrorPath`,
+  `TestM11SpawnFlowAcceptance`, `TestAgentCanEditWorkspaceFile`).
+- **Reconciler-quiet daemon-test harness** — `startDaemonHarness` now
+  writes `reconcile_on_startup = false` into the test config so the L2
+  reconciler can't race operator-driven kill / restart CAS writes
+  under the integration matrix. Belt-and-suspenders to the kill_agent
+  retry budget above; production reconciler behavior is unchanged.
+- **`cmd/sextantd` CLI-binary walkthrough** — `TestM12CLIBinaryWalkthroughAcceptance`
+  now decodes `--json` output through the `pkg/cliout` envelope
+  wrapper (added in commit `e916508`) and gates the destructive
+  `agents stop` call behind `--yes`. The test had drifted from the
+  CLI surface; without these fixes the test failed before the
+  kill_agent flake even had a chance to fire.
+
 ## [0.2.0] — 2026-05-28
 
 First tagged baseline. Establishes the version surface that prior
