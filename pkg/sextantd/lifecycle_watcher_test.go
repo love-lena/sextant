@@ -362,7 +362,7 @@ func TestLifecycleObserverFiresAfterApply(t *testing.T) {
 	kv.seedDefinitionWithIncarnation(t, id, "obs-test", sextantproto.LifecycleRunning, 1, inc)
 
 	var mu sync.Mutex
-	var fired []sextantproto.LifecyclePayload
+	fired := []sextantproto.LifecyclePayload{}
 
 	w := &LifecycleWatcher{defs: kv}
 	RegisterLifecycleObserver(w, func(p sextantproto.LifecyclePayload) {
