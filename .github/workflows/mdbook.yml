@@ -6,6 +6,11 @@ on:
     paths:
       - "docs/book/**"
       - ".github/workflows/mdbook.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "docs/book/**"
+      - ".github/workflows/mdbook.yml"
   workflow_dispatch:
 
 permissions:
@@ -14,7 +19,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
+  group: pages-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -37,15 +42,20 @@ jobs:
         working-directory: docs/book
         run: mdbook build
 
+      # Deploy artifacts only on push to main. PR runs validate the build
+      # but don't publish.
       - uses: actions/configure-pages@v5
+        if: github.event_name == 'push'
 
       - uses: actions/upload-pages-artifact@v3
+        if: github.event_name == 'push'
         with:
           path: docs/book/book
 
   deploy:
     name: deploy to GitHub Pages
     needs: build
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     environment:
       name: github-pages
