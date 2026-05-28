@@ -174,6 +174,14 @@ func registerInitialVerbs(srv *rpc.Server, kv handlers.AgentKV, chConn handlers.
 func (r *rpcRuntime) registerLifecycleVerbs(ca *authjwt.CA, spawnRT *spawnRuntime) error {
 	spawnDeps := spawnRT.asSpawnDeps(r.chConn)
 	spawnDeps.CA = ca
+	// Guardrail: prompt_agent's heartbeat-staleness guard (L1 of agent
+	// lifecycle truth) is captured by value in NewPromptAgent's closure.
+	// If r.heartbeats is nil here the guard is permanently disabled. The
+	// daemon's startup sequence must install the HeartbeatCache before
+	// calling this method — see cmd/sextantd/daemon.go step 11b.
+	if r.heartbeats == nil {
+		log.Printf("sextantd: registerLifecycleVerbs: WARNING heartbeats cache is nil; prompt_agent L1 staleness guard will not fire (see daemon.go ordering)")
+	}
 	if err := r.server.Register(rpc.VerbSpawnAgent, handlers.NewSpawnAgent(spawnDeps)); err != nil {
 		return err
 	}
