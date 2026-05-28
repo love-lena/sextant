@@ -123,10 +123,11 @@ func NewPromptAgent(deps PromptDeps) rpc.Handler {
 
 		// Heartbeat staleness guard (L1). Only runs when the cache is wired.
 		if deps.Heartbeats != nil {
-			now := time.Now()
-			if deps.Now != nil {
-				now = deps.Now()
+			nowFn := deps.Now
+			if nowFn == nil {
+				nowFn = time.Now
 			}
+			now := nowFn()
 			staleness := deps.HeartbeatStaleness
 			if staleness == 0 {
 				staleness = 30 * time.Second
