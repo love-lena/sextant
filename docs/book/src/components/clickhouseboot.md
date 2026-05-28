@@ -8,7 +8,7 @@
 
 - You want to know what tables ClickHouse holds in a sextant install.
 - You're adding a column (write a new migration file under `pkg/clickhouseboot/migrations/`).
-- You're investigating a "table not found" failure when running `sextant audit query` or `sextant traces show`.
+- You're investigating a "table not found" failure when running `sextant audit list` or `sextant traces show`.
 
 ## Public surface
 

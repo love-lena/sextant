@@ -85,7 +85,7 @@ func TestEnvelopeFromCommandStripsRoot(t *testing.T) {
 		{"sextant agents list", "agents.list", "agents.list"},
 		{"sextant events tail", "events.tail", "events.tail"},
 		{"sextant init", "init", "init"},
-		{"sextant audit query", "audit.query", "audit.query"},
+		{"sextant audit list", "audit.list", "audit.list"},
 		{"sextant", "", ""},
 	}
 	for _, tc := range cases {

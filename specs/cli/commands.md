@@ -68,8 +68,8 @@ First-run setup. Idempotent — re-running detects existing state and skips.
 |---|---|---|
 | `list` | List agents | `list_agents` |
 | `show <agent>` | Detailed status | `get_agent_status` |
-| `spawn <name> --template T [--host H]` | Create + start | `spawn_agent` |
-| `kill <agent> [--grace 10s]` | Terminate | `kill_agent` |
+| `create <name> --template T [--host H]` | Create + start (alias: `spawn`, removal in v0.2) | `spawn_agent` |
+| `stop <agent> [--grace 10s]` | Gracefully stop the container (alias: `kill`, removal in v0.2) | `kill_agent` |
 | `restart <agent> [--preserve-session]` | Restart | `restart_agent` |
 | `prompt <agent> "<text>"` | Send a prompt | `prompt_agent` |
 | `archive <agent>` | Move to archived state | `archive_agent` |
@@ -83,6 +83,19 @@ Subscribe to `agents.<uuid>.frames` and print frames in human-readable form. `--
 Synchronous one-shot: subscribe to `agents.<uuid>.frames` + `agents.<uuid>.lifecycle`, publish a prompt via `prompt_agent`, then stream the agent's reply inline until the next `lifecycle transition=turn_ended` (or `transition=ended`) for that agent. Exits 0 on a clean turn finish; exits non-zero with a clear "timeout waiting for turn_ended" message on `--timeout` expiry. `--timeout` defaults to 60s. `<agent>` accepts a name or a UUID (same resolution as `sextant agents archive`). `--json` swaps to NDJSON output, same shape as `sextant conversation --json`.
 
 Use this for daily-drive assistant chats where the two-pane `sextant conversation ... &` + `sextant agents prompt ...` workflow is overkill. The verb subscribes BEFORE publishing the prompt so the first frame can't be missed.
+
+### Deprecated CLI verb aliases (one-release backwards compat)
+
+The 2026-05-27 closed-exception verb migration renamed four verbs to the default CRUD vocabulary. The old spellings continue to resolve via cobra aliases for one release and are scheduled for removal in v0.2:
+
+| Old | New |
+|---|---|
+| `sextant agents spawn` | `sextant agents create` |
+| `sextant agents kill` | `sextant agents stop` |
+| `sextant audit query` | `sextant audit list` |
+| `sextant worktree destroy` | `sextant worktree delete` |
+
+The wire RPC verb names (`spawn_agent`, `kill_agent`, `query_audit`, `worktree_destroy`) are unchanged — this is a CLI-surface rename only. See `conventions/tui-conventions.md` § "Command design → Fixed verb vocabulary" and `plans/issues/feat-cli-verb-vocabulary-decision.md` for rationale.
 
 ### `sextant pending`
 
@@ -113,7 +126,7 @@ Run command inside agent's container. Capability-gated (operator-level). Audited
 
 | Verb | Purpose | RPC |
 |---|---|---|
-| `query [--since 1h] [--actor X] [--action spawn]` | Filter audit log | `query_audit` |
+| `list [--since 1h] [--actor X] [--action spawn]` | Filter audit log (alias: `query`, removal in v0.2) | `query_audit` |
 | `tail [--filter ...]` | Live audit stream | NATS subscribe on `audit.>` |
 
 `query_audit` is a dedicated RPC verb (not `query_history`): it targets the ClickHouse `audit` table directly so the column shape matches `pkg/shipper/mapping.go::AuditRow` (actor, action, capability_required, result, payload) rather than the generic envelope shape. Pinned for M12; the M10 MCP tool `query_audit` switches to this new verb so both surfaces share one backend.
@@ -146,7 +159,7 @@ Display a full distributed trace via spans from ClickHouse.
 |---|---|
 | `list` | Show all worktrees |
 | `create <name> [--base main]` | Create new worktree |
-| `destroy <name>` | Clean up worktree |
+| `delete <name>` | Clean up worktree (alias: `destroy`, removal in v0.2) |
 | `merge <name> [--target main]` | Merge to target |
 | `diff <name> [--against main]` | Show diff |
 

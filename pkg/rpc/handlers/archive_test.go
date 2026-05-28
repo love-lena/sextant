@@ -311,11 +311,14 @@ func TestArchiveAgentIdempotent(t *testing.T) {
 	}
 }
 
-// TestKillWithArchiveFlag mirrors the `sextant agents kill --archive`
-// CLI flow at the handler level: spawn → kill → archive, then assert
-// the name is immediately reusable. The CLI flag pairs two RPCs (kill
-// followed by archive) — this test verifies the daemon behaviour the
-// flag relies on without needing a running CLI binary.
+// TestKillWithArchiveFlag mirrors the `sextant agents stop --archive`
+// CLI flow at the handler level: spawn_agent → kill_agent → archive_agent,
+// then assert the name is immediately reusable. The CLI flag pairs two
+// RPCs (kill_agent followed by archive_agent) — this test verifies the
+// daemon behaviour the flag relies on without needing a running CLI
+// binary. The wire RPC verb names (`spawn_agent`, `kill_agent`) are
+// unchanged by the closed-exception CLI verb rename; only the user-
+// facing CLI verbs moved (`spawn`→`create`, `kill`→`stop`).
 //
 // Per plans/issues/bug-kill-doesnt-release-name.md Option A.
 func TestKillWithArchiveFlag(t *testing.T) {

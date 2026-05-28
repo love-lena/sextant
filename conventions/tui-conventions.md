@@ -71,15 +71,25 @@ land on the target stack.
     a `sextant install <verb>` noun would add an explicit noun for a
     single-instance resource and buy nothing. Rationale tracked at
     `plans/issues/feat-cli-resource-verb-cleanup.md`.
-- **Fixed verb vocabulary.** `list`, `show`, `create`, `update`,
-  `delete`, `run`. Custom verbs (`approve`, `escalate`) live as flags
-  or subcommands of `update`, not top-level.
-  - Open audit: sextant currently ships `spawn`, `kill`, `archive`,
-    `restart`, `prompt`, `answer`, `defer`, `escalate`. Whether to
-    fold these into the fixed vocabulary or relax the rule for
-    operator-clear domain verbs is tracked at
-    `plans/issues/feat-cli-verb-vocabulary-decision.md`
-    (needs-input).
+- **Closed-exception verb vocabulary.** Default verbs:
+  `list`, `show`, `create`, `update`, `delete`, `run`. New verbs
+  should land as flags or subcommands of `update`, not top-level —
+  the bar is "this maps to a first-class operator concept that wouldn't
+  be visible if collapsed into `update`."
+  - **Approved exceptions (closed list):** `restart`, `archive`,
+    `prompt`, `answer`, `defer`, `escalate`, `tail`, `merge`, `diff`.
+    Each justified by operator clarity that `update --kind=X` would
+    erase. Adding a tenth exception requires a needs-input ticket like
+    `plans/issues/feat-cli-verb-vocabulary-decision.md` and Lena's call.
+  - **Deprecated aliases (one-release backwards compat, removal in v0.2):**
+    `agents spawn` → `agents create`; `agents kill` → `agents stop`;
+    `audit query` → `audit list`; `worktree destroy` → `worktree delete`.
+    The old spellings continue to resolve via cobra `Aliases`. Scripts
+    that use them still work; the help text flags the alias and its
+    deprecation horizon.
+  - **Wire-protocol RPC verbs are unaffected.** This is a CLI-surface
+    rename only — `spawn_agent`, `kill_agent`, `query_audit`,
+    `worktree_destroy` keep their names on NATS subjects.
 - **Read from stdin when natural.** `sextant agents show` accepts an
   ID as positional arg or reads IDs from stdin one per line.
   Positional arg wins; stdin is fallback. Enables `sextant agents
@@ -387,7 +397,7 @@ carries the emphasis. Italics reserved for placeholder and hint text.
 ### Empty states
 
 Centered in the content area, muted text, one line of hint about
-what to do next ("no agents — try `sextant agents spawn`"). Never
+what to do next ("no agents — try `sextant agents create`"). Never
 blank.
 
 ### Status bar

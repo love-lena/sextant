@@ -20,8 +20,8 @@ func TestRootCmdWiring(t *testing.T) {
 		// agents.*
 		{"agents", "list"},
 		{"agents", "show"},
-		{"agents", "spawn"},
-		{"agents", "kill"},
+		{"agents", "create"},
+		{"agents", "stop"},
 		{"agents", "restart"},
 		{"agents", "archive"},
 		{"agents", "prompt"},
@@ -42,7 +42,7 @@ func TestRootCmdWiring(t *testing.T) {
 		// worktree.*
 		{"worktree", "list"},
 		{"worktree", "create"},
-		{"worktree", "destroy"},
+		{"worktree", "delete"},
 		{"worktree", "merge"},
 		{"worktree", "diff"},
 		{"worktree", "prune"},
@@ -51,7 +51,7 @@ func TestRootCmdWiring(t *testing.T) {
 		{"templates", "reload"},
 
 		// audit.*
-		{"audit", "query"},
+		{"audit", "list"},
 		{"audit", "tail"},
 
 		// traces.*
@@ -97,6 +97,47 @@ func TestRootCmdWiring(t *testing.T) {
 			}
 			if c.Name() != path[len(path)-1] {
 				t.Errorf("Find(%v) resolved to %q, want %q", path, c.Name(), path[len(path)-1])
+			}
+		})
+	}
+}
+
+// TestLegacyVerbAliasesResolve pins the four backwards-compat aliases
+// introduced in the closed-exception verb migration
+// (plans/issues/feat-cli-verb-vocabulary-decision.md). Each old verb
+// must continue to resolve to the same cobra command its new spelling
+// resolves to — so `sextant agents kill foo` still runs the stop
+// handler, etc. Aliases are scheduled for removal in v0.2; the test
+// guards against accidentally dropping them sooner.
+func TestLegacyVerbAliasesResolve(t *testing.T) {
+	cases := []struct {
+		alias  []string
+		canon  []string
+		wantUs string
+	}{
+		{alias: []string{"agents", "spawn"}, canon: []string{"agents", "create"}, wantUs: "create <name>"},
+		{alias: []string{"agents", "kill"}, canon: []string{"agents", "stop"}, wantUs: "stop <agent>"},
+		{alias: []string{"audit", "query"}, canon: []string{"audit", "list"}, wantUs: "list"},
+		{alias: []string{"worktree", "destroy"}, canon: []string{"worktree", "delete"}, wantUs: "delete <name>"},
+	}
+	for _, tc := range cases {
+		t.Run(strings.Join(tc.alias, "."), func(t *testing.T) {
+			root := newRootCmd()
+			aliasCmd, _, err := root.Find(tc.alias)
+			if err != nil {
+				t.Fatalf("alias %v does not resolve: %v", tc.alias, err)
+			}
+			canonCmd, _, err := root.Find(tc.canon)
+			if err != nil {
+				t.Fatalf("canonical %v does not resolve: %v", tc.canon, err)
+			}
+			// Cobra Aliases route both Find calls to the same *Command.
+			if aliasCmd != canonCmd {
+				t.Fatalf("alias %v resolved to %p (Use=%q); canonical %v resolved to %p (Use=%q) — must be the same command",
+					tc.alias, aliasCmd, aliasCmd.Use, tc.canon, canonCmd, canonCmd.Use)
+			}
+			if aliasCmd.Use != tc.wantUs {
+				t.Errorf("alias %v Use=%q, want %q", tc.alias, aliasCmd.Use, tc.wantUs)
 			}
 		})
 	}

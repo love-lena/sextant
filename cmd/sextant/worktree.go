@@ -21,11 +21,11 @@ import (
 func newWorktreeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "worktree",
-		Short: "Manage agent worktrees (list|create|destroy|merge|diff|prune)",
+		Short: "Manage agent worktrees (list|create|delete|merge|diff|prune)",
 	}
 	cmd.AddCommand(newWorktreeListCmd())
 	cmd.AddCommand(newWorktreeCreateCmd())
-	cmd.AddCommand(newWorktreeDestroyCmd())
+	cmd.AddCommand(newWorktreeDeleteCmd())
 	cmd.AddCommand(newWorktreeMergeCmd())
 	cmd.AddCommand(newWorktreeDiffCmd())
 	cmd.AddCommand(newWorktreePruneCmd())
@@ -107,12 +107,19 @@ func newWorktreeCreateCmd() *cobra.Command {
 	return cmd
 }
 
-func newWorktreeDestroyCmd() *cobra.Command {
+// newWorktreeDeleteCmd — `sextant worktree delete <name>`.
+//
+// Renamed from `destroy` per the closed-exception verb policy
+// (plans/issues/feat-cli-verb-vocabulary-decision.md). `delete` is the
+// default CRUD spelling. The old verb is kept as a cobra Alias for one
+// release.
+func newWorktreeDeleteCmd() *cobra.Command {
 	var force bool
 	cmd := &cobra.Command{
-		Use:   "destroy <name>",
-		Short: "Remove a worktree's dir + registry entry",
-		Args:  cobra.ExactArgs(1),
+		Use:     "delete <name>",
+		Aliases: []string{"destroy"},
+		Short:   "Remove a worktree's dir + registry entry (alias: destroy, scheduled for removal in v0.2)",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			cli, _, err := connectAgent(ctx, globalFlags.configDir)
