@@ -45,6 +45,24 @@ jobs:
       - name: make lint-nilaway test-go
         run: make lint-nilaway test-go
 
+      - name: make install smoke (verify ldflags + version surface)
+        run: |
+          make install
+          set -e
+          OUT_SEXTANT=$("$HOME/.local/bin/sextant" version)
+          OUT_SEXTANTD=$("$HOME/.local/bin/sextantd" version)
+          echo "sextant version  -> $OUT_SEXTANT"
+          echo "sextantd version -> $OUT_SEXTANTD"
+          # Output must contain the VERSION-file content (not the "dev"
+          # fallback) — proves ldflags landed via `make install`.
+          VERSION=$(cat VERSION)
+          for o in "$OUT_SEXTANT" "$OUT_SEXTANTD"; do
+            case "$o" in
+              "$VERSION"*) ;;
+              *) echo "::error::expected output to start with '$VERSION', got '$o'"; exit 1 ;;
+            esac
+          done
+
   ts:
     name: lint + test (TypeScript)
     runs-on: ubuntu-24.04
@@ -88,6 +106,9 @@ jobs:
       - name: npm test (clients/typescript)
         working-directory: clients/typescript
         run: npm test
+
+      - name: make lint-sidecar test-sidecar (entrypoint vitest)
+        run: make lint-sidecar test-sidecar
 
   sidecar-image:
     name: sidecar image build + smoke
