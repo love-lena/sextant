@@ -77,10 +77,13 @@ land on the target stack.
   the bar is "this maps to a first-class operator concept that wouldn't
   be visible if collapsed into `update`."
   - **Approved exceptions (closed list):** `restart`, `archive`,
-    `prompt`, `answer`, `defer`, `escalate`, `tail`, `merge`, `diff`.
-    Each justified by operator clarity that `update --kind=X` would
-    erase. Adding a tenth exception requires a needs-input ticket like
-    `plans/issues/feat-cli-verb-vocabulary-decision.md` and Lena's call.
+    `prompt`, `answer`, `defer`, `escalate`, `tail`, `merge`, `diff`,
+    `context`. Each justified by operator clarity that `update --kind=X`
+    would erase. (`context` joined per
+    `plans/issues/feat-agents-context-view.md` — inspecting the
+    agent's prompt buffer is a first-class operator concept distinct
+    from reading the agent record.) Adding an eleventh exception
+    requires a needs-input ticket and Lena's call.
   - **Deprecated aliases (one-release backwards compat, removal in v0.2):**
     `agents spawn` → `agents create`; `agents kill` → `agents stop`;
     `audit query` → `audit list`; `worktree destroy` → `worktree delete`.

@@ -47,6 +47,18 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   suite both pass.
 
 ### Added
+- **`sextant agents context <agent>` (Phase A)** — operator surface
+  for inspecting an agent's SDK session in raw form. CLI dump +
+  `--follow` (tail) + `--mode=<raw|conversation|tools|thinking|usage|tree>`
+  filters. New `pkg/sessionlog` typed JSONL parser underlies the view
+  modes. Daemon bind-mounts a per-agent `<data-dir>/agents/<uuid>/claude-projects/`
+  host directory at `/home/agent/.claude/projects/` inside the container
+  so the SDK's session writer ends up writing to a path the host can
+  read directly. `get_agent_status` surfaces the projects-dir path +
+  current session_id via the new `SessionLogInfo`. Verb `context`
+  added to the closed-exception list in `conventions/tui-conventions.md`.
+  `-i` TUI mount is a follow-up (depends on `feat-cli-iflag-tier1-components`).
+  See `plans/issues/feat-agents-context-view.md`.
 - **`sextant doctor` daemon version surface** — `doctor` now queries
   a new `get_version` RPC and prints CLI + daemon version, proto
   version, daemon PID, and start time. Warns when CLI and daemon

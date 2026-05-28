@@ -72,13 +72,42 @@ type GetAgentStatusResponse struct {
 // Nil means either the caller did not ask, or the cache has no entry
 // for this agent (e.g., never seen a heartbeat, or the daemon's cache
 // is not wired).
+//
+// SessionLog is populated when the daemon has per-agent session paths
+// wired (the spawn handler bind-mounts ~/.claude/projects/ per agent
+// per the `feat-agents-context-view` plan). Nil for older agents
+// spawned before the bind mount landed, and for daemons that haven't
+// configured the agents data root.
 type AgentStatus struct {
-	UUID      uuid.UUID          `json:"uuid"`
-	Name      string             `json:"name"`
-	Lifecycle string             `json:"lifecycle"`
-	Version   uint64             `json:"version"`
-	UpdatedAt time.Time          `json:"updated_at"`
-	Heartbeat *HeartbeatSnapshot `json:"heartbeat,omitempty"`
+	UUID       uuid.UUID          `json:"uuid"`
+	Name       string             `json:"name"`
+	Lifecycle  string             `json:"lifecycle"`
+	Version    uint64             `json:"version"`
+	UpdatedAt  time.Time          `json:"updated_at"`
+	Heartbeat  *HeartbeatSnapshot `json:"heartbeat,omitempty"`
+	SessionLog *SessionLogInfo    `json:"session_log,omitempty"`
+}
+
+// SessionLogInfo describes how to reach the agent's Claude Code SDK
+// session JSONL on the host filesystem. The daemon bind-mounts a
+// per-agent host directory at /home/agent/.claude/projects/ inside
+// the container, so the SDK's session writer ends up writing to a
+// path the host can read directly.
+//
+//   - ProjectsDir is the host dir corresponding to the container's
+//     /home/agent/.claude/projects/. The SDK writes session JSONL
+//     files under <ProjectsDir>/<encoded-cwd>/<sessionId>.jsonl.
+//   - SessionID is the latest SDK-issued session id persisted to the
+//     agent definition by the sidecar. Empty until the agent has
+//     completed its first turn.
+//
+// The CLI `agents context` verb resolves the actual JSONL path by
+// walking ProjectsDir for a file matching <SessionID>.jsonl — the
+// `<encoded-cwd>` segment is the SDK's URL-encoded representation of
+// the in-container cwd, which the daemon doesn't need to mirror.
+type SessionLogInfo struct {
+	ProjectsDir string `json:"projects_dir,omitempty"`
+	SessionID   string `json:"session_id,omitempty"`
 }
 
 // HeartbeatSnapshot is the freshness shape attached to AgentStatus when

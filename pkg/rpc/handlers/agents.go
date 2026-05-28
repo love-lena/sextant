@@ -96,10 +96,16 @@ func NewListAgents(kv AgentKV) rpc.Handler {
 // Heartbeats can be nil — the handler still serves the L0 KV record,
 // just without the freshness annotation. That matches the daemon's
 // fail-soft posture when the cache failed to start.
+//
+// AgentsDataRoot, when non-empty, populates Status.SessionLog on every
+// response — the handler computes the per-agent claude-projects host
+// path via handlers.AgentProjectsDir(root, uuid). When empty (older
+// daemons + most unit tests), SessionLog stays nil.
 type GetAgentStatusDeps struct {
-	KV         AgentKV
-	Heartbeats HeartbeatLookup
-	Now        func() time.Time
+	KV             AgentKV
+	Heartbeats     HeartbeatLookup
+	AgentsDataRoot string
+	Now            func() time.Time
 }
 
 // NewGetAgentStatus returns a Handler for the get_agent_status verb.
@@ -152,6 +158,15 @@ func NewGetAgentStatusWithDeps(deps GetAgentStatusDeps) rpc.Handler {
 		}
 		if args.IncludeHeartbeat {
 			status.Heartbeat = buildHeartbeatSnapshot(deps, def.UUID)
+		}
+		if deps.AgentsDataRoot != "" {
+			info := &sextantproto.SessionLogInfo{
+				ProjectsDir: AgentProjectsDir(deps.AgentsDataRoot, def.UUID),
+			}
+			if def.Runtime.SessionID != nil {
+				info.SessionID = *def.Runtime.SessionID
+			}
+			status.SessionLog = info
 		}
 		return emitOK(emit, sextantproto.GetAgentStatusResponse{Status: status})
 	}
