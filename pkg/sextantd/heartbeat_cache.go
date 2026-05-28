@@ -23,7 +23,12 @@ type HeartbeatCache struct {
 	nc    *nats.Conn
 	nowFn func() time.Time
 
-	mu       sync.RWMutex
+	mu sync.RWMutex
+	// lastSeen is grow-only: entries are added on every observed heartbeat
+	// and never evicted, so archived/lost agents leak a small constant of
+	// memory per UUID for the daemon's lifetime. Acceptable today because
+	// agent cardinality is single-machine-bounded; revisit if this changes.
+	// See feat-lifecycle-heartbeat-cache-eviction (not yet filed).
 	lastSeen map[uuid.UUID]time.Time
 	sub      *nats.Subscription
 }
@@ -107,6 +112,8 @@ func (c *HeartbeatCache) handle(msg *nats.Msg) {
 		return
 	}
 	if env.Kind != sextantproto.KindHeartbeat {
+		// Wrong kind on the heartbeat subject — shouldn't happen, but
+		// drop quietly so a misrouted publisher doesn't spam the log.
 		return
 	}
 	var payload sextantproto.HeartbeatPayload
@@ -115,6 +122,8 @@ func (c *HeartbeatCache) handle(msg *nats.Msg) {
 		return
 	}
 	if payload.AgentUUID == uuid.Nil {
+		// Malformed envelope (zero UUID is never valid). Drop silently
+		// to avoid log spam from forged or test publishes.
 		return
 	}
 	now := c.nowFn()
