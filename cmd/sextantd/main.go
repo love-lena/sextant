@@ -27,6 +27,15 @@ func main() {
 }
 
 func run() error {
+	// Subcommand dispatch: sextantd is otherwise flag-only, but `version`
+	// must work without touching config / signal handling / log setup, so
+	// it's routed here before any other startup happens. Keep this list
+	// short — flag-based subcommands don't scale; if more arrive, migrate
+	// sextantd to cobra in lockstep with the CLI.
+	if len(os.Args) >= 2 && os.Args[1] == "version" {
+		return runVersion(os.Stdout)
+	}
+
 	fs := flag.NewFlagSet("sextantd", flag.ExitOnError)
 	configPath := fs.String("config", "", "sextantd.toml path (default ~/.config/sextant/sextantd.toml)")
 	testMode := fs.Bool("test-mode", false, "run in test mode (reserved for M17)")

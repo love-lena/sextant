@@ -13,8 +13,6 @@ import (
 
 	charmlog "github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
-
-	"github.com/love-lena/sextant/pkg/version"
 )
 
 // rootFlags holds the persistent flags every command shares. Populated
@@ -139,25 +137,6 @@ sextant install itself).`,
 	}
 
 	return cmd
-}
-
-// newVersionCmd renders the sextant version. Single-line, scriptable.
-// `sextant --version` is also wired by Fang.
-func newVersionCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "version",
-		Short: "Print the sextant version",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			out := cmd.OutOrStdout()
-			if version.GitSHA == "" {
-				_, err := fmt.Fprintf(out, "sextant %s\n", version.String())
-				return err
-			}
-			_, err := fmt.Fprintf(out, "sextant %s (sha %s)\n", version.String(), shortSHA(version.GitSHA))
-			return err
-		},
-	}
 }
 
 // deprecationNote prints a one-line deprecation message to stderr unless

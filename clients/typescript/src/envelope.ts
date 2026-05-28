@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 import type { Address, Envelope } from "./types.generated.js";
 
 /** Envelope protocol version emitted by this client (matches Go ProtoVersion). */
-export const PROTO_VERSION = "1.0";
+export const PROTO_VERSION = "0.2.0";
 
 /** Recognized envelope kinds. Mirrors sextantproto.Kind. */
 export const KIND_AGENT_FRAME = "agent_frame";

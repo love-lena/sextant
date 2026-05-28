@@ -8,6 +8,24 @@ starting work; follow the links when the matching domain comes up.
 - **`PRINCIPLES.md`** — three load-bearing values that constrain every
   feature decision. Read once per session.
 
+## Versioning + PR policy
+
+- **Every change lands via a pull request.** No direct commits to
+  `main` — not for code, not for docs, not for spec/plan notes.
+  Self-approved fast-merges are fine; bypassing the PR path is not.
+  See `conventions/git-workflow.md` for the workflow.
+- **Semver is bumped per [semver.org](https://semver.org).** Breaking
+  changes bump MAJOR, additive features bump MINOR, bug-only changes
+  bump PATCH. Bump as part of the PR that introduces the change; do
+  not batch bumps.
+- The top-level `VERSION` file is the **source of truth** for the
+  binary semver. `make install` / `make build` plumb it into
+  `pkg/version.Version` via `-ldflags`. `sextant version` and
+  `sextantd version` surface the value at runtime.
+- `pkg/sextantproto/envelope.go::ProtoVersion` currently tracks the
+  same number; if the wire format and the binary semver diverge,
+  split them and file a follow-up for wire-format negotiation.
+
 ## Helping someone onboard
 
 If the user asks how to get started with sextant, how to install it,
