@@ -154,38 +154,43 @@ RUN set -eux; \
 # ---------------------------------------------------------------------------
 # Sidecar runtime: the TypeScript entrypoint plus a local copy of
 # `@sextant/client`. `@sextant/client` isn't published yet, so we COPY the
-# whole TS client into the image and wire it as a file: dependency in the
-# sidecar's package.json. When it's published, swap the file: dep for the
-# registry version and drop the client-ts COPY.
+# whole TS client into the image and wire it together via an npm workspace
+# root at /opt/sextant/. This mirrors the host workflow (root-level
+# `npm install` resolves @sextant/client into the sidecar via the
+# workspace graph) and removes the symlink-soup that the file: dep
+# previously needed. When @sextant/client is published, drop the
+# workspace root + client-ts COPY and let the sidecar pull the registry
+# version directly.
 # ---------------------------------------------------------------------------
 COPY --chown=agent:agent clients/typescript /opt/sextant/client-ts
 COPY --chown=agent:agent images/sidecar/entrypoint /opt/sextant/sidecar
 
+# Workspace root package.json. Kept inline so the image build doesn't
+# depend on the repo-root package.json layout: when contributors edit the
+# root package.json (adding workspaces, scripts, etc.) the image build
+# stays stable.
+RUN set -eux; \
+    printf '%s\n' \
+      '{' \
+      '  "name": "sextant-sidecar-image",' \
+      '  "private": true,' \
+      '  "workspaces": ["client-ts", "sidecar"]' \
+      '}' > /opt/sextant/package.json; \
+    chown agent:agent /opt/sextant/package.json
+
 USER agent
 
-# Install @sextant/client's runtime deps in-place inside the image. The
-# file:../client-ts dep symlinks the package into the sidecar's
-# node_modules, so when Node loads `@sextant/client` it resolves `nats`
-# and `smol-toml` relative to /opt/sextant/client-ts/node_modules — not
-# /opt/sextant/sidecar/node_modules. Run `npm ci --omit=dev` here so the
-# linked package has its deps without shipping the host's node_modules
-# in the build context.
-WORKDIR /opt/sextant/client-ts
-RUN set -eux; \
-    npm ci --omit=dev --no-audit --no-fund; \
-    npm cache clean --force
-
-# Build the sidecar entrypoint. `npm install` (no lockfile — the only
-# direct dep is the file:../client-ts symlink) resolves the link, then
-# `npm run build` produces dist/index.js.
-WORKDIR /opt/sextant/sidecar
+# Resolve and build via the workspace. `npm install` at the workspace
+# root pulls every workspace's deps (incl. typescript so tsc can run)
+# and links @sextant/client into /opt/sextant/sidecar/node_modules. Then
+# build the sidecar entrypoint and prune dev deps to keep the image lean.
+WORKDIR /opt/sextant
 RUN set -eux; \
     npm install --no-audit --no-fund; \
-    npm run build; \
-    # Drop devDependencies (typescript, @types/node) to keep the image lean.
-    npm prune --omit=dev; \
+    npm run --workspace=sidecar build; \
+    npm prune --omit=dev --workspaces --include-workspace-root; \
     npm cache clean --force; \
-    ls dist/index.js
+    ls sidecar/dist/index.js
 
 WORKDIR /workspace
 
