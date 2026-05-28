@@ -1,11 +1,23 @@
 ---
 title: prompt_agent should refuse when sidecar heartbeat is stale (deeper safety net beyond lifecycle)
-status: open
+status: fixed
 priority: P2
 created_at: 2026-05-26T22:30-07:00
-labels: [feature, daemon, rpc, resilience, operator-experience, needs-input]
+fixed_at: 2026-05-27T17:30-07:00
+labels: [feature, daemon, rpc, resilience, operator-experience]
 discovered_in: follow-up from [[bug-prompt-agent-accepts-when-sidecar-gone]] — lifecycle check covers clean exits; heartbeat staleness covers kill-9 / OOM / host-crash cases that bypass the lifecycle publish
 ---
+
+## Resolution
+
+Implemented as L1 of the three-layer "agent lifecycle truth" design:
+- Spec: `docs/superpowers/specs/2026-05-27-agent-lifecycle-truth-design.md`
+- Plan: `docs/superpowers/plans/2026-05-27-agent-lifecycle-truth.md`
+
+Defaults chosen: `heartbeat_staleness = 30s`, `heartbeat_startup_grace = 60s`
+(same as the original ticket's draft). Configurable via `[lifecycle]` in
+`sextantd.toml`. `HeartbeatCache` lives at `pkg/sextantd/heartbeat_cache.go`;
+the prompt_agent guard at `pkg/rpc/handlers/prompt.go`.
 
 ## Needs Lena's input
 
