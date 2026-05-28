@@ -1,30 +1,29 @@
 ---
 title: Supply-chain vulnerability scanning that works without GitHub Advanced Security
-status: in-progress
+status: resolved
 priority: P3
 created_at: 2026-05-28T12:35-07:00
+resolved_at: 2026-05-28T13:23-07:00
 labels: [feature, ci, security, supply-chain]
 discovered_in: PR #17 dropped `actions/dependency-review-action` after it failed with "Dependency review is not supported on this repository. Please ensure that Dependency graph is enabled along with GitHub Advanced Security" — GHAS is a paid add-on not available on private personal-account repos without enterprise
 ---
 
-## Resolution in progress (2026-05-28)
+## Resolution (2026-05-28, PR #18)
 
-Shipping the GHAS-free alternatives on branch
-`chore/dependabot-and-supply-chain`:
+Shipped on `chore/dependabot-and-supply-chain` (merged in PR #18):
 
 - **`govulncheck` in the Go CI job** — runs against `./...`,
   surfaces called-code + module-level Go vulns. Currently
   `continue-on-error: true` because two `github.com/docker/docker`
-  findings (GO-2026-4887, GO-2026-4883) have `Fixed in: N/A` and
-  block the gate from flipping. Flip to blocking once upstream
+  findings (GO-2026-4887, GO-2026-4883) have `Fixed in: N/A`.
+  **Follow-up:** flip to blocking once docker/docker ships
   patches.
 - **`npm audit --audit-level=high` in the TS CI job** — blocking
   from day one (local scan returned zero high-severity vulns).
 - **`.github/dependabot.yml`** — weekly bumps for `gomod`, `npm`,
   `github-actions`. Patch + minor grouped to avoid PR flood.
-  Major bumps still open individually.
-
-Flip status to `resolved` after the PR merges.
+  Major bumps still open individually. First Dependabot batch
+  (PRs #19–#22) merged cleanly on 2026-05-28.
 
 ## Summary
 
