@@ -74,7 +74,7 @@ func TestRunAgentCheckTerminalLifecycle(t *testing.T) {
 		{"ended", sextantproto.LifecycleEndedState, "ended", "sextant agents restart"},
 		{"crashed", sextantproto.LifecycleCrashedState, "ended", "sextant agents restart"},
 		{"paused", sextantproto.LifecyclePaused, "paused", "sextant agents restart"},
-		{"archived", sextantproto.LifecycleArchived, "archived", "spawn a new agent"},
+		{"archived", sextantproto.LifecycleArchived, "archived", "create a new agent"},
 		{"defined", sextantproto.LifecycleDefined, "stale_record", "sextant agents restart"},
 		{"lost", sextantproto.LifecycleLostState, "lost", "--preserve-session"},
 	}

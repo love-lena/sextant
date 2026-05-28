@@ -223,7 +223,7 @@ func (m *model) renderTable() string {
 	var rows []string
 	rows = append(rows, m.th.header.Render(header))
 	if len(m.agents) == 0 {
-		rows = append(rows, m.th.muted.Render("  (no agents yet — spawn one with `sextant agents spawn`)"))
+		rows = append(rows, m.th.muted.Render("  (no agents yet — create one with `sextant agents create`)"))
 		return strings.Join(rows, "\n")
 	}
 	for i, a := range m.agents {

@@ -23,14 +23,21 @@ import (
 func newAuditCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "audit",
-		Short: "Query or tail the audit log",
+		Short: "List or tail the audit log",
 	}
-	cmd.AddCommand(newAuditQueryCmd())
+	cmd.AddCommand(newAuditListCmd())
 	cmd.AddCommand(newAuditTailCmd())
 	return cmd
 }
 
-func newAuditQueryCmd() *cobra.Command {
+// newAuditListCmd — `sextant audit list [--since ...] [--actor ...] ...`.
+//
+// Renamed from `query` per the closed-exception verb policy
+// (plans/issues/feat-cli-verb-vocabulary-decision.md). `list` is the
+// default CRUD spelling and matches sibling list-shaped verbs like
+// `agents list`, `pending list`, `worktree list`. The old verb is kept
+// as a cobra Alias for one release.
+func newAuditListCmd() *cobra.Command {
 	var (
 		since  time.Duration
 		actor  string
@@ -39,9 +46,10 @@ func newAuditQueryCmd() *cobra.Command {
 		limit  int
 	)
 	cmd := &cobra.Command{
-		Use:   "query",
-		Short: "Query the ClickHouse audit table",
-		Args:  cobra.NoArgs,
+		Use:     "list",
+		Aliases: []string{"query"},
+		Short:   "List rows from the ClickHouse audit table (alias: query, scheduled for removal in v0.2)",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			cli, _, err := connectAgent(ctx, globalFlags.configDir)

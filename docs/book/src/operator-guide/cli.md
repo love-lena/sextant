@@ -105,8 +105,8 @@ Reads the daemon log (`<DataDir>/sextantd.log`). `--tail N` (default 50) prints 
 |------------------------------------------------------|----------------------------------------------------------------|
 | `agents list [--json]`                               | List every agent with UUID, name, template, lifecycle.         |
 | `agents show <agent> [--json]`                       | Full status for one agent (UUID or name).                      |
-| `agents spawn <name> --template <T> [--host <H>]`    | Create + start an agent. 60-second timeout.                    |
-| `agents kill <agent> [--grace 10s] [--archive]`      | Stop the container. `--archive` also transitions to archived.  |
+| `agents create <name> --template <T> [--host <H>]`   | Create + start an agent. 60-second timeout. (alias: `spawn`, removal in v0.2) |
+| `agents stop <agent> [--grace 10s] [--archive]`      | Gracefully stop the container. `--archive` also transitions to archived. (alias: `kill`, removal in v0.2) |
 | `agents restart <agent> [--preserve-session]`        | Stop and respawn. `--preserve-session` is reserved (always on). |
 | `agents archive <agent> [--all-dead]`                | Transition to archived. `--all-dead` bulk-archives `defined` agents. |
 | `agents prompt <agent> "<text>"`                     | Send a prompt to the agent's inbox.                            |
@@ -169,7 +169,7 @@ Runs a command in the agent's container (`exec_in_container` RPC, 5-minute timeo
 
 | Verb                                                                          | What it does                                                  |
 |-------------------------------------------------------------------------------|---------------------------------------------------------------|
-| `audit query [--since 24h] [--actor X] [--action Y] [--agent Z] [--limit N] [--json]` | ClickHouse `audit` table query.                  |
+| `audit list [--since 24h] [--actor X] [--action Y] [--agent Z] [--limit N] [--json]` | ClickHouse `audit` table query. (alias: `query`, removal in v0.2) |
 | `audit tail [--filter ...] [--json]`                                          | Live subscribe to `audit.>`.                                  |
 
 ## `tail`
@@ -194,7 +194,7 @@ Queries `telemetry_traces` for one trace, renders the spans as a tree (parent_sp
 |-----------------------------------------------------------------|---------------------------------------------------------|
 | `worktree list [--json]`                                        | All registered worktrees.                               |
 | `worktree create <name> [--base main] [--json]`                 | Create + check out a fresh branch.                      |
-| `worktree destroy <name> [--force] [--json]`                    | Remove dir + registry entry.                            |
+| `worktree delete <name> [--force] [--json]`                     | Remove dir + registry entry. (alias: `destroy`, removal in v0.2) |
 | `worktree merge <name> [--target main] [--json]`                | Merge under `locks.merge`.                              |
 | `worktree diff <name> [--against main] [--json]`                | `git diff` output.                                      |
 | `worktree prune [--apply] [--orphan-delete] [--json]`           | Enforce the 14d-archive / 30d-delete idle policy. Defaults to dry-run. |
@@ -217,6 +217,21 @@ sextant help       # prints the top-level usage
 ```
 
 **Note**: as of the snapshot's main, the dispatch table has 13 verbs (the 12 above plus `ask`). The `version` string `"sextant (M12)"` is a hand-rolled label, not a generated build version.
+
+## Deprecations
+
+Four CLI verbs were renamed on 2026-05-27 to align with the closed-exception verb policy (`conventions/tui-conventions.md` § "Command design"). The old spellings continue to resolve as cobra aliases for one release and are scheduled for removal in v0.2:
+
+| Old | New |
+|---|---|
+| `sextant agents spawn` | `sextant agents create` |
+| `sextant agents kill` | `sextant agents stop` |
+| `sextant audit query` | `sextant audit list` |
+| `sextant worktree destroy` | `sextant worktree delete` |
+
+Scripts using the old spellings continue to work without change. `sextant agents stop` is more accurate than `kill` — the implementation is a graceful container stop with name release, not SIGKILL. See `plans/issues/feat-cli-verb-vocabulary-decision.md` for the full rationale.
+
+The wire RPC verbs on NATS (`spawn_agent`, `kill_agent`, `query_audit`, `worktree_destroy`) are unchanged by this rename.
 
 ## Not yet implemented
 

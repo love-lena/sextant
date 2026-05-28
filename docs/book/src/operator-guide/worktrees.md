@@ -43,10 +43,10 @@ sextant worktree list
 sextant worktree create feat-bus-routing-001 --base main
 sextant worktree diff   feat-bus-routing-001 --against main
 sextant worktree merge  feat-bus-routing-001 --target main
-sextant worktree destroy feat-bus-routing-001 [--force]
+sextant worktree delete  feat-bus-routing-001 [--force]
 ```
 
-`--force` on `destroy` overrides the status guard that refuses to destroy non-archived worktrees.
+`--force` on `delete` overrides the status guard that refuses to delete non-archived worktrees. (The legacy spelling `destroy` continues to work as a one-release alias.)
 
 ## MCP tools (for agents)
 
@@ -145,7 +145,7 @@ Each pruner action publishes an envelope under `audit.>`:
 
 Archived dirs live under `archive_root` (default `~/.local/share/sextant/worktree-archive/`) with the original worktree name. The on-disk content of the worktree itself is moved; the git ref for the branch stays in the shared `.git` database. The KV entry's `status` becomes `archived`.
 
-Restoring an archived worktree is currently a manual operation — `worktree destroy` on the archived entry, then `worktree create <name>` to start fresh if you want the same name back.
+Restoring an archived worktree is currently a manual operation — `worktree delete` on the archived entry, then `worktree create <name>` to start fresh if you want the same name back.
 
 ## "Never force-push"
 
