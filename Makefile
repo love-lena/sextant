@@ -50,7 +50,10 @@ lint-ts: ts-install
 	cd $(TS_DIR) && $(NPM) run lint
 
 # lint-sidecar — tsc --noEmit for the sidecar entrypoint (includes test/ dir).
-lint-sidecar: sidecar-install
+# Depends on ts-build because @sextant/client is resolved through the npm
+# workspace at the repo root, and the sidecar's tsc reads its types from
+# clients/typescript/dist/index.d.ts.
+lint-sidecar: sidecar-install ts-build
 	cd $(SIDECAR_DIR) && $(NPM) run lint
 
 ## test — go test with race detector + TS integration suite + sidecar unit tests.
@@ -66,16 +69,20 @@ test-ts: ts-install
 
 # test-sidecar — vitest unit tests for the sidecar entrypoint classifier.
 # No external services required; runs entirely in-process.
-test-sidecar: sidecar-install
+# Depends on ts-build so `import "@sextant/client"` resolves through the npm
+# workspace to clients/typescript/dist/.
+test-sidecar: sidecar-install ts-build
 	cd $(SIDECAR_DIR) && $(NPM) test
 
-# ts-* targets — TypeScript client maintenance.
+# ts-install / sidecar-install — install all npm workspace deps from the
+# repo root. The root package.json declares `clients/typescript` and
+# `images/sidecar/entrypoint` as workspaces, so a single `npm install`
+# wires `@sextant/client` into the sidecar via the workspace graph instead
+# of the (formerly broken) checked-in symlink.
 ts-install:
-	@cd $(TS_DIR) && [ -d node_modules ] || $(NPM) ci
+	@[ -d node_modules ] || $(NPM) ci
 
-# sidecar-install — install sidecar entrypoint dev deps (idempotent).
-sidecar-install:
-	@cd $(SIDECAR_DIR) && [ -d node_modules ] || $(NPM) install
+sidecar-install: ts-install
 
 ts-codegen: ts-install
 	cd $(TS_DIR) && $(NPM) run codegen

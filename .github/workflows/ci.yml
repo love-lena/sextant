@@ -55,7 +55,7 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: clients/typescript/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: install nats-server
         run: |
@@ -65,8 +65,7 @@ jobs:
           sudo mv "/tmp/nats-server-v${NATS_VERSION}-linux-amd64/nats-server" /usr/local/bin/nats-server
           nats-server --version
 
-      - name: npm ci
-        working-directory: clients/typescript
+      - name: npm ci (workspace root)
         run: npm ci
 
       - name: npm run codegen (verify in sync)
@@ -78,15 +77,15 @@ jobs:
             exit 1
           fi
 
-      - name: npm run lint
+      - name: npm run lint (clients/typescript)
         working-directory: clients/typescript
         run: npm run lint
 
-      - name: npm run build
+      - name: npm run build (clients/typescript)
         working-directory: clients/typescript
         run: npm run build
 
-      - name: npm test
+      - name: npm test (clients/typescript)
         working-directory: clients/typescript
         run: npm test
 
@@ -108,7 +107,7 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: clients/typescript/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: make sidecar-image-test (build + acceptance smoke)
         run: make sidecar-image-test

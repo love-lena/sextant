@@ -52,6 +52,15 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   `agents stop` call behind `--yes`. The test had drifted from the
   CLI surface; without these fixes the test failed before the
   kill_agent flake even had a chance to fire.
+- **Sidecar `@sextant/client` resolution on fresh clone** — `make
+  lint-sidecar` and `make test-sidecar` no longer fail with `Cannot
+  find module '@sextant/client'`. The dependency is now wired through
+  an npm workspace at the repo root (`clients/typescript` +
+  `images/sidecar/entrypoint`), replacing the dangling
+  `node_modules/@sextant/client → ../../../client-ts` symlink that
+  pointed at a directory that doesn't exist in the repo. The sidecar
+  image build inlines an equivalent workspace root so the container
+  layout stays self-contained.
 
 ## [0.2.0] — 2026-05-28
 
