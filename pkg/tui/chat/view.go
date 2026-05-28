@@ -365,7 +365,7 @@ func wrapWithFirstWidth(text string, firstWidth, restWidth int) []string {
 	if text == "" {
 		return []string{""}
 	}
-	var out []string
+	out := []string{}
 	first := true
 	for _, paragraph := range strings.Split(text, "\n") {
 		budget := restWidth
@@ -404,7 +404,7 @@ func wordWrap(text string, firstWidth, restWidth int) []string {
 	if len(words) == 0 {
 		return []string{""}
 	}
-	var out []string
+	out := []string{}
 	budget := firstWidth
 	var line strings.Builder
 	for _, w := range words {

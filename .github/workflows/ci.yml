@@ -39,14 +39,8 @@ jobs:
           # checksum + caching, which the prior curl|sh approach
           # couldn't do reliably (release-asset SHA drift).
 
-      # nilaway is temporarily out of the CI gate — there are 4
-      # pre-existing pkg/tui/chat false-positives (turn.go slicing an
-      # `unassigned variable`, view.go's wordWrap result) that were
-      # masked when the upstream `make lint-go` step short-circuited
-      # the pipeline. Filed as chore-nilaway-tui-chat-false-positives.
-      # Re-enable here once those land.
-      - name: make test-go
-        run: make test-go
+      - name: make lint-nilaway test-go
+        run: make lint-nilaway test-go
 
   ts:
     name: lint + test (TypeScript)

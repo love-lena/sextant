@@ -79,7 +79,7 @@ type Frame struct {
 //     they have somewhere to live.
 //   - System notes and errors land as their own turns.
 func FramesToTurns(frames []Frame) []Turn {
-	var turns []Turn
+	turns := []Turn{}
 	// open queues unresolved tool calls per tool name. A FIFO queue
 	// (rather than a single slot) is what lets concurrent same-name
 	// tool calls — e.g. two `search` invocations in one turn — each
@@ -170,6 +170,9 @@ func FramesToTurns(frames []Frame) []Turn {
 }
 
 func lastAgentTurnIndex(turns []Turn) int {
+	if len(turns) == 0 {
+		return -1
+	}
 	for i := len(turns) - 1; i >= 0; i-- {
 		if turns[i].Actor == ActorAgent {
 			return i
