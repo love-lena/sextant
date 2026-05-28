@@ -53,6 +53,7 @@ import {
 
 import { classifyTool } from "./classifier.js";
 import { decodeInitialPrompt } from "./env.js";
+import { SIDECAR_VERSION } from "./version.js";
 import { publishLifecycle as publishLifecycleEnvelope } from "./lifecycle.js";
 import { connectOrExit } from "./sidecar-connect.js";
 import {
@@ -287,7 +288,7 @@ async function connectMCP(env: SidecarEnv): Promise<{ client: MCPClient; url: st
     },
   });
   const client = new MCPClient(
-    { name: "@sextant/sidecar", version: "0.1.0" },
+    { name: "@sextant/sidecar", version: SIDECAR_VERSION },
     { capabilities: {} },
   );
 
@@ -1185,7 +1186,7 @@ async function main(): Promise<void> {
       return;
     case "--version":
     case "version":
-      process.stdout.write("sextant-sidecar 0.2.0 (SDK driver wire-up)\n");
+      process.stdout.write(`sextant-sidecar ${SIDECAR_VERSION}\n`);
       return;
     default:
       process.stderr.write(`sextant-sidecar: unknown command ${JSON.stringify(cmd)}\n`);
