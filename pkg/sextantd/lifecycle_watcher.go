@@ -49,6 +49,7 @@ const watcherUpdateTimeout = 5 * time.Second
 //	crashed   → crashed
 //	paused    → paused
 //	archived  → archived
+//	lost      → lost
 //	turn_ended (and everything else) → no-op
 //
 // Exported so callers (and tests) can pin the mapping without re-reading
@@ -67,6 +68,8 @@ func MapLifecycleTransition(t sextantproto.LifecycleEvent) (sextantproto.Lifecyc
 		return sextantproto.LifecyclePaused, true
 	case sextantproto.LifecycleArchivedEvent:
 		return sextantproto.LifecycleArchived, true
+	case sextantproto.LifecycleLostEvent:
+		return sextantproto.LifecycleLostState, true
 	default:
 		// LifecycleTurnEnded and any unknown future event.
 		return "", false
@@ -320,22 +323,22 @@ func (w *LifecycleWatcher) applyTransition(key string, envelopeIncarnation uuid.
 }
 
 // watcherShouldYield reports whether the watcher must NOT overwrite
-// the current lifecycle with the proposed new state. The rule the
-// codex adversarial review pinned: operator-explicit terminals
-// (archived) outrank sidecar-driven transitions (ended/crashed).
+// the current lifecycle with the proposed new state. Two rules:
 //
-// Specifically: if the current state is archived, the watcher yields
-// to whatever set it (archive_agent). The watcher's incoming
-// envelope is necessarily from a prior incarnation at that point —
-// the agent can't be both archived and still running.
-//
-// `crashed` / `ended` are NOT in the yield set because the operator
-// can legitimately want to know that the agent's last incarnation
-// crashed even after spawn flipped it back to running on a restart;
-// that's the watcher's main job. The archive case is the one that
-// needs special handling.
-func watcherShouldYield(current sextantproto.LifecycleState, _ sextantproto.LifecycleState) bool {
-	return current == sextantproto.LifecycleArchived
+//  1. Operator-explicit `archived` outranks every sidecar-driven or
+//     daemon-inferred transition (existing rule).
+//  2. Sidecar-observed terminals (`ended`, `crashed`) outrank
+//     daemon-inferred `lost` — observed cause beats inferred absence.
+func watcherShouldYield(current, proposed sextantproto.LifecycleState) bool {
+	if current == sextantproto.LifecycleArchived {
+		return true
+	}
+	if proposed == sextantproto.LifecycleLostState &&
+		(current == sextantproto.LifecycleEndedState ||
+			current == sextantproto.LifecycleCrashedState) {
+		return true
+	}
+	return false
 }
 
 // isCASConflict reports whether the given error indicates that the

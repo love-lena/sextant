@@ -31,6 +31,7 @@ func TestMapLifecycleTransitionExhaustive(t *testing.T) {
 		{sextantproto.LifecycleArchivedEvent, sextantproto.LifecycleArchived, true},
 		{sextantproto.LifecycleRestartedEvent, sextantproto.LifecycleRunning, true},
 		{sextantproto.LifecycleCrashedEvent, sextantproto.LifecycleCrashedState, true},
+		{sextantproto.LifecycleLostEvent, sextantproto.LifecycleLostState, true},
 		{sextantproto.LifecycleTurnEnded, "", false},
 		{sextantproto.LifecycleEvent("future_event"), "", false},
 	}
@@ -174,6 +175,37 @@ func TestLifecycleWatcherDoesNotClobberArchived(t *testing.T) {
 	}
 	if kv.writeCount() != writesBefore {
 		t.Errorf("write count increased; archive-guard should have skipped the Update")
+	}
+}
+
+// TestWatcherShouldYield covers the yield-guard rules:
+//  1. archived always yields, regardless of proposed state.
+//  2. ended/crashed yield when proposed is lost (sidecar-observed outranks
+//     daemon-inferred absence).
+//  3. lost over running does not yield (daemon inference applies when there
+//     is no stronger observed state).
+//  4. running over lost does not yield (recovery path must be allowed).
+func TestWatcherShouldYield(t *testing.T) {
+	cases := []struct {
+		name     string
+		current  sextantproto.LifecycleState
+		proposed sextantproto.LifecycleState
+		want     bool
+	}{
+		{"lost over ended yields", sextantproto.LifecycleEndedState, sextantproto.LifecycleLostState, true},
+		{"lost over crashed yields", sextantproto.LifecycleCrashedState, sextantproto.LifecycleLostState, true},
+		{"lost over running does not yield", sextantproto.LifecycleRunning, sextantproto.LifecycleLostState, false},
+		{"running over lost does not yield (recovery)", sextantproto.LifecycleLostState, sextantproto.LifecycleRunning, false},
+		{"archived over anything yields", sextantproto.LifecycleArchived, sextantproto.LifecycleLostState, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := watcherShouldYield(tc.current, tc.proposed)
+			if got != tc.want {
+				t.Errorf("watcherShouldYield(%q, %q) = %v, want %v",
+					tc.current, tc.proposed, got, tc.want)
+			}
+		})
 	}
 }
 
