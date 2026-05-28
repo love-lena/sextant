@@ -126,6 +126,11 @@ sextant install itself).`,
 	cmd.AddCommand(newEventsCmd())
 	cmd.AddCommand(newThemeCmd())
 
+	// Discovery menu — opens a Huh-driven select listing every Tier 1
+	// component registered via pkg/tui/component. Per
+	// `plans/issues/feat-sextant-tui-discovery.md`.
+	cmd.AddCommand(newTUICmd())
+
 	// Backwards-compat aliases — each prints a stderr deprecation note
 	// pointing at the new home. Removed one minor release after landing.
 	cmd.AddCommand(newAskAliasCmd())
