@@ -7,6 +7,17 @@ labels: [bug, sidecar, nats, chat-tui, needs-input, operator-experience]
 discovered_in: chat TUI Checkpoint C — after `agents restart` resolved a NATS disconnect, the chat filled with response frames from prompts the operator had sent during the disconnect window
 ---
 
+## Deferred (2026-05-27)
+
+This bug's open questions (drain semantics, operator visibility,
+pairing with history) are downstream of the chat-vs-context
+design decision. The context half landed via
+[[feat-agents-context-view]]; the chat half is deferred (see
+[[feat-chat-tui-history]]'s Deferred note). **Don't pick this up
+until the chat surface gets its data-model conversation** — the
+recommended fix shape (chat history captures user prompts at
+submission time) only makes sense once chat history exists.
+
 ## Summary
 
 When the sidecar's NATS connection drops (see [[bug-sidecar-nats-disconnect-no-reconnect]]) and the operator continues sending prompts via `sextant conversation` / `sextant ask`, the prompts queue **durably** on the agent's `inbox` JetStream subject. The daemon publishes successfully — the bus has the messages — but the sidecar isn't subscribed so nothing is processed.
