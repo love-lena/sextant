@@ -11,6 +11,98 @@ import (
 	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
+// TestArchiveAgentRespectsConcurrentRestart pins the symmetric race
+// to TestRestartAgentRespectsConcurrentArchive: if a restart_agent
+// (or any other writer) bumps the definition's revision between
+// archive's initial Get and the final def write, archive must refuse
+// to overwrite the racer's state with lifecycle=archived.
+//
+// Without CAS on the final write, archive would silently clobber a
+// fresh `lifecycle=running` + new CurrentIncarnationID from a
+// concurrent restart, releasing the agent's name AND orphaning the
+// new container — the worst-shape of the race.
+//
+// Inject point: archive on a running agent issues two incs Puts in
+// sequence — spawn's initial incarnation persist (#1), then archive's
+// own "mark old exited" (#2). Hook on callIdx == 2 fires AFTER the
+// initial def Get and BEFORE the final def write, exactly the window
+// the CAS guard is meant to cover.
+func TestArchiveAgentRespectsConcurrentRestart(t *testing.T) {
+	deps, defs, incs, runner, _ := buildDeps(t)
+
+	spawnH := handlers.NewSpawnAgent(deps)
+	cap := &captureEmit{}
+	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+		Name: "delta", Template: "default",
+	}), cap.emit()); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	var spawnResp sextantproto.SpawnAgentResponse
+	if err := json.Unmarshal(cap.resp.Result, &spawnResp); err != nil {
+		t.Fatalf("decode spawn: %v", err)
+	}
+
+	// Race injection: on archive's "mark old exited" incs Put
+	// (callIdx == 2), simulate restart_agent racing in by flipping the
+	// def to running and bumping its revision. After the hook returns,
+	// archive proceeds to its final def write — the CAS must refuse to
+	// clobber the (now newer-revision) running record.
+	incs.putHook = func(_ string, callIdx int) error {
+		if callIdx == 2 {
+			entry, err := defs.Get(context.Background(), spawnResp.AgentID.String())
+			if err != nil {
+				return nil // best-effort race injection
+			}
+			var current sextantproto.AgentDefinition
+			if err := json.Unmarshal(entry.Value(), &current); err != nil {
+				return nil
+			}
+			current.Lifecycle = sextantproto.LifecycleRunning
+			current.CurrentIncarnationID = uuid.New()
+			current.Version++
+			raw, err := json.Marshal(current)
+			if err != nil {
+				return nil
+			}
+			_, _ = defs.Put(context.Background(), spawnResp.AgentID.String(), raw)
+		}
+		return nil
+	}
+
+	archiveH := handlers.NewArchiveAgent(handlers.ArchiveDeps{
+		Definitions:  defs,
+		Incarnations: incs,
+		Containers:   runner,
+	})
+	acap := &captureEmit{}
+	if err := archiveH(context.Background(), makeReq(t, sextantproto.ArchiveAgentRequest{
+		AgentID: spawnResp.AgentID,
+	}), acap.emit()); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	if acap.resp.Error == nil {
+		t.Fatal("expected an error — archive must refuse to overwrite the concurrent restart")
+	}
+	if acap.resp.Error.Code != sextantproto.ErrCodeBadRequest {
+		t.Errorf("Error.Code = %q, want %q (CAS conflict surfaces as bad_request)",
+			acap.resp.Error.Code, sextantproto.ErrCodeBadRequest)
+	}
+
+	// Definition must still be running. If archive's final write had
+	// gone through with lifecycle=archived, this assertion would fail
+	// and the operator's name release would have stomped a freshly
+	// restarted agent.
+	defSnap := defs.snapshot()
+	var def sextantproto.AgentDefinition
+	if err := json.Unmarshal(defSnap[spawnResp.AgentID.String()], &def); err != nil {
+		t.Fatalf("decode def: %v", err)
+	}
+	if def.Lifecycle != sextantproto.LifecycleRunning {
+		t.Errorf("def.Lifecycle = %s, want running (archive must not clobber the concurrent restart)",
+			def.Lifecycle)
+	}
+}
+
 // TestArchiveAgentReleasesName pins the full bundle that the
 // bug-kill-doesnt-release-name + feat-agents-archive-cli-verb pair was
 // filed to solve: an operator can spawn `foo`, kill `foo`, archive
