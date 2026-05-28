@@ -3,6 +3,7 @@ package sextantd
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,10 +38,64 @@ func makeDieEvent(agentID, incID uuid.UUID) containermgr.Event {
 		Action:      "die",
 		Time:        time.Now(),
 		Labels: map[string]string{
-			handlers.LabelAgentUUID:    agentID.String(),
+			handlers.LabelAgentUUID:     agentID.String(),
 			handlers.LabelIncarnationID: incID.String(),
 		},
 	}
+}
+
+// publishRecorder is the test-side capture for ContainerWatcher's publish
+// callback. The watcher invokes publishFn from a debounce goroutine that
+// outlives Run() — the recorder serializes writes with a mutex and exposes
+// a deterministic Wait/Count surface for the test.
+type publishRecorder struct {
+	mu       sync.Mutex
+	envs     []sextantproto.Envelope
+	signaled chan struct{}
+}
+
+func newPublishRecorder() *publishRecorder {
+	return &publishRecorder{signaled: make(chan struct{}, 8)}
+}
+
+func (p *publishRecorder) publish(_ context.Context, env sextantproto.Envelope) error {
+	p.mu.Lock()
+	p.envs = append(p.envs, env)
+	p.mu.Unlock()
+	select {
+	case p.signaled <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+func (p *publishRecorder) count() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.envs)
+}
+
+func (p *publishRecorder) snapshot() []sextantproto.Envelope {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]sextantproto.Envelope, len(p.envs))
+	copy(out, p.envs)
+	return out
+}
+
+// waitPublished blocks until n publishes have been recorded or the timeout
+// elapses. Returns true if n was reached.
+func (p *publishRecorder) waitPublished(t *testing.T, n int, timeout time.Duration) bool {
+	t.Helper()
+	deadline := time.After(timeout)
+	for p.count() < n {
+		select {
+		case <-p.signaled:
+		case <-deadline:
+			return false
+		}
+	}
+	return true
 }
 
 // TestContainerWatcherPublishesLostAfterDebounce emits a die event and
@@ -53,14 +108,9 @@ func TestContainerWatcherPublishesLostAfterDebounce(t *testing.T) {
 	src, evCh, errCh := newFakeEventSource()
 	defer close(errCh)
 
-	var published []sextantproto.Envelope
-	publishFn := func(_ context.Context, env sextantproto.Envelope) error {
-		published = append(published, env)
-		return nil
-	}
-
+	rec := newPublishRecorder()
 	const debounce = 20 * time.Millisecond
-	w := NewContainerWatcher(src, publishFn, WithDebounce(debounce))
+	w := NewContainerWatcher(src, rec.publish, WithDebounce(debounce))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -68,24 +118,27 @@ func TestContainerWatcherPublishesLostAfterDebounce(t *testing.T) {
 	runDone := make(chan error, 1)
 	go func() { runDone <- w.Run(ctx) }()
 
-	// Send the die event and then close the events channel so Run exits.
 	evCh <- makeDieEvent(agentID, incID)
-	// Wait for debounce to fire before closing the channel.
-	time.Sleep(debounce * 3)
-	close(evCh)
 
+	// Wait deterministically for the publish to land.
+	if !rec.waitPublished(t, 1, 2*time.Second) {
+		t.Fatalf("publish did not arrive within 2s; got %d", rec.count())
+	}
+
+	close(evCh)
 	select {
 	case <-runDone:
 	case <-time.After(3 * time.Second):
 		t.Fatal("Run did not return")
 	}
 
-	if len(published) != 1 {
-		t.Fatalf("published %d envelopes, want 1", len(published))
+	envs := rec.snapshot()
+	if len(envs) != 1 {
+		t.Fatalf("published %d envelopes, want 1", len(envs))
 	}
 
 	var payload sextantproto.LifecyclePayload
-	if err := json.Unmarshal(published[0].Payload, &payload); err != nil {
+	if err := json.Unmarshal(envs[0].Payload, &payload); err != nil {
 		t.Fatalf("decode payload: %v", err)
 	}
 	if payload.Transition != sextantproto.LifecycleLostEvent {
@@ -112,14 +165,9 @@ func TestContainerWatcherCancelsDebounceOnSidecarTerminal(t *testing.T) {
 	src, evCh, errCh := newFakeEventSource()
 	defer close(errCh)
 
-	var published []sextantproto.Envelope
-	publishFn := func(_ context.Context, env sextantproto.Envelope) error {
-		published = append(published, env)
-		return nil
-	}
-
+	rec := newPublishRecorder()
 	const debounce = 100 * time.Millisecond
-	w := NewContainerWatcher(src, publishFn, WithDebounce(debounce))
+	w := NewContainerWatcher(src, rec.publish, WithDebounce(debounce))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -127,7 +175,6 @@ func TestContainerWatcherCancelsDebounceOnSidecarTerminal(t *testing.T) {
 	runDone := make(chan error, 1)
 	go func() { runDone <- w.Run(ctx) }()
 
-	// Emit the die event.
 	evCh <- makeDieEvent(agentID, incID)
 
 	// Cancel the debounce by signalling a terminal sidecar lifecycle
@@ -149,8 +196,8 @@ func TestContainerWatcherCancelsDebounceOnSidecarTerminal(t *testing.T) {
 		t.Fatal("Run did not return")
 	}
 
-	if len(published) != 0 {
-		t.Errorf("published %d envelopes, want 0 (debounce should have been cancelled)", len(published))
+	if got := rec.count(); got != 0 {
+		t.Errorf("published %d envelopes, want 0 (debounce should have been cancelled)", got)
 	}
 }
 
@@ -165,14 +212,9 @@ func TestContainerWatcherIgnoresNonTerminalSidecarSignal(t *testing.T) {
 	src, evCh, errCh := newFakeEventSource()
 	defer close(errCh)
 
-	var published []sextantproto.Envelope
-	publishFn := func(_ context.Context, env sextantproto.Envelope) error {
-		published = append(published, env)
-		return nil
-	}
-
+	rec := newPublishRecorder()
 	const debounce = 20 * time.Millisecond
-	w := NewContainerWatcher(src, publishFn, WithDebounce(debounce))
+	w := NewContainerWatcher(src, rec.publish, WithDebounce(debounce))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -180,11 +222,10 @@ func TestContainerWatcherIgnoresNonTerminalSidecarSignal(t *testing.T) {
 	runDone := make(chan error, 1)
 	go func() { runDone <- w.Run(ctx) }()
 
-	// Emit the die event.
 	evCh <- makeDieEvent(agentID, incID)
 
-	// Notify with a non-terminal transition (turn_ended) — should NOT
-	// cancel the debounce.
+	// Non-terminal transition arrives during the debounce window. Must
+	// NOT cancel the timer.
 	time.Sleep(5 * time.Millisecond)
 	w.OnSidecarLifecycle(sextantproto.LifecyclePayload{
 		AgentUUID:     agentID,
@@ -192,17 +233,19 @@ func TestContainerWatcherIgnoresNonTerminalSidecarSignal(t *testing.T) {
 		Transition:    sextantproto.LifecycleTurnEnded,
 	})
 
-	// Wait past the debounce window.
-	time.Sleep(debounce * 3)
-	close(evCh)
+	// Wait deterministically for the (uncancelled) publish.
+	if !rec.waitPublished(t, 1, 2*time.Second) {
+		t.Fatalf("publish did not arrive within 2s; got %d", rec.count())
+	}
 
+	close(evCh)
 	select {
 	case <-runDone:
 	case <-time.After(3 * time.Second):
 		t.Fatal("Run did not return")
 	}
 
-	if len(published) != 1 {
-		t.Fatalf("published %d envelopes, want 1 (non-terminal signal must not cancel timer)", len(published))
+	if got := rec.count(); got != 1 {
+		t.Fatalf("published %d envelopes, want 1 (non-terminal signal must not cancel timer)", got)
 	}
 }
