@@ -42,7 +42,21 @@ type LifecyclePayload struct {
 	State         IncarnationState `json:"state"`
 	Reason        string           `json:"reason,omitempty"`
 	ExitCode      *int             `json:"exit_code,omitempty"`
+	// Source records what produced this lifecycle envelope. Empty
+	// (= sidecar) for back-compat with old payloads.
+	Source LifecycleSource `json:"source,omitempty"`
 }
+
+// LifecycleSource identifies the producer of a lifecycle envelope.
+type LifecycleSource string
+
+const (
+	// LifecycleSourceSidecar is the default (empty string) for back-compat
+	// with old payloads produced by sidecars before this field existed.
+	LifecycleSourceSidecar          LifecycleSource = ""
+	LifecycleSourceReconciler       LifecycleSource = "reconciler"
+	LifecycleSourceContainerWatcher LifecycleSource = "container_watcher"
+)
 
 // LifecycleEvent enumerates the kinds of transitions a lifecycle envelope
 // can record.
@@ -62,6 +76,11 @@ const (
 	// failed turn from a clean one. See
 	// specs/components/sidecar-image.md §"Sidecar entrypoint".
 	LifecycleTurnEnded LifecycleEvent = "turn_ended"
+	// LifecycleLostEvent is published by the daemon (reconciler or
+	// container watcher) when a container is absent and no sidecar
+	// lifecycle was observed. Distinct from LifecycleCrashedEvent which
+	// requires the sidecar itself to publish.
+	LifecycleLostEvent LifecycleEvent = "lost"
 )
 
 // AuditPayload records an auth-relevant action. Mirrors the ClickHouse
