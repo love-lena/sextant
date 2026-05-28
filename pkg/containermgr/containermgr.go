@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
@@ -723,6 +724,88 @@ func isVolumeNotFound(err error) bool {
 	}
 	s := err.Error()
 	return strings.Contains(s, "No such volume") || strings.Contains(s, "no such volume")
+}
+
+// Event is the projection ContainerWatcher consumers receive.
+type Event struct {
+	ContainerID string
+	Action      string    // "die", "start", etc.
+	Time        time.Time
+	Labels      map[string]string
+}
+
+// EventsFilter narrows the Events stream. Labels is ANDed; Events
+// (e.g. ["die"]) limits to listed actions. Empty == no filter.
+type EventsFilter struct {
+	Labels map[string]string
+	Events []string
+}
+
+// Events subscribes to the docker daemon's container event stream and
+// emits a projection on the returned channel. The error channel surfaces
+// stream-level errors (connection drop, decode failure); callers should
+// treat any value on `errs` as terminal and reconnect.
+//
+// Cancel ctx to stop. The channels are closed when the stream ends.
+func (m *Manager) Events(ctx context.Context, f EventsFilter) (<-chan Event, <-chan error) {
+	out := make(chan Event, 16)
+	errs := make(chan error, 1)
+	if m == nil {
+		errs <- fmt.Errorf("%w: nil manager", ErrDaemonUnavailable)
+		close(out)
+		close(errs)
+		return out, errs
+	}
+	args := filters.NewArgs()
+	args.Add("type", "container")
+	for k, v := range f.Labels {
+		if v == "" {
+			args.Add("label", k)
+		} else {
+			args.Add("label", k+"="+v)
+		}
+	}
+	for _, e := range f.Events {
+		args.Add("event", e)
+	}
+
+	msgCh, errCh := m.cli.Events(ctx, events.ListOptions{Filters: args})
+
+	go func() {
+		defer close(out)
+		defer close(errs)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case msg, ok := <-msgCh:
+				if !ok {
+					return
+				}
+				select {
+				case out <- Event{
+					ContainerID: msg.Actor.ID,
+					Action:      string(msg.Action),
+					Time:        time.Unix(0, msg.TimeNano),
+					Labels:      msg.Actor.Attributes,
+				}:
+				case <-ctx.Done():
+					return
+				}
+			case err, ok := <-errCh:
+				if !ok || err == nil {
+					return
+				}
+				select {
+				case errs <- err:
+				default:
+				}
+				return
+			}
+		}
+	}()
+
+	return out, errs
 }
 
 // isNotFound returns true for the Docker SDK's "no such container"
