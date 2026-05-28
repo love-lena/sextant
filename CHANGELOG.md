@@ -15,6 +15,13 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
 ### Changed
 
 ### Fixed
+- **Sidecar `version` reported a stale hard-coded string** —
+  [[bug-sidecar-version-string-stale]]. The `version` command printed
+  `sextant-sidecar 0.2.0` while `package.json` (and the MCP
+  client-identity handshake) said `0.1.0`. Both call sites now read the
+  version from `package.json` at runtime via a new `src/version.ts`
+  (`SIDECAR_VERSION`), so they can't drift from the manifest or each
+  other; a test pins the invariant.
 
 ## [0.3.0] — 2026-05-28
 

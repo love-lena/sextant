@@ -1,69 +1,77 @@
 ---
-title: Split the four version surfaces onto independently-bumped lines
-status: open
+title: Decouple the proto + TS-client version lines (gated, not backlog)
+status: deferred
 priority: P3
 created_at: 2026-05-28T15:40-07:00
 labels: [feature, versioning, protocol, build]
-discovered_in: 2026-05-28 versioning-policy rewrite — `conventions/versioning.md` documents four version surfaces (binary / proto / ts-client / sidecar) as the target, but three of them are currently coupled-or-stale rather than independently bumped by their own contract's breakage
+discovered_in: 2026-05-28 versioning-policy rewrite — `conventions/versioning.md` documents four version surfaces as the target, but two of them (proto, ts-client) are coupled-or-stale; this ticket tracks the gap deliberately rather than as active work
 ---
 
-## Summary
+## Status: deferred — both remaining pieces are gated on a trigger
 
-`conventions/versioning.md` adopts the target model: four version
-surfaces, each bumped by *its own* consumer's breakage. The docs are
-written to the strict target; this ticket tracks closing the code gap.
+`conventions/versioning.md` adopts the target model (four version
+surfaces, each bumped by its own consumer's breakage). Of the three
+non-binary surfaces:
 
-Current reality as of v0.3.0:
+- **Sidecar self-report** — DONE. Fixed in
+  [[bug-sidecar-version-string-stale]] (it was a stale-string bug, not
+  a version-line decision). Sourced from `package.json` now.
+- **Proto line** — deferred; gated on wire-format negotiation (below).
+- **TS client library** — deferred; gated on a publish decision (below).
 
-| Surface | Where | State |
-|---------|-------|-------|
-| Binary semver | `VERSION` → `pkg/version.Version` | source of truth; correct |
-| Proto version | `sextantproto.ProtoVersion` + TS `PROTO_VERSION` | **coupled** — tracks the binary number by convention, bumped in lockstep on the release cut |
-| TS client library | `clients/typescript/package.json` `version` | **stale** — stuck at `0.1.0`, doesn't move with releases |
-| Sidecar self-report | hardcoded string in `images/sidecar/entrypoint/src/index.ts` (~line 1188, `"sextant-sidecar 0.2.0 …"`) | **stale + hand-edited** — drifts on its own |
+Neither remaining piece is actionable today. This ticket exists so the
+gap is documented, not so it reads as pending work. Don't pick it up
+without the trigger having fired.
 
-## Why this matters
+## Proto line — gated on wire-format negotiation
 
-A wire-shape change that's invisible to operators should bump the proto
-line without forcing a binary bump (and vice versa). A change to
-`@sextant/client`'s exported surface should bump the library line for
-importers regardless of what the daemon did. Coupling them means every
-number lies about some consumer. Today we paper over it by bumping proto
-with the binary and ignoring the other two — fine at this scale, wrong
-as soon as the rates diverge.
+**Why deferred.** The proto version is currently *decorative*: it's
+stamped on every envelope, but the only checks anywhere are
+`ProtoVersion == ""` (is it set at all). Nothing compares the value;
+nothing rejects on a mismatch. There are no independent peers running
+mismatched wire versions — daemon and CLI build from the same commit,
+the sidecar is a pinned image. So coupling proto to the binary semver
+costs nothing real today, and splitting it now solves a problem that
+doesn't bite.
 
-## Shape
+**Trigger.** When wire-format negotiation becomes a thing — peers
+advertising supported proto versions and rejecting/adapting on
+mismatch — the proto line needs to bump on its own discipline (additive
+wire change → minor; removed/changed shape → major), independent of
+`VERSION`. That negotiation feature is the real work; the version split
+falls out of it. The `pkg/sextantproto/doc.go` comment already flags
+this.
 
-1. **Proto line independence.** Give `ProtoVersion` its own bump
-   discipline (additive wire change → minor; removed/changed shape →
-   major) decoupled from `VERSION`. Decide whether `ProtoVersion` and
-   the binary semver can share a value transiently or should be visibly
-   distinct from the start. Wire-format negotiation (peers advertising
-   supported proto versions) is the eventual MAJOR-proto trigger — file
-   a sub-ticket if/when a proto MAJOR is actually needed.
-2. **TS client library versioning.** Move `clients/typescript`'s
-   `package.json` version on its own cadence tied to the exported
-   surface. Decide if it's published or stays `private: true`; if
-   published, wire a release step.
-3. **Sidecar version from the build.** Source the sidecar self-report
-   from a build-injected value (mirror the Go `-ldflags` approach)
-   instead of a hand-edited string, so it can't drift.
-4. **Doc reconciliation.** Once the lines are independent, drop the
-   "Current reality: partially coupled" caveat block in
-   `conventions/versioning.md` and the matching note in `CLAUDE.md`.
+**Until then.** Keep `ProtoVersion` tracking the binary number; bump it
+on the release cut and note the wire delta in the changelog `Changed`
+section (as v0.3.0 did).
 
-## Acceptance
+## TS client library — gated on a publish decision
 
-- `ProtoVersion` bumps are driven by wire changes, not by the binary
-  cut, and the policy doc reflects that without a "currently coupled"
-  caveat.
-- `clients/typescript` version moves with its exported surface.
-- The sidecar version string is build-injected, not hand-edited.
-- `conventions/versioning.md` "Current reality" caveat is removed.
+**Why deferred.** A version number is a contract with a consumer.
+`@sextant/client` has no external consumers today: it's an internal
+workspace dependency the sidecar imports, never published, and its
+version has never moved off `0.1.0`. Bumping it on every release would
+be busywork on a number nobody reads.
+
+**Trigger / decision.** Decide whether `@sextant/client` gets published.
+- If **no** (likely, for now): leave it at `0.1.0`, treat it as an
+  internal workspace dep, and consider this part closed.
+- If **yes**: that's a "publish the TS client" initiative (npm
+  publishConfig, a release step, a README/usage surface) where
+  independent versioning tied to the exported API falls out naturally.
+  File that as its own ticket when the decision is made.
+
+## Doc reconciliation (when both above resolve)
+
+Once the proto line is independent and the TS-client question is
+settled, drop the "Current reality: partially coupled" caveat block in
+`conventions/versioning.md` and the matching note in `CLAUDE.md`.
 
 ## Related
 
+- `[[bug-sidecar-version-string-stale]]` — the one piece that was
+  actually actionable; resolved.
 - `conventions/versioning.md` — the target model this closes the gap to.
-- `CLAUDE.md` § "Versioning + PR policy" — the short form.
-- `pkg/sextantproto/doc.go` — `ProtoVersion` lives here; the comment
-  already anticipates a split + wire-format-negotiation follow-up.
+- `pkg/sextantproto/doc.go` — `ProtoVersion`; comment anticipates the
+  split + wire-format-negotiation follow-up.
