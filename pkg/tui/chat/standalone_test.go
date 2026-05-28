@@ -159,12 +159,17 @@ func TestStandaloneHeaderDotReflectsLifecycle(t *testing.T) {
 // table directly: each lifecycle transition pulls a distinct style.
 // Doesn't depend on the terminal color profile — compares the
 // lipgloss.Style values returned by the dot picker.
+//
+// Also asserts the state word appears in the rendered header for
+// each non-empty transition (feat-tui-chat-header-name-and-lifecycle):
+// the word must accompany the dot so operators don't have to memorize
+// the color palette to read a state.
 func TestRenderLifecycleDotSelectsRoleByTransition(t *testing.T) {
 	cases := []struct {
 		name       string
 		hasL       bool
 		transition sextantproto.LifecycleEvent
-		wantClass  string // success / attention / destructive / muted
+		wantClass  string // success / attention / destructive / lost / muted
 	}{
 		{"none", false, "", "muted"},
 		{"started", true, sextantproto.LifecycleStarted, "success"},
@@ -187,6 +192,19 @@ func TestRenderLifecycleDotSelectsRoleByTransition(t *testing.T) {
 			got := s.lifecycleDotRoleClass()
 			if got != tc.wantClass {
 				t.Errorf("lifecycleDotRoleClass = %q, want %q", got, tc.wantClass)
+			}
+			// Render the header chrome and confirm the state word is
+			// visible. The "none" case (no envelope seen) is exempt —
+			// the header omits the `· <state>` segment entirely.
+			header := strings.SplitN(s.renderHeader(80), "\n", 2)[0]
+			if !tc.hasL {
+				if strings.Contains(header, " · ") {
+					t.Errorf("header rendered a state segment with no lifecycle: %q", header)
+				}
+				return
+			}
+			if !strings.Contains(header, string(tc.transition)) {
+				t.Errorf("header missing state word %q: %q", tc.transition, header)
 			}
 		})
 	}
