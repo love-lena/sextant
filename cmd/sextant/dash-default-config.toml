@@ -1,0 +1,15 @@
+# Default sextant dash layout. Override at
+# ~/.config/sextant/config.toml; same schema. Print this default
+# via `sextant dash --dump-default-config`.
+
+[[dash.panes]]
+id = "agents"
+command = "agents list"
+
+[[dash.panes]]
+id = "conversation"
+command = "conversation $selected_agent"
+
+[[dash.panes]]
+id = "pending"
+command = "pending list"
