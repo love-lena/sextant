@@ -258,6 +258,7 @@ export interface LifecyclePayload {
   state: string;
   reason?: string;
   exit_code?: number;
+  source?: string;
 }
 /**
  * This interface was referenced by `SextantProtoBundle`'s JSON-Schema

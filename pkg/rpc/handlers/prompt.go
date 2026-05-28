@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
@@ -14,11 +15,24 @@ import (
 	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
+// HeartbeatLookup is the narrow surface prompt_agent (and future
+// freshness-sensitive RPCs) need on the heartbeat cache.
+type HeartbeatLookup interface {
+	LastSeen(id uuid.UUID) (time.Time, bool)
+}
+
 // PromptDeps is the dep bag for the prompt_agent handler.
 type PromptDeps struct {
 	Definitions AgentMutableKV
 	NATS        *nats.Conn
 	From        sextantproto.Address
+	// Heartbeats, when non-nil, gates the prompt on heartbeat freshness.
+	// Nil (in tests that don't exercise the path) skips the check.
+	Heartbeats            HeartbeatLookup
+	HeartbeatStaleness    time.Duration
+	HeartbeatStartupGrace time.Duration
+	// Now is injected for deterministic test timestamps. Defaults to time.Now.
+	Now func() time.Time
 }
 
 // PromptPayload is the body of an envelope published to
@@ -41,6 +55,9 @@ type PromptPayload struct {
 // pass-through to the operator without rewording.
 func promptUnreachableMessage(agentID uuid.UUID, lifecycle sextantproto.LifecycleState) string {
 	switch lifecycle {
+	case sextantproto.LifecycleLostState:
+		return fmt.Sprintf("agent %s lifecycle=lost; restart with `sextant agents restart %s --preserve-session`",
+			agentID, agentID)
 	case sextantproto.LifecycleEndedState, sextantproto.LifecycleCrashedState:
 		return fmt.Sprintf("agent %s lifecycle=%s; restart with `sextant agents restart %s`",
 			agentID, lifecycle, agentID)
@@ -102,6 +119,35 @@ func NewPromptAgent(deps PromptDeps) rpc.Handler {
 		if def.Lifecycle != sextantproto.LifecycleRunning {
 			return emitErr(emit, sextantproto.ErrCodeAgentNotReachable,
 				promptUnreachableMessage(args.AgentID, def.Lifecycle))
+		}
+
+		// Heartbeat staleness guard (L1). Only runs when the cache is wired.
+		if deps.Heartbeats != nil {
+			nowFn := deps.Now
+			if nowFn == nil {
+				nowFn = time.Now
+			}
+			now := nowFn()
+			staleness := deps.HeartbeatStaleness
+			if staleness == 0 {
+				staleness = 30 * time.Second
+			}
+			grace := deps.HeartbeatStartupGrace
+			if grace == 0 {
+				grace = 60 * time.Second
+			}
+			last, ok := deps.Heartbeats.LastSeen(args.AgentID)
+			if !ok {
+				if !def.UpdatedAt.IsZero() && now.Sub(def.UpdatedAt.Time) > grace {
+					return emitErr(emit, sextantproto.ErrCodeAgentNotReachable,
+						fmt.Sprintf("agent %s has no heartbeat (>%s past startup); run `sextant agents check %s`",
+							args.AgentID, grace, args.AgentID))
+				}
+			} else if age := now.Sub(last); age > staleness {
+				return emitErr(emit, sextantproto.ErrCodeAgentNotReachable,
+					fmt.Sprintf("agent %s heartbeat stale (last %s ago, threshold %s); run `sextant agents check %s`",
+						args.AgentID, age.Truncate(time.Second), staleness, args.AgentID))
+			}
 		}
 
 		payload := PromptPayload{

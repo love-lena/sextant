@@ -25,6 +25,7 @@ func TestStyleRoleTokensDefined(t *testing.T) {
 		"statusBar":           func() string { return s.StatusBar.Render("x") },
 		"keyHintKey":          func() string { return s.KeyHintKey.Render("x") },
 		"keyHintDesc":         func() string { return s.KeyHintDesc.Render("x") },
+		"lost":                func() string { return s.Lost.Render("x") },
 		"muted":               func() string { return s.Muted.Render("x") },
 		"headerName":          func() string { return s.HeaderName.Render("x") },
 		"headerBranch":        func() string { return s.HeaderBranch.Render("x") },

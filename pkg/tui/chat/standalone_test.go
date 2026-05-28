@@ -175,6 +175,7 @@ func TestRenderLifecycleDotSelectsRoleByTransition(t *testing.T) {
 		{"archived", true, sextantproto.LifecycleArchivedEvent, "attention"},
 		{"ended", true, sextantproto.LifecycleEnded, "destructive"},
 		{"crashed", true, sextantproto.LifecycleCrashedEvent, "destructive"},
+		{"lost", true, sextantproto.LifecycleLostEvent, "lost"},
 		{"unknown", true, sextantproto.LifecycleEvent("future"), "muted"},
 	}
 	for _, tc := range cases {

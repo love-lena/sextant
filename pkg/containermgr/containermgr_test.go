@@ -170,3 +170,50 @@ func TestNewFailsWithBadSocketPath(t *testing.T) {
 		t.Fatalf("err = %v, want wrap of ErrDaemonUnavailable", err)
 	}
 }
+
+func TestEventsDeliversDieForLabeledContainer(t *testing.T) {
+	requireDocker(t)
+
+	mgr, err := New(Config{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	pullIfMissing(t, mgr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	label := "sextant.test_run"
+	value := t.Name()
+
+	events, errs := mgr.Events(ctx, EventsFilter{
+		Labels: map[string]string{label: value},
+		Events: []string{"die"},
+	})
+
+	c, err := mgr.Run(ctx, ContainerSpec{
+		Image:  alpineImage,
+		Cmd:    []string{"true"},
+		Labels: map[string]string{label: value},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.ForceRemoveByLabel(context.Background(), label, value) })
+
+	select {
+	case ev := <-events:
+		if ev.ContainerID != c.ID {
+			t.Errorf("event ContainerID = %s, want %s", ev.ContainerID, c.ID)
+		}
+		if ev.Labels[label] != value {
+			t.Errorf("event missing label %s=%s", label, value)
+		}
+	case err := <-errs:
+		t.Fatalf("events error: %v", err)
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for die event")
+	}
+}
