@@ -11,6 +11,11 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
 ## [Unreleased]
 
 ### Added
+- **`sextant tui` Huh-driven discovery menu** — lists every Tier 1
+  component registered via `pkg/tui/component`'s registry and
+  launches the corresponding `-i` surface on selection. New
+  components appear automatically as they self-register via
+  `init()`.
 - **TTY interactive confirm for destructive verbs** — `agents stop`,
   `agents restart`, `agents archive` (incl. `--all-dead`), `daemon
   stop`, `daemon restart` now render a `huh.NewConfirm` prompt when
