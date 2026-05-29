@@ -22,6 +22,16 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   `NoIFlag` to drive this.
 
 ### Fixed
+- **`sextant agents context <agent>` leaked a raw filesystem error** when
+  the agent's per-agent projects dir doesn't exist on disk (agent spawned
+  before the context bind-mount, or no SDK turn flushed yet) — the daemon
+  reports a `SessionLog` in KV but the dir was never created. The command
+  printed `read projects dir …: no such file or directory`; it now returns
+  the same friendly, actionable message as the missing-session-file case
+  (`agent has no on-disk session yet … prompt the agent then retry`).
+  Affects both the CLI dump and `agents context <agent> -i`. Found by
+  `sextant agents context assistant` against an agent with a stale KV
+  session pointer.
 - **`sextant tui` could only launch 5 of its 9 entries; `q`/`esc` didn't
   quit.** Selecting chat / agent-detail / agents-context / traces errored
   (`accepts 1 arg(s)` / `unknown shorthand flag 'i'`) because the menu ran

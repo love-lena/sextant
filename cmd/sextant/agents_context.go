@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
@@ -118,6 +119,14 @@ stream:
 func resolveSessionJSONLPath(projectsDir, sessionID string) (string, error) {
 	entries, err := os.ReadDir(projectsDir)
 	if err != nil {
+		// A missing projects dir is the same operator situation as a
+		// missing session file: the agent has no on-disk session yet
+		// (no SDK turn flushed, or it predates the per-agent context
+		// bind-mount). Surface the friendly, actionable message instead
+		// of leaking a raw os.ReadDir ENOENT classified as INTERNAL.
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", fmt.Errorf("agent has no on-disk session yet (no SDK turn has been flushed, or it was spawned before the context bind-mount landed); prompt the agent then retry")
+		}
 		return "", fmt.Errorf("read projects dir %s: %w", projectsDir, err)
 	}
 	target := sessionID + ".jsonl"

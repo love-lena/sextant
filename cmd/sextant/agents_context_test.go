@@ -269,6 +269,34 @@ func TestResolveSessionJSONLPath_PerCwdSubdir(t *testing.T) {
 	}
 }
 
+// TestResolveSessionJSONLPath_DirMissing — when the per-agent projects
+// dir doesn't exist at all (agent spawned before the context bind-mount,
+// or no turn flushed), the operator must get a friendly, actionable
+// message — NOT a raw os.ReadDir ENOENT leaked as INTERNAL. This is the
+// `sextant agents context assistant` bug: a non-nil SessionLog in KV
+// pointing at a dir that was never created on disk.
+//
+// Pattern (per plans/issues/feat-tui-launch-acceptance-gate.md): assert
+// error *messages* on operator surfaces are friendly + actionable and
+// don't leak filesystem internals.
+func TestResolveSessionJSONLPath_DirMissing(t *testing.T) {
+	t.Parallel()
+	missing := filepath.Join(t.TempDir(), "never-created", "claude-projects")
+	_, err := resolveSessionJSONLPath(missing, "abc-123")
+	if err == nil {
+		t.Fatal("expected error for a non-existent projects dir")
+	}
+	// Must NOT leak the raw os.ReadDir error.
+	if strings.Contains(err.Error(), "read projects dir") ||
+		strings.Contains(err.Error(), "no such file or directory") {
+		t.Errorf("leaked raw filesystem error to the operator: %v", err)
+	}
+	// Must be actionable.
+	if !strings.Contains(err.Error(), "retry") {
+		t.Errorf("error is not actionable (no next step): %v", err)
+	}
+}
+
 // TestResolveSessionJSONLPath_NotFound — surfaces a readable error
 // when no matching JSONL exists. Common during the warm-up window
 // before the sidecar has flushed its first turn.
