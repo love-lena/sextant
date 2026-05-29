@@ -17,6 +17,7 @@ type recordingLauncher struct {
 	tracesID           string
 	contextProjectsDir string
 	contextSessionID   string
+	daemonLogPath      string
 	configDir          string
 	selectedID         string
 	returnErr          error
@@ -45,6 +46,11 @@ func (r *recordingLauncher) RunAgentsContext(_ context.Context, configDir, proje
 	r.contextProjectsDir = projectsDir
 	r.contextSessionID = sessionID
 	r.configDir = configDir
+	return r.returnErr
+}
+
+func (r *recordingLauncher) RunDaemonLogs(_ context.Context, logPath string) error {
+	r.daemonLogPath = logPath
 	return r.returnErr
 }
 
@@ -134,6 +140,20 @@ func TestPendingListIFlagRoutesToTUI(t *testing.T) {
 	}
 	if !rec.pendingCalled {
 		t.Fatal("pending TUI launcher not invoked under -i")
+	}
+}
+
+// TestDaemonLogsIFlagRegistered confirms the `-i` / `--tui` flag is
+// wired on `daemon logs`. (Full routing resolves the daemon config
+// before the launcher, so launcher coverage lives in the
+// pkg/tui/logsview tests.)
+func TestDaemonLogsIFlagRegistered(t *testing.T) {
+	cmd := newDaemonLogsCmd()
+	if cmd.Flags().Lookup("tui") == nil {
+		t.Fatal("daemon logs missing --tui flag")
+	}
+	if cmd.Flags().ShorthandLookup("i") == nil {
+		t.Fatal("daemon logs missing -i shorthand")
 	}
 }
 

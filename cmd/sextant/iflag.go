@@ -32,8 +32,10 @@ import (
 	"github.com/love-lena/sextant/pkg/sessionlog"
 	"github.com/love-lena/sextant/pkg/tui/agents"
 	"github.com/love-lena/sextant/pkg/tui/contextview"
+	"github.com/love-lena/sextant/pkg/tui/logsview"
 	"github.com/love-lena/sextant/pkg/tui/pending"
 	"github.com/love-lena/sextant/pkg/tui/traces"
+	"github.com/love-lena/sextant/pkg/tui/widget"
 )
 
 // tuiLauncher is the seam tests substitute to assert that the `-i`
@@ -44,6 +46,7 @@ type tuiLauncher interface {
 	RunPendingList(ctx context.Context, configDir string) error
 	RunTracesShow(ctx context.Context, configDir, traceID string) error
 	RunAgentsContext(ctx context.Context, configDir, projectsDir, sessionID string) error
+	RunDaemonLogs(ctx context.Context, logPath string) error
 }
 
 // realTUI is the live launcher; tests overwrite via newAgentsListIRunE's
@@ -64,6 +67,28 @@ func (realTUI) RunTracesShow(ctx context.Context, configDir, traceID string) err
 
 func (realTUI) RunAgentsContext(ctx context.Context, _ /*configDir*/, projectsDir, sessionID string) error {
 	return runAgentsContextTUI(ctx, projectsDir, sessionID)
+}
+
+func (realTUI) RunDaemonLogs(ctx context.Context, logPath string) error {
+	return runDaemonLogsTUI(ctx, logPath)
+}
+
+// runDaemonLogsTUI tails the daemon log file and runs the logsview
+// Component over the line stream.
+func runDaemonLogsTUI(ctx context.Context, logPath string) error {
+	src := widget.TailSource(logPath)
+	m := logsview.New(logsview.Options{Events: src.Events()})
+	prog := tea.NewProgram(logsview.NewStandalone(m), tea.WithAltScreen(), tea.WithContext(ctx))
+	go func() {
+		<-ctx.Done()
+		_ = src.Close()
+	}()
+	if _, err := prog.Run(); err != nil {
+		_ = src.Close()
+		return fmt.Errorf("tui: %w", err)
+	}
+	_ = src.Close()
+	return nil
 }
 
 // runAgentsContextTUI tails the agent's session JSONL and runs the

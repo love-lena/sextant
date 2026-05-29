@@ -133,6 +133,7 @@ table. Exit 0 if alive, 1 if not running or stale.`,
 // newDaemonLogsCmd wires `sextant daemon logs`.
 func newDaemonLogsCmd() *cobra.Command {
 	var follow bool
+	var interactive bool
 	var tail int
 	cmd := &cobra.Command{
 		Use:   "logs",
@@ -147,11 +148,16 @@ func newDaemonLogsCmd() *cobra.Command {
 				return err
 			}
 			logPath := resolveLogPath(cfg)
+			if interactive {
+				return activeTUILauncher.RunDaemonLogs(cmd.Context(), logPath)
+			}
 			return doLogs(cmd.Context(), cmd.OutOrStdout(), logPath, tail, follow)
 		},
 	}
 	cmd.Flags().BoolVar(&follow, "follow", false,
 		"stream new bytes (like tail -f) until cancelled")
+	cmd.Flags().BoolVarP(&interactive, "tui", "i", false,
+		"open the interactive tailing log viewport")
 	cmd.Flags().IntVar(&tail, "tail", 50,
 		"number of trailing lines to print before following")
 	return cmd
