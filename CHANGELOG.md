@@ -11,6 +11,13 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
 ## [Unreleased]
 
 ### Added
+- **`sextant agents show <id> -i` detail inspector** — `agents show -i`
+  now opens a `DetailPane` inspector (`pkg/tui/agentdetail`) instead of
+  the focused agents list: lifecycle / template / version / session /
+  owning-worktree, assembled client-side from `get_agent_status` +
+  `list_agents` + `worktree_list` (no new RPC; degrades gracefully when
+  a field is missing — RFC §6 †). Self-registers for `sextant tui`.
+  Per the RFC P2.
 - **`sextant audit list -i`** — interactive audit-log browser
   (`pkg/tui/auditlist`): a `ListPane` over the `query_audit` RPC (last
   24h; j/k nav, `/` filter, `r` refresh, Enter emits a detail intent).

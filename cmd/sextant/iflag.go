@@ -30,6 +30,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/love-lena/sextant/pkg/sessionlog"
+	"github.com/love-lena/sextant/pkg/tui/agentdetail"
 	"github.com/love-lena/sextant/pkg/tui/agents"
 	"github.com/love-lena/sextant/pkg/tui/auditlist"
 	"github.com/love-lena/sextant/pkg/tui/contextview"
@@ -51,6 +52,7 @@ type tuiLauncher interface {
 	RunDaemonLogs(ctx context.Context, logPath string) error
 	RunWorktreeList(ctx context.Context, configDir string) error
 	RunAuditList(ctx context.Context, configDir string) error
+	RunAgentsDetail(ctx context.Context, configDir, agentID string) error
 }
 
 // realTUI is the live launcher; tests overwrite via newAgentsListIRunE's
@@ -83,6 +85,27 @@ func (realTUI) RunWorktreeList(ctx context.Context, configDir string) error {
 
 func (realTUI) RunAuditList(ctx context.Context, configDir string) error {
 	return runAuditListTUI(ctx, configDir)
+}
+
+func (realTUI) RunAgentsDetail(ctx context.Context, configDir, agentID string) error {
+	return runAgentsDetailTUI(ctx, configDir, agentID)
+}
+
+// runAgentsDetailTUI dials the daemon, builds the agentdetail Component
+// seeded with agentID, and runs it.
+func runAgentsDetailTUI(ctx context.Context, configDir, agentID string) error {
+	cli, _, err := connectAgent(ctx, configDir)
+	if err != nil {
+		return err
+	}
+	defer cli.Close() //nolint:errcheck // best-effort close
+
+	m := agentdetail.New(agentdetail.Options{Bus: cli, AgentID: agentID})
+	prog := tea.NewProgram(agentdetail.NewStandalone(m, agentID), tea.WithAltScreen(), tea.WithContext(ctx))
+	if _, err := prog.Run(); err != nil {
+		return fmt.Errorf("tui: %w", err)
+	}
+	return nil
 }
 
 // runAuditListTUI dials the daemon, builds the auditlist Component, and
@@ -354,7 +377,7 @@ func addAgentsListIFlag(cmd *cobra.Command) {
 func addAgentsShowIFlag(cmd *cobra.Command) {
 	var interactive bool
 	cmd.Flags().BoolVarP(&interactive, "tui", "i", false,
-		"open the interactive agents TUI seeded on this agent")
+		"open the interactive agent detail inspector")
 	originalRunE := cmd.RunE
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		if interactive {
@@ -368,7 +391,7 @@ func addAgentsShowIFlag(cmd *cobra.Command) {
 			if resolveErr != nil {
 				return errUserUsage(fmt.Sprintf("agent: %v", resolveErr))
 			}
-			return activeTUILauncher.RunAgentsList(ctx, globalFlags.configDir, id.String())
+			return activeTUILauncher.RunAgentsDetail(ctx, globalFlags.configDir, id.String())
 		}
 		return originalRunE(cmd, args)
 	}
