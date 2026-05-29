@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/love-lena/sextant/pkg/sessionlog"
 )
 
 // fixtureLines is the JSONL the tests below stream through the
@@ -41,8 +43,8 @@ func TestParseContextModeAcceptsAllCanonical(t *testing.T) {
 	t.Parallel()
 	cases := []string{"raw", "conversation", "tools", "thinking", "usage", "tree", "", "RAW", " usage  "}
 	for _, in := range cases {
-		if _, err := parseContextMode(in); err != nil {
-			t.Errorf("parseContextMode(%q) err=%v, want nil", in, err)
+		if _, err := sessionlog.ParseMode(in); err != nil {
+			t.Errorf("sessionlog.ParseMode(%q) err=%v, want nil", in, err)
 		}
 	}
 }
@@ -51,7 +53,7 @@ func TestParseContextModeAcceptsAllCanonical(t *testing.T) {
 // usage error mentioning the legal set.
 func TestParseContextModeRejectsUnknown(t *testing.T) {
 	t.Parallel()
-	_, err := parseContextMode("garbage")
+	_, err := sessionlog.ParseMode("garbage")
 	if err == nil {
 		t.Fatal("expected error for bogus mode")
 	}
@@ -68,7 +70,7 @@ func TestRunAgentsContextRawMode(t *testing.T) {
 	t.Parallel()
 	path := writeFixture(t)
 	var buf bytes.Buffer
-	if err := runAgentsContext(context.Background(), &buf, path, contextModeRaw, false); err != nil {
+	if err := runAgentsContext(context.Background(), &buf, path, sessionlog.ModeRaw, false); err != nil {
 		t.Fatalf("runAgentsContext: %v", err)
 	}
 	got := buf.String()
@@ -98,7 +100,7 @@ func TestRunAgentsContextConversationMode(t *testing.T) {
 	t.Parallel()
 	path := writeFixture(t)
 	var buf bytes.Buffer
-	if err := runAgentsContext(context.Background(), &buf, path, contextModeConversation, false); err != nil {
+	if err := runAgentsContext(context.Background(), &buf, path, sessionlog.ModeConversation, false); err != nil {
 		t.Fatalf("runAgentsContext: %v", err)
 	}
 	got := buf.String()
@@ -125,7 +127,7 @@ func TestRunAgentsContextToolsMode(t *testing.T) {
 	t.Parallel()
 	path := writeFixture(t)
 	var buf bytes.Buffer
-	if err := runAgentsContext(context.Background(), &buf, path, contextModeTools, false); err != nil {
+	if err := runAgentsContext(context.Background(), &buf, path, sessionlog.ModeTools, false); err != nil {
 		t.Fatalf("runAgentsContext: %v", err)
 	}
 	got := buf.String()
@@ -146,7 +148,7 @@ func TestRunAgentsContextThinkingMode(t *testing.T) {
 	t.Parallel()
 	path := writeFixture(t)
 	var buf bytes.Buffer
-	if err := runAgentsContext(context.Background(), &buf, path, contextModeThinking, false); err != nil {
+	if err := runAgentsContext(context.Background(), &buf, path, sessionlog.ModeThinking, false); err != nil {
 		t.Fatalf("runAgentsContext: %v", err)
 	}
 	got := buf.String()
@@ -165,7 +167,7 @@ func TestRunAgentsContextUsageMode(t *testing.T) {
 	t.Parallel()
 	path := writeFixture(t)
 	var buf bytes.Buffer
-	if err := runAgentsContext(context.Background(), &buf, path, contextModeUsage, false); err != nil {
+	if err := runAgentsContext(context.Background(), &buf, path, sessionlog.ModeUsage, false); err != nil {
 		t.Fatalf("runAgentsContext: %v", err)
 	}
 	got := strings.TrimSpace(buf.String())
@@ -200,7 +202,7 @@ func TestRunAgentsContextTreeMode(t *testing.T) {
 	t.Parallel()
 	path := writeFixture(t)
 	var buf bytes.Buffer
-	if err := runAgentsContext(context.Background(), &buf, path, contextModeTree, false); err != nil {
+	if err := runAgentsContext(context.Background(), &buf, path, sessionlog.ModeTree, false); err != nil {
 		t.Fatalf("runAgentsContext: %v", err)
 	}
 	got := buf.String()
@@ -217,7 +219,7 @@ func TestRunAgentsContextTreeMode(t *testing.T) {
 func TestRunAgentsContextOpenError(t *testing.T) {
 	t.Parallel()
 	err := runAgentsContext(context.Background(), &bytes.Buffer{},
-		filepath.Join(t.TempDir(), "missing.jsonl"), contextModeRaw, false)
+		filepath.Join(t.TempDir(), "missing.jsonl"), sessionlog.ModeRaw, false)
 	if err == nil {
 		t.Fatal("expected error for missing file")
 	}
@@ -287,12 +289,12 @@ func TestResolveSessionJSONLPath_NotFound(t *testing.T) {
 // terminal on raw=tools mode.
 func TestOneLine_FoldsAndTruncates(t *testing.T) {
 	t.Parallel()
-	got := oneLine("hello\nworld\nfoo")
+	got := sessionlog.OneLine("hello\nworld\nfoo")
 	if got != "hello world foo" {
 		t.Errorf("got %q, want %q", got, "hello world foo")
 	}
 	long := strings.Repeat("x", 1000)
-	out := oneLine(long)
+	out := sessionlog.OneLine(long)
 	if len(out) > 250 {
 		t.Errorf("oneLine did not truncate: len=%d", len(out))
 	}

@@ -15,23 +15,23 @@
 //   - sextant traces show <id> -i   → pkg/tui/traces.Model
 //     (ListPane over the span-tree projection; shared with the static
 //     renderer).
-//
-// Future wiring (skipped because the matching Component doesn't yet
-// exist — file a follow-up before unsticking):
-//
-//   - sextant agents context <id> -i → ships with
-//     [[feat-agents-context-view]]; not wired here.
+//   - sextant agents context <id> -i → pkg/tui/contextview.Model
+//     (StreamViewport tail over the SDK session JSONL; mode keys 1-6).
 package main
 
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/nxadm/tail"
 	"github.com/spf13/cobra"
 
+	"github.com/love-lena/sextant/pkg/sessionlog"
 	"github.com/love-lena/sextant/pkg/tui/agents"
+	"github.com/love-lena/sextant/pkg/tui/contextview"
 	"github.com/love-lena/sextant/pkg/tui/pending"
 	"github.com/love-lena/sextant/pkg/tui/traces"
 )
@@ -43,6 +43,7 @@ type tuiLauncher interface {
 	RunAgentsList(ctx context.Context, configDir, selectedID string) error
 	RunPendingList(ctx context.Context, configDir string) error
 	RunTracesShow(ctx context.Context, configDir, traceID string) error
+	RunAgentsContext(ctx context.Context, configDir, projectsDir, sessionID string) error
 }
 
 // realTUI is the live launcher; tests overwrite via newAgentsListIRunE's
@@ -59,6 +60,65 @@ func (realTUI) RunPendingList(ctx context.Context, configDir string) error {
 
 func (realTUI) RunTracesShow(ctx context.Context, configDir, traceID string) error {
 	return runTracesShowTUI(ctx, configDir, traceID)
+}
+
+func (realTUI) RunAgentsContext(ctx context.Context, _ /*configDir*/, projectsDir, sessionID string) error {
+	return runAgentsContextTUI(ctx, projectsDir, sessionID)
+}
+
+// runAgentsContextTUI tails the agent's session JSONL and runs the
+// contextview Component over the parsed event stream. No daemon
+// connection — the caller already resolved the session-log paths.
+func runAgentsContextTUI(ctx context.Context, projectsDir, sessionID string) error {
+	jsonl, err := resolveSessionJSONLPath(projectsDir, sessionID)
+	if err != nil {
+		return err
+	}
+	t, err := tail.TailFile(jsonl, tail.Config{
+		Follow:    true,
+		ReOpen:    true,
+		MustExist: true,
+		Logger:    tail.DiscardingLogger,
+	})
+	if err != nil {
+		return fmt.Errorf("tail %s: %w", jsonl, err)
+	}
+	defer func() { _ = t.Stop() }()
+
+	pr, pw := io.Pipe()
+	go func() {
+		defer func() { _ = pw.Close() }()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case line, ok := <-t.Lines:
+				if !ok {
+					return
+				}
+				if line.Err != nil {
+					return
+				}
+				if _, err := io.WriteString(pw, line.Text+"\n"); err != nil {
+					return
+				}
+			}
+		}
+	}()
+	go func() {
+		<-ctx.Done()
+		_ = t.Stop()
+	}()
+
+	m := contextview.New(contextview.Options{
+		Events:      sessionlog.Stream(pr),
+		InitialMode: sessionlog.ModeConversation,
+	})
+	prog := tea.NewProgram(contextview.NewStandalone(m), tea.WithAltScreen(), tea.WithContext(ctx))
+	if _, err := prog.Run(); err != nil {
+		return fmt.Errorf("tui: %w", err)
+	}
+	return nil
 }
 
 // runTracesShowTUI dials the daemon, builds the traces Component seeded

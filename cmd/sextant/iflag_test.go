@@ -12,12 +12,14 @@ import (
 // it was invoked with so smoke tests can assert that the `-i` flag
 // actually routed through the TUI launcher.
 type recordingLauncher struct {
-	called        bool
-	pendingCalled bool
-	tracesID      string
-	configDir     string
-	selectedID    string
-	returnErr     error
+	called             bool
+	pendingCalled      bool
+	tracesID           string
+	contextProjectsDir string
+	contextSessionID   string
+	configDir          string
+	selectedID         string
+	returnErr          error
 }
 
 func (r *recordingLauncher) RunAgentsList(_ context.Context, configDir, selectedID string) error {
@@ -35,6 +37,13 @@ func (r *recordingLauncher) RunPendingList(_ context.Context, configDir string) 
 
 func (r *recordingLauncher) RunTracesShow(_ context.Context, configDir, traceID string) error {
 	r.tracesID = traceID
+	r.configDir = configDir
+	return r.returnErr
+}
+
+func (r *recordingLauncher) RunAgentsContext(_ context.Context, configDir, projectsDir, sessionID string) error {
+	r.contextProjectsDir = projectsDir
+	r.contextSessionID = sessionID
 	r.configDir = configDir
 	return r.returnErr
 }
@@ -125,6 +134,21 @@ func TestPendingListIFlagRoutesToTUI(t *testing.T) {
 	}
 	if !rec.pendingCalled {
 		t.Fatal("pending TUI launcher not invoked under -i")
+	}
+}
+
+// TestAgentsContextIFlagRegistered confirms the `-i` / `--tui` flag is
+// wired on `agents context`. (The full routing test would need a daemon
+// stub — the command resolves the session-log paths before reaching the
+// launcher — so coverage of the launcher itself lives in the
+// pkg/tui/contextview tests.)
+func TestAgentsContextIFlagRegistered(t *testing.T) {
+	cmd := newAgentsContextCmd()
+	if cmd.Flags().Lookup("tui") == nil {
+		t.Fatal("agents context missing --tui flag")
+	}
+	if cmd.Flags().ShorthandLookup("i") == nil {
+		t.Fatal("agents context missing -i shorthand")
 	}
 }
 
