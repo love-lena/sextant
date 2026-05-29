@@ -13,6 +13,44 @@ declarative control plane (the operator declares desired state; one
 reconciler is the sole actuator). Shipped as **one milestone**, landed as
 the individually-correct, CI-green tickets below. Ticket shorthand is `ctl`.
 
+## Shipped-it demo (the whole-milestone e2e)
+
+When every ticket has landed, this transcript runs start to finish. It *is*
+the milestone's top-level e2e acceptance — illustrative CLI, but the behavior
+is the contract.
+
+```console
+# Declare an agent — you state intent, not issue a command.
+$ sextant agents create reviewer --template code-review
+reviewer   desired=run   observed=running
+
+# Kill its container out from under the daemon (simulate an OOM).
+$ docker kill $(sextant agents get reviewer -o container-id)
+
+# ...do nothing. Watch it heal itself and resume its session.
+$ sextant agents list
+NAME      DESIRED  OBSERVED          RESTARTS  AGE
+reviewer  run      running           1         3m     # ← came back on its own
+
+# A genuinely broken agent parks loudly instead of looping forever.
+flaky     run      crashed (budget)  5         8m     # ← gave up after 5/10min, surfaced for you
+
+# Change what you want — edit the spec; the daemon converges it.
+$ sextant agents set reviewer --image sextant-sidecar:v2
+reviewer   converging → running       # restarted onto v2 at the next turn boundary
+
+# The front door is real — no sneaking a command past the daemon.
+$ nats pub "agents.$(sextant agents get reviewer -o uuid).inbox" '{"prompt":"hi"}'
+nats: Permission Violation for Publish to "agents.*.inbox"
+
+# ...and the audit is now the system of record: every command provably went through.
+$ sextant audit list --agent reviewer
+create · prompt · restart(auto) · set-image · ...
+```
+
+The "whoa": you killed it and it came back; you edited a field and reality
+followed; you couldn't go around the daemon if you tried.
+
 ## Acceptance standard (every stage — aggressive by design)
 
 Each ticket ships with **all three**:
