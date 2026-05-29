@@ -11,6 +11,11 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
 ## [Unreleased]
 
 ### Added
+- **`sextant daemon logs -i`** — interactive tailing log viewport
+  (`pkg/tui/logsview`): a scrollback `StreamViewport` over the daemon log
+  file (j/k scroll, g/G top/bottom, tail-follow). A thin composition —
+  `StreamViewport` + `widget.TailSource` — demonstrating the P0 widget
+  leverage. Self-registers for `sextant tui`. Per the RFC P2.
 
 ### Changed
 
