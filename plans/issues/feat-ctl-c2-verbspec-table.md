@@ -12,8 +12,8 @@ Replace the four parallel enumerations of the RPC surface — `Verb*` consts
 (`cmd/sextantd/rpc.go`), and the generator's hand-maintained type list — with
 **one declarative table**: `{name, capability, handlerFactory, req, resp,
 phase}`. Dispatch *iterates* it, `CapFor` *reads* it, schema-gen *walks its
-types*. `phase` preserves the existing two-stage registration (initial /
-query verbs vs lifecycle / container verbs).
+types*. `phase` preserves the two-stage registration (initial / query verbs
+vs lifecycle / container verbs).
 
 **Why:** four places enumerate verbs/types today; adding a verb and
 forgetting its handler, capability, or schema is a live drift class (the
@@ -24,10 +24,16 @@ forget.
 type-list by iterating it; migrate the existing verbs into the table.
 
 **Acceptance:**
-- A test asserts every `VerbSpec` has a registered handler **and** a
-  capability (no verb without a handler; no handler without a verb).
-- Schema-gen output is unchanged for existing types (pure refactor).
+- **E2E:** daemon boots and **every existing verb dispatches** against a real
+  daemon (spawn / list / get-status / prompt / restart / kill / archive /
+  query-* …) with unchanged behavior and caps.
+- **Regression:** a table-completeness test asserts every `VerbSpec` has a
+  registered handler **and** a capability (no verb without a handler, no
+  handler without a verb); schema-gen output is **byte-identical** for
+  existing types (pure refactor); the two-phase registration order is
+  preserved.
+- **Expected breakage:** none.
 
-**Depends on:** [[feat-cp-c1-wire-codegen-ts]] (generator). **Sequencing:**
+**Depends on:** [[feat-ctl-c1-wire-codegen-ts]] (generator). **Sequencing:**
 Wave 2. Touches `rpc.go`, which P0 also touches — **land before**
-[[feat-cp-p0-reconcile-spine]]. Part of [[feat-control-plane-milestone]].
+[[feat-ctl-p0-reconcile-spine]]. Part of [[feat-control-plane-milestone]].

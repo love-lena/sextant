@@ -698,6 +698,14 @@ safe; the one real risk is that the spine **replaces** the battle-tested
 (incarnation CAS, sidecar-terminal precedence, the debounce) as it absorbs
 it — not re-litigate it.
 
+Every stage carries an **aggressive acceptance bar**: an **e2e test** against
+a real daemon + containers, an **accumulating regression suite** (each
+stage's regressions run in every later stage's CI), and an explicit
+**expected-breakage declaration** naming any behavior a later ticket
+restores. Declared breakage between stages is fine; *undeclared* breakage is
+not. The standard + per-stage criteria live in the milestone tracker,
+`plans/issues/feat-control-plane-milestone.md`.
+
 | Step | Delivers | Depends on | Gate |
 |------|----------|-----------|------|
 | **C0** | `buildAgentContainerSpec` single-source projection (spawn+restart) | — | lossless restart verified (spawn ≡ restart spec, modulo identity) |
