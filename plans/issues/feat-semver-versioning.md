@@ -1,8 +1,9 @@
 ---
 title: Adopt semver for the sextant binary and protocol; gate all changes through PRs
-status: in-progress
+status: fixed
 priority: P2
 created_at: 2026-05-27T19:20-07:00
+fixed_in: c6d3573
 labels: [process, versioning, governance]
 discovered_in: post-lifecycle-truth merge — we shipped a substantial proto change (LifecyclePayload.source field, new lost transition/state) without a version bump anywhere; the daemon and CLI carry no version string at all today
 ---

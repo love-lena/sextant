@@ -1,8 +1,9 @@
 ---
 title: Add Huh interactive confirmation to destructive verbs (TTY path)
-status: open
+status: fixed
 priority: P3
 created_at: 2026-05-26T23:50-07:00
+fixed_in: 4b7f882
 labels: [feature, cli, safety, polish, charm]
 discovered_in: implementing feat-cli-destructive-op-flags — shipped --dry-run + --yes but skipped the TTY+Huh interactive confirm; charmbracelet/huh isn't in go.mod yet
 ---

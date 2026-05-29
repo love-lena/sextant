@@ -1,8 +1,9 @@
 ---
 title: Surface restart_agent errors inside the chat TUI when input is disabled
-status: open
+status: fixed
 priority: P3
 created_at: 2026-05-27T18:55-07:00
+fixed_in: 3532a34
 labels: [feature, tui, chat, polish, follow-up]
 discovered_in: Codex review of feat/lifecycle-truth-2026-05-27 — when an agent is `lost`, the chat TUI disables input and binds R to restart_agent; if restart_agent fails (daemon unreachable, container manager down, etc.) the error is logged but the operator's prompt area stays locked with no visible feedback
 ---
