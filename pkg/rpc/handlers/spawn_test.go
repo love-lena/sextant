@@ -681,6 +681,17 @@ func (s *stubWorktreeProvider) Destroy(_ context.Context, name string, _ bool) e
 	return nil
 }
 
+// Resolve returns the stub's pre-loaded path for any name once a
+// worktree has been Created (s.path set at construction). Restart's
+// lossless-projection path calls this to re-mount the worktree spawn
+// made. ok=false when the stub has no path (simulates "no worktree").
+func (s *stubWorktreeProvider) Resolve(_ context.Context, name string) (string, bool, error) {
+	if s.path == "" {
+		return "", false, nil
+	}
+	return s.path, true, nil
+}
+
 // TestSpawnAgentMountsHostGitDirForWorktreeAgents pins the bug-worktree-
 // gitdir-unreachable-in-container fix: when a worktree is the workspace
 // and the daemon knows the host repo root, the spawn handler must add a
