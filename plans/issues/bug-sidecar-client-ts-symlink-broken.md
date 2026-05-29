@@ -1,8 +1,9 @@
 ---
 title: images/sidecar/entrypoint's @sextant/client symlink is broken on main — make lint-sidecar / test-sidecar fail
-status: open
+status: fixed
 priority: P3
 created_at: 2026-05-26T22:25-07:00
+fixed_in: c801dd6
 labels: [bug, sidecar, build, devx, ci]
 discovered_in: writing the sidecar NATS reconnect fix — both `make lint-sidecar` and `make test-sidecar` fail on a clean main checkout with `Cannot find module '@sextant/client'`
 ---

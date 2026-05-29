@@ -1,8 +1,9 @@
 ---
 title: Surface daemon + CLI version in `sextant doctor`
-status: open
+status: fixed
 priority: P2
 created_at: 2026-05-27T19:20-07:00
+fixed_in: 28de5f2
 labels: [feature, cli, doctor, observability, operator-experience]
 discovered_in: post-lifecycle-truth merge — operator had no way to confirm whether the running daemon was the post-merge binary or a stale one still on PATH
 ---

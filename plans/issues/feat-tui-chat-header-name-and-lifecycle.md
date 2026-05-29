@@ -1,8 +1,9 @@
 ---
 title: Show the agent name and lifecycle status explicitly in the chat TUI header
-status: open
+status: fixed
 priority: P3
 created_at: 2026-05-27T19:48-07:00
+fixed_in: 8112131
 labels: [feature, tui, chat, polish, observability]
 discovered_in: post-lifecycle-truth smoke testing — the header today carries a color-coded dot whose semantics ("destructive" red could mean ended, crashed, OR lost) are invisible to anyone who hasn't memorized the mapping; the agent name is shown but the lifecycle state itself is not
 ---

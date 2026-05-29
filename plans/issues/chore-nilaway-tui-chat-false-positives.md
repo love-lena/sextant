@@ -1,8 +1,9 @@
 ---
 title: Resolve nilaway warnings in pkg/tui/chat (4 false positives masking pre-existing CI breakage)
-status: open
+status: fixed
 priority: P3
 created_at: 2026-05-27T11:50-07:00
+fixed_in: bc58b17
 labels: [chore, lint, ci, tech-debt]
 discovered_in: phase-2 polish PR CI green-up — the prior install-golangci-lint step had been silently short-circuiting `make lint-nilaway test-go`, so nilaway hadn't actually been gating PRs; once the install was fixed via the golangci-lint-action, nilaway's failures became visible
 ---

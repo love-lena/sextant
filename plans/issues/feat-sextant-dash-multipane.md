@@ -1,11 +1,28 @@
 ---
 title: `sextant dash` flagship multi-pane TUI — Stickers layout + BubbleZone mouse
-status: open
+status: resolved
 priority: P2
 created_at: 2026-05-28T10:54-07:00
+resolved_at: 2026-05-28T15:07-07:00
 labels: [feature, cli, tui, dash, architecture]
 discovered_in: 2026-05-28 split of feat-cli-i-flag-tier1-tier2 after architecture decisions baked in
 ---
+
+## Resolution
+
+Shipped via PR #30 (`55de77b`), target main. `sextant dash` opens
+the flagship multi-pane TUI: Stickers flex layout, BubbleZone click
+regions (mouse-on by default), Tab / Shift+Tab / number-key / click
+pane focus, and inter-pane `OpenMsg` / `LoadMsg` routing with
+`$selected_agent` resolved against NATS KV. Default layout embedded
+as `cmd/sextant/dash-default-config.toml`;
+`~/.config/sextant/config.toml` overrides when present;
+`sextant dash --dump-default-config` prints the embedded default.
+No code in `pkg/tui/chat/` or `pkg/tui/agents/` is dash-aware —
+panes are hosted identically standalone or in-dash.
+
+One documented gap, tracked separately: the pending pane renders a
+placeholder until [[feat-tui-pending-component]] lands.
 
 ## Summary
 

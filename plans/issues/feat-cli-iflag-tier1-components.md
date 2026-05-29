@@ -1,11 +1,33 @@
 ---
 title: Wire -i flag for Tier 1 component TUIs + add init()-time registry
-status: open
+status: resolved
 priority: P3
 created_at: 2026-05-28T10:54-07:00
+resolved_at: 2026-05-28T13:56-07:00
 labels: [feature, cli, tui, architecture]
 discovered_in: 2026-05-28 split of feat-cli-i-flag-tier1-tier2 after architecture decisions baked in
 ---
+
+## Resolution
+
+Shipped via PR #27 (`12e01f2`), target main. Both pieces landed:
+the `init()`-time registry (`pkg/tui/component/registry.go` —
+`Register` / `List`, with a double-register panic guard) and the
+`-i` / `--tui` flag on Tier 1 commands. `agents list -i` and
+`agents show <id> -i` mount the existing agents TUI inline; each
+component package self-registers via `init()`.
+
+`pending list -i` and `traces show <id> -i` accept the flag but
+surface a clear "not yet implemented" pointer — their Components
+shipped as placeholders, tracked by follow-ups filed during the
+work:
+
+- [[feat-tui-pending-component]] — build the real `pkg/tui/pending`
+  Component behind `pending list -i`.
+- [[feat-tui-traces-component]] — build the real `pkg/tui/traces`
+  Component behind `traces show <id> -i`.
+- [[feat-agents-context-view]] Phase B — `agents context <agent> -i`
+  mounts on this registry once its TUI view modes land.
 
 ## Summary
 

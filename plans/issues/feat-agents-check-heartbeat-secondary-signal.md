@@ -1,8 +1,9 @@
 ---
 title: `sextant agents check` should consult heartbeat freshness alongside KV lifecycle
-status: open
+status: fixed
 priority: P3
 created_at: 2026-05-27T19:20-07:00
+fixed_in: 5b11eaf
 labels: [feature, cli, doctor, lifecycle, defense-in-depth]
 discovered_in: post-lifecycle-truth manual smoke — user observed `agents check` returning verdict=healthy on an agent whose record's `updated_at` was 19 hours old; turned out the running daemon was a stale binary, but the case revealed that `agents check` is single-source-of-truth (KV) and has no defense-in-depth via the heartbeat cache the daemon already maintains
 ---
