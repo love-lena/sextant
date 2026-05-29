@@ -11,6 +11,21 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
 ## [Unreleased]
 
 ### Added
+
+### Changed
+
+### Fixed
+
+## [0.5.0] — 2026-05-28
+
+Interactive-surfaces workstream, phase 2: four more `-i` surfaces built
+on the P0 widget toolkit — `daemon logs`, `worktree list`, `audit list`,
+and the `agents show` detail inspector (the `DetailPane`'s first real
+consumer). MINOR — all additive; `agents show -i` now opens the detail
+inspector rather than the focused list, but no scripted invocation,
+output format, or wire shape changed. Per the RFC `plans/rfc-tui-workstream.md` (P2).
+
+### Added
 - **`sextant agents show <id> -i` detail inspector** — `agents show -i`
   now opens a `DetailPane` inspector (`pkg/tui/agentdetail`) instead of
   the focused agents list: lifecycle / template / version / session /
@@ -33,8 +48,9 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   leverage. Self-registers for `sextant tui`. Per the RFC P2.
 
 ### Changed
-
-### Fixed
+- **Proto version → 0.5.0** to track the binary number (per
+  `conventions/versioning.md`). **No wire change this window** — the new
+  surfaces are pure front-ends over existing RPCs / subjects / files.
 
 ## [0.4.0] — 2026-05-28
 
@@ -265,7 +281,8 @@ untagged releases (`v0.1.x` informal) lacked.
   through #12). Documented in `plans/issues/` with deferred /
   resolved tickets cross-linked.
 
-[Unreleased]: https://github.com/love-lena/sextant/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/love-lena/sextant/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/love-lena/sextant/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/love-lena/sextant/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/love-lena/sextant/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/love-lena/sextant/releases/tag/v0.2.0
