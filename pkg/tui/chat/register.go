@@ -22,5 +22,8 @@ func init() {
 		Description: "Open the chat TUI for an agent",
 		Command:     "agents chat",
 		New:         func() component.Component { return New(Options{}) },
+		Arg:         "agent",
+		ArgKind:     "agent",
+		NoIFlag:     true, // `agents chat <agent>` is interactive by default; no -i
 	})
 }

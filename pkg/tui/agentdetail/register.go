@@ -11,5 +11,7 @@ func init() {
 		Description: "Inspect one agent (lifecycle, template, worktree, session)",
 		Command:     "agents show",
 		New:         func() component.Component { return New(Options{}) },
+		Arg:         "agent",
+		ArgKind:     "agent",
 	})
 }
