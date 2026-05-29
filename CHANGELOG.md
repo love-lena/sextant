@@ -11,6 +11,14 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
 ## [Unreleased]
 
 ### Added
+- **`pkg/tui/widget` shared TUI toolkit** — the widget layer the
+  interactive-surface workstream composes: `ListPane[T]` (generic cursor
+  list with nav / selection / `/`-filter / scroll-window), `StreamViewport`
+  (scrollback over `bubbles/viewport` with tail-follow + ring-buffer cap +
+  `g`/`G`), `DetailPane` (label/value sections), and the `Source[T]` /
+  `Pump` data adapter (`SubscribeSource` / `TailSource` / `OnceSource`).
+  Internal foundation; no operator-visible change on its own. Per the RFC
+  `plans/rfc-tui-workstream.md` (P0).
 
 ### Changed
 
