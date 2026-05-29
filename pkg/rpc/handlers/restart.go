@@ -36,17 +36,24 @@ type RestartDeps struct {
 	// re-attach the named volume. May be nil; restart will then fall
 	// back to the legacy "no seed mount" behavior, which is fine for
 	// agents that don't use claude_seed.
-	Templates     templates.KV
-	CA            *authjwt.CA
-	WorkspaceRoot string
-	HostID        string
-	NATSURL       string
-	NATSUser      string
-	NATSPassword  string
-	MCPURL        string
-	Issuer        string
-	TestRunLabel  string
-	Now           func() time.Time
+	Templates templates.KV
+	// AgentsDataRoot is the host dir under which the per-agent
+	// claude-projects bind-mount lives (mirrors SpawnDeps.AgentsDataRoot).
+	// Restart MUST re-apply this mount or the restarted incarnation's SDK
+	// session journal lands inside the container instead of the
+	// host-readable path `sextant agents context` reads. Empty disables
+	// the mount (legacy daemons + unit tests).
+	AgentsDataRoot string
+	CA             *authjwt.CA
+	WorkspaceRoot  string
+	HostID         string
+	NATSURL        string
+	NATSUser       string
+	NATSPassword   string
+	MCPURL         string
+	Issuer         string
+	TestRunLabel   string
+	Now            func() time.Time
 }
 
 // restartCASRetries caps how many times the final definition commit
@@ -230,6 +237,22 @@ func NewRestartAgent(deps RestartDeps) rpc.Handler {
 						mounts = append(mounts, seedMount)
 					}
 				}
+			}
+		}
+		// Re-apply the per-agent claude-projects bind-mount that
+		// spawn_agent adds (overlays the seed volume at
+		// /home/agent/.claude/projects). Without it, the restarted
+		// incarnation's SDK session journal writes inside the container
+		// and `sextant agents context` can never find it — the
+		// dir-absent bug. The dir is idempotent and must persist across
+		// restarts, so we ignore the rollback cleanup here.
+		// See plans/issues/feat-agents-context-view.md.
+		if deps.AgentsDataRoot != "" {
+			if projectsHost, _, err := ensureAgentProjectsDir(deps.AgentsDataRoot, def.UUID); err == nil {
+				mounts = append(mounts, containermgr.MountSpec{
+					HostPath:      projectsHost,
+					ContainerPath: "/home/agent/.claude/projects",
+				})
 			}
 		}
 		spec := containermgr.ContainerSpec{

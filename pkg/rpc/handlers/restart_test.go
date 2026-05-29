@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -693,6 +694,79 @@ func TestRestartAgentReattachesClaudeSeedVolume(t *testing.T) {
 	vols.mu.Unlock()
 	if popCount != 1 {
 		t.Errorf("populate count = %d, want 1 (restart must reattach, not repopulate)", popCount)
+	}
+}
+
+// TestRestartAgentReappliesProjectsBindMount pins the `agents context`
+// dir-absent bug: restart MUST re-apply the per-agent claude-projects
+// host bind-mount that spawn adds (gated on AgentsDataRoot). Without it
+// the restarted incarnation's SDK session journal writes inside the
+// container and `sextant agents context` can never find it — the dir on
+// the host stays empty. Regression guard for the real cause behind
+// "sextant agents context assistant looks broken".
+func TestRestartAgentReappliesProjectsBindMount(t *testing.T) {
+	deps, defs, incs, runner, _ := buildDeps(t)
+	root := t.TempDir()
+	deps.AgentsDataRoot = root
+
+	spawnH := handlers.NewSpawnAgent(deps)
+	scap := &captureEmit{}
+	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+		Name: "alpha", Template: "default",
+	}), scap.emit()); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if scap.resp.Error != nil {
+		t.Fatalf("spawn error: %+v", scap.resp.Error)
+	}
+	var spawnResp sextantproto.SpawnAgentResponse
+	if err := json.Unmarshal(scap.resp.Result, &spawnResp); err != nil {
+		t.Fatalf("decode spawn: %v", err)
+	}
+
+	restartH := handlers.NewRestartAgent(handlers.RestartDeps{
+		Definitions:    defs,
+		Incarnations:   incs,
+		Containers:     runner,
+		AgentsDataRoot: root,
+		CA:             deps.CA,
+		WorkspaceRoot:  deps.WorkspaceRoot,
+		HostID:         deps.HostID,
+		NATSURL:        deps.NATSURL,
+		NATSUser:       deps.NATSUser,
+		NATSPassword:   deps.NATSPassword,
+		MCPURL:         deps.MCPURL,
+		Issuer:         deps.Issuer,
+	})
+	rcap := &captureEmit{}
+	if err := restartH(context.Background(), makeReq(t, sextantproto.RestartAgentRequest{
+		AgentID: spawnResp.AgentID,
+	}), rcap.emit()); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if rcap.resp.Error != nil {
+		t.Fatalf("restart error: %+v", rcap.resp.Error)
+	}
+	if len(runner.specs) < 2 {
+		t.Fatalf("expected spawn + restart specs; got %d", len(runner.specs))
+	}
+	restartSpec := runner.specs[len(runner.specs)-1]
+
+	var found bool
+	for _, m := range restartSpec.Mounts {
+		if m.ContainerPath == "/home/agent/.claude/projects" {
+			found = true
+			if !strings.HasPrefix(m.HostPath, root) {
+				t.Errorf("projects mount HostPath = %q, want under %q", m.HostPath, root)
+			}
+		}
+	}
+	if !found {
+		var summary []string
+		for _, m := range restartSpec.Mounts {
+			summary = append(summary, m.HostPath+m.VolumeName+"->"+m.ContainerPath)
+		}
+		t.Errorf("restart spec missing /home/agent/.claude/projects bind-mount; mounts = %v", summary)
 	}
 }
 
