@@ -11,10 +11,12 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 
@@ -25,7 +27,14 @@ import (
 
 func main() {
 	out := flag.String("out", "pkg/sextantproto/schemas", "output directory for JSON Schemas")
+	tsMode := flag.Bool("ts", false, "drive the TypeScript codegen (clients/typescript) instead of emitting Go schemas")
+	tsDir := flag.String("ts-dir", "clients/typescript", "clients/typescript directory (used with -ts)")
 	flag.Parse()
+
+	if *tsMode {
+		runTSCodegen(*tsDir)
+		return
+	}
 
 	if err := os.MkdirAll(*out, 0o750); err != nil {
 		log.Fatalf("mkdir %s: %v", *out, err)
@@ -124,7 +133,89 @@ func main() {
 			log.Fatalf("write %s: %v", path, err)
 		}
 	}
-	fmt.Printf("wrote %d schemas to %s\n", len(entries), *out)
+
+	// Emit the wire manifest: the single machine-readable source for the
+	// proto version, the WireEpoch compatibility key, and the closed
+	// enums. The TS codegen reads this to emit proto_version.ts (so
+	// PROTO_VERSION / WIRE_EPOCH / KIND_* / ADDRESS_* are generated, not
+	// hand-synced), and the CI schema-compat gate reads wire_epoch out of
+	// it. RFC §5.8.
+	if err := writeWireManifest(*out); err != nil {
+		log.Fatalf("write wire manifest: %v", err)
+	}
+
+	fmt.Printf("wrote %d schemas + wire.json to %s\n", len(entries), *out)
+}
+
+// wireManifest is the machine-readable contract substrate emitted to
+// schemas/wire.json. encoding/json marshals struct fields in declaration
+// order, so the on-disk key order is stable across runs; both consumers
+// (TS codegen, CI schema-compat gate) parse by key.
+type wireManifest struct {
+	ProtoVersion string   `json:"proto_version"`
+	WireEpoch    int      `json:"wire_epoch"`
+	Kinds        []string `json:"kinds"`
+	AddressKinds []string `json:"address_kinds"`
+	FrameKinds   []string `json:"frame_kinds"`
+}
+
+// writeWireManifest derives the manifest from the sextantproto package's
+// exported source of truth and writes it canonical-form (sorted, single
+// trailing newline) so git diffs stay clean and regeneration is
+// idempotent.
+func writeWireManifest(outDir string) error {
+	m := wireManifest{
+		ProtoVersion: sextantproto.ProtoVersion,
+		WireEpoch:    sextantproto.WireEpoch,
+		Kinds:        make([]string, 0, len(sextantproto.AllKinds())),
+		AddressKinds: make([]string, 0, len(sextantproto.AllAddressKinds())),
+		FrameKinds:   make([]string, 0, len(sextantproto.AllFrameKinds())),
+	}
+	for _, k := range sextantproto.AllKinds() {
+		m.Kinds = append(m.Kinds, string(k))
+	}
+	for _, k := range sextantproto.AllAddressKinds() {
+		m.AddressKinds = append(m.AddressKinds, string(k))
+	}
+	for _, k := range sextantproto.AllFrameKinds() {
+		m.FrameKinds = append(m.FrameKinds, string(k))
+	}
+
+	raw, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal manifest: %w", err)
+	}
+	raw = append(raw, '\n')
+	return writeIfChanged(filepath.Join(outDir, "wire.json"), raw)
+}
+
+// runTSCodegen drives the TypeScript codegen (clients/typescript: emits
+// types.generated.ts + the generated proto_version.ts from the schemas
+// this generator just wrote). It is the second half of `go generate
+// ./...` so both sides of the Go↔TS wire contract regenerate from one
+// command.
+//
+// If the npm workspace deps are not installed (a Go-only checkout), it
+// prints a skip notice and returns 0 rather than failing — CI installs the
+// deps and re-runs `npm run codegen` with an in-sync assertion, so the
+// gate still holds there. Missing `npm` is treated the same way.
+func runTSCodegen(tsDir string) {
+	if _, err := os.Stat(filepath.Join(tsDir, "node_modules")); errors.Is(err, os.ErrNotExist) {
+		fmt.Printf("ts codegen: %s/node_modules absent; skipping (run `npm ci` then re-run, or let CI do it)\n", tsDir)
+		return
+	}
+	npm, err := exec.LookPath("npm")
+	if err != nil {
+		fmt.Println("ts codegen: npm not found on PATH; skipping (CI runs it)")
+		return
+	}
+	cmd := exec.Command(npm, "run", "codegen") //nolint:gosec // fixed args, dir is generator-controlled
+	cmd.Dir = tsDir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		log.Fatalf("ts codegen (%s): %v", tsDir, err)
+	}
 }
 
 // writeIfChanged writes data to path only if it differs from the current

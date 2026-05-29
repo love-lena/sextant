@@ -11,8 +11,33 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
 ## [Unreleased]
 
 ### Added
+- **The wire contract is now generated end-to-end, and a CI gate guards
+  it.** The `payloads.go → schemas/*.json` generator (`cmd/sextantproto-gen`)
+  also emits `schemas/wire.json` — a machine-readable manifest carrying the
+  proto version, the new `WireEpoch` compatibility key, and the closed
+  envelope / address / frame enums — and now drives the TypeScript codegen
+  too (`go generate ./...` regenerates both the Go schemas and the TS types
+  + `proto_version.ts`). `sextantproto.WireEpoch` (Go) / `WIRE_EPOCH` (TS)
+  is the single source of truth for the bus compatibility epoch (RFC §5.8).
+  A new `schema-compat` CI check (sibling to `changelog entry required`,
+  backed by `cmd/sextant-schema-compat` + `pkg/wirecompat`) regenerates the
+  schemas, asserts the committed copy is in sync, and **fails the build if a
+  breaking wire change — removed/renamed field, type change,
+  optional→required, removed enum value — lands without a `WireEpoch` bump.**
+  A checked-in Go↔TS message corpus (`pkg/sextantproto/testdata/wire-corpus`)
+  is decoded by the generated TS types so the two ends can't silently drift.
 
 ### Changed
+- **The TypeScript client's wire constants are now generated, not
+  hand-written.** `PROTO_VERSION`, the `KIND_*` / `ADDRESS_*` / `FRAME_*`
+  constant sets, and the new `WIRE_EPOCH` live in a generated
+  `clients/typescript/src/proto_version.ts` (sourced from `wire.json`) and
+  are re-exported from `@sextant/client`. The public package surface is
+  unchanged (plus the new `WIRE_EPOCH` / `FRAME_*` / `ADDRESS_KINDS`
+  exports); the previously hand-maintained definitions of these constants in
+  `src/envelope.ts` are removed. No external consumers exist today; any code
+  importing the constants from the internal `./envelope.js` path (rather than
+  the package root) must import from `./proto_version.js`.
 - **`sextant tui` now walks you through arg-requiring surfaces.** Picking
   an agent-scoped surface (chat, agent detail, agents context) prompts an
   agent picker (live `list_agents`, falls back to free text if the daemon
