@@ -1,8 +1,9 @@
 ---
 title: `sextant tui` Huh-driven menu of available -i surfaces
-status: open
+status: fixed
 priority: P3
 created_at: 2026-05-28T10:54-07:00
+fixed_in: 5fe1af4
 labels: [feature, cli, tui, discovery]
 discovered_in: 2026-05-28 split of feat-cli-i-flag-tier1-tier2 after architecture decisions baked in
 ---

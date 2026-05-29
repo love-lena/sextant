@@ -1,8 +1,9 @@
 ---
 title: kill_agent CAS bail-on-conflict trips integration tests with "definition changed during kill (concurrent restart/archive)"
-status: open
+status: fixed
 priority: P2
 created_at: 2026-05-27T20:47-07:00
+fixed_in: 925fb19
 labels: [bug, daemon, rpc, test, flake, cas, regression]
 discovered_in: post-merge of kill_agent CAS migration (commit ceb0bb2) — multiple subagents running the full `make test-go` matrix on 2026-05-27 hit identical failures in `cmd/sextantd` integration tests; reproduces on `main` with no local changes
 ---
