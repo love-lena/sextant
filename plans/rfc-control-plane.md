@@ -7,58 +7,61 @@
 and *corrects* their state — plus the contract substrate that authority
 rests on. Vision-first; the migration path is deliberately secondary.
 
+---
+
+## Narrative
+
+An agent's container OOMs at 2am. The daemon notices, writes `lost` in its
+record, and *stops there*. The agent sits idle until morning, when someone
+runs `agents list`, sees it, and types `restart`. Nothing broke in the
+daemon — it did exactly what it was built to do. It just wasn't built to
+*act*.
+
+That's the gap this RFC closes. Today `sextantd` is a careful **bookkeeper**
+of agent state; we want a **control plane** — something that, given a
+declaration of the agents you want, makes reality match and keeps it
+matching. You stop issuing commands ("restart that container") and start
+declaring intent ("this agent should be running"); one reconcile loop owns
+the gap between intent and reality and closes it continuously — when a
+container exits, when a spec drifts, when a sidecar falls behind a new
+daemon. Recovery, drift, and version-skew stop being three problems and
+become one: *convergence*.
+
+We don't have to invent this. It's the Kubernetes control-loop pattern minus
+the hyperscale machinery — closer in spirit to Fly's `flyd` than to a
+cluster. We copy the discipline (declarative desired state, level-triggered
+reconciliation, idempotent actions, one validated front door) and skip the
+distribution (no Raft, no scheduler, no multi-host). The result: a small,
+legible daemon where divergence is always transient and no two pieces of
+truth can silently disagree — including the drift that produced this cycle's
+two shipped bugs.
+
+---
+
 ## TL;DR
 
-We are building a custom orchestrator. We should stop pretending we
-aren't, and copy a decade of Kubernetes' homework — **the
-state-management discipline, not the distribution machinery.**
+`sextantd` holds a declarative desired-state record per agent and senses
+liveness, but never **acts** — every automatic path ends in "mark `lost`,"
+and only an operator mutates a container. This RFC closes the loop.
 
-Today `sextantd` is a faithful **tracker**: it holds a declarative
-desired-state record per agent, senses liveness three ways, and records
-divergence honestly. But it almost never **acts** — every automatic path
-ends in "mark the agent `lost`," and the only thing that ever mutates a
-container is an operator typing a command. The loop is open.
+**The keystone is declarative agent state:** the operator writes *desired*
+state; one level-triggered, idempotent reconciler is the **sole actuator**
+(handlers write desired to KV; they never touch the runtime). That single
+decision dissolves the spawn/restart drift class *by construction*, makes
+recovery/drift/skew all *convergence*, and turns imperative verbs into
+intent edits. Copy k8s's **state-management discipline, not its distribution
+machinery** (blueprint: Fly's `flyd`; identity: "single-node kubelet").
 
-This RFC paints the closed loop: sextant as a **single-host declarative
-control plane** for AI agents that is
-
-- **declarative (the keystone)** — you declare the agents you want; the
-  daemon's reconciler is the *sole actuator* that makes reality match and
-  keeps it matching. Imperative verbs become intent edits, and loss,
-  drift, and version-skew all collapse into one verb: convergence;
-- **self-healing** — a level-triggered reconcile loop converges
-  actual→desired continuously, so a dropped event or a dead container is
-  a transient, not a permanent, divergence;
-- **single-front-door** — every mutation passes through one validated
-  chokepoint (the daemon), enforced by the broker, not by good manners;
-- **drift-proof** — the contracts between components are *generated* or
-  *single-sourced*, never hand-synced, so they can't silently disagree;
-- **convergent-by-restart** — we are not distributed *yet*, so we refuse
-  to tolerate version skew and instead fix mismatched truth by
-  aggressively restarting/upgrading the thing that's behind.
-
-The mental model, stolen wholesale: **the daemon is a single-node
-kubelet** (it owns the local restart loop; there is no scheduler to defer
-to, and that's fine), and the closest real blueprint is **Fly's `flyd`**
-— a single daemon, a durable local store as the one source of truth, an
-FSM per resource, no Raft, no scheduler, no "pending" state. We already
-look a lot like that; this RFC finishes the resemblance.
-
-The path's core is a foundational restructure (the reconcile *spine*) plus
-two thin behaviors on top — recovery and drift, each a branch in one loop. It
-rides a keystone refactor (making `restart` a lossless projection — the
-hard gate for auto-restart) and a contract track that makes the underlying
-truths un-driftable. §11 has the full sequence; the control-plane core is:
+The control-plane core — on top of a keystone refactor (lossless `restart`)
+and a contract track that makes the wire + verbs un-driftable:
 
 | Phase | Contents | Nature |
 |-------|----------|--------|
-| **P0 — the spine** | one idempotent, level-triggered, periodic + event-hinted reconcile that is the *sole writer* of observed state; spec/status split | mostly restructuring existing pieces |
-| **P1 — recovery** | auto-restart an involuntarily-lost agent, with `RestartPolicy`, backoff, and a crash budget | a branch in the reconcile body |
-| **P2 — drift** | detect stale specs (image/mounts/version) via a fingerprint and converge by restart | a second branch in the same body |
+| **P0 — the spine** | one idempotent, level-triggered, periodic + event-hinted reconcile; sole writer of observed state; spec/status split | restructuring existing pieces |
+| **P1 — recovery** | auto-restart an involuntarily-lost agent — `RestartPolicy`, backoff, crash budget | a branch in the loop |
+| **P2 — drift** | detect stale specs via a fingerprint; converge by restart | a second branch |
 
-Two correctness fixes fall out along the way and should be filed now: a
-**finalizer-shaped volume leak** in archive, and the **structural
-enforcement** of the sole-publisher decision via NATS authz.
+Plus two correctness fixes (a finalizer-shaped archive volume leak; NATS-authz enforcement of the sole-publisher rule). Full sequence in §11.
 
 ---
 
@@ -94,58 +97,24 @@ systems that have already paid for the lessons.
 
 ## 2. The vision — what sextant should be
 
-Picture the operator experience a year from now.
+You manage *agents*, declaratively. `spawn`/`stop`/`archive` become edits to
+desired state; **editing a running agent's spec** (image, env, mounts) makes
+the reconciler converge it. You never restart a container by hand — you
+declare intent and the daemon keeps reality matching, backing a
+crash-looping agent off and parking it loudly only when it has genuinely
+given up. `sextant agents` shows a `RESTARTS` column and a last-exit reason,
+like `kubectl`, because the daemon keeps that score.
 
-You declare the agents you want — by spawning them, or by editing their
-records. From that moment the daemon owns the gap between *what you asked
-for* and *what is true*. You never tell it "restart that container"; you
-tell it "this agent should be running," and if the container dies, the
-daemon brings it back — backing off if it's crash-looping, and parking it
-loudly for you only when it has genuinely given up. `sextant agents`
-shows a `RESTARTS` column and a last-exit reason, exactly like `kubectl`,
-because the daemon is keeping that score.
+When you ship a new daemon, agents converge to it: one whose sidecar is
+behind is restarted onto the current image, not left speaking a stale
+protocol. **Restart is the universal repair** — the same machinery that
+recovers a lost agent upgrades a stale one — and it's safe because agent
+state lives outside the container and restart rebuilds the *exact* spec
+losslessly.
 
-When you ship a new daemon, the agents converge to it. A long-running
-agent whose sidecar predates the upgrade is detected as *behind* and
-restarted onto the current image — not left to speak a stale protocol
-across a version boundary we then have to support. We do not build skew
-tolerance, because at single-host scale we don't have to: **restart is
-the universal repair**, and the same machinery that recovers a lost agent
-also upgrades a stale one. The cost — interrupting in-flight work — is
-bounded because an agent's state lives outside its container (the
-persisted session) and a restart rebuilds the *exact* spec, losslessly,
-from one source of truth.
-
-Every command an agent ever receives provably passed through the daemon,
-because the broker forbids any other path to an agent's inbox. So the
-audit trail isn't a best-effort log — it's the system of record. There is
-one place that validates a command, one place that applies defaults, one
-place to see what happened. The daemon is our API server and our
-admission controller.
-
-And the things that must agree, agree by construction. The wire shape
-between the Go daemon and the TypeScript sidecar is *generated* from one
-schema, so it cannot drift. The container spec is built by one function
-that `spawn` and `restart` both call, so a restarted agent is
-byte-for-byte the agent you spawned. Version strings that today live in
-four hand-synced places are derived from one. When we add a new RPC verb,
-its name, its capability, its handler, and its schema all come from a
-single declarative entry — you cannot add a verb and forget to register
-it, because there is nothing to forget.
-
-None of this is Kubernetes. We are not running a fleet; we are running
-one host for one operator. We deliberately do **not** build leader
-election, a scheduler, a watch-cache, CRDs, or multi-tenant policy — those
-solve problems we have designed ourselves out of. What we take from k8s is
-the *discipline* that makes a control loop trustworthy: declarative
-desired state, level-triggered reconciliation, idempotent actions, a clean
-split between intent and observation, and a circuit breaker on restarts.
-That discipline is worth copying at N=1; the distribution machinery is
-not.
-
-That is the north star: **a small, legible, self-healing control plane
-where divergence is always transient, every mutation is validated at one
-door, and no two pieces of truth can silently disagree.**
+North star: *a small, legible, self-healing control plane where divergence
+is always transient, every mutation is validated at one door, and no two
+pieces of truth can silently disagree.*
 
 ---
 
