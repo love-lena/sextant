@@ -11,6 +11,15 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
 ## [Unreleased]
 
 ### Added
+- **`sextant pending list -i` + dash pending pane** — the pending-requests
+  TUI now exists (`pkg/tui/pending`): a live `ListPane` of unanswered
+  user_input requests with j/k nav, `/` filter, and Enter emitting an
+  answer intent, built on the P0 widget toolkit. Self-registers, so the
+  `sextant dash` pending pane (previously a placeholder) and the
+  `sextant tui` menu pick it up automatically. NOTE: nothing in production
+  publishes input-requests yet, so the surface is empty against a live
+  daemon until an escalation producer lands (RFC §6 / Open Q5). Resolves
+  `plans/issues/feat-tui-pending-component.md`.
 - **`pkg/tui/widget` shared TUI toolkit** — the widget layer the
   interactive-surface workstream composes: `ListPane[T]` (generic cursor
   list with nav / selection / `/`-filter / scroll-window), `StreamViewport`

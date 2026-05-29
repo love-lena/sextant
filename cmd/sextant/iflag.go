@@ -10,13 +10,12 @@
 //   - sextant agents list -i        → pkg/tui/agents.Model
 //   - sextant agents show <id> -i   → pkg/tui/agents.Model, seeded
 //     with the requested UUID via LoadMsg.
+//   - sextant pending list -i       → pkg/tui/pending.Model
+//     (ListPane over the user_input.> subject).
 //
 // Future wiring (skipped because the matching Component doesn't yet
 // exist — file a follow-up before unsticking):
 //
-//   - sextant pending list -i       → needs pkg/tui/pending.Model
-//     (no such package yet; pending today is a non-interactive RPC
-//     snapshot).
 //   - sextant traces show <id> -i   → needs pkg/tui/traces.Model
 //     (no such package yet; traces today renders a static span tree).
 //   - sextant agents context <id> -i → ships with
@@ -32,13 +31,15 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/love-lena/sextant/pkg/tui/agents"
+	"github.com/love-lena/sextant/pkg/tui/pending"
 )
 
 // tuiLauncher is the seam tests substitute to assert that the `-i`
 // path was taken without booting a tea.Program. Production code uses
-// runAgentsListTUI; tests overwrite this with a recorder.
+// the runXxxTUI functions; tests overwrite this with a recorder.
 type tuiLauncher interface {
 	RunAgentsList(ctx context.Context, configDir, selectedID string) error
+	RunPendingList(ctx context.Context, configDir string) error
 }
 
 // realTUI is the live launcher; tests overwrite via newAgentsListIRunE's
@@ -47,6 +48,29 @@ type realTUI struct{}
 
 func (realTUI) RunAgentsList(ctx context.Context, configDir, selectedID string) error {
 	return runAgentsListTUI(ctx, configDir, selectedID)
+}
+
+func (realTUI) RunPendingList(ctx context.Context, configDir string) error {
+	return runPendingListTUI(ctx, configDir)
+}
+
+// runPendingListTUI dials the daemon, builds the pending Component, and
+// runs it under tea.NewProgram. Mirrors runAgentsListTUI.
+func runPendingListTUI(ctx context.Context, configDir string) error {
+	cli, _, err := connectAgent(ctx, configDir)
+	if err != nil {
+		return err
+	}
+	defer cli.Close() //nolint:errcheck // best-effort close
+
+	m := pending.New(pending.Options{Bus: cli})
+	standalone := pending.NewStandalone(m)
+	prog := tea.NewProgram(standalone, tea.WithAltScreen(), tea.WithContext(ctx))
+	pending.SetSender(prog.Send)
+	if _, err := prog.Run(); err != nil {
+		return fmt.Errorf("tui: %w", err)
+	}
+	return nil
 }
 
 // activeTUILauncher is the swappable seam; tests overwrite it.
@@ -166,21 +190,16 @@ func addAgentsShowIFlag(cmd *cobra.Command) {
 	}
 }
 
-// addPendingListIFlagFollowUp installs a `-i` flag on `pending list`
-// that returns a clear "not yet implemented" error pointing at the
-// follow-up ticket. Keeps the flag discoverable in `--help` so the
-// operator's muscle memory works once the Component lands.
-func addPendingListIFlagFollowUp(cmd *cobra.Command) {
+// addPendingListIFlag installs `-i` / `--tui` on `pending list` and hooks
+// it before the RunE so the pending TUI takes over when set.
+func addPendingListIFlag(cmd *cobra.Command) {
 	var interactive bool
 	cmd.Flags().BoolVarP(&interactive, "tui", "i", false,
-		"(not yet implemented; see plans/issues/feat-tui-pending-component.md)")
+		"open the interactive pending TUI instead of printing the list")
 	originalRunE := cmd.RunE
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		if interactive {
-			return errUserUsage(
-				"pending list -i: pkg/tui/pending Component not yet implemented; " +
-					"see plans/issues/feat-tui-pending-component.md",
-			)
+			return activeTUILauncher.RunPendingList(cmd.Context(), globalFlags.configDir)
 		}
 		return originalRunE(cmd, args)
 	}

@@ -71,10 +71,16 @@ func TestDashBuildPaneResolvesRegisteredComponent(t *testing.T) {
 			wantCommand: "conversation $selected_agent",
 		},
 		{
-			name:        "pending list falls back to placeholder",
+			name:        "pending list resolves to registered component",
 			pc:          paneConfig{ID: "pending", Command: "pending list"},
-			wantHosted:  false,
+			wantHosted:  true,
 			wantCommand: "pending list",
+		},
+		{
+			name:        "unregistered command falls back to placeholder",
+			pc:          paneConfig{ID: "traces", Command: "traces show"},
+			wantHosted:  false,
+			wantCommand: "traces show",
 		},
 	}
 	for _, tc := range cases {
