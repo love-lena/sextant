@@ -44,6 +44,7 @@ import (
 	// might prune those imports).
 	_ "github.com/love-lena/sextant/pkg/tui/agents"
 	_ "github.com/love-lena/sextant/pkg/tui/chat"
+	_ "github.com/love-lena/sextant/pkg/tui/pending"
 
 	"github.com/love-lena/sextant/pkg/tui/component"
 )

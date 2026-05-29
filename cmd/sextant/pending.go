@@ -153,7 +153,7 @@ func newPendingListCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().DurationVar(&since, "since", time.Hour, "lookback window (e.g. 1h, 24h)")
-	addPendingListIFlagFollowUp(cmd)
+	addPendingListIFlag(cmd)
 	return cmd
 }
 
