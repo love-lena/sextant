@@ -1,8 +1,9 @@
 ---
 title: pkg/tui/pending Component for `sextant pending list -i`
-status: open
+status: fixed
 priority: P3
 created_at: 2026-05-28T16:00-07:00
+fixed_in: 835b7af
 labels: [feature, tui, cli]
 discovered_in: 2026-05-28 implementation of [[feat-cli-iflag-tier1-components]]
 ---
