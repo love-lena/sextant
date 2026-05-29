@@ -13,8 +13,23 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
 ### Added
 
 ### Changed
+- **`sextant tui` now walks you through arg-requiring surfaces.** Picking
+  an agent-scoped surface (chat, agent detail, agents context) prompts an
+  agent picker (live `list_agents`, falls back to free text if the daemon
+  is unreachable); a trace surface prompts for the trace id. The resolved
+  command is printed (`→ sextant agents show <uuid> -i`) so it's easy to
+  copy/paste and reuse. `component.Meta` gains `Arg` / `ArgKind` /
+  `NoIFlag` to drive this.
 
 ### Fixed
+- **`sextant tui` could only launch 5 of its 9 entries; `q`/`esc` didn't
+  quit.** Selecting chat / agent-detail / agents-context / traces errored
+  (`accepts 1 arg(s)` / `unknown shorthand flag 'i'`) because the menu ran
+  `sextant <command> -i` with no positional and no per-surface launch
+  rules. The menu now collects the required arg (above), launches chat
+  bare (it has no `-i`), and binds `q`/`esc` to quit (huh's default was
+  ctrl+c-only, contradicting the menu's own help). Found by manually
+  driving every entry through the menu in a PTY.
 
 ## [0.5.0] — 2026-05-28
 

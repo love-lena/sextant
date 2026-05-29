@@ -24,14 +24,20 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
+
+	"github.com/love-lena/sextant/pkg/rpc"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 
 	// Side-effect imports: each component package's init() calls
 	// component.Register, populating the registry walked below. Without
@@ -100,10 +106,10 @@ func runTUIMenu(cmd *cobra.Command, _ []string) error {
 			Description("Pick a TUI to open (q/esc to quit)").
 			Options(options...).
 			Value(&chosen),
-	))
+	)).WithKeyMap(quitKeyMap())
 	if err := form.Run(); err != nil {
-		// huh returns ErrUserAborted on q/esc; treat that as a clean
-		// exit rather than a process error.
+		// huh returns ErrUserAborted on q/esc/ctrl+c; treat that as a
+		// clean exit rather than a process error.
 		if isUserAbort(err) {
 			return nil
 		}
@@ -121,7 +127,99 @@ func runTUIMenu(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("tui: selected component %q not found in registry", chosen)
 	}
 
-	return execComponent(meta)
+	// Surfaces that take a positional (an agent ref, a trace id) can't be
+	// launched bare — walk the operator through supplying it.
+	arg, err := resolveArg(cmd.Context(), meta)
+	if err != nil {
+		if isUserAbort(err) {
+			return nil
+		}
+		return err
+	}
+
+	return execComponent(cmd, meta, arg)
+}
+
+// quitKeyMap is huh's default keymap with q + esc added to Quit (huh's
+// default binds Quit to ctrl+c only). In a Select, esc still clears an
+// active filter first and q is still typed into the filter when one is
+// open — so q/esc only quit from the normal nav state, which is what the
+// menu's own help text promises.
+func quitKeyMap() *huh.KeyMap {
+	km := huh.NewDefaultKeyMap()
+	km.Quit = key.NewBinding(key.WithKeys("q", "esc", "ctrl+c"), key.WithHelp("q", "quit"))
+	return km
+}
+
+// resolveArg collects the positional a surface needs before launch.
+// Returns "" when the surface takes no arg. Walks the operator through a
+// picker (ArgKind=="agent" → choose from live agents) or a free-text
+// prompt, falling back to free text when the picker can't reach the
+// daemon. Propagates huh.ErrUserAborted so the caller can exit cleanly.
+func resolveArg(ctx context.Context, m component.Meta) (string, error) {
+	if m.Arg == "" {
+		return "", nil
+	}
+	if m.ArgKind == "agent" {
+		if v, err := pickAgent(ctx, m); err == nil {
+			return v, nil
+		} else if isUserAbort(err) {
+			return "", err
+		}
+		// Daemon unreachable / no agents → fall back to free text.
+	}
+	return promptArg(m)
+}
+
+// pickAgent lists live agents and lets the operator choose one; the
+// chosen value is the agent's UUID.
+func pickAgent(ctx context.Context, m component.Meta) (string, error) {
+	cli, _, err := connectAgent(ctx, globalFlags.configDir)
+	if err != nil {
+		return "", err
+	}
+	defer cli.Close() //nolint:errcheck // best-effort close
+
+	rpcCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	var resp sextantproto.ListAgentsResponse
+	if err := cli.RPC(rpcCtx, rpc.VerbListAgents, sextantproto.ListAgentsRequest{}, &resp); err != nil {
+		return "", err
+	}
+	if len(resp.Agents) == 0 {
+		return "", fmt.Errorf("no agents to choose from")
+	}
+	opts := make([]huh.Option[string], 0, len(resp.Agents))
+	for _, a := range resp.Agents {
+		label := fmt.Sprintf("%-24s %s  %s", a.Name, a.UUID.String()[:8], a.Lifecycle)
+		opts = append(opts, huh.NewOption(label, a.UUID.String()))
+	}
+	var chosen string
+	form := huh.NewForm(huh.NewGroup(
+		huh.NewSelect[string]().
+			Title(m.Description).
+			Description(fmt.Sprintf("Pick an agent for `%s` (q/esc to cancel)", m.Command)).
+			Options(opts...).
+			Value(&chosen),
+	)).WithKeyMap(quitKeyMap())
+	if err := form.Run(); err != nil {
+		return "", err
+	}
+	return chosen, nil
+}
+
+// promptArg asks for the surface's positional as free text.
+func promptArg(m component.Meta) (string, error) {
+	var val string
+	form := huh.NewForm(huh.NewGroup(
+		huh.NewInput().
+			Title(fmt.Sprintf("%s — enter %s", m.Description, m.Arg)).
+			Value(&val),
+	)).WithKeyMap(quitKeyMap())
+	if err := form.Run(); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(val), nil
 }
 
 // buildSelectOptions converts the registry metadata into Huh options.
@@ -148,28 +246,38 @@ func findMetaByName(metas []component.Meta, name string) (component.Meta, bool) 
 	return component.Meta{}, false
 }
 
-// execComponent forks `sextant <Meta.Command> -i` with stdio passed
-// through, then waits for it to exit. The exit code surfaces back to
-// the parent via exitCodeError so the operator sees the same status
-// they would running the verb directly.
-func execComponent(m component.Meta) error {
+// launchArgs assembles the argv (after the binary) for a chosen surface:
+// the command path, the optional positional arg, and `-i` unless the
+// surface is interactive-by-default (NoIFlag). Pure — unit-tested.
+func launchArgs(m component.Meta, arg string) []string {
 	parts := strings.Fields(m.Command)
-	parts = append(parts, "-i")
+	if arg != "" {
+		parts = append(parts, arg)
+	}
+	if !m.NoIFlag {
+		parts = append(parts, "-i")
+	}
+	return parts
+}
 
-	c := exec.Command(os.Args[0], parts...) //nolint:gosec // os.Args[0] is the running binary path
+// execComponent forks `sextant <args>` with stdio passed through, after
+// printing the resolved command (so the operator can copy/paste + reuse
+// it). The child's exit code surfaces back via exitCodeError so the
+// operator sees the same status they'd get running the verb directly.
+func execComponent(cmd *cobra.Command, m component.Meta, arg string) error {
+	args := launchArgs(m, arg)
+	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "→ sextant %s\n", strings.Join(args, " "))
+
+	c := exec.Command(os.Args[0], args...) //nolint:gosec // os.Args[0] is the running binary path
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	if err := c.Run(); err != nil {
-		// Bubble the child's exit code up via exitCodeError so
-		// scripts pivot on the child verb's status, not "tui menu
-		// failed". This mirrors what cmd/sextant/exec.go does with
-		// container exit codes.
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			return &exitCodeError{code: exitErr.ExitCode()}
 		}
-		return fmt.Errorf("launch %s -i: %w", m.Command, err)
+		return fmt.Errorf("launch %s: %w", strings.Join(args, " "), err)
 	}
 	return nil
 }

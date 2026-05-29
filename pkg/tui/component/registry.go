@@ -29,6 +29,21 @@ type Meta struct {
 	Description string
 	Command     string
 	New         func() Component
+
+	// Arg names a required positional the launcher must collect before
+	// running the surface (e.g. "agent", "trace_id"). Empty means the
+	// command takes no positional. The `sextant tui` menu walks the
+	// operator through supplying it.
+	Arg string
+	// ArgKind hints how the launcher collects Arg:
+	//   "agent" — pick from a live list_agents (falls back to free text
+	//             when the daemon is unreachable)
+	//   ""      — free-text input prompt
+	ArgKind string
+	// NoIFlag launches the bare `sextant <Command> <arg>` without
+	// appending `-i`. Used by surfaces that are interactive by default
+	// (chat), where `-i` is not a valid flag.
+	NoIFlag bool
 }
 
 // registry guards the global slice. Registration happens once per

@@ -11,5 +11,7 @@ func init() {
 		Description: "Explore a distributed trace as a span tree",
 		Command:     "traces show",
 		New:         func() component.Component { return New(Options{}) },
+		Arg:         "trace_id",
+		ArgKind:     "", // free-text — trace ids aren't enumerable from a cheap RPC
 	})
 }
