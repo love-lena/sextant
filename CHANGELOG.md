@@ -11,6 +11,10 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
 ## [Unreleased]
 
 ### Added
+- **`sextant audit list -i`** — interactive audit-log browser
+  (`pkg/tui/auditlist`): a `ListPane` over the `query_audit` RPC (last
+  24h; j/k nav, `/` filter, `r` refresh, Enter emits a detail intent).
+  Self-registers for `sextant tui` / `sextant dash`. Per the RFC P2.
 - **`sextant worktree list -i`** — interactive worktree browser
   (`pkg/tui/worktreelist`): a `ListPane` over the `worktree_list` RPC
   (j/k nav, `/` filter, `r` refresh, Enter emits a diff intent).

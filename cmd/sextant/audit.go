@@ -101,6 +101,7 @@ func newAuditListCmd() *cobra.Command {
 	cmd.Flags().StringVar(&action, "action", "", "filter by action")
 	cmd.Flags().StringVar(&agent, "agent", "", "filter by agent UUID")
 	cmd.Flags().IntVar(&limit, "limit", 0, "max rows (default 1000, max 10000)")
+	addAuditListIFlag(cmd)
 	return cmd
 }
 
