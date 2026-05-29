@@ -4,14 +4,195 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/love-lena/sextant/pkg/containermgr"
 	"github.com/love-lena/sextant/pkg/rpc/handlers"
 	"github.com/love-lena/sextant/pkg/sextantproto"
 )
+
+// mountByContainerPath returns the first mount in the spec targeting
+// the given container path, or nil. Test helper for the lossless-restart
+// assertions below.
+func mountByContainerPath(spec containermgr.ContainerSpec, containerPath string) *containermgr.MountSpec {
+	for i := range spec.Mounts {
+		if spec.Mounts[i].ContainerPath == containerPath {
+			return &spec.Mounts[i]
+		}
+	}
+	return nil
+}
+
+// TestRestartReproducesLatentSpawnMounts is the C0 regression: pre-fix,
+// restart appended only 3 mounts (workspace + claude_seed +
+// claude-projects) and silently dropped gitconfig, SSH, and the git-dir
+// bind. With the single-source builder, a restart of a worktree+ssh
+// agent must carry ALL SIX mounts spawn produces, and the workspace
+// must resolve to the SAME worktree (not the stop-gap dir). This is the
+// unit-shaped expression of the docker-backed e2e acceptance criterion.
+func TestRestartReproducesLatentSpawnMounts(t *testing.T) {
+	deps, defs, incs, runner, _ := buildDeps(t)
+
+	// Worktree-enabled agent: template lists "worktree" + "ssh", and the
+	// daemon knows the repo root. This is the exact shape that exercised
+	// all six spawn mounts.
+	repoRoot := t.TempDir()
+	if err := os.MkdirAll(repoRoot+"/.git", 0o750); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	wtPath := t.TempDir()
+	wt := &stubWorktreeProvider{path: wtPath, branch: "feat-default-deadbeef"}
+	deps.Worktree = wt
+	deps.RepoRoot = repoRoot
+
+	tplJSON, err := json.Marshal(map[string]any{
+		"name":        "wt-ssh",
+		"image":       "sextant-sidecar:latest",
+		"permissions": []string{"read.agents", "control.prompt"},
+		"mounts":      []string{"worktree", "ssh"},
+		"model":       "claude-opus-4-7[1m]",
+	})
+	if err != nil {
+		t.Fatalf("marshal template: %v", err)
+	}
+	tplKV := &fakeTemplatesKV{}
+	if _, err := tplKV.Put(context.Background(), "wt-ssh", tplJSON); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+	deps.Templates = tplKV
+
+	spawnH := handlers.NewSpawnAgent(deps)
+	scap := &captureEmit{}
+	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+		Name: "alpha", Template: "wt-ssh",
+	}), scap.emit()); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if scap.resp.Error != nil {
+		t.Fatalf("spawn error: %+v", scap.resp.Error)
+	}
+	var spawnResp sextantproto.SpawnAgentResponse
+	if err := json.Unmarshal(scap.resp.Result, &spawnResp); err != nil {
+		t.Fatalf("decode spawn: %v", err)
+	}
+
+	restartH := handlers.NewRestartAgent(handlers.RestartDeps{
+		Definitions:   defs,
+		Incarnations:  incs,
+		Containers:    runner,
+		Templates:     tplKV,
+		Worktree:      wt,
+		RepoRoot:      repoRoot,
+		CA:            deps.CA,
+		WorkspaceRoot: deps.WorkspaceRoot,
+		HostID:        deps.HostID,
+		NATSURL:       deps.NATSURL,
+		NATSUser:      deps.NATSUser,
+		NATSPassword:  deps.NATSPassword,
+		MCPURL:        deps.MCPURL,
+		Issuer:        deps.Issuer,
+	})
+	rcap := &captureEmit{}
+	if err := restartH(context.Background(), makeReq(t, sextantproto.RestartAgentRequest{
+		AgentID: spawnResp.AgentID,
+	}), rcap.emit()); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if rcap.resp.Error != nil {
+		t.Fatalf("restart error: %+v", rcap.resp.Error)
+	}
+
+	if len(runner.specs) != 2 {
+		t.Fatalf("runner.specs = %d, want 2 (spawn + restart)", len(runner.specs))
+	}
+	spawnSpec := runner.specs[0]
+	restartSpec := runner.specs[1]
+
+	// The three latent mounts must be present on restart.
+	gitDirHost := repoRoot + "/.git"
+	if m := mountByContainerPath(restartSpec, gitDirHost); m == nil {
+		t.Errorf("restart missing git-dir mount at %s; mounts = %v", gitDirHost, mountSummary(restartSpec))
+	} else if m.HostPath != gitDirHost {
+		t.Errorf("git-dir mount HostPath = %q, want %q", m.HostPath, gitDirHost)
+	}
+	if m := mountByContainerPath(restartSpec, "/home/agent/.gitconfig"); m == nil {
+		t.Errorf("restart missing gitconfig mount; mounts = %v", mountSummary(restartSpec))
+	} else if !m.ReadOnly {
+		t.Error("restart gitconfig mount must be ReadOnly")
+	}
+	if m := mountByContainerPath(restartSpec, "/home/agent/.ssh"); m == nil {
+		t.Errorf("restart missing ssh mount; mounts = %v", mountSummary(restartSpec))
+	} else if !m.ReadOnly {
+		t.Error("restart ssh mount must be ReadOnly")
+	}
+
+	// Workspace resolves to the SAME worktree, not the stop-gap dir.
+	if m := mountByContainerPath(restartSpec, "/workspace"); m == nil {
+		t.Errorf("restart missing /workspace mount; mounts = %v", mountSummary(restartSpec))
+	} else if m.HostPath != wtPath {
+		t.Errorf("restart /workspace HostPath = %q, want worktree path %q", m.HostPath, wtPath)
+	}
+
+	// The container-side mount shape (path + ro + bind/volume) is
+	// identical spawn-vs-restart, modulo identity. Compare the
+	// identity-stripped projection.
+	spawnKeys := mountKeyStrings(spawnSpec)
+	restartKeys := mountKeyStrings(restartSpec)
+	if len(spawnKeys) != len(restartKeys) {
+		t.Fatalf("mount-count drift: spawn=%v restart=%v", spawnKeys, restartKeys)
+	}
+	for i := range spawnKeys {
+		if spawnKeys[i] != restartKeys[i] {
+			t.Errorf("mount[%d] drift: spawn=%q restart=%q", i, spawnKeys[i], restartKeys[i])
+		}
+	}
+
+	// Env key sets are identical (values differ only on identity keys).
+	if got, want := len(restartSpec.Env), len(spawnSpec.Env); got != want {
+		t.Errorf("env key count drift: spawn=%d restart=%d", want, got)
+	}
+	for k := range spawnSpec.Env {
+		if _, ok := restartSpec.Env[k]; !ok {
+			t.Errorf("restart env missing key %q present on spawn", k)
+		}
+	}
+
+	// Fingerprints match: an unchanged def restarted must not look like
+	// drift (the P2 contract this label seeds).
+	if spawnSpec.Labels[handlers.LabelSpecFingerprint] != restartSpec.Labels[handlers.LabelSpecFingerprint] {
+		t.Errorf("spec fingerprint drift: spawn=%q restart=%q",
+			spawnSpec.Labels[handlers.LabelSpecFingerprint],
+			restartSpec.Labels[handlers.LabelSpecFingerprint])
+	}
+}
+
+func mountSummary(spec containermgr.ContainerSpec) []string {
+	var out []string
+	for _, m := range spec.Mounts {
+		out = append(out, m.HostPath+m.VolumeName+"->"+m.ContainerPath)
+	}
+	return out
+}
+
+func mountKeyStrings(spec containermgr.ContainerSpec) []string {
+	out := make([]string, 0, len(spec.Mounts))
+	for _, m := range spec.Mounts {
+		kind := "bind"
+		if m.VolumeName != "" && m.HostPath == "" {
+			kind = "volume"
+		}
+		ro := "rw"
+		if m.ReadOnly {
+			ro = "ro"
+		}
+		out = append(out, kind+":"+m.ContainerPath+":"+ro)
+	}
+	return out
+}
 
 // TestRestartAgentReplacesLiveIncarnation walks the happy path:
 // spawn, then restart, and assert the new incarnation is in KV with

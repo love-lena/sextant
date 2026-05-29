@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -12,10 +14,10 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/love-lena/sextant/pkg/authjwt"
-	"github.com/love-lena/sextant/pkg/containermgr"
 	"github.com/love-lena/sextant/pkg/rpc"
 	"github.com/love-lena/sextant/pkg/sextantproto"
 	"github.com/love-lena/sextant/pkg/templates"
+	"github.com/love-lena/sextant/pkg/worktree"
 )
 
 // RestartDeps bundles the deps NewRestartAgent needs. It is a strict
@@ -44,16 +46,29 @@ type RestartDeps struct {
 	// host-readable path `sextant agents context` reads. Empty disables
 	// the mount (legacy daemons + unit tests).
 	AgentsDataRoot string
-	CA             *authjwt.CA
-	WorkspaceRoot  string
-	HostID         string
-	NATSURL        string
-	NATSUser       string
-	NATSPassword   string
-	MCPURL         string
-	Issuer         string
-	TestRunLabel   string
-	Now            func() time.Time
+	// Worktree, when non-nil, lets restart resolve the SAME worktree
+	// spawn created (by the deterministic spawn-worktree name) and
+	// re-mount it as /workspace — the lossless-projection requirement
+	// (RFC §5.4). Without it, a worktree agent restarts into the M11
+	// stop-gap dir and loses its git working tree. nil/no-worktree-class
+	// agents fall back to the stop-gap dir, as before.
+	Worktree WorktreeProvider
+	// RepoRoot mirrors SpawnDeps.RepoRoot. When set and the restarted
+	// agent runs in a worktree, restart re-applies the <RepoRoot>/.git
+	// bind so the worktree's `.git` pointer resolves inside the
+	// container — one of the three mounts spawn added but pre-C0 restart
+	// silently dropped. Empty disables the git-dir mount.
+	RepoRoot      string
+	CA            *authjwt.CA
+	WorkspaceRoot string
+	HostID        string
+	NATSURL       string
+	NATSUser      string
+	NATSPassword  string
+	MCPURL        string
+	Issuer        string
+	TestRunLabel  string
+	Now           func() time.Time
 }
 
 // restartCASRetries caps how many times the final definition commit
@@ -167,18 +182,30 @@ func NewRestartAgent(deps RestartDeps) rpc.Handler {
 			return emitErr(emit, sextantproto.ErrCodeInternal,
 				fmt.Sprintf("issue jwt: %v", err))
 		}
-		workspace, err := ensureWorkspaceDir(deps.WorkspaceRoot, def.UUID.String())
+		// Resolve the workspace as a pure projection of the definition.
+		// A worktree-class agent (def.Sandbox.Mounts lists "worktree")
+		// re-mounts the SAME worktree spawn created — resolved by the
+		// deterministic spawn-worktree name, never re-Created — so the
+		// git working tree survives the restart. Everything else falls
+		// back to the per-UUID stop-gap dir spawn used. This is the
+		// workspace half of the lossless-projection guarantee (RFC §5.4).
+		workspace, usingWorktree, err := resolveRestartWorkspace(ctx, deps, def)
 		if err != nil {
 			return emitErr(emit, sextantproto.ErrCodeInternal,
-				fmt.Sprintf("ensure workspace: %v", err))
+				fmt.Sprintf("resolve workspace: %v", err))
 		}
 
-		// Env is assembled by the same buildContainerEnv helper the spawn
-		// path uses so the two can't drift on the well-known SEXTANT_*
-		// keys. The pre-helper restart path silently dropped
-		// ANTHROPIC_API_KEY, SEXTANT_MODEL, SEXTANT_PERMISSION_MODE, and
-		// SEXTANT_SESSION_ID — see [[bug-restart-no-api-key-forwarding]]
-		// and [[bug-restart-preserve-session-noop]].
+		// Per-agent gitconfig — one of the three mounts spawn added but
+		// pre-C0 restart silently dropped. The file is per-UUID and
+		// idempotent (identical content each incarnation), so we write
+		// it unconditionally and don't register a rollback: a leftover
+		// file is harmless and the next spawn/restart rewrites it.
+		gitconfigPath, _, err := writeAgentGitConfig(deps.WorkspaceRoot, def.UUID, def.Name)
+		if err != nil {
+			return emitErr(emit, sextantproto.ErrCodeInternal,
+				fmt.Sprintf("write gitconfig: %v", err))
+		}
+
 		model := def.Runtime.Model
 		if strings.TrimSpace(model) == "" {
 			model = DefaultModel
@@ -191,41 +218,46 @@ func NewRestartAgent(deps RestartDeps) rpc.Handler {
 		if args.PreserveSession && def.Runtime.SessionID != nil {
 			sessionID = *def.Runtime.SessionID
 		}
-		envVars := buildContainerEnv(containerEnvInput{
-			AgentUUID:      def.UUID,
-			AgentName:      def.Name,
-			IncarnationID:  newIncID,
-			HostID:         deps.HostID,
-			NATSURL:        deps.NATSURL,
-			NATSUser:       deps.NATSUser,
-			NATSPassword:   deps.NATSPassword,
-			JWT:            jwt,
-			MCPURL:         deps.MCPURL,
-			Model:          model,
-			PermissionMode: permissionCeilingToSDKMode(def.Runtime.PermissionCeil),
-			APIKey:         hostAPIKey(),
-			SessionID:      sessionID,
-			InitialPrompt:  def.Runtime.InitialPrompt,
-			EnvOverlay:     def.Sandbox.Env,
-		})
-		labels := map[string]string{
-			LabelAgentUUID:     def.UUID.String(),
-			LabelAgentName:     def.Name,
-			LabelHostID:        deps.HostID,
-			LabelIncarnationID: newIncID.String(),
-			LabelTemplate:      def.Template,
+
+		specIn := agentContainerSpecInput{
+			Def:               def,
+			IncarnationID:     newIncID,
+			JWT:               jwt,
+			HostID:            deps.HostID,
+			NATSURL:           deps.NATSURL,
+			NATSUser:          deps.NATSUser,
+			NATSPassword:      deps.NATSPassword,
+			MCPURL:            deps.MCPURL,
+			Model:             model,
+			SessionID:         sessionID,
+			APIKey:            hostAPIKey(),
+			TestRunLabel:      deps.TestRunLabel,
+			WorkspacePath:     workspace,
+			GitConfigHostPath: gitconfigPath,
 		}
-		if deps.TestRunLabel != "" {
-			labels[LabelTestRun] = deps.TestRunLabel
+		// git-dir bind for worktree agents — resolves the worktree's
+		// `.git` pointer. Mirrors spawn exactly (RFC §5.4 + the
+		// bug-worktree-gitdir-unreachable fix).
+		if usingWorktree && deps.RepoRoot != "" {
+			specIn.GitDirHostPath = filepath.Join(deps.RepoRoot, ".git")
 		}
-		mounts := []containermgr.MountSpec{{HostPath: workspace, ContainerPath: WorkspaceMountPath}}
-		// Re-apply the claude_seed mount on restart. For copy-on-spawn
-		// mode this re-attaches the per-agent named volume — populated
-		// on the first spawn, idempotent here — so the SDK's session
-		// journal under /home/agent/.claude/projects survives the
-		// restart. Without this, --preserve-session would silently fail
-		// because the new container can't read the journal the SDK
-		// recorded in the previous incarnation's volume. See
+		// SSH read-only bind — template opt-in, read off the def's
+		// cloned mount classes. Was dropped pre-C0.
+		if mountClassListed(def.Sandbox.Mounts, templates.MountClassSSH) {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return emitErr(emit, sextantproto.ErrCodeInternal,
+					fmt.Sprintf("resolve home dir for ssh mount: %v", err))
+			}
+			specIn.SSHHostPath = filepath.Join(home, ".ssh")
+		}
+		// Re-attach the claude_seed mount. For copy-on-spawn mode this
+		// re-attaches the per-agent named volume — populated on the first
+		// spawn, idempotent here — so the SDK's session journal under
+		// /home/agent/.claude/projects survives the restart. Without it,
+		// --preserve-session would silently fail because the new
+		// container can't read the journal the SDK recorded in the
+		// previous incarnation's volume. See
 		// plans/issues/bug-claude-seed-readonly-breaks-session-persistence.md.
 		if deps.Templates != nil && def.Template != "" {
 			tpl, err := templates.LoadFromKV(ctx, deps.Templates, def.Template)
@@ -234,7 +266,7 @@ func NewRestartAgent(deps RestartDeps) rpc.Handler {
 				if expErr == nil {
 					seedMount, _, sErr := buildClaudeSeedMount(ctx, SpawnDeps{Volumes: deps.Volumes}, tpl.ResolveClaudeSeedMode(), seedPath, def.UUID, def.Sandbox.Image)
 					if sErr == nil {
-						mounts = append(mounts, seedMount)
+						specIn.ClaudeSeedMount = &seedMount
 					}
 				}
 			}
@@ -249,21 +281,11 @@ func NewRestartAgent(deps RestartDeps) rpc.Handler {
 		// See plans/issues/feat-agents-context-view.md.
 		if deps.AgentsDataRoot != "" {
 			if projectsHost, _, err := ensureAgentProjectsDir(deps.AgentsDataRoot, def.UUID); err == nil {
-				mounts = append(mounts, containermgr.MountSpec{
-					HostPath:      projectsHost,
-					ContainerPath: "/home/agent/.claude/projects",
-				})
+				specIn.ClaudeProjectsHostPath = projectsHost
 			}
 		}
-		spec := containermgr.ContainerSpec{
-			Name:       containerName(def.Name, newIncID),
-			Image:      def.Sandbox.Image,
-			Cmd:        []string{"/opt/sextant/sidecar/entrypoint.sh"},
-			Env:        envVars,
-			Mounts:     mounts,
-			Labels:     labels,
-			AutoRemove: true,
-		}
+
+		spec := buildAgentContainerSpec(specIn)
 		container, err := deps.Containers.Run(ctx, spec)
 		if err != nil {
 			// Restart is "best-effort across a failure point": leave the
@@ -409,6 +431,40 @@ func NewRestartAgent(deps RestartDeps) rpc.Handler {
 
 		return emitOK(emit, sextantproto.RestartAgentResponse{AgentID: finalDef.UUID, OK: true})
 	}
+}
+
+// resolveRestartWorkspace returns the /workspace host path for the
+// restarted incarnation and whether it is a worktree.
+//
+// Worktree-class agents (def.Sandbox.Mounts lists "worktree") with a
+// worktree provider wired re-mount the SAME worktree spawn created,
+// resolved by the deterministic spawn-worktree name. We Resolve rather
+// than Create: the worktree already exists from spawn (kill doesn't
+// destroy it; archive does), and Create rejects an existing name. If
+// the worktree can't be resolved (provider absent, name pruned, or the
+// agent never used one) we fall back to the per-UUID stop-gap dir spawn
+// uses for non-worktree agents — the same fallback materializeWorkspace
+// applies on spawn when the worktree surface is disabled.
+func resolveRestartWorkspace(ctx context.Context, deps RestartDeps, def sextantproto.AgentDefinition) (string, bool, error) {
+	if deps.Worktree != nil && mountClassListed(def.Sandbox.Mounts, templates.MountClassWorktree) {
+		name := worktree.SpawnWorktreeName(def.Template, def.UUID)
+		path, ok, err := deps.Worktree.Resolve(ctx, name)
+		if err != nil {
+			return "", false, fmt.Errorf("resolve worktree %s: %w", name, err)
+		}
+		if ok {
+			return path, true, nil
+		}
+		// Worktree not found — fall through to the stop-gap dir. The
+		// agent either never ran in a worktree (daemon had the surface
+		// disabled at spawn) or it was pruned; either way the stop-gap
+		// dir is the safe, spawn-equivalent fallback.
+	}
+	path, err := ensureWorkspaceDir(deps.WorkspaceRoot, def.UUID.String())
+	if err != nil {
+		return "", false, err
+	}
+	return path, false, nil
 }
 
 // rollbackBackgroundStop force-stops a container on a fresh background

@@ -134,13 +134,20 @@ type SpawnDeps struct {
 	Now func() time.Time
 }
 
-// WorktreeProvider is the narrow surface the spawn handler needs on
-// pkg/worktree. Defined here (consumer-side) so the handlers package
-// doesn't depend on the worktree package; the daemon adapts its
-// *worktree.Manager into this interface.
+// WorktreeProvider is the narrow surface the spawn + restart handlers
+// need on pkg/worktree. The daemon adapts its *worktree.Manager into
+// this interface.
+//
+// Resolve is the restart-path addition: restart must re-mount the same
+// worktree spawn created (the lossless-projection requirement, RFC
+// §5.4) but must NOT re-Create it — Create rejects an existing name.
+// Resolve returns the on-disk path of an already-registered worktree,
+// or ok=false when no worktree by that name exists (the agent ran in
+// the stop-gap workspace dir, or the worktree was pruned).
 type WorktreeProvider interface {
 	Create(ctx context.Context, name, baseBranch string, owningAgent uuid.UUID) (sextantproto.WorktreeInfo, error)
 	Destroy(ctx context.Context, name string, force bool) error
+	Resolve(ctx context.Context, name string) (path string, ok bool, err error)
 }
 
 // ContainerRunner is the subset of containermgr.Manager the handlers
@@ -346,11 +353,13 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 				fmt.Sprintf("issue jwt: %v", err))
 		}
 
-		// 9. Container spec. Env is assembled by buildContainerEnv so the
-		// spawn and restart paths can't drift on the well-known
-		// SEXTANT_* keys; the body of that helper mirrors
-		// specs/components/sidecar-image.md §"Env vars" exactly. See
-		// pkg/rpc/handlers/container_env.go.
+		// 9. Container spec. Built by buildAgentContainerSpec — the SOLE
+		// builder shared with restart_agent so the two paths cannot drift
+		// (RFC §5.4). The side-effecting host state (workspace, gitconfig
+		// file, claude-projects dir, claude_seed volume) is resolved here
+		// because each owns a spawn-specific rollback closure; the builder
+		// itself is a pure projection of the resolved inputs + the
+		// persisted AgentDefinition.
 		model := tpl.Model
 		if strings.TrimSpace(model) == "" {
 			model = DefaultModel
@@ -365,76 +374,38 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 		if def.Runtime.SessionID != nil {
 			sessionID = *def.Runtime.SessionID
 		}
-		envVars := buildContainerEnv(containerEnvInput{
-			AgentUUID:      agentUUID,
-			AgentName:      def.Name,
-			IncarnationID:  incID,
-			HostID:         hostID,
-			NATSURL:        deps.NATSURL,
-			NATSUser:       deps.NATSUser,
-			NATSPassword:   deps.NATSPassword,
-			JWT:            jwt,
-			MCPURL:         deps.MCPURL,
-			Model:          model,
-			PermissionMode: permissionCeilingToSDKMode(tpl.PermissionCeiling),
-			APIKey:         hostAPIKey(),
-			SessionID:      sessionID,
-			InitialPrompt:  tpl.InitialPrompt,
-			EnvOverlay:     tpl.Env,
-		})
 
-		labels := map[string]string{
-			LabelAgentUUID:     agentUUID.String(),
-			LabelAgentName:     def.Name,
-			LabelHostID:        hostID,
-			LabelIncarnationID: incID.String(),
-			LabelTemplate:      tpl.Name,
-		}
-		if deps.TestRunLabel != "" {
-			labels[LabelTestRun] = deps.TestRunLabel
-		}
-
-		// AutoRemove=true so a crashing sidecar can't leave a stopped
-		// container around. Stop() force-removes anyway as a safety net.
-		//
-		// Cmd points at the sidecar entrypoint script. The image's
-		// default CMD is /bin/bash (so the M9 smoke test stays
-		// interactive); spawning agents always overrides it to run the
-		// long-lived sidecar runtime.
-		mounts := []containermgr.MountSpec{
-			{HostPath: workspace, ContainerPath: WorkspaceMountPath},
+		specIn := agentContainerSpecInput{
+			Def:           def,
+			IncarnationID: incID,
+			JWT:           jwt,
+			HostID:        hostID,
+			NATSURL:       deps.NATSURL,
+			NATSUser:      deps.NATSUser,
+			NATSPassword:  deps.NATSPassword,
+			MCPURL:        deps.MCPURL,
+			Model:         model,
+			SessionID:     sessionID,
+			APIKey:        hostAPIKey(),
+			TestRunLabel:  deps.TestRunLabel,
+			WorkspacePath: workspace,
+			// gitconfig is written for every spawn (git identity for
+			// commits). See plans/issues/feat-container-git-config.md.
+			GitConfigHostPath: gitconfigPath,
 		}
 		// When the workspace is a worktree, the worktree's `.git` is a
 		// pointer file that names <RepoRoot>/.git/worktrees/<branch>
 		// using the host's absolute path. We must expose that exact
-		// path inside the container so git operations resolve. Mount
-		// rw because `git commit` writes blobs into <RepoRoot>/.git/
-		// objects (worktrees share the main repo's object store) and
-		// refs into <RepoRoot>/.git/worktrees/<branch>/. See
+		// path inside the container so git operations resolve. See
 		// plans/issues/bug-worktree-gitdir-unreachable-in-container.md.
 		if usingWorktree && deps.RepoRoot != "" {
-			gitdir := filepath.Join(deps.RepoRoot, ".git")
-			mounts = append(mounts, containermgr.MountSpec{
-				HostPath:      gitdir,
-				ContainerPath: gitdir,
-			})
+			specIn.GitDirHostPath = filepath.Join(deps.RepoRoot, ".git")
 		}
-		mounts = append(mounts, containermgr.MountSpec{
-			HostPath:      gitconfigPath,
-			ContainerPath: "/home/agent/.gitconfig",
-			ReadOnly:      true,
-		})
 		// Per-agent host dir for the Claude Code SDK's session JSONL.
 		// Mounted at /home/agent/.claude/projects so the SDK writer
-		// inside the container produces files the host can read
-		// directly (no docker cp, no container exec). The mount
-		// overlays on top of the claude_seed volume's /home/agent/.claude
-		// — Docker resolves the deepest-prefix mount per path, so a
-		// write under /home/agent/.claude/projects/ hits this bind
-		// while everything else under /home/agent/.claude/ still hits
-		// the seed volume. Skipped when AgentsDataRoot is empty
-		// (legacy spawn paths + unit tests).
-		// See plans/issues/feat-agents-context-view.md.
+		// inside the container produces files the host can read directly.
+		// Skipped when AgentsDataRoot is empty (legacy spawn paths + unit
+		// tests). See plans/issues/feat-agents-context-view.md.
 		if deps.AgentsDataRoot != "" {
 			projectsHost, projectsCleanup, err := ensureAgentProjectsDir(deps.AgentsDataRoot, agentUUID)
 			if err != nil {
@@ -442,29 +413,20 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 					fmt.Sprintf("create claude-projects dir: %v", err))
 			}
 			pushRollback(projectsCleanup)
-			mounts = append(mounts, containermgr.MountSpec{
-				HostPath:      projectsHost,
-				ContainerPath: "/home/agent/.claude/projects",
-			})
+			specIn.ClaudeProjectsHostPath = projectsHost
 		}
 		// Template-opt-in: bind-mount the host's ~/.ssh read-only at
 		// /home/agent/.ssh so the agent can authenticate to GitHub for
 		// `git push`. Only fires when the template lists "ssh" in
-		// `mounts` — defaults stay airtight. Read-only so a misbehaving
-		// agent can't rewrite the operator's keys. See
-		// plans/issues/feat-container-ssh-passthrough.md and
-		// specs/components/sidecar-image.md.
+		// `mounts` — defaults stay airtight. See
+		// plans/issues/feat-container-ssh-passthrough.md.
 		if wantsSSHMount(tpl) {
 			home, err := os.UserHomeDir()
 			if err != nil {
 				return emitErr(emit, sextantproto.ErrCodeInternal,
 					fmt.Sprintf("resolve home dir for ssh mount: %v", err))
 			}
-			mounts = append(mounts, containermgr.MountSpec{
-				HostPath:      filepath.Join(home, ".ssh"),
-				ContainerPath: "/home/agent/.ssh",
-				ReadOnly:      true,
-			})
+			specIn.SSHHostPath = filepath.Join(home, ".ssh")
 		}
 		// Template-declared seed for /home/agent/.claude. Two modes:
 		//
@@ -497,21 +459,13 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 				return emitErr(emit, sextantproto.ErrCodeInternal,
 					fmt.Sprintf("claude_seed (mode %q): %v", mode, err))
 			}
-			mounts = append(mounts, seedMount)
+			specIn.ClaudeSeedMount = &seedMount
 			if seedCleanup != nil {
 				pushRollback(seedCleanup)
 			}
 		}
 
-		spec := containermgr.ContainerSpec{
-			Name:       containerName(def.Name, incID),
-			Image:      tpl.Image,
-			Cmd:        []string{"/opt/sextant/sidecar/entrypoint.sh"},
-			Env:        envVars,
-			Mounts:     mounts,
-			Labels:     labels,
-			AutoRemove: true,
-		}
+		spec := buildAgentContainerSpec(specIn)
 		container, err := deps.Containers.Run(ctx, spec)
 		if err != nil {
 			return emitErr(emit, sextantproto.ErrCodeInternal,
@@ -749,12 +703,7 @@ func writeAgentGitConfig(root string, agentUUID uuid.UUID, agentName string) (st
 // contains the string "worktree". Spec: specs/architecture.md
 // §"Mount classes".
 func wantsWorktreeMount(tpl templates.Template) bool {
-	for _, m := range tpl.Mounts {
-		if m == templates.MountClassWorktree {
-			return true
-		}
-	}
-	return false
+	return mountClassListed(tpl.Mounts, templates.MountClassWorktree)
 }
 
 // wantsSSHMount returns true if the template opts into the host
@@ -762,8 +711,17 @@ func wantsWorktreeMount(tpl templates.Template) bool {
 // templates never list "ssh". See
 // plans/issues/feat-container-ssh-passthrough.md.
 func wantsSSHMount(tpl templates.Template) bool {
-	for _, m := range tpl.Mounts {
-		if m == templates.MountClassSSH {
+	return mountClassListed(tpl.Mounts, templates.MountClassSSH)
+}
+
+// mountClassListed reports whether class is present in the mount-class
+// list. Operates on a raw []string so both templates.Template.Mounts
+// (spawn) and AgentDefinition.Sandbox.Mounts (restart) can answer the
+// same question — the def's Mounts are cloned from the template's at
+// spawn time, so the restart projection is lossless.
+func mountClassListed(mounts []string, class string) bool {
+	for _, m := range mounts {
+		if m == class {
 			return true
 		}
 	}
