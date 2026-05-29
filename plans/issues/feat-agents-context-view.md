@@ -1,11 +1,28 @@
 ---
 title: Raw-context view — CLI dump + `-i` TUI tail/scroll of agent's prompt buffer
-status: open
+status: resolved
 priority: P2
 created_at: 2026-05-27T20:22-07:00
+resolved_at: 2026-05-28T22:00-07:00
 labels: [feature, cli, tui, context, observability, sidecar]
 discovered_in: 2026-05-27 conversation deferring the chat-vs-context split — Lena's minimal context requirement was "see what the agent is working with in the rawest form possible, ideally tailing a file"
 ---
+
+## Resolution
+
+Both phases shipped.
+
+- **Phase A** (CLI dump): `sextant agents context <agent>` + `--follow`
+  + `--mode=` filters, on `pkg/sessionlog` — PR #28 (`8e8f26b`), v0.3.0.
+- **Phase B** (`-i` TUI): the tailing `StreamViewport` with mode keys
+  1–6, `pkg/tui/contextview` — PR #39 (`3bae7ee`), v0.4.0. The per-line
+  renderers + `Mode`/`ParseMode` were lifted into `pkg/sessionlog`
+  (`render.go`) so the CLI dump and the TUI render identically.
+
+Built on the shared widget layer from the TUI workstream RFC
+([`plans/rfc-tui-workstream.md`](../rfc-tui-workstream.md), P1). The
+durable-replay + tool-definition-dump follow-ups noted in "Out of scope"
+below remain unfiled P3 polish.
 
 ## Summary
 
