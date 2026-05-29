@@ -1,8 +1,9 @@
 ---
 title: pkg/tui/traces Component for `sextant traces show <id> -i`
-status: open
+status: fixed
 priority: P3
 created_at: 2026-05-28T16:00-07:00
+fixed_in: edd63f4
 labels: [feature, tui, cli, observability]
 discovered_in: 2026-05-28 implementation of [[feat-cli-iflag-tier1-components]]
 ---
