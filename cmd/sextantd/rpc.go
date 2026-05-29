@@ -278,15 +278,20 @@ func (r *rpcRuntime) registerLifecycleVerbs(ca *authjwt.CA, spawnRT *spawnRuntim
 		Volumes:        spawnRT.containers,
 		Templates:      spawnDeps.Templates,
 		AgentsDataRoot: spawnDeps.AgentsDataRoot,
-		CA:             ca,
-		WorkspaceRoot:  spawnDeps.WorkspaceRoot,
-		HostID:         spawnDeps.HostID,
-		NATSURL:        spawnDeps.NATSURL,
-		NATSUser:       spawnDeps.NATSUser,
-		NATSPassword:   spawnDeps.NATSPassword,
-		MCPURL:         spawnDeps.MCPURL,
-		Issuer:         spawnDeps.Issuer,
-		TestRunLabel:   spawnDeps.TestRunLabel,
+		// Worktree + RepoRoot let restart reproduce the worktree
+		// /workspace + <RepoRoot>/.git mounts spawn adds — the lossless
+		// restart projection (RFC §5.4). Same handles spawn uses.
+		Worktree:      spawnDeps.Worktree,
+		RepoRoot:      spawnDeps.RepoRoot,
+		CA:            ca,
+		WorkspaceRoot: spawnDeps.WorkspaceRoot,
+		HostID:        spawnDeps.HostID,
+		NATSURL:       spawnDeps.NATSURL,
+		NATSUser:      spawnDeps.NATSUser,
+		NATSPassword:  spawnDeps.NATSPassword,
+		MCPURL:        spawnDeps.MCPURL,
+		Issuer:        spawnDeps.Issuer,
+		TestRunLabel:  spawnDeps.TestRunLabel,
 	})); err != nil {
 		return err
 	}

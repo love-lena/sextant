@@ -26,6 +26,15 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   optional→required, removed enum value — lands without a `WireEpoch` bump.**
   A checked-in Go↔TS message corpus (`pkg/sextantproto/testdata/wire-corpus`)
   is decoded by the generated TS types so the two ends can't silently drift.
+- **Every agent container now carries a spec-fingerprint label**
+  (`sextant.spec_fingerprint`): a deterministic hash of the image, the
+  ordered mount targets, and the sorted env-var key set, stamped at
+  build time by the single-source container-spec builder. It is
+  identity-independent — a restart of an unchanged definition reproduces
+  the same fingerprint — which is the seed for control-plane drift
+  detection and converge-by-restart (RFC §5.6). No operator-facing
+  behavior change beyond the new label; it's inert until the reconciler
+  reads it.
 
 ### Changed
 - **The TypeScript client's wire constants are now generated, not
@@ -38,6 +47,18 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   `src/envelope.ts` are removed. No external consumers exist today; any code
   importing the constants from the internal `./envelope.js` path (rather than
   the package root) must import from `./proto_version.js`.
+- **`spawn_agent` and `restart_agent` now build the container spec
+  through one `buildAgentContainerSpec` projection.** Previously each
+  handler assembled the mount/env/label set inline, which is how
+  `restart` drifted from `spawn` (see Fixed). The spec is now a pure
+  projection of the persisted `AgentDefinition` plus the daemon's
+  host-environment context; the only spawn-vs-restart differences are
+  the freshly-minted incarnation id, the per-incarnation JWT, and the
+  session-resume decision — explicit parameters, never the absence of a
+  mount. `RestartDeps` gains `Worktree` + `RepoRoot` so restart can
+  re-mount the same worktree `/workspace` and the `<repo>/.git` bind
+  spawn produced (the lossless-restart prerequisite, RFC §5.4). No
+  operator-facing CLI change.
 - **`sextant tui` now walks you through arg-requiring surfaces.** Picking
   an agent-scoped surface (chat, agent detail, agents context) prompts an
   agent picker (live `list_agents`, falls back to free text if the daemon
@@ -47,6 +68,19 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   `NoIFlag` to drive this.
 
 ### Fixed
+- **`restart_agent` silently dropped three mounts `spawn_agent` adds —
+  the gitconfig, the worktree `<repo>/.git` bind, and the opt-in SSH
+  bind.** A restarted agent lost its git identity (`user.name`/`email`),
+  couldn't resolve its worktree's `.git` pointer (so `git status`/commit
+  failed), restarted into the M11 stop-gap dir instead of its worktree,
+  and — for `mounts = ["ssh"]` templates — lost `git push` auth. Latent
+  until now because restart was operator-initiated and rare; it becomes
+  load-bearing under the upcoming auto-restart path, where a lossy
+  restart would *propagate* the drift on every recovery. The
+  single-source `buildAgentContainerSpec` (above) makes restart reproduce
+  the full spawn mount set by construction; a docker-backed e2e
+  `docker inspect`s both containers and asserts identical mount sets +
+  env (modulo incarnation id / JWT). Subsumes RFC §10.3.
 - **`restart_agent` dropped the per-agent claude-projects bind-mount —
   the real reason `sextant agents context <agent>` showed nothing.**
   `spawn_agent` bind-mounts `<data>/agents/<uuid>/claude-projects` at

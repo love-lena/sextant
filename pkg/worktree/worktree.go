@@ -291,6 +291,26 @@ func (m *Manager) Get(ctx context.Context, name string) (sextantproto.WorktreeIn
 	return info, nil
 }
 
+// Resolve returns the on-disk path of an already-registered worktree
+// and ok=true, or ("", false, nil) when no worktree by that name
+// exists. It is the read-only counterpart to Create used by the
+// restart path: restart must re-mount the worktree spawn created (the
+// lossless-projection requirement, RFC §5.4) without re-Creating it
+// (Create rejects an existing name). A genuine backend error (KV
+// unreachable, corrupt entry) is returned as a non-nil err; a plain
+// "not found" is the (false, nil) case so the caller can fall back to
+// the stop-gap workspace dir.
+func (m *Manager) Resolve(ctx context.Context, name string) (string, bool, error) {
+	info, err := m.Get(ctx, name)
+	if err != nil {
+		if errors.Is(err, ErrWorktreeNotFound) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return info.Path, true, nil
+}
+
 // Diff returns `git diff <against>...<branch>` rendered as a string.
 // against defaults to "main" when empty. The diff is the
 // triple-dot variant — patches showing what <name> introduced
