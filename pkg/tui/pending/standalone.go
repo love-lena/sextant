@@ -25,7 +25,8 @@ type Standalone struct {
 // NewStandalone wraps m for `sextant pending list -i`.
 func NewStandalone(m *Model) *Standalone {
 	s := &Standalone{inner: m, th: theme.DefaultTheme()}
-	s.host = component.NewHost(m,
+	s.host = component.NewHost(
+		m,
 		component.WithChrome(s.renderChrome, HostChromeReserved),
 		component.WithInitialFocus(),
 	)

@@ -102,9 +102,11 @@ func renderRow(r Request, selected bool) string {
 
 // --- messages ---
 
-type requestUpsertMsg struct{ req Request }
-type responseMsg struct{ requestID uuid.UUID }
-type subErrMsg struct{ err error }
+type (
+	requestUpsertMsg struct{ req Request }
+	responseMsg      struct{ requestID uuid.UUID }
+	subErrMsg        struct{ err error }
+)
 
 // --- Component interface ---
 
@@ -127,6 +129,7 @@ func (m *Model) Focused() bool  { return m.focused }
 func (m *Model) ShortHelp() []key.Binding {
 	return []key.Binding{m.keys.Nav, m.keys.Answer, m.keys.Filter, m.keys.Quit}
 }
+
 func (m *Model) FullHelp() [][]key.Binding {
 	return [][]key.Binding{{m.keys.Nav, m.keys.Answer}, {m.keys.Filter, m.keys.Quit}}
 }
