@@ -15,6 +15,6 @@ package sextantproto
 // the wire format and the binary semver have meaningfully different
 // evolution rates we may split them — see follow-up ticket on wire-format
 // negotiation.
-const ProtoVersion = "0.4.0"
+const ProtoVersion = "0.5.0"
 
 //go:generate go run github.com/love-lena/sextant/cmd/sextantproto-gen -out ./schemas
