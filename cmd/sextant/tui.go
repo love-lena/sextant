@@ -42,6 +42,7 @@ import (
 	// imported only by iflag.go — also fine — yet making the dependency
 	// explicit here is the safest hedge against future refactors that
 	// might prune those imports).
+	_ "github.com/love-lena/sextant/pkg/tui/agentdetail"
 	_ "github.com/love-lena/sextant/pkg/tui/agents"
 	_ "github.com/love-lena/sextant/pkg/tui/auditlist"
 	_ "github.com/love-lena/sextant/pkg/tui/chat"

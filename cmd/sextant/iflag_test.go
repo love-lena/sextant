@@ -20,6 +20,7 @@ type recordingLauncher struct {
 	daemonLogPath      string
 	worktreeCalled     bool
 	auditCalled        bool
+	agentDetailID      string
 	configDir          string
 	selectedID         string
 	returnErr          error
@@ -64,6 +65,12 @@ func (r *recordingLauncher) RunWorktreeList(_ context.Context, configDir string)
 
 func (r *recordingLauncher) RunAuditList(_ context.Context, configDir string) error {
 	r.auditCalled = true
+	r.configDir = configDir
+	return r.returnErr
+}
+
+func (r *recordingLauncher) RunAgentsDetail(_ context.Context, configDir, agentID string) error {
+	r.agentDetailID = agentID
 	r.configDir = configDir
 	return r.returnErr
 }
