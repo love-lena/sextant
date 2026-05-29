@@ -1,0 +1,28 @@
+{
+  "id": "01010101-0101-0101-0101-010101010101",
+  "ts": "2026-05-29T12:34:56.789000Z",
+  "proto_version": "0.5.0",
+  "from": {
+    "kind": "agent",
+    "id": "11111111-1111-1111-1111-111111111111"
+  },
+  "trace_id": "01010101-0101-0101-0101-010101010101",
+  "span_id": "02020202-0202-0202-0202-020202020202",
+  "kind": "agent_frame",
+  "payload": {
+    "frame_kind": "tool_call",
+    "session_id": "sess-1",
+    "tool_name": "read_file",
+    "body": {
+      "path": "README.md"
+    },
+    "tokens": {
+      "input": 1000,
+      "output": 200,
+      "cache_read": 50
+    },
+    "tags": {
+      "agent": "lead"
+    }
+  }
+}

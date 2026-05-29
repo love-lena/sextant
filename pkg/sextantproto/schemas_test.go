@@ -74,6 +74,12 @@ func TestSchemasOnDisk(t *testing.T) {
 		if e.IsDir() {
 			continue
 		}
+		// wire.json is the contract-substrate manifest (proto_version,
+		// WireEpoch, closed enums), not a JSON Schema — it has no $schema
+		// key and is covered by TestWireManifestMatchesGoConstants.
+		if e.Name() == "wire.json" {
+			continue
+		}
 		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
 		if err != nil {
 			t.Fatalf("read %s: %v", e.Name(), err)

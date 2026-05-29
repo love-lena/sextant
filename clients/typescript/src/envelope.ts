@@ -8,38 +8,14 @@
 
 import { randomUUID } from "node:crypto";
 
+// PROTO_VERSION + the closed-enum constants (KIND_*, ADDRESS_*, FRAME_*)
+// + WIRE_EPOCH now live in the generated proto_version.ts, sourced from
+// pkg/sextantproto/schemas/wire.json — no longer hand-synced here. They
+// are re-exported from the package root via index.ts.
+import { ADDRESS_KINDS, PROTO_VERSION } from "./proto_version.js";
 import type { Address, Envelope } from "./types.generated.js";
 
-/** Envelope protocol version emitted by this client (matches Go ProtoVersion). */
-export const PROTO_VERSION = "0.5.0";
-
-/** Recognized envelope kinds. Mirrors sextantproto.Kind. */
-export const KIND_AGENT_FRAME = "agent_frame";
-export const KIND_LIFECYCLE = "lifecycle";
-export const KIND_AUDIT = "audit";
-export const KIND_TELEMETRY_SPAN = "telemetry_span";
-export const KIND_TELEMETRY_METRIC = "telemetry_metric";
-export const KIND_TELEMETRY_LOG = "telemetry_log";
-export const KIND_USER_INPUT_REQUEST = "user_input_request";
-export const KIND_USER_INPUT_RESPONSE = "user_input_response";
-export const KIND_RPC_REQUEST = "rpc_request";
-export const KIND_RPC_RESPONSE = "rpc_response";
-export const KIND_HEARTBEAT = "heartbeat";
-
-/** Recognized Address kinds. Mirrors sextantproto.AddressKind. */
-export const ADDRESS_AGENT = "agent";
-export const ADDRESS_OPERATOR = "operator";
-export const ADDRESS_DAEMON = "daemon";
-export const ADDRESS_UI = "ui";
-export const ADDRESS_EXTERNAL = "external";
-
-const VALID_ADDRESS_KINDS = new Set([
-  ADDRESS_AGENT,
-  ADDRESS_OPERATOR,
-  ADDRESS_DAEMON,
-  ADDRESS_UI,
-  ADDRESS_EXTERNAL,
-]);
+const VALID_ADDRESS_KINDS = new Set<string>(ADDRESS_KINDS);
 
 /**
  * Format a Date (or "now") as the wire timestamp form: RFC 3339 with

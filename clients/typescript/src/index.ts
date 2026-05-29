@@ -26,7 +26,12 @@ export {
   encodeEnvelope,
   formatTimestamp,
   parseTimestamp,
+} from "./envelope.js";
+// Wire contract constants — generated from pkg/sextantproto/schemas/wire.json
+// (single source of truth; no hand-sync). See src/proto_version.ts.
+export {
   PROTO_VERSION,
+  WIRE_EPOCH,
   KIND_AGENT_FRAME,
   KIND_LIFECYCLE,
   KIND_AUDIT,
@@ -43,7 +48,13 @@ export {
   ADDRESS_DAEMON,
   ADDRESS_UI,
   ADDRESS_EXTERNAL,
-} from "./envelope.js";
+  ADDRESS_KINDS,
+  FRAME_ASSISTANT_TEXT,
+  FRAME_TOOL_CALL,
+  FRAME_TOOL_RESULT,
+  FRAME_SYSTEM_NOTE,
+  FRAME_ERROR,
+} from "./proto_version.js";
 export {
   ClientClosedError,
   KVCASConflictError,

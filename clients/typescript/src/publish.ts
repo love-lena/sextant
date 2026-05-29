@@ -8,7 +8,8 @@
  */
 
 import type { Client } from "./client.js";
-import { encodeEnvelope, validateEnvelope, formatTimestamp, PROTO_VERSION } from "./envelope.js";
+import { encodeEnvelope, validateEnvelope, formatTimestamp } from "./envelope.js";
+import { PROTO_VERSION } from "./proto_version.js";
 import type { Envelope } from "./types.generated.js";
 
 export async function publish(client: Client, subject: string, env: Envelope): Promise<void> {

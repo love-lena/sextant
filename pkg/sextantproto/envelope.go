@@ -64,6 +64,19 @@ func (k AddressKind) IsValid() bool {
 	}
 }
 
+// AllAddressKinds returns every AddressKind in canonical order. Used by
+// code generation (the wire.json manifest + generated TS constants) and
+// tests; do not rely on it for hot paths.
+func AllAddressKinds() []AddressKind {
+	return []AddressKind{
+		AddressAgent,
+		AddressOperator,
+		AddressDaemon,
+		AddressUI,
+		AddressExternal,
+	}
+}
+
 // Kind is the envelope discriminator. Every value here corresponds to a
 // payload type in this package.
 type Kind string
