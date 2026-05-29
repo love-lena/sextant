@@ -33,7 +33,7 @@ func newWorktreeCmd() *cobra.Command {
 }
 
 func newWorktreeListCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List every worktree in the registry",
 		Args:  cobra.NoArgs,
@@ -67,6 +67,8 @@ func newWorktreeListCmd() *cobra.Command {
 			return tw.Flush()
 		},
 	}
+	addWorktreeListIFlag(cmd)
+	return cmd
 }
 
 func newWorktreeCreateCmd() *cobra.Command {

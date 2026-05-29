@@ -48,6 +48,7 @@ import (
 	_ "github.com/love-lena/sextant/pkg/tui/logsview"
 	_ "github.com/love-lena/sextant/pkg/tui/pending"
 	_ "github.com/love-lena/sextant/pkg/tui/traces"
+	_ "github.com/love-lena/sextant/pkg/tui/worktreelist"
 
 	"github.com/love-lena/sextant/pkg/tui/component"
 )
