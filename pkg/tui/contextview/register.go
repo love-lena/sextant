@@ -10,5 +10,7 @@ func init() {
 		Description: "Tail an agent's raw SDK session context",
 		Command:     "agents context",
 		New:         func() component.Component { return New(Options{}) },
+		Arg:         "agent",
+		ArgKind:     "agent",
 	})
 }

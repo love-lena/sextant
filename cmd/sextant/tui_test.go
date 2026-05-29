@@ -113,6 +113,45 @@ func TestFindMetaByName(t *testing.T) {
 	}
 }
 
+// TestLaunchArgs covers the argv assembly: arg-less surfaces get `-i`,
+// arg-requiring surfaces get the positional before `-i`, and NoIFlag
+// surfaces (chat) launch bare with the positional and no `-i`.
+func TestLaunchArgs(t *testing.T) {
+	cases := []struct {
+		name string
+		meta component.Meta
+		arg  string
+		want []string
+	}{
+		{
+			name: "arg-less list surface",
+			meta: component.Meta{Command: "worktree list"},
+			arg:  "",
+			want: []string{"worktree", "list", "-i"},
+		},
+		{
+			name: "arg-requiring detail surface",
+			meta: component.Meta{Command: "agents show", Arg: "agent", ArgKind: "agent"},
+			arg:  "c5f20c2f",
+			want: []string{"agents", "show", "c5f20c2f", "-i"},
+		},
+		{
+			name: "chat launches bare (NoIFlag) with the agent",
+			meta: component.Meta{Command: "agents chat", Arg: "agent", NoIFlag: true},
+			arg:  "assistant",
+			want: []string{"agents", "chat", "assistant"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := launchArgs(tc.meta, tc.arg)
+			if strings.Join(got, " ") != strings.Join(tc.want, " ") {
+				t.Errorf("launchArgs = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestRunTUIMenuEmptyRegistry verifies the empty-registry path prints
 // a friendly message and returns nil rather than crashing.
 func TestRunTUIMenuEmptyRegistry(t *testing.T) {
