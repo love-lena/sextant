@@ -15,13 +15,12 @@ import { randomUUID } from "node:crypto";
 import { createInbox, type Subscription } from "nats";
 
 import type { Client } from "./client.js";
+import { newEnvelope, encodeEnvelope } from "./envelope.js";
 import {
   KIND_RPC_REQUEST,
   KIND_RPC_RESPONSE,
   ADDRESS_OPERATOR,
-  newEnvelope,
-  encodeEnvelope,
-} from "./envelope.js";
+} from "./proto_version.js";
 import { RPCError, RPCTimeoutError } from "./errors.js";
 import type { Envelope, RPCResponse, Address } from "./types.generated.js";
 

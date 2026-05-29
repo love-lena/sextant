@@ -26,6 +26,19 @@ const (
 	FrameError         FrameKind = "error"
 )
 
+// AllFrameKinds returns every AgentFramePayload.FrameKind in canonical
+// order. Used by code generation (the wire.json manifest + generated TS
+// constants) and tests; do not rely on it for hot paths.
+func AllFrameKinds() []FrameKind {
+	return []FrameKind{
+		FrameAssistantText,
+		FrameToolCall,
+		FrameToolResult,
+		FrameSystemNote,
+		FrameError,
+	}
+}
+
 // FrameTokens carries optional token-accounting numbers reported by the SDK.
 type FrameTokens struct {
 	Input        int64 `json:"input"`

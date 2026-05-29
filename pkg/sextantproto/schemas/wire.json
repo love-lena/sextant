@@ -1,0 +1,31 @@
+{
+  "proto_version": "0.5.0",
+  "wire_epoch": 1,
+  "kinds": [
+    "agent_frame",
+    "lifecycle",
+    "audit",
+    "telemetry_span",
+    "telemetry_metric",
+    "telemetry_log",
+    "user_input_request",
+    "user_input_response",
+    "rpc_request",
+    "rpc_response",
+    "heartbeat"
+  ],
+  "address_kinds": [
+    "agent",
+    "operator",
+    "daemon",
+    "ui",
+    "external"
+  ],
+  "frame_kinds": [
+    "assistant_text",
+    "tool_call",
+    "tool_result",
+    "system_note",
+    "error"
+  ]
+}
