@@ -11,6 +11,20 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
 ## [Unreleased]
 
 ### Added
+
+### Changed
+
+### Fixed
+
+## [0.4.0] — 2026-05-28
+
+Interactive-surfaces workstream, phase 1: a shared TUI widget layer
+(`pkg/tui/widget`) plus three new `-i` surfaces composed from it
+(`pending list`, `traces show`, `agents context`). MINOR bump —
+everything is additive; no verb, flag, output format, or wire shape was
+removed. Per the RFC `plans/rfc-tui-workstream.md` (P0 + P1).
+
+### Added
 - **`sextant agents context <agent> -i` (Phase B)** — the raw-context
   view's interactive TUI (`pkg/tui/contextview`): a scrollable, tailing
   `StreamViewport` over the agent's SDK session JSONL with mode keys 1–6
@@ -45,6 +59,11 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   `plans/rfc-tui-workstream.md` (P0).
 
 ### Changed
+- **Proto version → 0.4.0** to track the binary number (per
+  `conventions/versioning.md`, proto tracks the binary until the
+  version-line split lands). **No wire change this window** — the new
+  surfaces are pure front-ends over existing RPCs / subjects / files;
+  no RPC, envelope field, or payload shape changed.
 
 ### Fixed
 - **Sidecar `version` reported a stale hard-coded string** —
@@ -226,6 +245,7 @@ untagged releases (`v0.1.x` informal) lacked.
   through #12). Documented in `plans/issues/` with deferred /
   resolved tickets cross-linked.
 
-[Unreleased]: https://github.com/love-lena/sextant/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/love-lena/sextant/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/love-lena/sextant/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/love-lena/sextant/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/love-lena/sextant/releases/tag/v0.2.0
