@@ -11,6 +11,14 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
 ## [Unreleased]
 
 ### Added
+- **`sextant agents context <agent> -i` (Phase B)** — the raw-context
+  view's interactive TUI (`pkg/tui/contextview`): a scrollable, tailing
+  `StreamViewport` over the agent's SDK session JSONL with mode keys 1–6
+  (raw/conversation/tools/thinking/usage/tree). The per-line rendering +
+  mode vocabulary moved into `pkg/sessionlog` (`Mode` / `RenderLine` /
+  `ParseMode`), so the CLI dump and the TUI render identically (DRY).
+  Self-registers for `sextant tui` / `sextant dash`. Completes
+  `plans/issues/feat-agents-context-view.md`.
 - **`sextant traces show <id> -i`** — interactive span-tree explorer
   (`pkg/tui/traces`): a collapse/expand outline (j/k nav, Enter toggles,
   Esc collapses) over a `query_trace` result, built on `widget.ListPane`
