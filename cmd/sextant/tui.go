@@ -43,6 +43,7 @@ import (
 	// explicit here is the safest hedge against future refactors that
 	// might prune those imports).
 	_ "github.com/love-lena/sextant/pkg/tui/agents"
+	_ "github.com/love-lena/sextant/pkg/tui/auditlist"
 	_ "github.com/love-lena/sextant/pkg/tui/chat"
 	_ "github.com/love-lena/sextant/pkg/tui/contextview"
 	_ "github.com/love-lena/sextant/pkg/tui/logsview"

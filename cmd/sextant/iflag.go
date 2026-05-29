@@ -31,6 +31,7 @@ import (
 
 	"github.com/love-lena/sextant/pkg/sessionlog"
 	"github.com/love-lena/sextant/pkg/tui/agents"
+	"github.com/love-lena/sextant/pkg/tui/auditlist"
 	"github.com/love-lena/sextant/pkg/tui/contextview"
 	"github.com/love-lena/sextant/pkg/tui/logsview"
 	"github.com/love-lena/sextant/pkg/tui/pending"
@@ -49,6 +50,7 @@ type tuiLauncher interface {
 	RunAgentsContext(ctx context.Context, configDir, projectsDir, sessionID string) error
 	RunDaemonLogs(ctx context.Context, logPath string) error
 	RunWorktreeList(ctx context.Context, configDir string) error
+	RunAuditList(ctx context.Context, configDir string) error
 }
 
 // realTUI is the live launcher; tests overwrite via newAgentsListIRunE's
@@ -77,6 +79,41 @@ func (realTUI) RunDaemonLogs(ctx context.Context, logPath string) error {
 
 func (realTUI) RunWorktreeList(ctx context.Context, configDir string) error {
 	return runWorktreeListTUI(ctx, configDir)
+}
+
+func (realTUI) RunAuditList(ctx context.Context, configDir string) error {
+	return runAuditListTUI(ctx, configDir)
+}
+
+// runAuditListTUI dials the daemon, builds the auditlist Component, and
+// runs it. Mirrors runWorktreeListTUI.
+func runAuditListTUI(ctx context.Context, configDir string) error {
+	cli, _, err := connectAgent(ctx, configDir)
+	if err != nil {
+		return err
+	}
+	defer cli.Close() //nolint:errcheck // best-effort close
+
+	m := auditlist.New(auditlist.Options{Bus: cli})
+	prog := tea.NewProgram(auditlist.NewStandalone(m), tea.WithAltScreen(), tea.WithContext(ctx))
+	if _, err := prog.Run(); err != nil {
+		return fmt.Errorf("tui: %w", err)
+	}
+	return nil
+}
+
+// addAuditListIFlag installs `-i` / `--tui` on `audit list`.
+func addAuditListIFlag(cmd *cobra.Command) {
+	var interactive bool
+	cmd.Flags().BoolVarP(&interactive, "tui", "i", false,
+		"open the interactive audit TUI instead of printing the list")
+	originalRunE := cmd.RunE
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		if interactive {
+			return activeTUILauncher.RunAuditList(cmd.Context(), globalFlags.configDir)
+		}
+		return originalRunE(cmd, args)
+	}
 }
 
 // runWorktreeListTUI dials the daemon, builds the worktreelist Component,
