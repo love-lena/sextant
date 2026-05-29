@@ -36,6 +36,7 @@ import (
 	"github.com/love-lena/sextant/pkg/tui/pending"
 	"github.com/love-lena/sextant/pkg/tui/traces"
 	"github.com/love-lena/sextant/pkg/tui/widget"
+	"github.com/love-lena/sextant/pkg/tui/worktreelist"
 )
 
 // tuiLauncher is the seam tests substitute to assert that the `-i`
@@ -47,6 +48,7 @@ type tuiLauncher interface {
 	RunTracesShow(ctx context.Context, configDir, traceID string) error
 	RunAgentsContext(ctx context.Context, configDir, projectsDir, sessionID string) error
 	RunDaemonLogs(ctx context.Context, logPath string) error
+	RunWorktreeList(ctx context.Context, configDir string) error
 }
 
 // realTUI is the live launcher; tests overwrite via newAgentsListIRunE's
@@ -71,6 +73,41 @@ func (realTUI) RunAgentsContext(ctx context.Context, _ /*configDir*/, projectsDi
 
 func (realTUI) RunDaemonLogs(ctx context.Context, logPath string) error {
 	return runDaemonLogsTUI(ctx, logPath)
+}
+
+func (realTUI) RunWorktreeList(ctx context.Context, configDir string) error {
+	return runWorktreeListTUI(ctx, configDir)
+}
+
+// runWorktreeListTUI dials the daemon, builds the worktreelist Component,
+// and runs it. Mirrors runPendingListTUI.
+func runWorktreeListTUI(ctx context.Context, configDir string) error {
+	cli, _, err := connectAgent(ctx, configDir)
+	if err != nil {
+		return err
+	}
+	defer cli.Close() //nolint:errcheck // best-effort close
+
+	m := worktreelist.New(worktreelist.Options{Bus: cli})
+	prog := tea.NewProgram(worktreelist.NewStandalone(m), tea.WithAltScreen(), tea.WithContext(ctx))
+	if _, err := prog.Run(); err != nil {
+		return fmt.Errorf("tui: %w", err)
+	}
+	return nil
+}
+
+// addWorktreeListIFlag installs `-i` / `--tui` on `worktree list`.
+func addWorktreeListIFlag(cmd *cobra.Command) {
+	var interactive bool
+	cmd.Flags().BoolVarP(&interactive, "tui", "i", false,
+		"open the interactive worktree TUI instead of printing the list")
+	originalRunE := cmd.RunE
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		if interactive {
+			return activeTUILauncher.RunWorktreeList(cmd.Context(), globalFlags.configDir)
+		}
+		return originalRunE(cmd, args)
+	}
 }
 
 // runDaemonLogsTUI tails the daemon log file and runs the logsview
