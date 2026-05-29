@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 
 	"github.com/love-lena/sextant/pkg/rpc"
 	"github.com/love-lena/sextant/pkg/sextantproto"
+	"github.com/love-lena/sextant/pkg/tui/traces"
 )
 
 func newTracesCmd() *cobra.Command {
@@ -51,68 +51,32 @@ func newTracesShowCmd() *cobra.Command {
 			return renderSpanTree(out, resp.Spans)
 		},
 	}
-	addTracesShowIFlagFollowUp(cmd)
+	addTracesShowIFlag(cmd)
 	return cmd
 }
 
-// renderSpanTree projects spans into a parent→children index, then
-// walks every root in Timestamp order.
+// renderSpanTree prints the span tree to stdout. The tree projection is
+// shared with the interactive `traces show -i` surface via
+// pkg/tui/traces (BuildSpanTree + FlattenVisible) so the layout logic
+// lives in exactly one place.
 func renderSpanTree(w io.Writer, spans []sextantproto.TraceSpan) error {
 	if len(spans) == 0 {
 		_, err := fmt.Fprintln(w, "no spans")
 		return err
 	}
-	children := map[string][]sextantproto.TraceSpan{}
-	known := map[string]bool{}
-	for _, s := range spans {
-		known[s.SpanID] = true
-	}
-	roots := make([]sextantproto.TraceSpan, 0)
-	for _, s := range spans {
-		if s.ParentSpanID == "" || !known[s.ParentSpanID] {
-			roots = append(roots, s)
-			continue
-		}
-		children[s.ParentSpanID] = append(children[s.ParentSpanID], s)
-	}
-	for k := range children {
-		sort.Slice(children[k], func(i, j int) bool {
-			return children[k][i].Timestamp.Before(children[k][j].Timestamp)
-		})
-	}
-	sort.Slice(roots, func(i, j int) bool {
-		return roots[i].Timestamp.Before(roots[j].Timestamp)
-	})
-	type frame struct {
-		span  sextantproto.TraceSpan
-		depth int
-	}
-	stack := make([]frame, 0, len(spans))
-	for i := len(roots) - 1; i >= 0; i-- {
-		stack = append(stack, frame{span: roots[i], depth: 0})
-	}
-	for len(stack) > 0 {
-		top := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		printSpan(w, top.span, top.depth)
-		kids, ok := children[top.span.SpanID]
-		if !ok {
-			continue
-		}
-		for i := len(kids) - 1; i >= 0; i-- {
-			stack = append(stack, frame{span: kids[i], depth: top.depth + 1})
-		}
+	for _, row := range traces.FlattenVisible(traces.BuildSpanTree(spans), nil) {
+		printSpanRow(w, row)
 	}
 	return nil
 }
 
-func printSpan(w io.Writer, s sextantproto.TraceSpan, depth int) {
-	indent := strings.Repeat("  ", depth)
-	dur := time.Duration(s.DurationNanos)
+func printSpanRow(w io.Writer, r traces.Row) {
+	indent := strings.Repeat("  ", r.Depth)
+	dur := time.Duration(r.Span.DurationNanos)
 	status := ""
-	if s.StatusCode != "" && s.StatusCode != "STATUS_CODE_OK" && s.StatusCode != "OK" {
-		status = " [" + s.StatusCode + "]"
+	if sc := r.Span.StatusCode; sc != "" && sc != "STATUS_CODE_OK" && sc != "OK" {
+		status = " [" + sc + "]"
 	}
 	printf(w, "%s%s%s (%s) %s\n",
-		indent, s.SpanName, status, dur, s.SpanID)
+		indent, r.Span.SpanName, status, dur, r.Span.SpanID)
 }

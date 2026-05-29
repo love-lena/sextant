@@ -11,6 +11,13 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
 ## [Unreleased]
 
 ### Added
+- **`sextant traces show <id> -i`** — interactive span-tree explorer
+  (`pkg/tui/traces`): a collapse/expand outline (j/k nav, Enter toggles,
+  Esc collapses) over a `query_trace` result, built on `widget.ListPane`
+  fed a flattened depth-annotated row slice. The static `traces show`
+  stdout renderer now shares the same `BuildSpanTree` / `FlattenVisible`
+  projection (DRY). Self-registers for `sextant tui` / `sextant dash`.
+  Resolves `plans/issues/feat-tui-traces-component.md`.
 - **`sextant pending list -i` + dash pending pane** — the pending-requests
   TUI now exists (`pkg/tui/pending`): a live `ListPane` of unanswered
   user_input requests with j/k nav, `/` filter, and Enter emitting an

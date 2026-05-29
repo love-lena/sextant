@@ -14,6 +14,7 @@ import (
 type recordingLauncher struct {
 	called        bool
 	pendingCalled bool
+	tracesID      string
 	configDir     string
 	selectedID    string
 	returnErr     error
@@ -28,6 +29,12 @@ func (r *recordingLauncher) RunAgentsList(_ context.Context, configDir, selected
 
 func (r *recordingLauncher) RunPendingList(_ context.Context, configDir string) error {
 	r.pendingCalled = true
+	r.configDir = configDir
+	return r.returnErr
+}
+
+func (r *recordingLauncher) RunTracesShow(_ context.Context, configDir, traceID string) error {
+	r.tracesID = traceID
 	r.configDir = configDir
 	return r.returnErr
 }
@@ -121,18 +128,22 @@ func TestPendingListIFlagRoutesToTUI(t *testing.T) {
 	}
 }
 
-// TestTracesShowIFlagSurfacesFollowUp is the traces equivalent.
-func TestTracesShowIFlagSurfacesFollowUp(t *testing.T) {
+// TestTracesShowIFlagRoutesToTUI verifies `traces show <id> -i`
+// dispatches through the launcher seam with the trace id (replaces the
+// old placeholder test now that pkg/tui/traces exists).
+func TestTracesShowIFlagRoutesToTUI(t *testing.T) {
+	rec := &recordingLauncher{returnErr: errors.New("ok")}
+	withTUILauncher(t, rec)
+
 	root := newRootCmd()
 	root.SetOut(&bytes.Buffer{})
 	root.SetErr(&bytes.Buffer{})
-	root.SetArgs([]string{"traces", "show", "abc123", "-i"})
-	err := root.Execute()
-	if err == nil {
-		t.Fatal("expected error from traces show -i; got nil")
+	root.SetArgs([]string{"traces", "show", "abc-123", "-i"})
+	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "ok") {
+		t.Fatalf("Execute returned %v, want stub error 'ok'", err)
 	}
-	if !strings.Contains(err.Error(), "feat-tui-traces-component") {
-		t.Errorf("error %q should mention the follow-up ticket", err.Error())
+	if rec.tracesID != "abc-123" {
+		t.Fatalf("traces launcher got id %q, want abc-123", rec.tracesID)
 	}
 }
 
