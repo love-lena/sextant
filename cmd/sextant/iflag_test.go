@@ -19,6 +19,7 @@ type recordingLauncher struct {
 	contextSessionID   string
 	daemonLogPath      string
 	worktreeCalled     bool
+	auditCalled        bool
 	configDir          string
 	selectedID         string
 	returnErr          error
@@ -57,6 +58,12 @@ func (r *recordingLauncher) RunDaemonLogs(_ context.Context, logPath string) err
 
 func (r *recordingLauncher) RunWorktreeList(_ context.Context, configDir string) error {
 	r.worktreeCalled = true
+	r.configDir = configDir
+	return r.returnErr
+}
+
+func (r *recordingLauncher) RunAuditList(_ context.Context, configDir string) error {
+	r.auditCalled = true
 	r.configDir = configDir
 	return r.returnErr
 }
@@ -166,6 +173,24 @@ func TestWorktreeListIFlagRoutesToTUI(t *testing.T) {
 	}
 	if !rec.worktreeCalled {
 		t.Fatal("worktree TUI launcher not invoked under -i")
+	}
+}
+
+// TestAuditListIFlagRoutesToTUI verifies `audit list -i` routes through
+// the launcher seam (the flag handler calls the launcher directly).
+func TestAuditListIFlagRoutesToTUI(t *testing.T) {
+	rec := &recordingLauncher{returnErr: errors.New("ok")}
+	withTUILauncher(t, rec)
+
+	root := newRootCmd()
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{"audit", "list", "-i"})
+	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "ok") {
+		t.Fatalf("Execute returned %v, want stub error 'ok'", err)
+	}
+	if !rec.auditCalled {
+		t.Fatal("audit TUI launcher not invoked under -i")
 	}
 }
 
