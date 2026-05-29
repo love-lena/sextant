@@ -24,11 +24,21 @@ This RFC proposes building the **widget layer** the 0.3.0 wave skipped:
 3. **Deliver the surface catalog as thin compositions.** Each new TUI
    becomes ~a screen of glue, not a from-scratch model.
 
-**The whole P0–P2 catalog ships with zero backend work.** Every surface
-is a new *front-end* over an RPC verb, NATS subject, or file path that
-already exists — verified against the RPC catalog (§6). (One *optional*
-P3 surface, `templates list`, may want a trivial read endpoint; flagged,
-not hidden.)
+**The widget layer + every P0–P2 surface ships with zero backend
+work.** Every surface is a new *front-end* over an RPC verb, NATS
+subject, or file path that already exists — verified against the RPC
+catalog (§6). Two honest caveats, both surfaced (not hidden) after an
+adversarial review pass (Appendix C):
+
+- **`pending` renders correctly but has no live data yet** — nothing in
+  production publishes input-*requests* (only test fixtures do; the
+  existing `pending list` CLI has the same gap). The TUI is buildable
+  and correct; making it *useful* needs an agent→operator escalation
+  producer, which **is** backend work. So `pending` ships as a
+  front-end ahead of its data pipeline (§6, Open Q5).
+- **`agents show` detail is a client-side aggregation** of 3–4 existing
+  calls, with graceful degradation when a field is unavailable — not
+  one ready RPC, but not new backend either (§6).
 
 Delivered in four independently-shippable phases:
 
@@ -103,6 +113,15 @@ distinct from `pkg/tui/component/` (which owns the *mount* contract:
 sub-model a surface embeds; it is **not** a `Component` (it has no
 lifecycle/registry identity of its own). See Open Question 2.
 
+**Receiver convention (load-bearing).** Every widget uses **pointer
+receivers and mutates in place**; `Update` returns only an *action* or
+`tea.Cmd`, never a copy of itself. This deliberately diverges from the
+value-receiver `tea.Model` style in `pkg/tui/agents` — embedding a
+value-returning widget inside a pointer `Component` (which is how
+`Host.Update` type-asserts `tea.Model` back to `Component`,
+`host.go:122-131`) is a copy/staleness trap. Pointer-in-place sidesteps
+it. (Surfaced by the review — Appendix C #9.)
+
 Every widget consumes `pkg/theme` role tokens — no bare palette indices,
 matching `conventions/tui-conventions.md`.
 
@@ -133,7 +152,7 @@ func NewList[T any](cfg ListConfig[T]) ListPane[T]
 
 func (l *ListPane[T]) SetRows(rows []T)        // re-render; clamp cursor
 func (l *ListPane[T]) SetSize(w, h int)
-func (l *ListPane[T]) Update(msg tea.Msg) (ListPane[T], ListAction[T]) // j/k/g/G, `/`, enter
+func (l *ListPane[T]) Update(msg tea.Msg) ListAction[T] // pointer rx, mutates in place; j/k/g/G, `/`, enter
 func (l *ListPane[T]) View() string
 func (l *ListPane[T]) Selected() (T, bool)     // current row
 ```
@@ -171,7 +190,7 @@ func NewStreamViewport(maxLines int) StreamViewport // ring-buffer cap
 func (s *StreamViewport) SetSize(w, h int)
 func (s *StreamViewport) SetContent(lines []string) // replace (one-shot dump)
 func (s *StreamViewport) Append(lines ...string)    // tail; sticks to bottom unless scrolled up
-func (s *StreamViewport) Update(msg tea.Msg) (StreamViewport, tea.Cmd) // j/k, PgUp/Dn, g/G, ^d/^u
+func (s *StreamViewport) Update(msg tea.Msg) tea.Cmd // pointer rx, in place; j/k, PgUp/Dn, g/G, ^d/^u
 func (s *StreamViewport) View() string
 func (s *StreamViewport) Following() bool            // for the chrome's follow indicator
 ```
@@ -204,7 +223,7 @@ type Section struct {
 func NewDetail() DetailPane
 func (d *DetailPane) SetSections(secs []Section)
 func (d *DetailPane) SetSize(w, h int)
-func (d *DetailPane) Update(msg tea.Msg) (DetailPane, tea.Cmd) // scroll only
+func (d *DetailPane) Update(msg tea.Msg) tea.Cmd // pointer rx, in place; scroll only
 func (d *DetailPane) View() string
 ```
 
@@ -222,23 +241,45 @@ Today the goroutine that feeds a surface is copy-pasted per surface:
 ```go
 package widget // or pkg/tui/widget/stream
 
-// Source is anything that yields items until closed: a NATS subscription,
-// a tailed file, or a one-shot RPC that emits once and closes.
+// Event carries one item OR an error — the channel never silently drops
+// failures. Terminal marks the last event (OnceSource sets it; a closed
+// subscription/tail just closes the channel).
+type Event[T any] struct {
+	Item     T
+	Err      error
+	Terminal bool
+}
+
+// Source is anything that yields Events until closed: a NATS
+// subscription, a tailed file, or a one-shot RPC.
 type Source[T any] interface {
-	Events() <-chan T
+	Events() <-chan Event[T]
 	Close() error
 }
 
 func SubscribeSource(cli Bus, subject string, opts ...client.SubscribeOption) Source[client.Message]
 func TailSource(path string) Source[string]   // wraps nxadm/tail
-func OnceSource[T any](fn func() (T, error)) Source[T]
+func OnceSource[T any](fn func() (T, error)) Source[T] // emits one Event{Terminal:true}
 
-// Pump drains src into send until the channel closes or ctx cancels.
-func Pump[T any](ctx context.Context, src Source[T], send func(tea.Msg), wrap func(T) tea.Msg)
+// Pump drains src into send until the channel closes or ctx cancels,
+// routing items and errors through the caller's wrappers.
+func Pump[T any](ctx context.Context, src Source[T], send func(tea.Msg),
+	onItem func(T) tea.Msg, onErr func(error) tea.Msg)
 ```
 
-This collapses the per-surface drain boilerplate to one line each and is
-the single seam tests fake.
+**What it standardizes — and what it deliberately doesn't.** The adapter
+unifies only the *plumbing* (open → drain → close → surface errors as
+`component.ErrorMsg`). It does **not** flatten the sources' different
+semantics, because they genuinely differ: NATS messages carry
+`Ack`/`StreamSeq`/decode-`Err` (`pkg/client/subscribe.go`), a file tail
+surfaces inotify/rotation errors, and an RPC is a single terminal
+result, not a stream. Those stay accessible on the item type —
+`SubscribeSource`'s `T` is `client.Message` (so `Ack`/`StreamSeq` remain
+in reach for the rare caller that needs them); `OnceSource` emits exactly
+one `Event{Terminal:true}`. The adapter buys the drain-goroutine DRY and
+a uniform error path, not a false "all sources are the same" abstraction.
+(Refined after the review flagged the original error-free `Events() <-chan
+T` as leaky — Appendix C #5.)
 
 ### 3.5 Theming + size discipline
 
@@ -263,16 +304,30 @@ implementation and one scroll implementation in the tree.
   input textarea, lifecycle header, and frame model stay.
 
 **This touches shipped, working code — the biggest risk in the RFC.**
-Mitigation:
+The adversarial review (Appendix C) sharpened the picture, and it's a
+useful inversion of intuition:
 
-1. **Lock current behavior first.** Before refactoring, ensure the
-   golden/VHS snapshots + reducer tests pin today's output. The retrofit
-   is then **green-to-green**: identical rendered frames, identical
-   keybinds.
-2. **`chat` is the harder retrofit** (its wrapping logic is entangled
-   with turn rendering). If it fights `StreamViewport`, **defer `chat`'s
-   retrofit to P3** and ship `agents` + the new surfaces on the widgets
-   first. `agents` alone proves `ListPane`. (Open Question 3.)
+- **`agents` is the *easy* retrofit but the *untested* one.** It has
+  **no golden snapshot** today — `pkg/tui/agents/model_test.go` only
+  asserts the view is non-empty. So "green-to-green" is currently
+  vacuous for `agents`. **First P0 task: add an `agents` golden snapshot
+  + reducer tests pinning exact nav/render**, *then* retrofit onto
+  `ListPane`. The retrofit is green-to-green only once that net exists.
+- **`chat` is the *well-tested* retrofit but the *hard* one.** It has a
+  golden (`pkg/tui/chat/standalone_test.go`) and a VHS tape
+  (`tests/visual/chat_default.tape`) — but it is **not an append-only
+  line stream.** It's a selected-turn renderer with composer focus
+  handoff, selection-centered clipping, bottom-padding, and per-line
+  selection-background styling (`pkg/tui/chat/{model,view}.go`). A
+  generic `StreamViewport` will fight that model.
+
+  **Recommendation (revised): defer `chat`'s full retrofit.** Extract
+  only the wrapping/viewport *math* into `StreamViewport` if anything,
+  and keep chat's turn-level model. Ship `agents` + the new P1/P2
+  surfaces on the widgets first — `agents` alone proves `ListPane`,
+  `context`/`logs` prove `StreamViewport`. **Note:** this revisits the
+  earlier "retrofit agents *and* chat" decision; the evidence now argues
+  against the chat half. Flagged as Open Question 3 for Lena's call.
 
 ---
 
@@ -284,9 +339,9 @@ Every interactive surface, its backing data path, and its status. **The
 | Surface (`-i` / TUI) | Archetype | Widget(s) | Backend source (exists today) | Status | Backend work |
 |----------------------|-----------|-----------|-------------------------------|--------|--------------|
 | `agents list` | list | ListPane | `list_agents` RPC | shipped → retrofit | none |
-| `agents show <id>` | detail | DetailPane | `get_agent_status` + sessionlog + `query_history` | **new (P2)** | none |
+| `agents show <id>` | detail | DetailPane | `get_agent_status` + `list_agents` (template) + `worktree_list` (worktree) + sessionlog (usage) + `query_history` (frames) | **new (P2)** | none† |
 | `agents chat` / `conversation` | stream | StreamViewport | `agents.<uuid>.frames` subject | shipped → retrofit | none |
-| `pending list` | list | ListPane | `user_input.>` subject | planned (P1) | none |
+| `pending list` | list | ListPane | `user_input.>` subject | planned (P1) | none‡ |
 | `traces show <id>` | tree | ListPane (tree) | `query_trace` RPC | planned (P1) | none |
 | `agents context <id>` | stream | StreamViewport + TailSource | `get_agent_status.SessionLog` + bind-mounted JSONL | planned (P1) | none |
 | `worktree list` | list + actions | ListPane | `worktree_list` RPC (+ `merge`/`destroy`/`diff`) | **new (P2)** | none |
@@ -294,17 +349,36 @@ Every interactive surface, its backing data path, and its status. **The
 | `audit list` | list | ListPane | `query_audit` RPC | **new (P2)** | none |
 | `audit tail` | stream | StreamViewport + SubscribeSource | audit NATS subject | **new (P2)** | none |
 | `events tail` | stream | StreamViewport + SubscribeSource | events subject | future (P3) | none |
-| `files ls` + `files read` | list↔stream (master/detail) | ListPane + StreamViewport | `list_dir` + `read_file` RPCs | future (P3) | none |
+| `files ls` + `files read` | list↔stream (master/detail) | ListPane + StreamViewport | `list_dir` + `read_file` RPCs | future (P3) | none§ |
 | `history` (per agent) | stream/list | StreamViewport or ListPane | `query_history` RPC (client method exists; no CLI sibling) | future (P3) | none |
 | `templates list` | list | ListPane | templates KV (no list RPC today — `templates` has only `reload`) | future (P3) | **minor*** |
 | `theme list` | list (preview) | ListPane + DetailPane | `pkg/theme` (local) | future (P3) | none |
 | `doctor` | detail/report | DetailPane | `get_version` + reachability checks | future (P3) | none |
 
-\* `templates list` is the **one** surface in the catalog that may want
-a small new read endpoint (`list_templates`) — there's a `templates
-reload` path but no list RPC. It's P3/optional and the endpoint is
-trivial; flagged here for honesty rather than buried. Everything in
-P0–P2 is confirmed front-end-only.
+\* `templates list` is the **one** surface that may want a small new
+read endpoint (`list_templates`) — there's a `templates reload` path but
+no list RPC. P3/optional, trivial; flagged, not buried.
+
+† `agents show` detail assembles from existing calls (`get_agent_status`
+carries only UUID/name/lifecycle/version/updated/heartbeat/session_log —
+template comes from `list_agents`, worktree from `worktree_list`, usage
+from the mounted session JSONL, recent frames from `query_history`). No
+new RPC; the pane **degrades gracefully** (shows "—" / "no session yet")
+when a field is missing, rather than hard-failing the way
+`agents context` does today. A future `get_agent_detail` aggregator is an
+optimization, not a P2 prerequisite.
+
+‡ `pending`: the subject exists and the TUI renders it, but **no
+production code publishes input-requests** — only `pkg/fixtures/bus.go`
+does. The existing `pending list` CLI shares this gap. The widget/TUI
+work is real P1; making the surface *populated* needs an agent→operator
+escalation producer (sidecar publishing `user_input_request`), which is
+backend work tracked separately (Open Q5). Ship the front-end; don't
+claim live data.
+
+§ `files ls`: `list_dir` returns only `Name` + `IsDir` today (the handler
+explicitly leaves `Size`/`Mode` zero). A name-only browser is fine; a
+rich one needs a `stat` fan-out or a `list_dir` metadata add. P3; noted.
 
 ---
 
@@ -340,6 +414,23 @@ consolidate these into one call — but it is an **optimization, not a
 prerequisite**; P2 ships on the existing calls. (Open Question 4 picks
 the frames source.)
 
+**The bigger nuance — `pending` has no producer.** The `user_input.>`
+subject and JetStream stream exist, and the TUI subscribes correctly —
+but a sweep of the tree shows the *only* code that ever publishes a
+`KindUserInputRequest` is `pkg/fixtures/bus.go` (test fixtures). The
+sidecar has no `user_input` path at all; no daemon handler emits one.
+So `pending list` — the CLI today and the proposed TUI — is a correct
+subscriber to a subject that nothing populates in a live system. This
+is a **pre-existing gap in the pending *feature***, not something the
+TUI introduces, and it's orthogonal to the widget work: building
+`ListPane` + the pending surface is still valid P1. But the RFC must not
+pretend the surface shows live data. **Decision needed (Open Q5):** ship
+the pending TUI as front-end-ahead-of-pipeline (honest, useful once the
+producer lands), or pull the agent→operator escalation producer
+(sidecar publishes `user_input_request` when it needs input) into this
+workstream — which would be the one piece of genuine backend work, and
+arguably belongs with the chat data-model track, not here.
+
 ---
 
 ## 7. Phasing
@@ -356,12 +447,22 @@ the existing golden/VHS snapshots are unchanged. This phase de-risks
 everything downstream; it intentionally ships nothing new to the operator.
 
 ### P1 — `pending`, `traces`, `context` *(v0.4.0)*
-The originally-planned three, now thin compositions:
+The originally-planned three, now thin compositions — with two honest
+asterisks:
 - `pending` = `ListPane[Request]` + `SubscribeSource("user_input.>")`.
-- `traces` = `ListPane` over `FlattenVisible(BuildSpanTree(...))` + `query_trace`.
+  Ships, renders, exits clean — but is **empty against a live daemon**
+  until a request producer exists (‡, §6, Open Q5). Build it; set
+  expectations.
+- `traces` = `ListPane` over a tree projection + `query_trace`. **Not
+  pure glue:** `BuildSpanTree` / `FlattenVisible` *don't exist yet* —
+  today's `cmd/sextant/traces.go::renderSpanTree` is a private
+  stdout-only walker. P1 includes extracting a small reusable
+  tree-projection (the existing impl plan's Task 2.1, which also DRYs
+  the CLI renderer). Count it as real P1 work, not composition.
 - `context` (-i) = `StreamViewport` + `TailSource(jsonl)` + the
   `pkg/sessionlog` mode renderers (shared with the CLI dump per the
-  existing plan's §Task 3.1 extraction).
+  existing plan's §Task 3.1 extraction). The cleanest pure-composition
+  of the three.
 
 `plans/feat-0.4.0-interactive-surfaces-impl.md` is **re-cut against the
 widgets** for this phase (the bespoke model code in that plan is replaced
@@ -381,9 +482,16 @@ events monitor, files browser (master/detail), history viewer, templates
 list, theme picker, `doctor` report. Each is near-free once the widgets
 exist; pick them up opportunistically.
 
-**Automatic wins:** because surfaces self-register via `init()`, every new
-component appears in the `sextant tui` menu and is mountable as a `sextant
-dash` pane with no extra wiring.
+**Per-surface wiring (not automatic — review corrected this).** Go
+`init()` runs only for *imported* packages, so a new surface is **not**
+free: it needs (1) the package blank-imported in `cmd/sextant/tui.go`
+(today that file imports only `agents` + `chat`), (2) its `-i` flag wired
+in the command table (`iflag.go`), and (3) for the dash, a pane entry in
+`dash-default-config.toml` (the dash currently maps `pending`/`traces` to
+placeholder tickets). *After* those three lines, the registry drives
+discovery — the `sextant tui` menu and dash enumerate `component.List()`
+with no further per-surface code. So: a fixed 3-line wiring cost per
+surface, then registry-automatic. (Appendix C #8.)
 
 ---
 
@@ -443,12 +551,25 @@ dash` pane with no extra wiring.
    (*recommended*, §3.1) vs wrap `bubbles/table`?
 2. **Widget package location** — new `pkg/tui/widget/` (*recommended*) vs
    fold into `pkg/tui/component/`?
-3. **`chat` retrofit timing** — in P0 for full consistency (*recommended*),
-   or deferred to P3 if its bespoke wrapping fights `StreamViewport`?
+3. **`chat` retrofit** — the review's evidence (chat is a selected-turn
+   renderer, not a line stream) flips my recommendation to **defer the
+   full retrofit** (extract only wrapping math, keep the turn model).
+   This revisits the earlier "retrofit agents *and* chat" decision —
+   your call: defer chat (*now recommended*), or attempt the full swap
+   anyway?
 4. **`agent detail` "recent frames" source** — `query_history` (durable
    ClickHouse snapshot, *recommended* for a stable view) vs live
    `agents.<uuid>.frames` subscribe (ephemeral, but live)? Could offer both
    (snapshot + optional live tail).
+5. **`pending` producer** *(new, from the review)* — the pending surface
+   has no live data because nothing publishes input-requests. Options:
+   (a) ship the pending TUI as front-end-ahead-of-pipeline and track the
+   producer separately (*recommended* — keeps this workstream pure
+   front-end); (b) pull the agent→operator escalation producer (sidecar
+   publishes `user_input_request`) into this workstream, accepting it as
+   the one piece of backend work; (c) drop `pending` from P1 until the
+   producer exists elsewhere. This likely belongs with the chat
+   data-model track, not here.
 
 ---
 
@@ -493,3 +614,34 @@ Each widget clears the "≥3 consumers" bar comfortably.
   `feat-agents-context-view` Phase B are its tickets.)
 - Backend contract: `pkg/rpc` verb constants; `pkg/sextantproto` payloads;
   `pkg/sessionlog` (typed JSONL parser, shipped 0.3.0).
+
+## Appendix C — adversarial-review dispositions
+
+A Codex adversarial pass reviewed an earlier draft with full repo access.
+Each finding was verified against the code before action — not accepted
+on authority. Dispositions:
+
+| # | Codex finding | Sev | Disposition | Resolution |
+|---|---------------|-----|-------------|------------|
+| 1 | `pending` has no production producer of input-requests (only fixtures publish them) | Critical | **Accept fact, reframe implication** | Verified: only `pkg/fixtures/bus.go` publishes `KindUserInputRequest`; sidecar has no `user_input` path. But this is a *pre-existing feature gap* (the CLI shares it), orthogonal to the widget work. TL;DR caveat + §6 nuance + catalog ‡ + Open Q5. |
+| 2 | `get_agent_status` insufficient for the detail pane; catalog omits `worktree_list` | High | **Accept; partially reject the fix** | Verified the fields. Fixed the catalog row (lists all 4 sources) + graceful degradation (†). **Rejected** "needs a `get_agent_detail` RPC for P2" — client-side aggregation over existing calls is *not* backend work; that's the whole front-end thesis. P2 ships on existing calls. |
+| 3 | "green-to-green" has no teeth — `agents` has no golden snapshot | High | **Accept** | Verified: `pkg/tui/agents` has no `testdata/`/golden; only a non-empty assertion. §4 now makes "add `agents` golden + reducer tests" the *first* P0 task, before the retrofit. |
+| 4 | `chat` is a selected-turn renderer, not a line stream; `StreamViewport` will fight it | High | **Accept; flip recommendation** | Evidence credible (selection clipping, composer focus, per-line styling). §4 + Open Q3 now recommend **deferring** chat's full retrofit — which revisits the earlier "retrofit chat" choice, so flagged for Lena rather than decided unilaterally. |
+| 5 | `stream.Source` erases ack/seq/err vs file-err vs RPC-terminal semantics | Medium | **Accept** | §3.4 now carries `Event[T]{Item,Err,Terminal}`, keeps source-specific semantics on the item type, and states what it does/doesn't unify. |
+| 6 | `list_dir` returns only `Name`+`IsDir`, not `Size`/`Mode` | Medium | **Accept** | Verified handler comment. Catalog § footnote; files browser is P3 and name-only-fine. |
+| 7 | `BuildSpanTree`/`FlattenVisible` don't exist; traces isn't pure glue | Medium | **Accept** | §7 P1 now counts the tree-projection extraction as real P1 work (the impl plan's Task 2.1), not composition. |
+| 8 | "self-register → zero wiring" is false (`init()` needs an import) | Medium | **Accept, soften "false"→"overstated"** | The registry mechanism *is* real; the overstatement was "no wiring." §7 now states the fixed 3-line per-surface cost (blank-import + `-i` + dash pane), then registry-automatic. |
+| 9 | Value-receiver widget `Update` returning a copy is a staleness trap | Low | **Accept** | §3 now mandates pointer-receiver / mutate-in-place / `Update → Action` for all widgets, with the rationale. |
+
+**Confirmed-correct by the review (clean signal):** `list_agents`,
+`query_trace`, `query_audit`, `query_history`, all worktree verbs,
+`read_file`, `list_dir` are registered + implemented; `agents.<uuid>.frames`
+is published by the sidecar; the audit subjects exist; the daemon log
+path is discoverable at runtime. The backend-readiness of the
+*non-pending* surfaces holds.
+
+**Net effect of the review:** the widget architecture (the RFC's core)
+survived intact. What changed is honesty — `pending`'s data gap, the
+`agents` test gap, and the chat-retrofit risk are now explicit, and three
+overstatements ("zero wiring," "green-to-green," "pure glue") are
+corrected. The RFC is stronger for it.
