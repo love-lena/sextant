@@ -272,20 +272,21 @@ func (r *rpcRuntime) registerLifecycleVerbs(ca *authjwt.CA, spawnRT *spawnRuntim
 		return err
 	}
 	if err := r.server.Register(rpc.VerbRestartAgent, handlers.NewRestartAgent(handlers.RestartDeps{
-		Definitions:   spawnDeps.Definitions,
-		Incarnations:  spawnDeps.Incarnations,
-		Containers:    spawnRT.containers,
-		Volumes:       spawnRT.containers,
-		Templates:     spawnDeps.Templates,
-		CA:            ca,
-		WorkspaceRoot: spawnDeps.WorkspaceRoot,
-		HostID:        spawnDeps.HostID,
-		NATSURL:       spawnDeps.NATSURL,
-		NATSUser:      spawnDeps.NATSUser,
-		NATSPassword:  spawnDeps.NATSPassword,
-		MCPURL:        spawnDeps.MCPURL,
-		Issuer:        spawnDeps.Issuer,
-		TestRunLabel:  spawnDeps.TestRunLabel,
+		Definitions:    spawnDeps.Definitions,
+		Incarnations:   spawnDeps.Incarnations,
+		Containers:     spawnRT.containers,
+		Volumes:        spawnRT.containers,
+		Templates:      spawnDeps.Templates,
+		AgentsDataRoot: spawnDeps.AgentsDataRoot,
+		CA:             ca,
+		WorkspaceRoot:  spawnDeps.WorkspaceRoot,
+		HostID:         spawnDeps.HostID,
+		NATSURL:        spawnDeps.NATSURL,
+		NATSUser:       spawnDeps.NATSUser,
+		NATSPassword:   spawnDeps.NATSPassword,
+		MCPURL:         spawnDeps.MCPURL,
+		Issuer:         spawnDeps.Issuer,
+		TestRunLabel:   spawnDeps.TestRunLabel,
 	})); err != nil {
 		return err
 	}
