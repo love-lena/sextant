@@ -78,9 +78,9 @@ func TestDashBuildPaneResolvesRegisteredComponent(t *testing.T) {
 		},
 		{
 			name:        "unregistered command falls back to placeholder",
-			pc:          paneConfig{ID: "traces", Command: "traces show"},
+			pc:          paneConfig{ID: "files", Command: "files ls"},
 			wantHosted:  false,
-			wantCommand: "traces show",
+			wantCommand: "files ls",
 		},
 	}
 	for _, tc := range cases {
