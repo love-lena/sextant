@@ -12,12 +12,13 @@
 //     with the requested UUID via LoadMsg.
 //   - sextant pending list -i       → pkg/tui/pending.Model
 //     (ListPane over the user_input.> subject).
+//   - sextant traces show <id> -i   → pkg/tui/traces.Model
+//     (ListPane over the span-tree projection; shared with the static
+//     renderer).
 //
 // Future wiring (skipped because the matching Component doesn't yet
 // exist — file a follow-up before unsticking):
 //
-//   - sextant traces show <id> -i   → needs pkg/tui/traces.Model
-//     (no such package yet; traces today renders a static span tree).
 //   - sextant agents context <id> -i → ships with
 //     [[feat-agents-context-view]]; not wired here.
 package main
@@ -32,6 +33,7 @@ import (
 
 	"github.com/love-lena/sextant/pkg/tui/agents"
 	"github.com/love-lena/sextant/pkg/tui/pending"
+	"github.com/love-lena/sextant/pkg/tui/traces"
 )
 
 // tuiLauncher is the seam tests substitute to assert that the `-i`
@@ -40,6 +42,7 @@ import (
 type tuiLauncher interface {
 	RunAgentsList(ctx context.Context, configDir, selectedID string) error
 	RunPendingList(ctx context.Context, configDir string) error
+	RunTracesShow(ctx context.Context, configDir, traceID string) error
 }
 
 // realTUI is the live launcher; tests overwrite via newAgentsListIRunE's
@@ -52,6 +55,28 @@ func (realTUI) RunAgentsList(ctx context.Context, configDir, selectedID string) 
 
 func (realTUI) RunPendingList(ctx context.Context, configDir string) error {
 	return runPendingListTUI(ctx, configDir)
+}
+
+func (realTUI) RunTracesShow(ctx context.Context, configDir, traceID string) error {
+	return runTracesShowTUI(ctx, configDir, traceID)
+}
+
+// runTracesShowTUI dials the daemon, builds the traces Component seeded
+// with traceID, and runs it. Mirrors runPendingListTUI.
+func runTracesShowTUI(ctx context.Context, configDir, traceID string) error {
+	cli, _, err := connectAgent(ctx, configDir)
+	if err != nil {
+		return err
+	}
+	defer cli.Close() //nolint:errcheck // best-effort close
+
+	m := traces.New(traces.Options{Bus: cli, TraceID: traceID})
+	standalone := traces.NewStandalone(m, traceID)
+	prog := tea.NewProgram(standalone, tea.WithAltScreen(), tea.WithContext(ctx))
+	if _, err := prog.Run(); err != nil {
+		return fmt.Errorf("tui: %w", err)
+	}
+	return nil
 }
 
 // runPendingListTUI dials the daemon, builds the pending Component, and
@@ -205,19 +230,16 @@ func addPendingListIFlag(cmd *cobra.Command) {
 	}
 }
 
-// addTracesShowIFlagFollowUp is the traces equivalent of
-// addPendingListIFlagFollowUp.
-func addTracesShowIFlagFollowUp(cmd *cobra.Command) {
+// addTracesShowIFlag installs `-i` / `--tui` on `traces show <id>`. The
+// positional trace_id seeds the TUI via LoadMsg.
+func addTracesShowIFlag(cmd *cobra.Command) {
 	var interactive bool
 	cmd.Flags().BoolVarP(&interactive, "tui", "i", false,
-		"(not yet implemented; see plans/issues/feat-tui-traces-component.md)")
+		"open the interactive span-tree TUI instead of printing the tree")
 	originalRunE := cmd.RunE
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		if interactive {
-			return errUserUsage(
-				"traces show -i: pkg/tui/traces Component not yet implemented; " +
-					"see plans/issues/feat-tui-traces-component.md",
-			)
+			return activeTUILauncher.RunTracesShow(cmd.Context(), globalFlags.configDir, args[0])
 		}
 		return originalRunE(cmd, args)
 	}
