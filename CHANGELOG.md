@@ -22,6 +22,18 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   `NoIFlag` to drive this.
 
 ### Fixed
+- **`restart_agent` dropped the per-agent claude-projects bind-mount —
+  the real reason `sextant agents context <agent>` showed nothing.**
+  `spawn_agent` bind-mounts `<data>/agents/<uuid>/claude-projects` at
+  `/home/agent/.claude/projects` so the SDK's session journal lands on a
+  host path the operator can read; `restart_agent` re-attached the
+  claude-seed volume but **not** that bind-mount, so a restarted
+  incarnation wrote its session inside the container and the host dir
+  stayed empty (and `agents context` reported "no on-disk session yet").
+  Restart now re-applies the mount (gated on `AgentsDataRoot`, wired via
+  `RestartDeps`), with a regression test asserting the restart container
+  spec includes it. Operators must restart the daemon + the affected
+  agent to pick this up.
 - **`sextant agents context <agent>` leaked a raw filesystem error** when
   the agent's per-agent projects dir doesn't exist on disk (agent spawned
   before the context bind-mount, or no SDK turn flushed yet) — the daemon
