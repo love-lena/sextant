@@ -53,8 +53,7 @@ func TestQuitEmitsDone(t *testing.T) {
 func TestClosedStreamStopsCleanly(t *testing.T) {
 	m := New(Options{})
 	m.SetSize(80, 20)
-	next, cmd := m.Update(eventMsg{ok: false})
-	m = next.(*Model)
+	_, cmd := m.Update(eventMsg{ok: false})
 	if cmd != nil {
 		t.Fatal("closed stream should not schedule another read")
 	}
