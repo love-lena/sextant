@@ -1,47 +1,9 @@
 package rpc
 
-// CapFor returns the capability string required to invoke the given verb
-// per specs/protocols/rpc-catalog.md "Catalog by category". Returns "" for
-// unknown verbs — callers should treat that as "deny by default" once
-// M10 wires real JWT checks; in M7 the operator-path CheckCap stub
-// returns nil regardless.
-func CapFor(verb string) string {
-	switch verb {
-	case VerbListAgents, VerbGetAgentStatus:
-		return "read.agents"
-	case VerbQueryHistory, VerbQueryAudit, VerbQueryTrace:
-		return "read.history"
-	case VerbReadFile, VerbListDir, VerbStat:
-		return "read.container_files"
-	case VerbExecInContainer:
-		return "control.exec"
-	case VerbSpawnAgent:
-		return "control.spawn"
-	case VerbKillAgent:
-		return "control.kill"
-	case VerbRestartAgent:
-		return "control.restart"
-	case VerbPromptAgent:
-		return "control.prompt"
-	case VerbArchiveAgent:
-		return "control.archive"
-	case VerbWorktreeCreate, VerbWorktreeDestroy, VerbWorktreeMerge:
-		return "control.worktree"
-	case VerbWorktreeList, VerbWorktreeDiff:
-		return "read.worktrees"
-	case VerbGetVersion:
-		// get_version is a diagnostic verb — `sextant doctor` calls it
-		// to compare CLI and daemon builds. The reply carries no agent
-		// state, only build metadata; an operator with operator creds
-		// can already read more sensitive surfaces. Returning "" keeps
-		// the verb in the same lane as "no capability required" for
-		// M7's AllowAll checker, and gives M10 an obvious slot to wire
-		// a per-verb policy without changing this signature.
-		return ""
-	default:
-		return ""
-	}
-}
+// CapFor and the VerbSpecs table that backs it live in verbspec.go —
+// the single declarative RPC surface (RFC §5.8). This file holds the
+// verb-name constants the table references and the query_history limit
+// knobs.
 
 // Verb names. One per row in specs/protocols/rpc-catalog.md.
 const (

@@ -179,12 +179,13 @@ func (l rpcHeartbeatLookup) LastSeen(id uuid.UUID) (time.Time, bool) {
 	return l.rt.heartbeats.LastSeen(id)
 }
 
-// registerInitialVerbs installs the verbs that have no container-runtime
-// dependency. The M7-era set: list_agents, get_agent_status,
-// query_history. M12 added query_audit and query_trace (both ClickHouse-
-// only, no container deps). The container-touching verbs (read_file,
-// list_dir, stat, exec_in_container, restart_agent) wait for the spawn
-// runtime in registerLifecycleVerbs.
+// registerInitialVerbs installs the PhaseInitial verbs — those with no
+// container-runtime dependency (ClickHouse-only queries, KV reads, the
+// get_version diagnostic). The set is whatever rpc.VerbSpecs tags
+// PhaseInitial; this function only supplies the per-verb handler
+// factories and delegates the iteration + ordering to registerPhase.
+// The container-touching verbs wait for the spawn runtime in
+// registerLifecycleVerbs (PhaseLifecycle).
 //
 // heartbeats is the late-binding HeartbeatLookup wrapper (see
 // rpcRuntime.heartbeatLookup): the real cache is installed in
@@ -200,35 +201,60 @@ func (l rpcHeartbeatLookup) LastSeen(id uuid.UUID) (time.Time, bool) {
 // get_agent_status uses it to compute the claude-projects host path
 // the operator's `agents context` verb reads from.
 func registerInitialVerbs(srv *rpc.Server, kv handlers.AgentKV, chConn handlers.QueryHistoryDB, heartbeats handlers.HeartbeatLookup, startedAt time.Time, agentsDataRoot string) error {
-	if err := srv.Register(rpc.VerbListAgents, handlers.NewListAgents(kv)); err != nil {
-		return err
+	factories := map[string]func() rpc.Handler{
+		rpc.VerbListAgents: func() rpc.Handler { return handlers.NewListAgents(kv) },
+		rpc.VerbGetAgentStatus: func() rpc.Handler {
+			return handlers.NewGetAgentStatusWithDeps(handlers.GetAgentStatusDeps{
+				KV:             kv,
+				Heartbeats:     heartbeats,
+				AgentsDataRoot: agentsDataRoot,
+			})
+		},
+		rpc.VerbQueryHistory: func() rpc.Handler { return handlers.NewQueryHistory(chConn) },
+		rpc.VerbQueryAudit:   func() rpc.Handler { return handlers.NewQueryAudit(chConn) },
+		rpc.VerbQueryTrace:   func() rpc.Handler { return handlers.NewQueryTrace(chConn) },
+		rpc.VerbGetVersion: func() rpc.Handler {
+			return handlers.NewGetVersion(handlers.VersionDeps{StartedAt: startedAt})
+		},
 	}
-	if err := srv.Register(rpc.VerbGetAgentStatus, handlers.NewGetAgentStatusWithDeps(handlers.GetAgentStatusDeps{
-		KV:             kv,
-		Heartbeats:     heartbeats,
-		AgentsDataRoot: agentsDataRoot,
-	})); err != nil {
-		return err
+	return registerPhase(srv, rpc.PhaseInitial, factories)
+}
+
+// registerPhase wires every VerbSpec in phase p onto srv by looking up
+// its handler factory in factories and registering in table order. It
+// enforces the table-completeness invariant the VerbSpec table exists to
+// guarantee (RFC §5.8): a phase verb without a factory, or a factory
+// without a phase verb, is a wiring bug and fails startup loudly rather
+// than silently leaving a verb undispatched. Capability and schema are
+// already derived from the same table, so one row is the only thing to
+// add for a new verb.
+func registerPhase(srv *rpc.Server, p rpc.Phase, factories map[string]func() rpc.Handler) error {
+	specs := rpc.VerbSpecsForPhase(p)
+	covered := make(map[string]bool, len(specs))
+	for _, s := range specs {
+		factory, ok := factories[s.Name]
+		if !ok {
+			return fmt.Errorf("rpc: verb %q (phase %d) has a VerbSpec but no handler factory", s.Name, p)
+		}
+		covered[s.Name] = true
+		if err := srv.Register(s.Name, factory()); err != nil {
+			return err
+		}
 	}
-	if err := srv.Register(rpc.VerbQueryHistory, handlers.NewQueryHistory(chConn)); err != nil {
-		return err
-	}
-	if err := srv.Register(rpc.VerbQueryAudit, handlers.NewQueryAudit(chConn)); err != nil {
-		return err
-	}
-	if err := srv.Register(rpc.VerbQueryTrace, handlers.NewQueryTrace(chConn)); err != nil {
-		return err
-	}
-	if err := srv.Register(rpc.VerbGetVersion, handlers.NewGetVersion(handlers.VersionDeps{StartedAt: startedAt})); err != nil {
-		return err
+	for verb := range factories {
+		if !covered[verb] {
+			return fmt.Errorf("rpc: handler factory for %q registered in phase %d, but no VerbSpec has that verb in this phase", verb, p)
+		}
 	}
 	return nil
 }
 
-// registerLifecycleVerbs wires the M11+M12 agent-lifecycle and
-// container-filesystem verbs onto the RPC server now that the spawn
-// runtime exists. The CA is the daemon's signing CA (rpc handler
-// embeds it in every issued JWT).
+// registerLifecycleVerbs wires the PhaseLifecycle verbs — the M11+M12
+// agent-lifecycle and container-filesystem verbs — onto the RPC server
+// now that the spawn runtime exists. It supplies the per-verb handler
+// factories and delegates iteration + ordering to registerPhase, which
+// reads the verb set from rpc.VerbSpecs (PhaseLifecycle). The CA is the
+// daemon's signing CA (rpc handler embeds it in every issued JWT).
 func (r *rpcRuntime) registerLifecycleVerbs(ca *authjwt.CA, spawnRT *spawnRuntime) error {
 	spawnDeps := spawnRT.asSpawnDeps(r.chConn)
 	spawnDeps.CA = ca
@@ -240,79 +266,71 @@ func (r *rpcRuntime) registerLifecycleVerbs(ca *authjwt.CA, spawnRT *spawnRuntim
 	if r.heartbeats == nil {
 		log.Printf("sextantd: registerLifecycleVerbs: WARNING heartbeats cache is nil; prompt_agent L1 staleness guard will not fire (see daemon.go ordering)")
 	}
-	if err := r.server.Register(rpc.VerbSpawnAgent, handlers.NewSpawnAgent(spawnDeps)); err != nil {
-		return err
-	}
-	if err := r.server.Register(rpc.VerbKillAgent, handlers.NewKillAgent(handlers.KillDeps{
-		Definitions:  spawnDeps.Definitions,
-		Incarnations: spawnDeps.Incarnations,
-		Containers:   spawnDeps.Containers,
-	})); err != nil {
-		return err
-	}
-	if err := r.server.Register(rpc.VerbArchiveAgent, handlers.NewArchiveAgent(handlers.ArchiveDeps{
-		Definitions:  spawnDeps.Definitions,
-		Incarnations: spawnDeps.Incarnations,
-		Containers:   spawnDeps.Containers,
-		Volumes:      spawnDeps.Volumes,
-	})); err != nil {
-		return err
-	}
-	if err := r.server.Register(rpc.VerbPromptAgent, handlers.NewPromptAgent(handlers.PromptDeps{
-		Definitions: spawnDeps.Definitions,
-		NATS:        r.nc,
-		From: sextantproto.Address{
-			Kind: sextantproto.AddressDaemon,
-			ID:   "daemon",
-		},
-		Heartbeats:            r.heartbeats,
-		HeartbeatStaleness:    r.heartbeatStaleness,
-		HeartbeatStartupGrace: r.heartbeatStartupGrace,
-	})); err != nil {
-		return err
-	}
-	if err := r.server.Register(rpc.VerbRestartAgent, handlers.NewRestartAgent(handlers.RestartDeps{
-		Definitions:    spawnDeps.Definitions,
-		Incarnations:   spawnDeps.Incarnations,
-		Containers:     spawnRT.containers,
-		Volumes:        spawnRT.containers,
-		Templates:      spawnDeps.Templates,
-		AgentsDataRoot: spawnDeps.AgentsDataRoot,
-		// Worktree + RepoRoot let restart reproduce the worktree
-		// /workspace + <RepoRoot>/.git mounts spawn adds — the lossless
-		// restart projection (RFC §5.4). Same handles spawn uses.
-		Worktree:      spawnDeps.Worktree,
-		RepoRoot:      spawnDeps.RepoRoot,
-		CA:            ca,
-		WorkspaceRoot: spawnDeps.WorkspaceRoot,
-		HostID:        spawnDeps.HostID,
-		NATSURL:       spawnDeps.NATSURL,
-		NATSUser:      spawnDeps.NATSUser,
-		NATSPassword:  spawnDeps.NATSPassword,
-		MCPURL:        spawnDeps.MCPURL,
-		Issuer:        spawnDeps.Issuer,
-		TestRunLabel:  spawnDeps.TestRunLabel,
-	})); err != nil {
-		return err
-	}
 	filesDeps := handlers.FilesDeps{
 		Definitions:  spawnDeps.Definitions,
 		Incarnations: spawnDeps.Incarnations,
 		Containers:   spawnRT.containers,
 	}
-	if err := r.server.Register(rpc.VerbReadFile, handlers.NewReadFile(filesDeps)); err != nil {
-		return err
+	factories := map[string]func() rpc.Handler{
+		rpc.VerbSpawnAgent: func() rpc.Handler { return handlers.NewSpawnAgent(spawnDeps) },
+		rpc.VerbKillAgent: func() rpc.Handler {
+			return handlers.NewKillAgent(handlers.KillDeps{
+				Definitions:  spawnDeps.Definitions,
+				Incarnations: spawnDeps.Incarnations,
+				Containers:   spawnDeps.Containers,
+			})
+		},
+		rpc.VerbArchiveAgent: func() rpc.Handler {
+			return handlers.NewArchiveAgent(handlers.ArchiveDeps{
+				Definitions:  spawnDeps.Definitions,
+				Incarnations: spawnDeps.Incarnations,
+				Containers:   spawnDeps.Containers,
+				Volumes:      spawnDeps.Volumes,
+			})
+		},
+		rpc.VerbPromptAgent: func() rpc.Handler {
+			return handlers.NewPromptAgent(handlers.PromptDeps{
+				Definitions: spawnDeps.Definitions,
+				NATS:        r.nc,
+				From: sextantproto.Address{
+					Kind: sextantproto.AddressDaemon,
+					ID:   "daemon",
+				},
+				Heartbeats:            r.heartbeats,
+				HeartbeatStaleness:    r.heartbeatStaleness,
+				HeartbeatStartupGrace: r.heartbeatStartupGrace,
+			})
+		},
+		rpc.VerbRestartAgent: func() rpc.Handler {
+			return handlers.NewRestartAgent(handlers.RestartDeps{
+				Definitions:    spawnDeps.Definitions,
+				Incarnations:   spawnDeps.Incarnations,
+				Containers:     spawnRT.containers,
+				Volumes:        spawnRT.containers,
+				Templates:      spawnDeps.Templates,
+				AgentsDataRoot: spawnDeps.AgentsDataRoot,
+				// Worktree + RepoRoot let restart reproduce the worktree
+				// /workspace + <RepoRoot>/.git mounts spawn adds — the lossless
+				// restart projection (RFC §5.4). Same handles spawn uses.
+				Worktree:      spawnDeps.Worktree,
+				RepoRoot:      spawnDeps.RepoRoot,
+				CA:            ca,
+				WorkspaceRoot: spawnDeps.WorkspaceRoot,
+				HostID:        spawnDeps.HostID,
+				NATSURL:       spawnDeps.NATSURL,
+				NATSUser:      spawnDeps.NATSUser,
+				NATSPassword:  spawnDeps.NATSPassword,
+				MCPURL:        spawnDeps.MCPURL,
+				Issuer:        spawnDeps.Issuer,
+				TestRunLabel:  spawnDeps.TestRunLabel,
+			})
+		},
+		rpc.VerbReadFile:        func() rpc.Handler { return handlers.NewReadFile(filesDeps) },
+		rpc.VerbListDir:         func() rpc.Handler { return handlers.NewListDir(filesDeps) },
+		rpc.VerbStat:            func() rpc.Handler { return handlers.NewStat(filesDeps) },
+		rpc.VerbExecInContainer: func() rpc.Handler { return handlers.NewExecInContainer(filesDeps) },
 	}
-	if err := r.server.Register(rpc.VerbListDir, handlers.NewListDir(filesDeps)); err != nil {
-		return err
-	}
-	if err := r.server.Register(rpc.VerbStat, handlers.NewStat(filesDeps)); err != nil {
-		return err
-	}
-	if err := r.server.Register(rpc.VerbExecInContainer, handlers.NewExecInContainer(filesDeps)); err != nil {
-		return err
-	}
-	return nil
+	return registerPhase(r.server, rpc.PhaseLifecycle, factories)
 }
 
 // stopRPC tears the RPC runtime down in reverse order: cancel the
