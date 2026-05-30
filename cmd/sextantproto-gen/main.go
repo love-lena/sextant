@@ -22,6 +22,7 @@ import (
 
 	"github.com/invopop/jsonschema"
 
+	"github.com/love-lena/sextant/pkg/rpc"
 	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
@@ -54,6 +55,13 @@ func main() {
 		T    any
 	}
 
+	// Non-verb wire types: envelopes, frame payloads, telemetry, and the
+	// shared worktree_info record. These are not RPC verb req/resp pairs,
+	// so they are enumerated here rather than derived from the VerbSpec
+	// table. Verb payloads are appended below from rpc.VerbSpecs (the
+	// single declarative RPC surface — RFC §5.8), which removes the
+	// generator's hand-maintained verb list (formerly the hidden 4th
+	// copy of the verb enumeration).
 	entries := []entry{
 		{"envelope", &sextantproto.Envelope{}},
 		{"address", &sextantproto.Address{}},
@@ -71,51 +79,23 @@ func main() {
 		{"span", &sextantproto.Span{}},
 		{"metric", &sextantproto.Metric{}},
 		{"log_record", &sextantproto.LogRecord{}},
-		// RPC verb payloads — consumed by the TypeScript client codegen.
-		{"list_agents_request", &sextantproto.ListAgentsRequest{}},
-		{"list_agents_response", &sextantproto.ListAgentsResponse{}},
-		{"get_agent_status_request", &sextantproto.GetAgentStatusRequest{}},
-		{"get_agent_status_response", &sextantproto.GetAgentStatusResponse{}},
-		{"read_file_request", &sextantproto.ReadFileRequest{}},
-		{"read_file_response", &sextantproto.ReadFileResponse{}},
-		{"query_history_request", &sextantproto.QueryHistoryRequest{}},
-		{"query_history_response", &sextantproto.QueryHistoryResponse{}},
-		{"spawn_agent_request", &sextantproto.SpawnAgentRequest{}},
-		{"spawn_agent_response", &sextantproto.SpawnAgentResponse{}},
-		{"kill_agent_request", &sextantproto.KillAgentRequest{}},
-		{"kill_agent_response", &sextantproto.KillAgentResponse{}},
-		{"prompt_agent_request", &sextantproto.PromptAgentRequest{}},
-		{"prompt_agent_response", &sextantproto.PromptAgentResponse{}},
-		{"archive_agent_request", &sextantproto.ArchiveAgentRequest{}},
-		{"archive_agent_response", &sextantproto.ArchiveAgentResponse{}},
-		// M12 verb payloads.
-		{"restart_agent_request", &sextantproto.RestartAgentRequest{}},
-		{"restart_agent_response", &sextantproto.RestartAgentResponse{}},
-		{"list_dir_request", &sextantproto.ListDirRequest{}},
-		{"list_dir_response", &sextantproto.ListDirResponse{}},
-		{"stat_request", &sextantproto.StatRequest{}},
-		{"stat_response", &sextantproto.StatResponse{}},
-		{"exec_in_container_request", &sextantproto.ExecInContainerRequest{}},
-		{"exec_in_container_response", &sextantproto.ExecInContainerResponse{}},
-		{"query_audit_request", &sextantproto.QueryAuditRequest{}},
-		{"query_audit_response", &sextantproto.QueryAuditResponse{}},
-		{"query_trace_request", &sextantproto.QueryTraceRequest{}},
-		{"query_trace_response", &sextantproto.QueryTraceResponse{}},
-		// M14 verb payloads.
+		// worktree_info is the shared registry record embedded in several
+		// worktree verb payloads — a wire type, not a verb req/resp pair.
 		{"worktree_info", &sextantproto.WorktreeInfo{}},
-		{"worktree_create_request", &sextantproto.WorktreeCreateRequest{}},
-		{"worktree_create_response", &sextantproto.WorktreeCreateResponse{}},
-		{"worktree_destroy_request", &sextantproto.WorktreeDestroyRequest{}},
-		{"worktree_destroy_response", &sextantproto.WorktreeDestroyResponse{}},
-		{"worktree_list_request", &sextantproto.WorktreeListRequest{}},
-		{"worktree_list_response", &sextantproto.WorktreeListResponse{}},
-		{"worktree_merge_request", &sextantproto.WorktreeMergeRequest{}},
-		{"worktree_merge_response", &sextantproto.WorktreeMergeResponse{}},
-		{"worktree_diff_request", &sextantproto.WorktreeDiffRequest{}},
-		{"worktree_diff_response", &sextantproto.WorktreeDiffResponse{}},
-		// Diagnostic verb (feat-doctor-show-daemon-version).
-		{"get_version_request", &sextantproto.GetVersionRequest{}},
-		{"get_version_response", &sextantproto.GetVersionResponse{}},
+	}
+
+	// RPC verb payloads — one request + response schema per VerbSpec row.
+	// The schema file stem is "<verb>_request" / "<verb>_response", which
+	// matches the committed schema names. The schema generator walks the
+	// same table dispatch registration and CapFor read, so a new verb
+	// gets its schema for free.
+	for _, s := range rpc.VerbSpecs {
+		if s.Req != nil {
+			entries = append(entries, entry{s.Name + "_request", s.Req})
+		}
+		if s.Resp != nil {
+			entries = append(entries, entry{s.Name + "_response", s.Resp})
+		}
 	}
 
 	for _, e := range entries {
