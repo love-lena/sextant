@@ -1,6 +1,6 @@
 {
   "proto_version": "0.5.0",
-  "wire_epoch": 1,
+  "wire_epoch": 2,
   "kinds": [
     "agent_frame",
     "lifecycle",

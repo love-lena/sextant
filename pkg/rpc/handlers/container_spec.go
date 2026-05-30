@@ -149,11 +149,11 @@ func buildAgentContainerSpec(in agentContainerSpecInput) containermgr.ContainerS
 		JWT:            in.JWT,
 		MCPURL:         in.MCPURL,
 		Model:          in.Model,
-		PermissionMode: permissionCeilingToSDKMode(def.Runtime.PermissionCeil),
+		PermissionMode: permissionCeilingToSDKMode(def.Spec.Runtime.PermissionCeil),
 		APIKey:         in.APIKey,
 		SessionID:      in.SessionID,
-		InitialPrompt:  def.Runtime.InitialPrompt,
-		EnvOverlay:     def.Sandbox.Env,
+		InitialPrompt:  def.Spec.Runtime.InitialPrompt,
+		EnvOverlay:     def.Spec.Sandbox.Env,
 	})
 
 	// Mount assembly. The ORDER is fixed and shared so spawn and restart
@@ -211,11 +211,11 @@ func buildAgentContainerSpec(in agentContainerSpecInput) containermgr.ContainerS
 	if in.TestRunLabel != "" {
 		labels[LabelTestRun] = in.TestRunLabel
 	}
-	labels[LabelSpecFingerprint] = specFingerprint(def.Sandbox.Image, mounts, env)
+	labels[LabelSpecFingerprint] = specFingerprint(def.Spec.Sandbox.Image, mounts, env)
 
 	return containermgr.ContainerSpec{
 		Name:       containerName(def.Name, in.IncarnationID),
-		Image:      def.Sandbox.Image,
+		Image:      def.Spec.Sandbox.Image,
 		Cmd:        append([]string(nil), SidecarEntrypoint...),
 		Env:        env,
 		Mounts:     mounts,

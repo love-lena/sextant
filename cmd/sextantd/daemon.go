@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -16,8 +15,8 @@ import (
 	"github.com/love-lena/sextant/pkg/authjwt"
 	"github.com/love-lena/sextant/pkg/clickhouseboot"
 	"github.com/love-lena/sextant/pkg/natsboot"
+	"github.com/love-lena/sextant/pkg/rpc/handlers"
 	"github.com/love-lena/sextant/pkg/sextantd"
-	"github.com/love-lena/sextant/pkg/sextantproto"
 	"github.com/love-lena/sextant/pkg/shipperboot"
 	"github.com/love-lena/sextant/pkg/supervisor"
 	"github.com/love-lena/sextant/pkg/version"
@@ -90,22 +89,26 @@ type daemon struct {
 	// in doShutdown.
 	controlRT *controlRuntime
 
-	// lifecycleRT watches `agents.*.lifecycle` and updates the agent
-	// record so list_agents reflects the latest transition. Built after
-	// rpcRT (we need its operator NATS conn + agent_definitions KV).
-	// See plans/issues/bug-agents-list-stale-lifecycle.md.
-	lifecycleRT *sextantd.LifecycleWatcher
+	// lifecycleHints is the sidecar-lifecycle hint source (control-plane
+	// P0): it subscribes `agents.*.lifecycle` and feeds every transition
+	// to the reconciler as a hint (it no longer writes status — the
+	// reconciler is the sole writer). Built after rpcRT (needs its
+	// operator NATS conn).
+	lifecycleHints *sextantd.LifecycleHintSource
 
 	// heartbeats is the L1 heartbeat cache. Set after startRPC; nil when
 	// cache init fails (daemon continues, prompt_agent skips the guard).
 	heartbeats *sextantd.HeartbeatCache
 
-	// containerWatcher is the L3 docker-event watcher. Set after the
-	// spawn runtime exists; nil when disabled. containerWatcherCtx
-	// cancels it; containerWatcherDone is closed when the goroutine exits.
-	containerWatcher     *sextantd.ContainerWatcher
-	containerWatcherCtx  context.CancelFunc
-	containerWatcherDone chan struct{}
+	// reconciler is the control-plane spine (RFC §5.1): the sole writer of
+	// observed status AND (via the Actuator) the sole actuator of the
+	// container runtime. reconcileCtx cancels its loop; reconcileDone is
+	// closed when the loop exits.
+	reconciler     *sextantd.Reconciler
+	reconcileCtx   context.CancelFunc
+	reconcileDone  chan struct{}
+	dieHintCtx     context.CancelFunc
+	dieHintDone    chan struct{}
 
 	shutdownOnce sync.Once
 	shutdownErr  error
@@ -399,10 +402,29 @@ func (d *daemon) Start(ctx context.Context) error {
 		rpcRT.heartbeatStartupGrace = grace
 	}
 
+	// 11c. Build the control-plane spine (RFC §5.1) BEFORE registering the
+	// lifecycle verbs, so the desired-state handlers can capture the
+	// reconciler's Enqueue hint sink. The Actuator (sole actuator) wraps
+	// the spawn runtime's container manager — the ONLY place the runtime
+	// is handed to an actuation path. The reconciler is the sole writer of
+	// observed status.
+	actuator := handlers.NewActuator(spawnRT.asActuatorDeps(d.ca, rpcRT.chConn))
+	_, _, debounce, _ := d.cfg.Lifecycle.Resolved()
+	reconciler := sextantd.NewReconciler(&sextantd.Reconciler{
+		Defs:        kvMutableAdapter{kv: rpcRT.agentDefsKV},
+		Containers:  spawnRT.containers,
+		Actuator:    actuator,
+		HostID:      spawnRT.hostID,
+		DieDebounce: debounce,
+	})
+	d.mu.Lock()
+	d.reconciler = reconciler
+	d.mu.Unlock()
+
 	// 12. Register the lifecycle verbs on the RPC server now that the
 	// spawn runtime exists. Also hand the same dep bag to the MCP
 	// server so the agent path uses the same backend.
-	if err := rpcRT.registerLifecycleVerbs(d.ca, spawnRT); err != nil {
+	if err := rpcRT.registerLifecycleVerbs(d.ca, spawnRT, reconciler); err != nil {
 		_ = spawnRT.containers.Close()
 		_ = rpcRT.stopRPC()
 		_ = mcpRT.stop(ctx)
@@ -416,7 +438,9 @@ func (d *daemon) Start(ctx context.Context) error {
 		_ = d.stopNATSNow(ctx)
 		return fmt.Errorf("register lifecycle verbs: %w", err)
 	}
-	mcpRT.server.SetSpawnDeps(spawnRT.asMCPDeps(d.ca, rpcRT.chConn))
+	mcpDeps := spawnRT.asMCPDeps(d.ca, rpcRT.chConn)
+	mcpDeps.Enqueue = reconciler
+	mcpRT.server.SetSpawnDeps(mcpDeps)
 
 	// 12b. Spin up the periodic pruner ticker + control subscription.
 	// Best-effort: a subscribe failure is fatal-on-boot (the daemon's
@@ -479,11 +503,12 @@ func (d *daemon) Start(ctx context.Context) error {
 	d.controlRT = controlRT
 	d.mu.Unlock()
 
-	// 15. Lifecycle watcher — subscribes to agents.*.lifecycle so the
-	// agent record reflects sidecar-driven transitions (ended / crashed
-	// / paused / archived) that the spawn/restart/kill handlers don't
-	// produce.
-	lifecycleRT, err := sextantd.NewLifecycleWatcher(rpcRT.nc, rpcRT.agentDefsKV)
+	// 15. Lifecycle hint source — subscribes agents.*.lifecycle and feeds
+	// every sidecar transition to the reconciler as a HINT (it no longer
+	// writes status; the reconciler is the sole writer). Terminal
+	// transitions (ended/crashed) record the sidecar-terminal precedence
+	// so a daemon-inferred lost never downgrades an observed terminal.
+	lifecycleHints, err := sextantd.NewLifecycleHintSource(rpcRT.nc, reconciler)
 	if err != nil {
 		_ = controlRT.stop()
 		_ = spawnRT.containers.Close()
@@ -496,67 +521,46 @@ func (d *daemon) Start(ctx context.Context) error {
 		_ = sextantd.RemoveRuntimeInfo(d.cfg.Paths.RuntimeFile)
 		_ = d.stopClickHouseNow(ctx)
 		_ = d.stopNATSNow(ctx)
-		return fmt.Errorf("start lifecycle watcher: %w", err)
+		return fmt.Errorf("start lifecycle hint source: %w", err)
 	}
 	d.mu.Lock()
-	d.lifecycleRT = lifecycleRT
+	d.lifecycleHints = lifecycleHints
 	d.mu.Unlock()
 
-	// 16. Container watcher (L3 of agent-lifecycle truth).
-	_, _, debounce, reconcileOK := d.cfg.Lifecycle.Resolved()
-
-	publishLifecycle := func(pctx context.Context, env sextantproto.Envelope) error {
-		var p sextantproto.LifecyclePayload
-		if err := json.Unmarshal(env.Payload, &p); err != nil {
-			return fmt.Errorf("decode synthetic lifecycle payload: %w", err)
-		}
-		raw, err := json.Marshal(env)
-		if err != nil {
-			return fmt.Errorf("marshal synthetic lifecycle envelope: %w", err)
-		}
-		subject := "agents." + p.AgentUUID.String() + ".lifecycle"
-		return rpcRT.nc.Publish(subject, raw)
-	}
-
-	cw := sextantd.NewContainerWatcher(spawnRT.containers, publishLifecycle,
-		sextantd.WithDebounce(debounce))
-	// Derive from d.supCtx (the daemon's long-lived supervisor context) so
-	// the container watcher outlives Start's bootstrap ctx but is still
-	// cancelled when the daemon stops. doShutdown also calls cwCancel
-	// explicitly for the deterministic ordering before containermgr.Close.
-	cwCtx, cwCancel := context.WithCancel(d.supCtx) //nolint:contextcheck // see comment above
-	cwDone := make(chan struct{})
+	// 16. Die hint source (L3) — docker `die` events become reconcile
+	// hints via reconciler.OnDie, which records the die timestamp (the 5s
+	// debounce anchor) and enqueues. The reconciler infers lost only after
+	// the debounce elapses with no sidecar terminal. Derived from d.supCtx
+	// so it outlives Start's bootstrap ctx but is cancelled on shutdown.
+	dieSrc := sextantd.NewDieHintSource(spawnRT.containers, reconciler)
+	dieCtx, dieCancel := context.WithCancel(d.supCtx) //nolint:contextcheck // long-lived supervisor ctx by design
+	dieDone := make(chan struct{})
 	go func() {
-		defer close(cwDone)
-		if err := cw.Run(cwCtx); err != nil && !errors.Is(err, context.Canceled) {
-			log.Printf("sextantd: container watcher exited: %v", err)
+		defer close(dieDone)
+		if err := dieSrc.Run(dieCtx); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("sextantd: die hint source exited: %v", err)
 		}
 	}()
+
+	// 17. Start the reconcile spine. One worker + periodic sweep (RFC
+	// §5.1). The sweep is the backstop that catches deaths the die hint
+	// missed (eventually-consistent). Derived from d.supCtx so it survives
+	// the bootstrap ctx and is cancelled on shutdown.
+	recCtx, recCancel := context.WithCancel(d.supCtx) //nolint:contextcheck // long-lived supervisor ctx by design
+	recDone := make(chan struct{})
+	go func() {
+		defer close(recDone)
+		if err := reconciler.Run(recCtx); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("sextantd: reconciler exited: %v", err)
+		}
+	}()
+
 	d.mu.Lock()
-	d.containerWatcher = cw
-	d.containerWatcherCtx = cwCancel
-	d.containerWatcherDone = cwDone
+	d.reconcileCtx = recCancel
+	d.reconcileDone = recDone
+	d.dieHintCtx = dieCancel
+	d.dieHintDone = dieDone
 	d.mu.Unlock()
-
-	// Hook the watcher's cancel-on-terminal mechanism off LifecycleWatcher.
-	sextantd.RegisterLifecycleObserver(lifecycleRT, cw.OnSidecarLifecycle)
-
-	// 17. Reconciler (L2). One-shot at startup. Failure is non-fatal —
-	// the watcher + L3 still converge.
-	if reconcileOK {
-		r := &sextantd.Reconciler{
-			Defs:    rpcRT.agentDefsKV,
-			Mgr:     spawnRT.containers,
-			Publish: publishLifecycle,
-			HostID:  spawnRT.hostID,
-		}
-		if res, err := r.Run(ctx); err != nil {
-			log.Printf("sextantd: reconciler: %v", err)
-		} else if res.Published > 0 {
-			log.Printf("sextantd: reconciler: scanned=%d running=%d missing=%d published=%d",
-				res.Scanned, res.RunningRecords, res.MissingContainers, res.Published)
-		}
-	}
 
 	log.Printf("sextantd: ready (nats=%s clickhouse=%s control=%s rpc=sextant.rpc.* mcp=%s)",
 		natsSrv.Address(), chSrv.TCPAddress(), d.cfg.Daemon.ControlSocket, mcpRT.server.HTTPURL())
@@ -613,16 +617,20 @@ func (d *daemon) doShutdown() error {
 	d.spawnRT = nil
 	controlRT := d.controlRT
 	d.controlRT = nil
-	lifecycleRT := d.lifecycleRT
-	d.lifecycleRT = nil
+	lifecycleHints := d.lifecycleHints
+	d.lifecycleHints = nil
 	worktreeRT := d.worktreeRT
 	d.worktreeRT = nil
 	heartbeats := d.heartbeats
 	d.heartbeats = nil
-	cwCancel := d.containerWatcherCtx
-	d.containerWatcherCtx = nil
-	cwDone := d.containerWatcherDone
-	d.containerWatcherDone = nil
+	dieCancel := d.dieHintCtx
+	d.dieHintCtx = nil
+	dieDone := d.dieHintDone
+	d.dieHintDone = nil
+	recCancel := d.reconcileCtx
+	d.reconcileCtx = nil
+	recDone := d.reconcileDone
+	d.reconcileDone = nil
 	d.mu.Unlock()
 	if worktreeRT != nil {
 		// Stop the prune ticker + unsubscribe the control subject.
@@ -630,13 +638,24 @@ func (d *daemon) doShutdown() error {
 		// goes away (the unsubscribe needs a live conn).
 		worktreeRT.stopPruneLoop()
 	}
-	// Stop the L3 container watcher first (it subscribes to docker events
-	// via spawnRT.containers; spawnRT.containers.Close() comes later).
-	if cwCancel != nil {
-		cwCancel()
-		if cwDone != nil {
+	// Stop the reconcile spine first (the sole actuator) so no new
+	// container is created/stopped while we tear down. Then stop the die
+	// hint source (it subscribes docker events via spawnRT.containers,
+	// which Close()s later).
+	if recCancel != nil {
+		recCancel()
+		if recDone != nil {
 			select {
-			case <-cwDone:
+			case <-recDone:
+			case <-ctx.Done():
+			}
+		}
+	}
+	if dieCancel != nil {
+		dieCancel()
+		if dieDone != nil {
+			select {
+			case <-dieDone:
 			case <-ctx.Done():
 			}
 		}
@@ -646,9 +665,9 @@ func (d *daemon) doShutdown() error {
 			errs = append(errs, fmt.Errorf("heartbeat cache stop: %w", err))
 		}
 	}
-	if lifecycleRT != nil {
-		if err := lifecycleRT.Stop(); err != nil {
-			errs = append(errs, fmt.Errorf("lifecycle watcher stop: %w", err))
+	if lifecycleHints != nil {
+		if err := lifecycleHints.Stop(); err != nil {
+			errs = append(errs, fmt.Errorf("lifecycle hint source stop: %w", err))
 		}
 	}
 	if controlRT != nil {

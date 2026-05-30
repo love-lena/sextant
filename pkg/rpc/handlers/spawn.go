@@ -18,7 +18,6 @@ import (
 	"github.com/love-lena/sextant/pkg/rpc"
 	"github.com/love-lena/sextant/pkg/sextantproto"
 	"github.com/love-lena/sextant/pkg/templates"
-	"github.com/love-lena/sextant/pkg/worktree"
 )
 
 // AgentIncarnationsBucket is the canonical KV bucket name for agent
@@ -32,12 +31,11 @@ const AgentIncarnationsBucket = "agent_incarnations"
 const DefaultModel = "claude-opus-4-7[1m]"
 
 // SpawnJWTLifetime is the per-incarnation JWT lifetime applied by the
-// M11 spawn handler. Spec calls for 24h. Bump alongside the
-// specs/components/sextantd.md §"M11 spawn flow" doc.
+// actuator. Spec calls for 24h.
 const SpawnJWTLifetime = 24 * time.Hour
 
-// LabelAgentUUID etc. are the container labels every spawn stamps. Tests
-// rely on these stable strings for cleanup.
+// LabelAgentUUID etc. are the container labels every actuation stamps.
+// Tests rely on these stable strings for cleanup.
 const (
 	LabelAgentUUID      = "sextant.agent_uuid"
 	LabelAgentName      = "sextant.agent_name"
@@ -46,7 +44,7 @@ const (
 	LabelTemplate       = "sextant.template"
 	LabelTestRun        = "sextant.test_run"
 	WorkspaceMountPath  = "/workspace"
-	defaultGraceSeconds = 10
+	defaultGraceSeconds = 30
 )
 
 // AgentMutableKV is the read+write surface the spawn handler needs on
@@ -57,136 +55,106 @@ type AgentMutableKV interface {
 	Put(ctx context.Context, key string, value []byte) (uint64, error)
 	// Update is the CAS write: writes value when the entry's last
 	// revision matches `revision`. Real jetstream.KeyValue returns
-	// jetstream.ErrKeyExists on revision mismatch; handlers should
-	// treat that as "concurrent writer slipped in" and re-read +
-	// re-apply their guards before retrying. Used by restart_agent
-	// to close the restart-vs-archive race the Codex adversarial
-	// review caught.
+	// jetstream.ErrKeyExists on revision mismatch; handlers treat that as
+	// "concurrent writer slipped in" and re-read + re-apply before
+	// retrying.
 	Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error)
 	Delete(ctx context.Context, key string, opts ...jetstream.KVDeleteOpt) error
 }
 
 // HistoryWriter records definition mutations to ClickHouse so the
-// audit trail survives a NATS data-dir wipe. Narrow surface so the
-// spawn handler doesn't need the full driver.Conn.
+// audit trail survives a NATS data-dir wipe.
 type HistoryWriter interface {
 	Exec(ctx context.Context, query string, args ...any) error
 }
 
-// SpawnDeps bundles the dependencies the spawn handler needs. The
-// daemon wires real values; tests substitute fakes.
+// ReconcileEnqueuer is the hint sink a handler calls after writing
+// desired state: it asks the reconcile loop to converge the agent soon.
+// The reconciler is level-triggered, so a dropped enqueue only delays
+// convergence to the next periodic sweep — it can never desync us
+// (RFC §3.2). Nil is acceptable (unit tests without a loop wired).
+type ReconcileEnqueuer interface {
+	Enqueue(agentID uuid.UUID)
+}
+
+// SpawnDeps bundles the dependencies the spawn handler needs. Under the
+// declarative model the spawn handler is a thin desired-state writer: it
+// validates, builds the record (desired=run), persists it, and enqueues
+// a reconcile. It NEVER touches the container runtime — the reconciler
+// (the sole actuator) creates the container.
+//
+// The container-runtime and host-materialization fields (Containers,
+// Volumes, Worktree, RepoRoot, NATS*, MCPURL, …) are retained on the
+// struct so the daemon can build a single dep bag and hand the
+// runtime-bearing subset to the Actuator. The spawn handler itself reads
+// only the KV + template + history + enqueue surfaces.
 type SpawnDeps struct {
-	Definitions   AgentMutableKV
-	Incarnations  AgentMutableKV
-	Templates     templates.KV
-	Containers    ContainerRunner
-	CA            *authjwt.CA
-	History       HistoryWriter
-	WorkspaceRoot string
-	// AgentsDataRoot is the host directory under which the spawn
-	// handler creates per-agent state dirs the operator needs to
-	// reach directly — today only the Claude Code SDK session JSONL
-	// under <root>/<uuid>/claude-projects/, bind-mounted at
-	// /home/agent/.claude/projects/ inside the container so the
-	// SDK's session writer ends up writing to a host-readable path.
-	// See plans/issues/feat-agents-context-view.md.
-	//
-	// When empty, the bind mount is skipped — older spawn paths and
-	// unit tests that don't care about session-log visibility leave
-	// this unset and behave as before.
+	Definitions    AgentMutableKV
+	Incarnations   AgentMutableKV
+	Templates      templates.KV
+	Containers     ContainerRunner
+	CA             *authjwt.CA
+	History        HistoryWriter
+	WorkspaceRoot  string
 	AgentsDataRoot string
-	// Worktree, when non-nil, is used to materialize the /workspace
-	// mount for templates whose `mounts` field includes "worktree".
-	// When nil or when the template doesn't request a worktree, the
-	// spawn handler falls back to the M11 stop-gap dir under
-	// WorkspaceRoot. The spawn-time worktree is named per
-	// specs/architecture.md §11 "Worktree naming" via
-	// worktree.SpawnWorktreeName.
-	Worktree WorktreeProvider
-	// RepoRoot is the host path of the main repository (the same
-	// value the worktree manager uses as its RepoRoot). When set and
-	// the spawn materializes a worktree, the spawn handler bind-mounts
-	// <RepoRoot>/.git into the container at the same path so the
-	// worktree's `.git` pointer file resolves inside the container.
-	// Empty disables the gitdir mount (fallback workspaces don't need
-	// it, and tests that don't exercise the worktree path leave it
-	// empty).
-	RepoRoot string
-	// Volumes, when non-nil, manages per-agent Docker named volumes
-	// (currently only the claude_seed copy-on-spawn volume). When nil,
-	// templates with claude_seed_mode = "copy-on-spawn" fall back to the
-	// legacy readonly-bind behavior so the spawn handler still works in
-	// pre-volume-aware test harnesses. Production wiring passes the
-	// containermgr.Manager (which satisfies both ContainerRunner and
-	// VolumeManager).
-	Volumes      VolumeManager
-	HostID       string
-	NATSURL      string
-	NATSUser     string
-	NATSPassword string
-	MCPURL       string
-	Issuer       string
-	// TestRunLabel, when non-empty, stamps sextant.test_run=<value> on
-	// every spawned container. Used by tests to scope cleanup. Empty in
-	// production.
-	TestRunLabel string
+	Worktree       WorktreeProvider
+	RepoRoot       string
+	Volumes        VolumeManager
+	HostID         string
+	NATSURL        string
+	NATSUser       string
+	NATSPassword   string
+	MCPURL         string
+	Issuer         string
+	TestRunLabel   string
+	// Enqueue, when non-nil, asks the reconcile loop to converge the new
+	// agent right after the record lands. Nil falls back to the periodic
+	// sweep (still correct, just slower).
+	Enqueue ReconcileEnqueuer
 	// Now is injected for deterministic timestamps in tests.
 	Now func() time.Time
 }
 
-// WorktreeProvider is the narrow surface the spawn + restart handlers
-// need on pkg/worktree. The daemon adapts its *worktree.Manager into
-// this interface.
-//
-// Resolve is the restart-path addition: restart must re-mount the same
-// worktree spawn created (the lossless-projection requirement, RFC
-// §5.4) but must NOT re-Create it — Create rejects an existing name.
-// Resolve returns the on-disk path of an already-registered worktree,
-// or ok=false when no worktree by that name exists (the agent ran in
-// the stop-gap workspace dir, or the worktree was pruned).
+// WorktreeProvider is the narrow surface the spawn path + actuator need
+// on pkg/worktree.
 type WorktreeProvider interface {
 	Create(ctx context.Context, name, baseBranch string, owningAgent uuid.UUID) (sextantproto.WorktreeInfo, error)
 	Destroy(ctx context.Context, name string, force bool) error
 	Resolve(ctx context.Context, name string) (path string, ok bool, err error)
 }
 
-// ContainerRunner is the subset of containermgr.Manager the handlers
-// call. Mirroring it as an interface keeps the dependency direction
-// clean and lets tests substitute a no-op runner without depending on
-// docker SDK availability.
+// ContainerRunner is the subset of containermgr.Manager the actuator
+// calls. Handlers no longer call it directly (RFC §5: sole actuator);
+// it lives here because the actuator + spec builder share the package.
 type ContainerRunner interface {
 	Run(ctx context.Context, spec containermgr.ContainerSpec) (*containermgr.Container, error)
 	Stop(ctx context.Context, id string, grace time.Duration) error
 }
 
-// VolumeManager is the subset of containermgr.Manager the spawn/archive
-// handlers use to manage per-agent named volumes (today: the
-// claude_seed copy-on-spawn volume). Defined here so tests can
-// substitute a fake without spinning a real docker daemon.
+// VolumeManager is the subset of containermgr.Manager the actuator uses
+// to manage per-agent named volumes (the claude_seed copy-on-spawn
+// volume).
 type VolumeManager interface {
 	EnsureVolume(ctx context.Context, name string, labels map[string]string) (created bool, err error)
 	PopulateVolumeFromHostDir(ctx context.Context, volumeName, hostSrc, image string, cmd []string) error
 	RemoveVolume(ctx context.Context, name string, force bool) error
 }
 
-// NewSpawnAgent returns a Handler that implements `spawn_agent`.
-// Flow per specs/components/sextantd.md §"M11 spawn flow":
+// NewSpawnAgent returns a Handler implementing `spawn_agent` as a
+// desired-state edit (RFC §5: imperative verbs become intent edits).
+// Flow:
 //
 //  1. Decode + validate args.
 //  2. Reject duplicate names (unique among non-archived definitions).
 //  3. Resolve the template from KV.
-//  4. Build a fresh AgentDefinition; persist as agent_definitions/<uuid>.
-//  5. Append the initial agent_definitions_history row.
-//  6. Materialize the M11 stop-gap workspace dir.
-//  7. Build the AgentIncarnation record (state=starting).
-//  8. Issue the per-incarnation JWT.
-//  9. Build the container spec; Run it.
-//  10. Persist agent_incarnations/<incarnation_id> with container ID.
-//  11. Flip the definition's lifecycle to "running" + bump version.
-//  12. Reply with the new agent UUID.
+//  4. Build a fresh AgentDefinition with spec.desired=run, generation=1,
+//     status.observed=pending, observed_generation=0 — the reconciler
+//     sees the generation gap and actuates the first incarnation.
+//  5. Persist; append the history row; enqueue a reconcile.
+//  6. Reply with the new agent UUID.
 //
-// Errors at any step roll back what we already wrote so the daemon
-// doesn't accumulate half-spawned ghosts.
+// It does NOT create a container, mount anything, or issue a JWT — the
+// reconciler does all of that when it actuates the pending record.
 func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 	if deps.Now == nil {
 		deps.Now = time.Now
@@ -226,299 +194,70 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 
 		now := deps.Now().UTC()
 		agentUUID := uuid.New()
-		incID := uuid.New()
-		hostPin := args.HostPin
-		hostID := deps.HostID
 
-		// 4. Build + persist the AgentDefinition.
+		// 4. Build the declarative record. desired=run + generation=1 with
+		// observed_generation=0 is the initial-actuation trigger the
+		// reconciler converges (decideRun branch 1).
 		def := sextantproto.AgentDefinition{
 			UUID:        agentUUID,
 			Name:        args.Name,
 			Type:        "assistant",
 			Template:    tpl.Name,
 			Description: tpl.Description,
-			Runtime: sextantproto.RuntimeConfig{
-				Model:          tpl.Model,
-				PermissionCeil: tpl.PermissionCeiling,
-				InitialPrompt:  tpl.InitialPrompt,
+			Spec: sextantproto.AgentSpec{
+				Desired: sextantproto.DesiredRun,
+				Runtime: sextantproto.RuntimeConfig{
+					Model:          tpl.Model,
+					PermissionCeil: tpl.PermissionCeiling,
+					InitialPrompt:  tpl.InitialPrompt,
+				},
+				Sandbox: sextantproto.SandboxConfig{
+					Image:  tpl.Image,
+					Mounts: append([]string(nil), tpl.Mounts...),
+					Env:    cloneStringMap(tpl.Env),
+				},
+				Tools:         append([]string(nil), tpl.Permissions...),
+				RestartPolicy: sextantproto.RestartOnFailure,
+				Generation:    1,
 			},
-			Sandbox: sextantproto.SandboxConfig{
-				Image:  tpl.Image,
-				Mounts: append([]string(nil), tpl.Mounts...),
-				Env:    cloneStringMap(tpl.Env),
+			Status: sextantproto.AgentStatusRecord{
+				Observed: sextantproto.ObservedPending,
+				Phase:    string(sextantproto.ObservedPending),
 			},
-			Tools:                append([]string(nil), tpl.Permissions...),
-			Lifecycle:            sextantproto.LifecycleDefined,
-			CurrentIncarnationID: incID,
-			Version:              1,
-			CreatedAt:            sextantproto.AtTimestamp(now),
-			UpdatedAt:            sextantproto.AtTimestamp(now),
+			Version:   1,
+			CreatedAt: sextantproto.AtTimestamp(now),
+			UpdatedAt: sextantproto.AtTimestamp(now),
 		}
-		if hostPin != "" {
-			pin := hostPin
-			def.HostPin = &pin
+		if args.HostPin != "" {
+			pin := args.HostPin
+			def.Spec.HostPin = &pin
 		}
-		// Rollback ledger: every step that produces a side-effect pushes
-		// its cleanup closure here. On any error before `committed` is
-		// flipped, the deferred rollback walks the ledger in LIFO order
-		// and undoes every step — workspace dir, KV entries, container,
-		// the lot. This replaces the per-step ad-hoc deletes that
-		// previously leaked the workspace and (on lifecycle-flip
-		// failure) left a running container with no `running`
-		// definition.
-		var (
-			committed bool
-			rollbacks []func()
-		)
-		pushRollback := func(fn func()) {
-			rollbacks = append(rollbacks, fn)
-		}
-		defer func() {
-			if committed {
-				return
-			}
-			// LIFO so cleanup mirrors the order operations were applied.
-			for i := len(rollbacks) - 1; i >= 0; i-- {
-				rollbacks[i]()
-			}
-		}()
 
 		if err := putJSON(ctx, deps.Definitions, agentUUID.String(), def); err != nil {
 			return emitErr(emit, sextantproto.ErrCodeInternal,
 				fmt.Sprintf("persist agent definition: %v", err))
 		}
-		//nolint:contextcheck // rollback closure intentionally outlives the request ctx — see fresh-background-ctx comment in the closure
-		pushRollback(func() {
-			// Use a fresh background ctx with a short timeout — the
-			// request ctx may already be canceled by the time we
-			// rollback. Same pattern for every cleanup below.
-			rbCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = deps.Definitions.Delete(rbCtx, agentUUID.String())
-		})
 
-		// 5. Append the initial agent_definitions_history row. Best-
-		// effort: a history-table failure shouldn't abort a spawn — it
-		// becomes an alertable event the operator can backfill. The
-		// history table is append-only so we don't try to roll it back.
+		// 5. Append the initial history row (best-effort).
 		if deps.History != nil {
 			if err := insertDefinitionHistory(ctx, deps.History, def, "spawn"); err != nil {
-				// Don't fail the spawn — log via stderr.
-				fmt.Fprintf(os.Stderr, "spawn_agent: history insert failed for %s: %v\n",
-					agentUUID, err)
+				fmt.Fprintf(os.Stderr, "spawn_agent: history insert failed for %s: %v\n", agentUUID, err)
 			}
 		}
 
-		// 6. Materialize workspace. When the template's `mounts`
-		// includes "worktree" and the daemon has a worktree provider
-		// wired, create a per-incarnation worktree and mount that.
-		// Otherwise, fall back to the M11 stop-gap dir under
-		// WorkspaceRoot.
-		workspace, usingWorktree, workspaceCleanup, err := materializeWorkspace(ctx, deps, tpl, agentUUID)
-		if err != nil {
-			return emitErr(emit, sextantproto.ErrCodeInternal,
-				fmt.Sprintf("create workspace: %v", err))
-		}
-		pushRollback(workspaceCleanup)
-
-		// 6a. Per-spawn gitconfig file. Bind-mounted into the container
-		// at /home/agent/.gitconfig so the agent has a usable git
-		// identity for commits. See plans/issues/feat-container-git-
-		// config.md.
-		gitconfigPath, gitconfigCleanup, err := writeAgentGitConfig(deps.WorkspaceRoot, agentUUID, args.Name)
-		if err != nil {
-			return emitErr(emit, sextantproto.ErrCodeInternal,
-				fmt.Sprintf("write gitconfig: %v", err))
-		}
-		pushRollback(gitconfigCleanup)
-
-		// 7+8. Build incarnation record (state=starting) + issue JWT.
-		inc := sextantproto.AgentIncarnation{
-			IncarnationID: incID,
-			AgentUUID:     agentUUID,
-			StartedAt:     sextantproto.AtTimestamp(now),
-			HostID:        hostID,
-			State:         sextantproto.IncarnationStarting,
-		}
-		jwt, err := deps.CA.Issue(authjwt.Claims{
-			AgentUUID:     agentUUID,
-			IncarnationID: incID,
-			Capabilities:  append([]string(nil), tpl.Permissions...),
-			IssuedAt:      now,
-			ExpiresAt:     now.Add(SpawnJWTLifetime),
-			Issuer:        deps.Issuer,
-		})
-		if err != nil {
-			return emitErr(emit, sextantproto.ErrCodeInternal,
-				fmt.Sprintf("issue jwt: %v", err))
+		// Hint the reconciler to converge the new pending record now.
+		if deps.Enqueue != nil {
+			deps.Enqueue.Enqueue(agentUUID)
 		}
 
-		// 9. Container spec. Built by buildAgentContainerSpec — the SOLE
-		// builder shared with restart_agent so the two paths cannot drift
-		// (RFC §5.4). The side-effecting host state (workspace, gitconfig
-		// file, claude-projects dir, claude_seed volume) is resolved here
-		// because each owns a spawn-specific rollback closure; the builder
-		// itself is a pure projection of the resolved inputs + the
-		// persisted AgentDefinition.
-		model := tpl.Model
-		if strings.TrimSpace(model) == "" {
-			model = DefaultModel
-		}
-		// Resume an existing SDK session when the definition has one
-		// recorded. The sidecar's first turn captures the SDK-issued
-		// session_id and writes it back to the definition, so the next
-		// spawn of the same agent picks up where we left off. Restart
-		// only forwards the session id when --preserve-session is true,
-		// but spawn always does (a fresh definition has SessionID=nil).
-		var sessionID string
-		if def.Runtime.SessionID != nil {
-			sessionID = *def.Runtime.SessionID
-		}
-
-		specIn := agentContainerSpecInput{
-			Def:           def,
-			IncarnationID: incID,
-			JWT:           jwt,
-			HostID:        hostID,
-			NATSURL:       deps.NATSURL,
-			NATSUser:      deps.NATSUser,
-			NATSPassword:  deps.NATSPassword,
-			MCPURL:        deps.MCPURL,
-			Model:         model,
-			SessionID:     sessionID,
-			APIKey:        hostAPIKey(),
-			TestRunLabel:  deps.TestRunLabel,
-			WorkspacePath: workspace,
-			// gitconfig is written for every spawn (git identity for
-			// commits). See plans/issues/feat-container-git-config.md.
-			GitConfigHostPath: gitconfigPath,
-		}
-		// When the workspace is a worktree, the worktree's `.git` is a
-		// pointer file that names <RepoRoot>/.git/worktrees/<branch>
-		// using the host's absolute path. We must expose that exact
-		// path inside the container so git operations resolve. See
-		// plans/issues/bug-worktree-gitdir-unreachable-in-container.md.
-		if usingWorktree && deps.RepoRoot != "" {
-			specIn.GitDirHostPath = filepath.Join(deps.RepoRoot, ".git")
-		}
-		// Per-agent host dir for the Claude Code SDK's session JSONL.
-		// Mounted at /home/agent/.claude/projects so the SDK writer
-		// inside the container produces files the host can read directly.
-		// Skipped when AgentsDataRoot is empty (legacy spawn paths + unit
-		// tests). See plans/issues/feat-agents-context-view.md.
-		if deps.AgentsDataRoot != "" {
-			projectsHost, projectsCleanup, err := ensureAgentProjectsDir(deps.AgentsDataRoot, agentUUID)
-			if err != nil {
-				return emitErr(emit, sextantproto.ErrCodeInternal,
-					fmt.Sprintf("create claude-projects dir: %v", err))
-			}
-			pushRollback(projectsCleanup)
-			specIn.ClaudeProjectsHostPath = projectsHost
-		}
-		// Template-opt-in: bind-mount the host's ~/.ssh read-only at
-		// /home/agent/.ssh so the agent can authenticate to GitHub for
-		// `git push`. Only fires when the template lists "ssh" in
-		// `mounts` — defaults stay airtight. See
-		// plans/issues/feat-container-ssh-passthrough.md.
-		if wantsSSHMount(tpl) {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return emitErr(emit, sextantproto.ErrCodeInternal,
-					fmt.Sprintf("resolve home dir for ssh mount: %v", err))
-			}
-			specIn.SSHHostPath = filepath.Join(home, ".ssh")
-		}
-		// Template-declared seed for /home/agent/.claude. Two modes:
-		//
-		//   - "copy-on-spawn" (default when claude_seed is set): create a
-		//     per-agent Docker named volume, populate it from the host
-		//     seed dir on first spawn (idempotent on subsequent spawns),
-		//     and mount it rw. This lets the Claude Agent SDK write its
-		//     session journal under /home/agent/.claude/projects/ — which
-		//     a readonly bind blocks. See
-		//     plans/issues/bug-claude-seed-readonly-breaks-session-persistence.md.
-		//
-		//   - "readonly-bind" (legacy opt-in): bind-mount the host dir
-		//     read-only. Suitable for one-shot agents that don't need
-		//     SDK state persistence; multi-turn conversation does not
-		//     work in this mode.
-		//
-		// templates.Validate already confirmed the path exists and is a
-		// directory; we re-expand here so a `~/`-prefixed value (resolved
-		// against the daemon-process's UserHomeDir) reaches containermgr
-		// as an absolute path.
-		if tpl.ClaudeSeed != "" {
-			seedPath, err := templates.ExpandClaudeSeed(tpl.ClaudeSeed)
-			if err != nil {
-				return emitErr(emit, sextantproto.ErrCodeInternal,
-					fmt.Sprintf("expand claude_seed: %v", err))
-			}
-			mode := tpl.ResolveClaudeSeedMode()
-			seedMount, seedCleanup, err := buildClaudeSeedMount(ctx, deps, mode, seedPath, agentUUID, tpl.Image)
-			if err != nil {
-				return emitErr(emit, sextantproto.ErrCodeInternal,
-					fmt.Sprintf("claude_seed (mode %q): %v", mode, err))
-			}
-			specIn.ClaudeSeedMount = &seedMount
-			if seedCleanup != nil {
-				pushRollback(seedCleanup)
-			}
-		}
-
-		spec := buildAgentContainerSpec(specIn)
-		container, err := deps.Containers.Run(ctx, spec)
-		if err != nil {
-			return emitErr(emit, sextantproto.ErrCodeInternal,
-				fmt.Sprintf("start container: %v", err))
-		}
-		//nolint:contextcheck // rollback closure intentionally outlives the request ctx
-		pushRollback(func() {
-			rbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			_ = deps.Containers.Stop(rbCtx, container.ID, 5*time.Second)
-		})
-		inc.ContainerID = container.ID
-
-		// 10. Persist the incarnation.
-		if err := putJSON(ctx, deps.Incarnations, incID.String(), inc); err != nil {
-			return emitErr(emit, sextantproto.ErrCodeInternal,
-				fmt.Sprintf("persist agent incarnation: %v", err))
-		}
-		//nolint:contextcheck // rollback closure intentionally outlives the request ctx
-		pushRollback(func() {
-			rbCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = deps.Incarnations.Delete(rbCtx, incID.String())
-		})
-
-		// 11. Flip definition lifecycle to running + bump version. This
-		// is the last side-effect before the success reply; a failure
-		// here means the KV is unhealthy *and* we still have a live
-		// container — so we must roll the whole spawn back rather than
-		// leave an inconsistent "definition=defined, container running"
-		// state in the bus.
-		def.Lifecycle = sextantproto.LifecycleRunning
-		def.Version = 2
-		def.UpdatedAt = sextantproto.AtTimestamp(deps.Now().UTC())
-		if err := putJSON(ctx, deps.Definitions, agentUUID.String(), def); err != nil {
-			return emitErr(emit, sextantproto.ErrCodeInternal,
-				fmt.Sprintf("flip lifecycle to running: %v", err))
-		}
-		if deps.History != nil {
-			_ = insertDefinitionHistory(ctx, deps.History, def, "running")
-		}
-
-		committed = true
 		return emitOK(emit, sextantproto.SpawnAgentResponse{AgentID: agentUUID})
 	}
 }
 
 // agentNameInUse returns true if there's an entry in the definitions
-// bucket whose Name matches and whose Lifecycle is not "archived".
+// bucket whose Name matches and whose desired intent is not archived.
 //
-// O(N) scan over the bucket; M11 has very few entries so this is fine.
-// A secondary name index would make sense at scale but is not the M11
-// hot path.
+// O(N) scan over the bucket; very few entries so this is fine.
 func agentNameInUse(ctx context.Context, kv AgentMutableKV, name string) (bool, error) {
 	lister, err := kv.ListKeys(ctx)
 	if err != nil {
@@ -538,15 +277,10 @@ func agentNameInUse(ctx context.Context, kv AgentMutableKV, name string) (bool, 
 		}
 		var def sextantproto.AgentDefinition
 		if err := json.Unmarshal(entry.Value(), &def); err != nil {
-			// Garbage in the bucket — don't crash spawn over it, but
-			// log so the operator notices. Silently continuing means
-			// a corrupt blob with the requested name would be
-			// invisible: the duplicate-name check would pass, and the
-			// spawn would succeed against a poisoned bucket.
 			fmt.Fprintf(os.Stderr, "spawn_agent: agentNameInUse: decode %s: %v\n", key, err)
 			continue
 		}
-		if def.Name == name && def.Lifecycle != sextantproto.LifecycleArchived {
+		if def.Name == name && def.Spec.Desired != sextantproto.DesiredArchived {
 			return true, nil
 		}
 	}
@@ -577,15 +311,7 @@ func cloneStringMap(in map[string]string) map[string]string {
 
 // ensureAgentProjectsDir creates <root>/<uuid>/claude-projects/ with
 // mode 0o700. Returns the host path + a rollback closure that removes
-// the dir tree (only safe pre-spawn — once the SDK starts writing
-// session JSONL files, rollback should still be fine because the
-// rollback only fires when the spawn itself fails before reply).
-//
-// Mode 0o700 because the JSONL contains the operator's prompts and
-// tool outputs verbatim; same posture as ~/.claude/projects/ on the
-// host. The parent <root>/<uuid>/ is created mode 0o750 (the same
-// posture used by the M11 spawn-workspaces dir) so other operator
-// tools can stat it but not list contents.
+// the dir tree.
 func ensureAgentProjectsDir(root string, agentUUID uuid.UUID) (string, func(), error) {
 	if root == "" {
 		return "", nil, fmt.Errorf("agents data root is empty")
@@ -599,18 +325,14 @@ func ensureAgentProjectsDir(root string, agentUUID uuid.UUID) (string, func(), e
 		return "", nil, fmt.Errorf("mkdir %s: %w", projects, err)
 	}
 	cleanup := func() {
-		// Only remove the claude-projects subtree on rollback — the
-		// parent agent dir is shared with any other per-agent state
-		// future PRs may stage under it.
 		_ = os.RemoveAll(projects)
 	}
 	return projects, cleanup, nil
 }
 
 // AgentProjectsDir returns the host path of the per-agent
-// claude-projects directory created by ensureAgentProjectsDir. The
-// get_agent_status handler uses this to surface the path back to the
-// operator without re-implementing the layout rule.
+// claude-projects directory. get_agent_status uses it to surface the
+// path back to the operator without re-implementing the layout rule.
 func AgentProjectsDir(root string, agentUUID uuid.UUID) string {
 	if root == "" {
 		return ""
@@ -618,10 +340,7 @@ func AgentProjectsDir(root string, agentUUID uuid.UUID) string {
 	return filepath.Join(root, agentUUID.String(), "claude-projects")
 }
 
-// ensureWorkspaceDir creates ~/.local/share/sextant/spawn-workspaces/<uuid>/
-// if missing. M11 stop-gap — used as the fallback when a template
-// doesn't request a worktree mount (or the daemon has no worktree
-// provider).
+// ensureWorkspaceDir creates the stop-gap workspace dir under root.
 func ensureWorkspaceDir(root, agentUUID string) (string, error) {
 	if root == "" {
 		return "", fmt.Errorf("workspace root is empty")
@@ -633,56 +352,9 @@ func ensureWorkspaceDir(root, agentUUID string) (string, error) {
 	return path, nil
 }
 
-// materializeWorkspace decides whether to create a per-incarnation
-// worktree or fall back to the M11 stop-gap dir, and returns the
-// resolved on-host path + a "is a worktree" flag + a cleanup closure
-// for the rollback ledger.
-//
-// Rules:
-//
-//   - Template lists "worktree" in mounts AND deps.Worktree non-nil →
-//     create a worktree via worktree.Create; cleanup removes the
-//     worktree. usingWorktree=true.
-//   - Otherwise → ensureWorkspaceDir; cleanup os.RemoveAll's the dir.
-//     usingWorktree=false.
-//
-// The fallback path covers two scenarios: M11-style templates that
-// never declared the mount, and templates that do declare it but
-// land on a daemon where worktree.repo_root is unset (M14
-// transitional state).
-//
-//nolint:contextcheck // rollback closure intentionally uses background ctx so a canceled request still cleans up
-func materializeWorkspace(ctx context.Context, deps SpawnDeps, tpl templates.Template, agentUUID uuid.UUID) (string, bool, func(), error) {
-	if wantsWorktreeMount(tpl) && deps.Worktree != nil {
-		name := worktree.SpawnWorktreeName(tpl.Name, agentUUID)
-		info, err := deps.Worktree.Create(ctx, name, "main", agentUUID)
-		if err != nil {
-			return "", false, nil, fmt.Errorf("worktree.Create %s: %w", name, err)
-		}
-		cleanup := func() {
-			rbCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			_ = deps.Worktree.Destroy(rbCtx, info.Name, true)
-		}
-		return info.Path, true, cleanup, nil
-	}
-	path, err := ensureWorkspaceDir(deps.WorkspaceRoot, agentUUID.String())
-	if err != nil {
-		return "", false, nil, err
-	}
-	cleanup := func() {
-		_ = os.RemoveAll(path)
-	}
-	return path, false, cleanup, nil
-}
-
-// writeAgentGitConfig stages a per-spawn gitconfig file under root and
-// returns its path + a cleanup closure that removes the file. The body
-// matches plans/issues/feat-container-git-config.md: name = "sextant
-// <agent-name>", email = "<uuid>@sextant.local", init.defaultBranch =
-// main. The file is intentionally mode 0o644 (and bind-mounted
-// read-only into the container) so the agent can read it but not
-// rewrite the identity from inside the sandbox.
+// writeAgentGitConfig stages a per-agent gitconfig file under root and
+// returns its path + a cleanup closure. Content matches
+// plans/issues/feat-container-git-config.md.
 func writeAgentGitConfig(root string, agentUUID uuid.UUID, agentName string) (string, func(), error) {
 	if root == "" {
 		return "", nil, fmt.Errorf("workspace root is empty")
@@ -699,26 +371,10 @@ func writeAgentGitConfig(root string, agentUUID uuid.UUID, agentName string) (st
 	return path, cleanup, nil
 }
 
-// wantsWorktreeMount returns true if the template's `mounts` field
-// contains the string "worktree". Spec: specs/architecture.md
-// §"Mount classes".
-func wantsWorktreeMount(tpl templates.Template) bool {
-	return mountClassListed(tpl.Mounts, templates.MountClassWorktree)
-}
-
-// wantsSSHMount returns true if the template opts into the host
-// ~/.ssh → /home/agent/.ssh read-only bind mount. Opt-in only: default
-// templates never list "ssh". See
-// plans/issues/feat-container-ssh-passthrough.md.
-func wantsSSHMount(tpl templates.Template) bool {
-	return mountClassListed(tpl.Mounts, templates.MountClassSSH)
-}
-
 // mountClassListed reports whether class is present in the mount-class
-// list. Operates on a raw []string so both templates.Template.Mounts
-// (spawn) and AgentDefinition.Sandbox.Mounts (restart) can answer the
-// same question — the def's Mounts are cloned from the template's at
-// spawn time, so the restart projection is lossless.
+// list. Operates on a raw []string so both the template's Mounts and the
+// def's Spec.Sandbox.Mounts (cloned from the template at spawn) answer
+// the same question.
 func mountClassListed(mounts []string, class string) bool {
 	for _, m := range mounts {
 		if m == class {
@@ -729,10 +385,6 @@ func mountClassListed(mounts []string, class string) bool {
 }
 
 func containerName(agentName string, incID uuid.UUID) string {
-	// "/" and ":" disallowed in Docker names; agentName is operator
-	// input, so sanitize. We don't fail on malformed input — Docker
-	// would emit a clearer error if our sanitizer let something
-	// through, but the rules are well-known.
 	safe := strings.Map(func(r rune) rune {
 		switch {
 		case r == '-' || r == '_' || r == '.':
@@ -757,58 +409,36 @@ func containerName(agentName string, incID uuid.UUID) string {
 	return "sextant-" + safe + "-" + short
 }
 
-// permissionCeilingToSDKMode maps a sextant-internal permission_ceiling value
-// (from the template TOML) to the Claude Agent SDK permissionMode string that
-// the sidecar passes to sdkQuery. The mapping is:
+// permissionCeilingToSDKMode maps a sextant-internal permission_ceiling
+// value to the Claude Agent SDK permissionMode string.
 //
-//	"auto" or ""  → "acceptEdits"  (auto-accept Edit/Write; bash auto-gated)
+//	"auto" or ""  → "acceptEdits"
 //	"plan"        → "plan"
-//
-// "bypassPermissions" is never produced — it is prohibited by the
-// [[sextant-permission-ceiling]] policy. Any unrecognized value falls
-// back to "acceptEdits" so a stale or hand-edited template can't
-// accidentally escalate privileges.
 func permissionCeilingToSDKMode(ceiling string) string {
 	switch ceiling {
 	case "plan":
 		return "plan"
 	default:
-		// Covers "auto", "" (unset), and any unrecognized value.
 		return "acceptEdits"
 	}
 }
 
 // ClaudeSeedVolumePrefix is the prefix for per-agent Docker named
-// volumes that back the claude_seed copy-on-spawn flow. The full volume
-// name is "<prefix><agent-uuid>". Stable per-agent so a
-// restart-with-preserve-session reattaches the same volume and the
-// SDK's session journal survives.
+// volumes that back the claude_seed copy-on-spawn flow.
 const ClaudeSeedVolumePrefix = "sextant-claude-seed-"
 
 // ClaudeSeedVolumeName returns the canonical name of the per-agent
-// claude_seed volume. Exported so the archive handler can compute the
-// same name and delete the volume when an agent is archived.
+// claude_seed volume.
 func ClaudeSeedVolumeName(agentUUID uuid.UUID) string {
 	return ClaudeSeedVolumePrefix + agentUUID.String()
 }
 
-// buildClaudeSeedMount returns the mount that should be appended to the
-// container spec for a template with claude_seed set. The returned
-// cleanup closure (nil for the readonly-bind mode) handles rollback —
-// for copy-on-spawn, this means deleting a newly-created volume if a
-// later step in the spawn fails. The cleanup is NOT registered for
-// volumes that already existed (a restart of an agent with a prior
-// session must not destroy that agent's working state on rollback).
-//
-// When deps.Volumes is nil and the mode is "copy-on-spawn", we fall
-// back to the readonly-bind behavior so the spawn handler still works
-// in test harnesses that didn't wire a volume manager. Production
-// always wires deps.Volumes.
+// buildClaudeSeedMount returns the mount appended to the container spec
+// for a template with claude_seed set. See the original spawn doc for
+// the copy-on-spawn vs readonly-bind modes.
 func buildClaudeSeedMount(ctx context.Context, deps SpawnDeps, mode, seedPath string, agentUUID uuid.UUID, image string) (containermgr.MountSpec, func(), error) {
 	switch mode {
 	case templates.ClaudeSeedModeReadonly:
-		// Legacy bind-mount. No rollback cleanup needed — bind mounts
-		// don't own host state.
 		return containermgr.MountSpec{
 			HostPath:      seedPath,
 			ContainerPath: "/home/agent/.claude",
@@ -816,9 +446,6 @@ func buildClaudeSeedMount(ctx context.Context, deps SpawnDeps, mode, seedPath st
 		}, nil, nil
 	case templates.ClaudeSeedModeCopyOnSpawn, "":
 		if deps.Volumes == nil {
-			// No volume manager wired (unit-test fallback). Use the
-			// readonly bind so tests that don't care about the copy
-			// flow still get a deterministic mount shape.
 			return containermgr.MountSpec{
 				HostPath:      seedPath,
 				ContainerPath: "/home/agent/.claude",
@@ -835,25 +462,13 @@ func buildClaudeSeedMount(ctx context.Context, deps SpawnDeps, mode, seedPath st
 			return containermgr.MountSpec{}, nil, fmt.Errorf("ensure volume %s: %w", volName, err)
 		}
 		if created {
-			// First spawn for this agent UUID. Populate from the host
-			// seed dir so the SDK boots with operator-curated content.
-			// We always use the sidecar image (whatever the template
-			// declares) for the populate one-shot — it's the image we
-			// know is already pulled.
 			if err := deps.Volumes.PopulateVolumeFromHostDir(ctx, volName, seedPath, image, nil); err != nil {
-				// Populate failed: tear down the half-created volume so
-				// the next spawn starts cleanly.
 				_ = deps.Volumes.RemoveVolume(context.Background(), volName, true) //nolint:contextcheck // rollback uses a fresh ctx
 				return containermgr.MountSpec{}, nil, fmt.Errorf("populate volume %s from %s: %w", volName, seedPath, err)
 			}
 		}
 		var cleanup func()
 		if created {
-			// Only roll back the volume when we created it. Re-attaching
-			// an existing volume is a no-op for the caller; deleting it
-			// would destroy the agent's accumulated state. Rollback runs
-			// after the outer spawn ctx may have been cancelled, so the
-			// timeout context derives from Background by design.
 			//nolint:contextcheck // rollback against fresh ctx is intentional
 			cleanup = func() {
 				rbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -871,9 +486,9 @@ func buildClaudeSeedMount(ctx context.Context, deps SpawnDeps, mode, seedPath st
 	}
 }
 
-// insertDefinitionHistory writes one row into the agent_definitions_history
-// ClickHouse table. The `definition` column is JSON — we pass the full
-// AgentDefinition JSON so the history is self-describing.
+// insertDefinitionHistory writes one row into the
+// agent_definitions_history ClickHouse table. The definition column is
+// the full AgentDefinition JSON so the history is self-describing.
 func insertDefinitionHistory(ctx context.Context, hw HistoryWriter, def sextantproto.AgentDefinition, changeKind string) error {
 	raw, err := json.Marshal(def)
 	if err != nil {
