@@ -66,6 +66,20 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   command is printed (`→ sextant agents show <uuid> -i`) so it's easy to
   copy/paste and reuse. `component.Meta` gains `Arg` / `ArgKind` /
   `NoIFlag` to drive this.
+- **The RPC surface is now one declarative `VerbSpec` table instead of
+  four parallel enumerations.** The verb-name constants, the `CapFor`
+  capability mapping, the daemon's staged handler registration, and the
+  schema generator's hand-maintained payload list used to enumerate the
+  same verbs in four places; adding a verb and forgetting one was a live
+  drift class (the generator's type list was the hidden 4th copy). They
+  now derive from `rpc.VerbSpecs` (`{name, capability, phase, req, resp}`):
+  dispatch registration iterates it per phase, `CapFor` reads it, and
+  `cmd/sextantproto-gen` walks its req/resp types. Registration fails
+  loudly if a verb lacks a handler or a handler lacks a verb. Pure
+  internal refactor — no observable behavior change: every verb keeps its
+  exact name and capability, the staged registration order is preserved,
+  and `go generate ./...` produces byte-identical schema output (no
+  `WireEpoch` bump). RFC §5.8.
 
 ### Fixed
 - **`restart_agent` silently dropped three mounts `spawn_agent` adds —

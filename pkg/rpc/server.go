@@ -83,10 +83,11 @@ type Server struct {
 	logger   *log.Logger
 	ttlPrune time.Duration
 
-	mu       sync.RWMutex
-	handlers map[string]Handler
-	caps     map[string]string
-	closed   bool
+	mu        sync.RWMutex
+	handlers  map[string]Handler
+	caps      map[string]string
+	verbOrder []string // registration order, for introspection/tests
+	closed    bool
 
 	sub   *nats.Subscription
 	runMu sync.Mutex // serializes Run vs Close
@@ -152,7 +153,20 @@ func (s *Server) Register(verb string, h Handler) error {
 	}
 	s.handlers[verb] = h
 	s.caps[verb] = CapFor(verb)
+	s.verbOrder = append(s.verbOrder, verb)
 	return nil
+}
+
+// RegisteredVerbs returns the verbs registered so far, in the order
+// Register was called. The daemon registers in VerbSpec phase order, so
+// this is the observable projection of the staged registration the
+// VerbSpec table drives (RFC §5.8). Returns a copy; safe to mutate.
+func (s *Server) RegisteredVerbs() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]string, len(s.verbOrder))
+	copy(out, s.verbOrder)
+	return out
 }
 
 // Run subscribes to "sextant.rpc.*" and blocks until ctx is canceled

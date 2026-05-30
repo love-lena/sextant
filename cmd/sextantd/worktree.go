@@ -352,22 +352,14 @@ func (r *rpcRuntime) registerWorktreeVerbs(wt *worktreeRuntime) error {
 		return nil
 	}
 	deps := handlers.WorktreeDeps{Manager: wt.mgr}
-	if err := r.server.Register(rpc.VerbWorktreeCreate, handlers.NewWorktreeCreate(deps)); err != nil {
-		return err
+	factories := map[string]func() rpc.Handler{
+		rpc.VerbWorktreeCreate:  func() rpc.Handler { return handlers.NewWorktreeCreate(deps) },
+		rpc.VerbWorktreeDestroy: func() rpc.Handler { return handlers.NewWorktreeDestroy(deps) },
+		rpc.VerbWorktreeList:    func() rpc.Handler { return handlers.NewWorktreeList(deps) },
+		rpc.VerbWorktreeMerge:   func() rpc.Handler { return handlers.NewWorktreeMerge(deps) },
+		rpc.VerbWorktreeDiff:    func() rpc.Handler { return handlers.NewWorktreeDiff(deps) },
 	}
-	if err := r.server.Register(rpc.VerbWorktreeDestroy, handlers.NewWorktreeDestroy(deps)); err != nil {
-		return err
-	}
-	if err := r.server.Register(rpc.VerbWorktreeList, handlers.NewWorktreeList(deps)); err != nil {
-		return err
-	}
-	if err := r.server.Register(rpc.VerbWorktreeMerge, handlers.NewWorktreeMerge(deps)); err != nil {
-		return err
-	}
-	if err := r.server.Register(rpc.VerbWorktreeDiff, handlers.NewWorktreeDiff(deps)); err != nil {
-		return err
-	}
-	return nil
+	return registerPhase(r.server, rpc.PhaseWorktree, factories)
 }
 
 // lockKVAdapter wraps a jetstream.KeyValue so it satisfies
