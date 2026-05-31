@@ -119,11 +119,14 @@ func TestGetAgentStatusSurfacesSessionLog(t *testing.T) {
 	id := uuid.New()
 	sid := "session-xyz"
 	def := sextantproto.AgentDefinition{
-		UUID:      id,
-		Name:      "alpha",
-		Lifecycle: sextantproto.LifecycleRunning,
-		Version:   2,
-		Runtime:   sextantproto.RuntimeConfig{SessionID: &sid},
+		UUID:    id,
+		Name:    "alpha",
+		Version: 2,
+		Spec: sextantproto.AgentSpec{
+			Desired: sextantproto.DesiredRun,
+			Runtime: sextantproto.RuntimeConfig{SessionID: &sid},
+		},
+		Status: sextantproto.AgentStatusRecord{Observed: sextantproto.ObservedRunning, ObservedGeneration: 1},
 	}
 	raw, _ := json.Marshal(def)
 	kv.entries[id.String()] = raw
@@ -165,7 +168,7 @@ func TestGetAgentStatusSurfacesSessionLog(t *testing.T) {
 func TestGetAgentStatusSessionLogEmptyWhenRootUnset(t *testing.T) {
 	kv := &fakeKV{entries: map[string][]byte{}}
 	id := uuid.New()
-	def := sextantproto.AgentDefinition{UUID: id, Name: "alpha", Lifecycle: sextantproto.LifecycleRunning}
+	def := sextantproto.AgentDefinition{UUID: id, Name: "alpha", Spec: sextantproto.AgentSpec{Desired: sextantproto.DesiredRun}, Status: sextantproto.AgentStatusRecord{Observed: sextantproto.ObservedRunning, ObservedGeneration: 1}}
 	raw, _ := json.Marshal(def)
 	kv.entries[id.String()] = raw
 
@@ -190,7 +193,7 @@ func TestGetAgentStatusSessionLogEmptyWhenRootUnset(t *testing.T) {
 func TestGetAgentStatusSessionLogIDEmptyBeforeFirstTurn(t *testing.T) {
 	kv := &fakeKV{entries: map[string][]byte{}}
 	id := uuid.New()
-	def := sextantproto.AgentDefinition{UUID: id, Name: "alpha", Lifecycle: sextantproto.LifecycleRunning}
+	def := sextantproto.AgentDefinition{UUID: id, Name: "alpha", Spec: sextantproto.AgentSpec{Desired: sextantproto.DesiredRun}, Status: sextantproto.AgentStatusRecord{Observed: sextantproto.ObservedRunning, ObservedGeneration: 1}}
 	raw, _ := json.Marshal(def)
 	kv.entries[id.String()] = raw
 

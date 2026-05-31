@@ -47,15 +47,18 @@ func fullSpecInput(t *testing.T) agentContainerSpecInput {
 			UUID:     agentUUID,
 			Name:     "alpha",
 			Template: "default",
-			Runtime: sextantproto.RuntimeConfig{
-				Model:          "claude-opus-4-7[1m]",
-				PermissionCeil: "auto",
-				InitialPrompt:  "you are alpha",
-			},
-			Sandbox: sextantproto.SandboxConfig{
-				Image:  "sextant-sidecar:latest",
-				Mounts: []string{"worktree", "ssh"},
-				Env:    map[string]string{"SEXTANT_DRIVER": "mock"},
+			Spec: sextantproto.AgentSpec{
+				Desired: sextantproto.DesiredRun,
+				Runtime: sextantproto.RuntimeConfig{
+					Model:          "claude-opus-4-7[1m]",
+					PermissionCeil: "auto",
+					InitialPrompt:  "you are alpha",
+				},
+				Sandbox: sextantproto.SandboxConfig{
+					Image:  "sextant-sidecar:latest",
+					Mounts: []string{"worktree", "ssh"},
+					Env:    map[string]string{"SEXTANT_DRIVER": "mock"},
+				},
 			},
 		},
 		IncarnationID:          uuid.New(),
@@ -204,7 +207,7 @@ func TestSpecFingerprintChangesWithSpecNotIdentity(t *testing.T) {
 
 	// Image change → different fingerprint.
 	img := base
-	img.Def.Sandbox.Image = "sextant-sidecar:next"
+	img.Def.Spec.Sandbox.Image = "sextant-sidecar:next"
 	if got := buildAgentContainerSpec(img).Labels[LabelSpecFingerprint]; got == baseFP {
 		t.Error("fingerprint unchanged when image changed")
 	}
@@ -219,7 +222,7 @@ func TestSpecFingerprintChangesWithSpecNotIdentity(t *testing.T) {
 
 	// Adding an env key → different fingerprint.
 	envKey := base
-	envKey.Def.Sandbox.Env = map[string]string{"SEXTANT_DRIVER": "mock", "EXTRA": "1"}
+	envKey.Def.Spec.Sandbox.Env = map[string]string{"SEXTANT_DRIVER": "mock", "EXTRA": "1"}
 	if got := buildAgentContainerSpec(envKey).Labels[LabelSpecFingerprint]; got == baseFP {
 		t.Error("fingerprint unchanged when an env key was added")
 	}

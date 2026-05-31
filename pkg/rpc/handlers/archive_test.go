@@ -11,22 +11,18 @@ import (
 	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
-// TestArchiveAgentRespectsConcurrentRestart pins the symmetric race
-// to TestRestartAgentRespectsConcurrentArchive: if a restart_agent
-// (or any other writer) bumps the definition's revision between
-// archive's initial Get and the final def write, archive must refuse
-// to overwrite the racer's state with lifecycle=archived.
+// TestArchiveAgentRespectsConcurrentRestart pins the symmetric race to
+// TestRestartAgentRespectsConcurrentArchive: if a concurrent writer (the
+// reconciler's status write, or a racing restart) bumps the definition's
+// revision between archive's initial Get and its final CAS write, archive
+// must refuse to overwrite the racer's state with desired=archived rather
+// than silently clobbering it.
 //
-// Without CAS on the final write, archive would silently clobber a
-// fresh `lifecycle=running` + new CurrentIncarnationID from a
-// concurrent restart, releasing the agent's name AND orphaning the
-// new container — the worst-shape of the race.
-//
-// Inject point: archive on a running agent issues two incs Puts in
-// sequence — spawn's initial incarnation persist (#1), then archive's
-// own "mark old exited" (#2). Hook on callIdx == 2 fires AFTER the
-// initial def Get and BEFORE the final def write, exactly the window
-// the CAS guard is meant to cover.
+// Under the declarative model archive_agent is a desired-state edit
+// (spec.desired=archived via CAS); the teardown is the reconciler's job
+// (sole actuator). The race is injected on the def-key Update path: a
+// `bumpingKV` wrapper bumps the revision before every Update, guaranteeing
+// archive's CAS budget exhausts and it surfaces BAD_REQUEST.
 func TestArchiveAgentRespectsConcurrentRestart(t *testing.T) {
 	deps, defs, incs, runner, _ := buildDeps(t)
 
@@ -42,35 +38,11 @@ func TestArchiveAgentRespectsConcurrentRestart(t *testing.T) {
 		t.Fatalf("decode spawn: %v", err)
 	}
 
-	// Race injection: on archive's "mark old exited" incs Put
-	// (callIdx == 2), simulate restart_agent racing in by flipping the
-	// def to running and bumping its revision. After the hook returns,
-	// archive proceeds to its final def write — the CAS must refuse to
-	// clobber the (now newer-revision) running record.
-	incs.putHook = func(_ string, callIdx int) error {
-		if callIdx == 2 {
-			entry, err := defs.Get(context.Background(), spawnResp.AgentID.String())
-			if err != nil {
-				return nil // best-effort race injection
-			}
-			var current sextantproto.AgentDefinition
-			if err := json.Unmarshal(entry.Value(), &current); err != nil {
-				return nil
-			}
-			current.Lifecycle = sextantproto.LifecycleRunning
-			current.CurrentIncarnationID = uuid.New()
-			current.Version++
-			raw, err := json.Marshal(current)
-			if err != nil {
-				return nil
-			}
-			_, _ = defs.Put(context.Background(), spawnResp.AgentID.String(), raw)
-		}
-		return nil
-	}
+	// Every archive CAS attempt collides with a concurrent revision bump.
+	bumpingDefs := &bumpingKV{wrapped: defs, key: spawnResp.AgentID.String()}
 
 	archiveH := handlers.NewArchiveAgent(handlers.ArchiveDeps{
-		Definitions:  defs,
+		Definitions:  bumpingDefs,
 		Incarnations: incs,
 		Containers:   runner,
 	})
@@ -81,25 +53,23 @@ func TestArchiveAgentRespectsConcurrentRestart(t *testing.T) {
 		t.Fatalf("archive: %v", err)
 	}
 	if acap.resp.Error == nil {
-		t.Fatal("expected an error — archive must refuse to overwrite the concurrent restart")
+		t.Fatal("expected an error — archive must refuse to overwrite the concurrent writer")
 	}
 	if acap.resp.Error.Code != sextantproto.ErrCodeBadRequest {
 		t.Errorf("Error.Code = %q, want %q (CAS conflict surfaces as bad_request)",
 			acap.resp.Error.Code, sextantproto.ErrCodeBadRequest)
 	}
 
-	// Definition must still be running. If archive's final write had
-	// gone through with lifecycle=archived, this assertion would fail
-	// and the operator's name release would have stomped a freshly
-	// restarted agent.
+	// Definition must NOT have flipped to archived — the CAS guard kept
+	// archive from clobbering the concurrent writer's record.
 	defSnap := defs.snapshot()
 	var def sextantproto.AgentDefinition
 	if err := json.Unmarshal(defSnap[spawnResp.AgentID.String()], &def); err != nil {
 		t.Fatalf("decode def: %v", err)
 	}
-	if def.Lifecycle != sextantproto.LifecycleRunning {
-		t.Errorf("def.Lifecycle = %s, want running (archive must not clobber the concurrent restart)",
-			def.Lifecycle)
+	if def.Spec.Desired == sextantproto.DesiredArchived {
+		t.Errorf("def.Spec.Desired = %s, want NOT archived (archive must not clobber the concurrent writer)",
+			def.Spec.Desired)
 	}
 }
 
@@ -108,7 +78,7 @@ func TestArchiveAgentRespectsConcurrentRestart(t *testing.T) {
 // filed to solve: an operator can spawn `foo`, kill `foo`, archive
 // `foo`, then spawn `foo` again without colliding on the name. Without
 // the archive step the second spawn fails because spawn.agentNameInUse
-// would see the killed-but-defined record and refuse the duplicate.
+// would see the killed-but-non-archived record and refuse the duplicate.
 func TestArchiveAgentReleasesName(t *testing.T) {
 	deps, defs, incs, runner, _ := buildDeps(t)
 	spawnH := handlers.NewSpawnAgent(deps)
@@ -138,7 +108,8 @@ func TestArchiveAgentReleasesName(t *testing.T) {
 		t.Fatalf("decode first spawn: %v", err)
 	}
 
-	// 2) Kill agent-foo. Lifecycle goes to defined (not archived).
+	// 2) Kill agent-foo. Desired goes to paused (not archived); the name
+	// is still held.
 	killCap := &captureEmit{}
 	if err := killH(context.Background(), makeReq(t, sextantproto.KillAgentRequest{
 		AgentID: spawnResp1.AgentID,
@@ -165,7 +136,7 @@ func TestArchiveAgentReleasesName(t *testing.T) {
 			collisionCap.resp.Error.Code, sextantproto.ErrCodeBadRequest)
 	}
 
-	// 3) Archive agent-foo. Lifecycle flips to archived.
+	// 3) Archive agent-foo. spec.desired flips to archived.
 	archiveCap := &captureEmit{}
 	if err := archiveH(context.Background(), makeReq(t, sextantproto.ArchiveAgentRequest{
 		AgentID: spawnResp1.AgentID,
@@ -180,8 +151,11 @@ func TestArchiveAgentReleasesName(t *testing.T) {
 	if err := json.Unmarshal(defSnap[spawnResp1.AgentID.String()], &archivedDef); err != nil {
 		t.Fatalf("decode archived def: %v", err)
 	}
-	if archivedDef.Lifecycle != sextantproto.LifecycleArchived {
-		t.Errorf("Lifecycle after archive = %s, want archived", archivedDef.Lifecycle)
+	if archivedDef.Spec.Desired != sextantproto.DesiredArchived {
+		t.Errorf("spec.desired after archive = %s, want archived", archivedDef.Spec.Desired)
+	}
+	if archivedDef.Lifecycle() != sextantproto.LifecycleArchived {
+		t.Errorf("Lifecycle() after archive = %s, want archived", archivedDef.Lifecycle())
 	}
 
 	// 4) Spawn agent-foo again — succeeds. This is the acceptance
@@ -204,12 +178,12 @@ func TestArchiveAgentReleasesName(t *testing.T) {
 	}
 }
 
-// TestArchiveAgentOnRunningAgentStopsContainer covers the "archive a
-// running agent" path: archive must stop the live container first, mark
-// the incarnation exited, and only then flip lifecycle to archived.
-// This is the shape the MCP path uses when an agent caller archives
-// its own child without an explicit kill.
-func TestArchiveAgentOnRunningAgentStopsContainer(t *testing.T) {
+// TestArchiveAgentOnRunningAgentSetsArchivedIntent covers the "archive a
+// running agent" path: under the declarative model archive writes
+// spec.desired=archived (the reconciler tears the live container down +
+// reclaims the volume out-of-band). This is the shape the MCP path uses
+// when an agent caller archives its own child without an explicit kill.
+func TestArchiveAgentOnRunningAgentSetsArchivedIntent(t *testing.T) {
 	deps, defs, incs, runner, _ := buildDeps(t)
 	spawnH := handlers.NewSpawnAgent(deps)
 	archiveH := handlers.NewArchiveAgent(handlers.ArchiveDeps{
@@ -239,28 +213,16 @@ func TestArchiveAgentOnRunningAgentStopsContainer(t *testing.T) {
 		t.Fatalf("archive error: %+v", archiveCap.resp.Error)
 	}
 
-	// Container was stopped.
-	runner.mu.Lock()
-	stopped := append([]string(nil), runner.stopped...)
-	runner.mu.Unlock()
-	if len(stopped) != 1 {
-		t.Errorf("stopped count = %d, want 1", len(stopped))
-	}
-
-	// Incarnation marked exited.
-	for _, v := range incs.snapshot() {
-		var inc sextantproto.AgentIncarnation
-		_ = json.Unmarshal(v, &inc)
-		if inc.AgentUUID == spawnResp.AgentID && inc.State != sextantproto.IncarnationExited {
-			t.Errorf("incarnation State = %s, want exited", inc.State)
-		}
-	}
-
-	// Definition archived.
+	// Definition records archived intent. The reconciler converges the
+	// teardown (container stop + volume reclaim) — see the reconciler
+	// convergence + e2e tests, not this handler-level test.
 	var def sextantproto.AgentDefinition
 	_ = json.Unmarshal(defs.snapshot()[spawnResp.AgentID.String()], &def)
-	if def.Lifecycle != sextantproto.LifecycleArchived {
-		t.Errorf("Lifecycle = %s, want archived", def.Lifecycle)
+	if def.Spec.Desired != sextantproto.DesiredArchived {
+		t.Errorf("spec.desired = %s, want archived", def.Spec.Desired)
+	}
+	if def.Lifecycle() != sextantproto.LifecycleArchived {
+		t.Errorf("Lifecycle() = %s, want archived", def.Lifecycle())
 	}
 }
 
@@ -385,11 +347,11 @@ func TestKillWithArchiveFlag(t *testing.T) {
 }
 
 // TestArchiveAllDead mirrors `sextant agents archive --all-dead`: spawn
-// three agents, kill them all, then archive every agent currently in
-// lifecycle=defined. After the bulk run, list_agents must report zero
-// non-archived agents and every name must be reusable.
+// three agents, kill them all, then archive every agent currently paused.
+// After the bulk run, list_agents must report zero non-archived agents
+// and every name must be reusable.
 //
-// The CLI's --all-dead loop is `list_agents(filter=defined)` →
+// The CLI's --all-dead loop is `list_agents(filter=paused)` →
 // `archive_agent(uuid)` per row; this test exercises the same shape so
 // the bulk flow is regression-tested without a running daemon.
 func TestArchiveAllDead(t *testing.T) {
@@ -426,7 +388,8 @@ func TestArchiveAllDead(t *testing.T) {
 		ids = append(ids, sr.AgentID)
 	}
 
-	// Kill all 3 — every agent now sits in lifecycle=defined.
+	// Kill all 3 — every agent now sits at desired=paused (lifecycle
+	// projects to paused).
 	for _, id := range ids {
 		cap := &captureEmit{}
 		if err := killH(context.Background(), makeReq(t, sextantproto.KillAgentRequest{
@@ -439,10 +402,10 @@ func TestArchiveAllDead(t *testing.T) {
 		}
 	}
 
-	// list_agents(filter=defined) — the same query --all-dead runs.
+	// list_agents(filter=paused) — the same query --all-dead runs.
 	listCap := &captureEmit{}
 	if err := listH(context.Background(), makeReq(t, sextantproto.ListAgentsRequest{
-		Filter: &sextantproto.ListAgentsFilter{Lifecycle: string(sextantproto.LifecycleDefined)},
+		Filter: &sextantproto.ListAgentsFilter{Lifecycle: string(sextantproto.LifecyclePaused)},
 	}), listCap.emit()); err != nil {
 		t.Fatalf("list_agents: %v", err)
 	}
@@ -451,7 +414,7 @@ func TestArchiveAllDead(t *testing.T) {
 		t.Fatalf("decode list: %v", err)
 	}
 	if len(listResp.Agents) != len(names) {
-		t.Fatalf("defined agents = %d, want %d", len(listResp.Agents), len(names))
+		t.Fatalf("paused agents = %d, want %d", len(listResp.Agents), len(names))
 	}
 
 	// Archive each.
@@ -467,11 +430,11 @@ func TestArchiveAllDead(t *testing.T) {
 		}
 	}
 
-	// After the bulk archive, list_agents(filter=defined) returns 0,
+	// After the bulk archive, list_agents(filter=paused) returns 0,
 	// and every name is reusable.
 	postCap := &captureEmit{}
 	if err := listH(context.Background(), makeReq(t, sextantproto.ListAgentsRequest{
-		Filter: &sextantproto.ListAgentsFilter{Lifecycle: string(sextantproto.LifecycleDefined)},
+		Filter: &sextantproto.ListAgentsFilter{Lifecycle: string(sextantproto.LifecyclePaused)},
 	}), postCap.emit()); err != nil {
 		t.Fatalf("list_agents post-archive: %v", err)
 	}
@@ -480,7 +443,7 @@ func TestArchiveAllDead(t *testing.T) {
 		t.Fatalf("decode post-list: %v", err)
 	}
 	if len(postResp.Agents) != 0 {
-		t.Errorf("defined agents post --all-dead = %d, want 0", len(postResp.Agents))
+		t.Errorf("paused agents post --all-dead = %d, want 0", len(postResp.Agents))
 	}
 
 	// Spawn each name again to prove the names were truly released.
@@ -495,61 +458,6 @@ func TestArchiveAllDead(t *testing.T) {
 			t.Errorf("re-spawn %s error: %+v (name %q still claimed after --all-dead)",
 				n, cap.resp.Error, n)
 		}
-	}
-}
-
-// TestArchiveAgentRemovesClaudeSeedVolume pins the cleanup step from
-// the bug-claude-seed-readonly-breaks-session-persistence fix: when an
-// agent is archived (the operator's "permanently delete" signal), the
-// per-agent copy-on-spawn volume must be removed so it doesn't
-// accumulate on the host. Best-effort — the archive succeeds even if
-// the remove fails — but the call must be issued.
-func TestArchiveAgentRemovesClaudeSeedVolume(t *testing.T) {
-	deps, defs, incs, runner, _ := buildDeps(t)
-	vols := newFakeVolumeManager()
-	deps.Volumes = vols
-	spawnH := handlers.NewSpawnAgent(deps)
-	archiveH := handlers.NewArchiveAgent(handlers.ArchiveDeps{
-		Definitions:  defs,
-		Incarnations: incs,
-		Containers:   runner,
-		Volumes:      vols,
-	})
-
-	spawnCap := &captureEmit{}
-	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "alpha", Template: "default",
-	}), spawnCap.emit()); err != nil {
-		t.Fatalf("spawn: %v", err)
-	}
-	var spawnResp sextantproto.SpawnAgentResponse
-	if err := json.Unmarshal(spawnCap.resp.Result, &spawnResp); err != nil {
-		t.Fatalf("decode spawn: %v", err)
-	}
-
-	archCap := &captureEmit{}
-	if err := archiveH(context.Background(), makeReq(t, sextantproto.ArchiveAgentRequest{
-		AgentID: spawnResp.AgentID,
-	}), archCap.emit()); err != nil {
-		t.Fatalf("archive: %v", err)
-	}
-	if archCap.resp.Error != nil {
-		t.Fatalf("archive error: %+v", archCap.resp.Error)
-	}
-
-	wantVol := handlers.ClaudeSeedVolumeName(spawnResp.AgentID)
-	vols.mu.Lock()
-	removed := append([]string(nil), vols.removed...)
-	vols.mu.Unlock()
-	var found bool
-	for _, name := range removed {
-		if name == wantVol {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("archive did not remove volume %q; removed = %v", wantVol, removed)
 	}
 }
 

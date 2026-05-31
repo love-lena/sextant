@@ -156,16 +156,20 @@ func bootNATSForTest(t *testing.T, bin string) *natsboot.Server {
 }
 
 // seedAgent writes one AgentDefinition into the agent_definitions KV bucket
-// so list_agents can return it.
+// so list_agents can return it. The desired LifecycleState is projected
+// back onto the spec/status split (RFC §5.2) so AgentDefinition.Lifecycle()
+// renders the requested rollup.
 func seedAgent(t *testing.T, nc *nats.Conn, id uuid.UUID, name string, lifecycle sextantproto.LifecycleState) {
 	t.Helper()
 	kv := openAgentDefsKV(t, nc)
+	spec, status := specStatusForLifecycle(lifecycle)
 	def := sextantproto.AgentDefinition{
 		UUID:      id,
 		Name:      name,
 		Type:      "test",
 		Template:  "claude-coder",
-		Lifecycle: lifecycle,
+		Spec:      spec,
+		Status:    status,
 		Version:   1,
 		CreatedAt: sextantproto.NowTimestamp(),
 		UpdatedAt: sextantproto.NowTimestamp(),
@@ -176,6 +180,35 @@ func seedAgent(t *testing.T, nc *nats.Conn, id uuid.UUID, name string, lifecycle
 	}
 	if _, err := kv.Put(context.Background(), id.String(), raw); err != nil {
 		t.Fatalf("KV Put %s: %v", id, err)
+	}
+}
+
+// specStatusForLifecycle projects a legacy LifecycleState back onto the
+// spec/status split so a seeded record renders the requested rollup via
+// AgentDefinition.Lifecycle().
+func specStatusForLifecycle(l sextantproto.LifecycleState) (sextantproto.AgentSpec, sextantproto.AgentStatusRecord) {
+	switch l {
+	case sextantproto.LifecyclePaused:
+		return sextantproto.AgentSpec{Desired: sextantproto.DesiredPaused, Generation: 1},
+			sextantproto.AgentStatusRecord{Observed: sextantproto.ObservedEnded}
+	case sextantproto.LifecycleArchived:
+		return sextantproto.AgentSpec{Desired: sextantproto.DesiredArchived, Generation: 1},
+			sextantproto.AgentStatusRecord{Observed: sextantproto.ObservedEnded}
+	case sextantproto.LifecycleRunning:
+		return sextantproto.AgentSpec{Desired: sextantproto.DesiredRun, Generation: 1},
+			sextantproto.AgentStatusRecord{Observed: sextantproto.ObservedRunning, ObservedGeneration: 1}
+	case sextantproto.LifecycleCrashedState:
+		return sextantproto.AgentSpec{Desired: sextantproto.DesiredRun, Generation: 1},
+			sextantproto.AgentStatusRecord{Observed: sextantproto.ObservedCrashed, ObservedGeneration: 1}
+	case sextantproto.LifecycleLostState:
+		return sextantproto.AgentSpec{Desired: sextantproto.DesiredRun, Generation: 1},
+			sextantproto.AgentStatusRecord{Observed: sextantproto.ObservedLost, ObservedGeneration: 1}
+	case sextantproto.LifecycleEndedState:
+		return sextantproto.AgentSpec{Desired: sextantproto.DesiredRun, Generation: 1},
+			sextantproto.AgentStatusRecord{Observed: sextantproto.ObservedEnded, ObservedGeneration: 1}
+	default: // LifecycleDefined — desired=run, pre-actuation.
+		return sextantproto.AgentSpec{Desired: sextantproto.DesiredRun, Generation: 1},
+			sextantproto.AgentStatusRecord{Observed: sextantproto.ObservedPending}
 	}
 }
 
