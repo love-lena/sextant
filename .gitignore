@@ -41,5 +41,7 @@ node_modules/
 # mdbook build output
 /docs/book/book/
 
-# Claude harness state
-.claude/
+# Claude harness state is local (worktrees, settings), except shared
+# project skills, which are version-controlled.
+.claude/*
+!.claude/skills/
