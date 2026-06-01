@@ -254,6 +254,7 @@ func (s *Server) prune(ctx context.Context, done chan<- struct{}) {
 // All error paths emit a terminal RPCError reply — a missing reply is
 // a protocol violation per spec.
 func (s *Server) handle(runCtx context.Context, msg *nats.Msg) {
+	// decode — the only place an inbound RPC envelope is unmarshalled.
 	var req sextantproto.Envelope
 	if err := json.Unmarshal(msg.Data, &req); err != nil {
 		s.logger.Printf("rpc: bad envelope on %s: %v", msg.Subject, err)
@@ -261,10 +262,16 @@ func (s *Server) handle(runCtx context.Context, msg *nats.Msg) {
 			fmt.Sprintf("malformed envelope: %v", err))
 		return
 	}
-	if err := req.Validate(); err != nil {
-		s.logger.Printf("rpc: invalid envelope on %s: %v", msg.Subject, err)
-		s.replyErrorRaw(msg.Reply, req, sextantproto.ErrCodeBadRequest,
-			fmt.Sprintf("envelope failed validation: %v", err))
+	// Shared admission pre-step (decode → default → validate), the one
+	// choke point in front of every handler (RFC §5.7). It runs the
+	// structural envelope validation AND the wire-epoch compatibility
+	// check; a stale-epoch peer is rejected here with the reinstall
+	// diagnostic before any handler, cap check, or audit runs.
+	admitted, admitErr := Admit(req)
+	req = admitted
+	if admitErr != nil {
+		s.logger.Printf("rpc: admission rejected %s: %s (%s)", msg.Subject, admitErr.Code, admitErr.Message)
+		s.replyAdmissionError(msg.Reply, req, admitErr)
 		return
 	}
 	if req.Kind != sextantproto.KindRPCRequest {
@@ -494,6 +501,23 @@ func (s *Server) replyErrorRaw(natsReply string, req sextantproto.Envelope, code
 		return
 	}
 	s.replyErrorTo(reply, req, code, message, "")
+}
+
+// replyAdmissionError publishes the terminal RPCError the admission
+// pre-step produced, preserving its Details (the WireEpoch rejection
+// carries client/daemon proto_version + remedy so the CLI can render the
+// reinstall hint without parsing the message). Like replyErrorRaw it
+// tolerates a missing Envelope.ReplyTo by falling back to the NATS reply
+// subject; the request never reached a verb, so no idempotency caching.
+func (s *Server) replyAdmissionError(natsReply string, req sextantproto.Envelope, rerr *sextantproto.RPCError) {
+	reply := derefString(req.ReplyTo)
+	if reply == "" {
+		reply = natsReply
+	}
+	if reply == "" {
+		return
+	}
+	s.replyErrorToWithDetails(reply, req, rerr.Code, rerr.Message, "", rerr.Details)
 }
 
 // buildResponseBytes wraps an RPCResponse in an rpc_response envelope

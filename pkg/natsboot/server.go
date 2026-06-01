@@ -128,9 +128,18 @@ func (s *Server) Address() string {
 	return net.JoinHostPort(s.cfg.ListenHost, strconv.Itoa(s.cfg.ListenPort))
 }
 
-// URL returns a NATS connection URL with embedded operator credentials.
-// Treat this string as sensitive — it carries the operator password.
+// URL returns a NATS connection URL with embedded DAEMON credentials.
+// The daemon principal is the privileged sole-publisher (feat-ctl-f0);
+// this URL is for the daemon's own in-process use. Treat as sensitive —
+// it carries the daemon password. Operators/CLIs use OperatorURL.
 func (s *Server) URL() string {
+	return fmt.Sprintf("nats://%s:%s@%s", s.cfg.DaemonUser, s.cfg.DaemonPassword, s.Address())
+}
+
+// OperatorURL returns a NATS connection URL with embedded OPERATOR
+// credentials — the broker-scoped principal (publish sextant.rpc.* +
+// reply inboxes only). Sensitive — carries the operator password.
+func (s *Server) OperatorURL() string {
 	return fmt.Sprintf("nats://%s:%s@%s", s.cfg.OperatorUser, s.cfg.OperatorPassword, s.Address())
 }
 
@@ -140,12 +149,25 @@ func (s *Server) PublicURL() string {
 	return "nats://" + s.Address()
 }
 
-// OperatorUser returns the NATS auth username configured at start time.
+// OperatorUser returns the broker-scoped operator NATS username.
 func (s *Server) OperatorUser() string { return s.cfg.OperatorUser }
 
-// OperatorPassword returns the NATS auth password. Sensitive — log only
-// at trace level if at all.
+// OperatorPassword returns the operator NATS password. Sensitive — log
+// only at trace level if at all.
 func (s *Server) OperatorPassword() string { return s.cfg.OperatorPassword }
+
+// DaemonUser returns the privileged daemon NATS username (sole publisher).
+func (s *Server) DaemonUser() string { return s.cfg.DaemonUser }
+
+// DaemonPassword returns the daemon NATS password. Sensitive.
+func (s *Server) DaemonPassword() string { return s.cfg.DaemonPassword }
+
+// SidecarUser returns the broker-scoped sidecar NATS username (the
+// principal forwarded into sidecar containers at spawn).
+func (s *Server) SidecarUser() string { return s.cfg.SidecarUser }
+
+// SidecarPassword returns the sidecar NATS password. Sensitive.
+func (s *Server) SidecarPassword() string { return s.cfg.SidecarPassword }
 
 // DataDir returns the JetStream data directory.
 func (s *Server) DataDir() string { return s.cfg.DataDir }
@@ -154,11 +176,33 @@ func (s *Server) DataDir() string { return s.cfg.DataDir }
 // tests and `sextant-natsboot` to surface in --help output.
 func (s *Server) ConfigPath() string { return s.cfgPath }
 
-// Connect opens a NATS connection authenticated as the operator user.
-// The caller owns nc.Close().
+// Connect opens a NATS connection authenticated as the privileged DAEMON
+// user (feat-ctl-f0). This is the daemon's in-process connection — RPC,
+// MCP, reconciler — and the broker-sanctioned sole publisher to agent
+// inboxes. CLIs/TUIs must NOT use this; they connect with the scoped
+// operator credentials via pkg/client. The caller owns nc.Close().
 func (s *Server) Connect(opts ...nats.Option) (*nats.Conn, error) {
 	allOpts := append([]nats.Option{
 		nats.Name("sextant-natsboot"),
+		nats.UserInfo(s.cfg.DaemonUser, s.cfg.DaemonPassword),
+		nats.RetryOnFailedConnect(false),
+		nats.Timeout(2 * time.Second),
+		nats.MaxReconnects(0),
+	}, opts...)
+	nc, err := nats.Connect(s.Address(), allOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("natsboot: connect as daemon: %w", err)
+	}
+	return nc, nil
+}
+
+// ConnectOperator opens a NATS connection authenticated as the
+// broker-scoped operator user. Exposed for tests and tools that need to
+// exercise the operator front door (e.g. assert the broker rejects an
+// inbox publish from this principal). The caller owns nc.Close().
+func (s *Server) ConnectOperator(opts ...nats.Option) (*nats.Conn, error) {
+	allOpts := append([]nats.Option{
+		nats.Name("sextant-natsboot-operator"),
 		nats.UserInfo(s.cfg.OperatorUser, s.cfg.OperatorPassword),
 		nats.RetryOnFailedConnect(false),
 		nats.Timeout(2 * time.Second),
@@ -325,7 +369,8 @@ func (s *Server) waitReady(ctx context.Context) error {
 			return fmt.Errorf("natsboot: nats-server exited during startup: %w", s.cachedWaitErr())
 		default:
 		}
-		nc, err := nats.Connect(s.Address(),
+		nc, err := nats.Connect(
+			s.Address(),
 			nats.UserInfo(s.cfg.OperatorUser, s.cfg.OperatorPassword),
 			nats.Timeout(500*time.Millisecond),
 			nats.RetryOnFailedConnect(false),

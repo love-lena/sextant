@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/love-lena/sextant/pkg/client"
 	"github.com/love-lena/sextant/pkg/natsboot"
@@ -83,6 +84,29 @@ func clientFromServer(ctx context.Context, t *testing.T, srv *natsboot.Server) *
 	return cli
 }
 
+// seedJS publishes raw to subject via the privileged DAEMON principal.
+// Since feat-ctl-f0 the broker-scoped operator credential the test client
+// uses may publish only sextant.rpc.* + reply inboxes — it cannot publish
+// to agents.*.frames. Tests that need to seed an agent stream (to then
+// exercise the operator-side *read* path) must publish as the daemon,
+// which mirrors production where the sidecar/daemon are the only frame
+// publishers.
+func seedJS(ctx context.Context, t *testing.T, srv *natsboot.Server, subject string, raw []byte) {
+	t.Helper()
+	nc, err := srv.Connect()
+	if err != nil {
+		t.Fatalf("seedJS: daemon connect: %v", err)
+	}
+	defer nc.Close()
+	js, err := jetstream.New(nc)
+	if err != nil {
+		t.Fatalf("seedJS: jetstream.New: %v", err)
+	}
+	if _, err := js.Publish(ctx, subject, raw); err != nil {
+		t.Fatalf("seedJS: publish %s: %v", subject, err)
+	}
+}
+
 // TestSubscribeRoundTripsEnvelopeWithStreamSeq is the M4 acceptance test:
 // publish an envelope on agents.<uuid>.frames, observe it on the
 // subscription channel with StreamSeq populated, and confirm the
@@ -114,9 +138,9 @@ func TestSubscribeRoundTripsEnvelopeWithStreamSeq(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal envelope: %v", err)
 	}
-	if _, err := cli.JetStream().Publish(ctx, subject, raw); err != nil {
-		t.Fatalf("JS Publish: %v", err)
-	}
+	// Seed via the daemon principal — the operator client may not publish
+	// to agents.*.frames (feat-ctl-f0).
+	seedJS(ctx, t, srv, subject, raw)
 
 	select {
 	case msg, ok := <-ch:
@@ -176,9 +200,9 @@ func TestSubscribeFromSeqResumes(t *testing.T) {
 		if perr != nil {
 			t.Fatalf("Marshal envelope: %v", perr)
 		}
-		if _, perr := cli.JetStream().Publish(ctx, subject, raw); perr != nil {
-			t.Fatalf("JS Publish: %v", perr)
-		}
+		// Seed via the daemon principal (feat-ctl-f0): operator can't
+		// publish agents.*.frames.
+		seedJS(ctx, t, srv, subject, raw)
 		return env
 	}
 
@@ -441,10 +465,9 @@ func TestSubscribeSurfacesMalformedEnvelopeError(t *testing.T) {
 		t.Fatalf("Subscribe: %v", err)
 	}
 
-	// Publish raw bytes that are not a JSON envelope.
-	if _, err := cli.JetStream().Publish(ctx, subject, []byte("not a json envelope")); err != nil {
-		t.Fatalf("JS Publish: %v", err)
-	}
+	// Publish raw bytes that are not a JSON envelope, via the daemon
+	// principal (feat-ctl-f0): operator can't publish agents.*.frames.
+	seedJS(ctx, t, srv, subject, []byte("not a json envelope"))
 
 	select {
 	case msg, ok := <-ch:
@@ -702,9 +725,9 @@ func TestAckIsSafeToCallMultipleTimes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	if _, err := cli.JetStream().Publish(ctx, subject, raw); err != nil {
-		t.Fatalf("JS Publish: %v", err)
-	}
+	// Seed via the daemon principal (feat-ctl-f0): operator can't publish
+	// agents.*.frames.
+	seedJS(ctx, t, srv, subject, raw)
 
 	select {
 	case msg := <-ch:

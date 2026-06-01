@@ -28,8 +28,15 @@ type NATSConfig struct {
 	// URL is the NATS server URL. Empty means "read from runtime.json".
 	URL string `toml:"url"`
 	// OperatorCreds is the path to operator.creds (TOML written by
-	// sextant init). Required.
+	// sextant init). Required as the credential fallback.
 	OperatorCreds string `toml:"operator_creds"`
+	// DaemonUser / DaemonPassword are the privileged daemon NATS principal
+	// (feat-ctl-f0), populated from runtime.json by MergeRuntime — never
+	// from TOML. The shipper consumes every stream via JetStream and so
+	// needs the unrestricted daemon principal. When empty (older runtime
+	// file or a standalone shipper), New falls back to OperatorCreds.
+	DaemonUser     string `toml:"-"`
+	DaemonPassword string `toml:"-"`
 }
 
 // ClickHouseConfig holds ClickHouse connection details.
@@ -280,8 +287,10 @@ func (c Config) Resolve() (Config, error) {
 // shipper. We mirror the field names so a future migration to a shared
 // package is trivial.
 type RuntimeAddrs struct {
-	NATSAddr      string `json:"nats_addr"`
-	ClickHouseTCP string `json:"clickhouse_tcp"`
+	NATSAddr           string `json:"nats_addr"`
+	NATSDaemonUser     string `json:"nats_daemon_user"`
+	NATSDaemonPassword string `json:"nats_daemon_password"`
+	ClickHouseTCP      string `json:"clickhouse_tcp"`
 }
 
 // MergeRuntime fills empty NATS URL and ClickHouse Addr from
@@ -294,12 +303,20 @@ type RuntimeAddrs struct {
 // surprising.
 func (c Config) MergeRuntime(runtimePath string) (Config, error) {
 	out := c
-	if out.NATS.URL != "" && out.ClickHouse.Addr != "" {
+	// Even when both addresses are configured explicitly we still want the
+	// daemon credential from runtime.json (feat-ctl-f0), so only short-
+	// circuit when there is nothing left to fill.
+	if out.NATS.URL != "" && out.ClickHouse.Addr != "" && out.NATS.DaemonUser != "" {
 		return out, nil
 	}
 	raw, err := os.ReadFile(runtimePath) //nolint:gosec // operator-controlled path
 	if err != nil {
 		if os.IsNotExist(err) {
+			if out.NATS.URL != "" && out.ClickHouse.Addr != "" {
+				// Addresses came from explicit config; the missing runtime
+				// file just means we fall back to operator.creds for auth.
+				return out, nil
+			}
 			return out, fmt.Errorf("shipper: nats.url/clickhouse.addr empty and runtime file missing at %s", runtimePath)
 		}
 		return Config{}, fmt.Errorf("shipper: read runtime file %s: %w", runtimePath, err)
@@ -313,6 +330,13 @@ func (c Config) MergeRuntime(runtimePath string) (Config, error) {
 			return Config{}, fmt.Errorf("shipper: runtime file %s missing nats_addr", runtimePath)
 		}
 		out.NATS.URL = "nats://" + rt.NATSAddr
+	}
+	// Daemon principal: the privileged credential the shipper needs to
+	// consume every stream via JetStream. Empty in older runtime files;
+	// New falls back to operator.creds in that case.
+	if out.NATS.DaemonUser == "" {
+		out.NATS.DaemonUser = rt.NATSDaemonUser
+		out.NATS.DaemonPassword = rt.NATSDaemonPassword
 	}
 	if out.ClickHouse.Addr == "" {
 		if rt.ClickHouseTCP == "" {

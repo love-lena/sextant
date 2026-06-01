@@ -30,12 +30,36 @@ type Config struct {
 
 	// OperatorUser is the NATS auth username for the operator. Defaults
 	// to "operator". Stored in operator.creds (M5 write); used by every
-	// CLI/TUI/sextantd-internal NATS connection.
+	// CLI/TUI NATS connection. Since feat-ctl-f0 this principal is
+	// BROKER-SCOPED: it may publish sextant.rpc.* + reply inboxes only —
+	// NOT agents.*.inbox. See conf.go renderAuthorization.
 	OperatorUser string
 
 	// OperatorPassword is the password for OperatorUser. If empty,
 	// Build generates a 32-byte URL-safe random password.
 	OperatorPassword string
+
+	// DaemonUser is the privileged NATS principal the daemon's in-process
+	// connection uses (RPC + MCP + reconciler + shipper). It is the
+	// BROKER-ENFORCED sole publisher to agent inboxes (publish ">").
+	// Defaults to "daemon". feat-ctl-f0.
+	DaemonUser string
+
+	// DaemonPassword is the password for DaemonUser. If empty, a 32-byte
+	// URL-safe random password is generated at validateAndFill time. The
+	// daemon holds the rendered config in-process so this never needs to
+	// be persisted to a creds file — it is regenerated each boot.
+	DaemonPassword string
+
+	// SidecarUser is the NATS principal forwarded into sidecar containers.
+	// Broker-scoped to agents.*.{frames,heartbeat,lifecycle} publish +
+	// agents.*.inbox subscribe (per-uuid narrowing is the future
+	// per-incarnation NATS-JWT work). Defaults to "sidecar". feat-ctl-f0.
+	SidecarUser string
+
+	// SidecarPassword is the password for SidecarUser. If empty, a 32-byte
+	// URL-safe random password is generated at validateAndFill time.
+	SidecarPassword string
 
 	// JWTCAPubPath is the path to the sextant CA public key used to
 	// verify per-agent JWTs. May be empty or point at a missing file
@@ -74,6 +98,8 @@ func DefaultConfig(dataDir string) Config {
 		ListenHost:        "127.0.0.1",
 		ListenPort:        0,
 		OperatorUser:      "operator",
+		DaemonUser:        "daemon",
+		SidecarUser:       "sidecar",
 		StartupTimeout:    10 * time.Second,
 		ShutdownTimeout:   5 * time.Second,
 		MaxBytesPerStream: 1 << 30, // 1 GiB
@@ -105,6 +131,33 @@ func (c Config) validateAndFill() (Config, error) {
 			return Config{}, fmt.Errorf("natsboot: generate operator password: %w", err)
 		}
 		out.OperatorPassword = pass
+	}
+	if out.DaemonUser == "" {
+		out.DaemonUser = "daemon"
+	}
+	if out.DaemonPassword == "" {
+		pass, err := randomPassword()
+		if err != nil {
+			return Config{}, fmt.Errorf("natsboot: generate daemon password: %w", err)
+		}
+		out.DaemonPassword = pass
+	}
+	if out.SidecarUser == "" {
+		out.SidecarUser = "sidecar"
+	}
+	if out.SidecarPassword == "" {
+		pass, err := randomPassword()
+		if err != nil {
+			return Config{}, fmt.Errorf("natsboot: generate sidecar password: %w", err)
+		}
+		out.SidecarPassword = pass
+	}
+	// The three principals must be distinct usernames or the broker
+	// collapses their permission sets and the front-door guarantee is
+	// silently lost.
+	if out.DaemonUser == out.OperatorUser || out.DaemonUser == out.SidecarUser || out.OperatorUser == out.SidecarUser {
+		return Config{}, fmt.Errorf("natsboot: daemon/operator/sidecar users must be distinct (got %q/%q/%q)",
+			out.DaemonUser, out.OperatorUser, out.SidecarUser)
 	}
 	if out.StartupTimeout <= 0 {
 		out.StartupTimeout = 10 * time.Second

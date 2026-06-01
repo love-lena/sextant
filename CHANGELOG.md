@@ -71,7 +71,48 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   behavior change beyond the new label; it's inert until the reconciler
   reads it.
 
+### Security
+- **The daemon is now the broker-ENFORCED sole publisher to agent
+  inboxes (control-plane RFC §5.7).** The single unrestricted NATS
+  account (`publish: ">"`) is gone; `nats-server.conf` now renders three
+  role-scoped principals the broker enforces: **daemon** (`publish: ">"`,
+  the only principal that may publish to `agents.*.inbox`), **operator**
+  (publish `sextant.rpc.*` + reply inboxes + the JetStream/KV read API
+  *only* — never inboxes), and **sidecar** (publish its own
+  `agents.*.{frames,heartbeat,lifecycle}`; subscribe `agents.*.inbox`).
+  The prompt gate stops being a politeness clients observe and becomes a
+  rule the broker enforces — so the audit becomes the system of record
+  (every command provably transited the daemon). Reads stay off the
+  gauntlet: KV-backed TUIs and `pkg/client.Subscribe` keep working over
+  the JetStream API. The daemon + sidecar credentials are boot-generated
+  and never persisted (regenerated each boot, stable across NATS
+  restarts); the daemon principal is threaded to the shipper via
+  `runtime.json`'s mode-0600 `nats_daemon_*` fields.
+- **A shared admission pre-step (`decode → default → validate`) now runs
+  in front of every RPC handler** — one choke point so no handler can
+  skip envelope validation or the wire-epoch check (RFC §5.7).
+- **The front door checks `WireEpoch` on every RPC envelope.** A
+  stale-epoch peer (an envelope whose `proto_version` — generated in
+  lockstep with `WireEpoch` — differs from the daemon's) is rejected with
+  a new `wire_epoch_mismatch` error and an actionable `make install`
+  diagnostic, because the daemon can converge an out-of-epoch agent by
+  restart but cannot restart the operator's CLI (RFC §5.8 "stale peer").
+
 ### Changed
+- **BREAKING — direct publishing to `agents.*.inbox` is now forbidden,
+  and the unrestricted NATS credential is gone.** Any client or test that
+  published straight to an agent inbox (bypassing the `prompt_agent` /
+  `send_message` daemon path) is now rejected by the broker; route every
+  prompt through the daemon RPC/MCP surface instead. **Cred rotation
+  (required on upgrade): restart `sextantd`** so it re-renders
+  `nats-server.conf` with the three broker-scoped principals instead of
+  the old single unrestricted `operator` account. The daemon + sidecar
+  NATS secrets are minted fresh on each daemon boot (no operator action).
+  To fully re-issue the operator credential as well, run
+  `sextant init --force` (rewrites `~/.config/sextant/operator.creds`;
+  note `--force` also rotates the CA + ClickHouse password) — or re-run
+  `make bootstrap` on a clean config dir — then restart `sextantd`.
+  (RFC §5.7.)
 - **`sextantd` is now a declarative control plane: handlers write
   desired state, a single reconciler is the sole actuator.** `spawn`,
   `stop` (the `kill_agent` verb), and `archive` no longer touch Docker
