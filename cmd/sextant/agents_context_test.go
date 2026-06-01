@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +9,23 @@ import (
 
 	"github.com/love-lena/sextant/pkg/sessionlog"
 )
+
+// renderFixture opens a staged JSONL fixture and renders it through the
+// shared renderEvents core under the given mode — the side-effect-free
+// path both the --raw/--backup dump and the -i viewport feed. (The live
+// `agents context` default reads frames, not files; the modes' fidelity
+// is asserted here off the authoritative .jsonl source.)
+func renderFixture(t *testing.T, path string, mode sessionlog.Mode) (string, error) {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	var buf bytes.Buffer
+	rerr := renderEvents(&buf, sessionlog.Stream(f), mode)
+	return buf.String(), rerr
+}
 
 // fixtureLines is the JSONL the tests below stream through the
 // renderer. Kept small + curated so each assertion picks out one
@@ -69,11 +85,10 @@ func TestParseContextModeRejectsUnknown(t *testing.T) {
 func TestRunAgentsContextRawMode(t *testing.T) {
 	t.Parallel()
 	path := writeFixture(t)
-	var buf bytes.Buffer
-	if err := runAgentsContext(context.Background(), &buf, path, sessionlog.ModeRaw, false); err != nil {
-		t.Fatalf("runAgentsContext: %v", err)
+	got, err := renderFixture(t, path, sessionlog.ModeRaw)
+	if err != nil {
+		t.Fatalf("renderFixture: %v", err)
 	}
-	got := buf.String()
 	wantSubstrings := []string{
 		`"type":"assistant"`,
 		`"type":"user"`,
@@ -99,11 +114,10 @@ func TestRunAgentsContextRawMode(t *testing.T) {
 func TestRunAgentsContextConversationMode(t *testing.T) {
 	t.Parallel()
 	path := writeFixture(t)
-	var buf bytes.Buffer
-	if err := runAgentsContext(context.Background(), &buf, path, sessionlog.ModeConversation, false); err != nil {
-		t.Fatalf("runAgentsContext: %v", err)
+	got, err := renderFixture(t, path, sessionlog.ModeConversation)
+	if err != nil {
+		t.Fatalf("renderFixture: %v", err)
 	}
-	got := buf.String()
 	wantSubstrings := []string{
 		"assistant: hi there",
 		"tool_use[t1] Bash",
@@ -126,11 +140,10 @@ func TestRunAgentsContextConversationMode(t *testing.T) {
 func TestRunAgentsContextToolsMode(t *testing.T) {
 	t.Parallel()
 	path := writeFixture(t)
-	var buf bytes.Buffer
-	if err := runAgentsContext(context.Background(), &buf, path, sessionlog.ModeTools, false); err != nil {
-		t.Fatalf("runAgentsContext: %v", err)
+	got, err := renderFixture(t, path, sessionlog.ModeTools)
+	if err != nil {
+		t.Fatalf("renderFixture: %v", err)
 	}
-	got := buf.String()
 	if !strings.Contains(got, "call t1 Bash") {
 		t.Errorf("tools mode missing call: %s", got)
 	}
@@ -147,11 +160,10 @@ func TestRunAgentsContextToolsMode(t *testing.T) {
 func TestRunAgentsContextThinkingMode(t *testing.T) {
 	t.Parallel()
 	path := writeFixture(t)
-	var buf bytes.Buffer
-	if err := runAgentsContext(context.Background(), &buf, path, sessionlog.ModeThinking, false); err != nil {
-		t.Fatalf("runAgentsContext: %v", err)
+	got, err := renderFixture(t, path, sessionlog.ModeThinking)
+	if err != nil {
+		t.Fatalf("renderFixture: %v", err)
 	}
-	got := buf.String()
 	if !strings.Contains(got, "thinking[a1]: plan ahead") {
 		t.Errorf("thinking mode missing record: %s", got)
 	}
@@ -166,11 +178,11 @@ func TestRunAgentsContextThinkingMode(t *testing.T) {
 func TestRunAgentsContextUsageMode(t *testing.T) {
 	t.Parallel()
 	path := writeFixture(t)
-	var buf bytes.Buffer
-	if err := runAgentsContext(context.Background(), &buf, path, sessionlog.ModeUsage, false); err != nil {
-		t.Fatalf("runAgentsContext: %v", err)
+	raw, err := renderFixture(t, path, sessionlog.ModeUsage)
+	if err != nil {
+		t.Fatalf("renderFixture: %v", err)
 	}
-	got := strings.TrimSpace(buf.String())
+	got := strings.TrimSpace(raw)
 	// Exactly one usage line (the second assistant turn carries
 	// zero-value usage and is skipped by the tracker).
 	lines := strings.Split(got, "\n")
@@ -201,11 +213,10 @@ func TestRunAgentsContextUsageMode(t *testing.T) {
 func TestRunAgentsContextTreeMode(t *testing.T) {
 	t.Parallel()
 	path := writeFixture(t)
-	var buf bytes.Buffer
-	if err := runAgentsContext(context.Background(), &buf, path, sessionlog.ModeTree, false); err != nil {
-		t.Fatalf("runAgentsContext: %v", err)
+	got, err := renderFixture(t, path, sessionlog.ModeTree)
+	if err != nil {
+		t.Fatalf("renderFixture: %v", err)
 	}
-	got := buf.String()
 	if !strings.Contains(got, "[main] a1 parent=u0 kind=assistant") {
 		t.Errorf("tree mode missing main row: %s", got)
 	}
@@ -214,101 +225,17 @@ func TestRunAgentsContextTreeMode(t *testing.T) {
 	}
 }
 
-// TestRunAgentsContextOpenError — a nonexistent path surfaces a
-// readable error rather than panicking.
+// TestRunAgentsContextOpenError — a nonexistent authoritative-source
+// path surfaces a readable error rather than panicking. Mirrors the
+// dump path's os.Open of the in-container read result / host snapshot.
 func TestRunAgentsContextOpenError(t *testing.T) {
 	t.Parallel()
-	err := runAgentsContext(context.Background(), &bytes.Buffer{},
-		filepath.Join(t.TempDir(), "missing.jsonl"), sessionlog.ModeRaw, false)
+	_, err := renderFixture(t, filepath.Join(t.TempDir(), "missing.jsonl"), sessionlog.ModeRaw)
 	if err == nil {
 		t.Fatal("expected error for missing file")
 	}
-	if !strings.Contains(err.Error(), "open session log") {
-		t.Errorf("error = %v, want substring 'open session log'", err)
-	}
-}
-
-// TestResolveSessionJSONLPath_DirectFile — covers the SDK layout
-// where the JSONL lives directly under projectsDir (no per-cwd
-// subdir). This is the common shape inside the sidecar's bind-mounted
-// projects dir because each agent has one cwd → one subdir.
-func TestResolveSessionJSONLPath_DirectFile(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "abc-123.jsonl"), []byte(`{}`), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	got, err := resolveSessionJSONLPath(dir, "abc-123")
-	if err != nil {
-		t.Fatalf("resolveSessionJSONLPath: %v", err)
-	}
-	if got != filepath.Join(dir, "abc-123.jsonl") {
-		t.Errorf("got %q", got)
-	}
-}
-
-// TestResolveSessionJSONLPath_PerCwdSubdir — covers the SDK's
-// canonical layout where each cwd gets a URL-encoded subdir.
-func TestResolveSessionJSONLPath_PerCwdSubdir(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	sub := filepath.Join(dir, "-workspace")
-	if err := os.MkdirAll(sub, 0o700); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	want := filepath.Join(sub, "abc-123.jsonl")
-	if err := os.WriteFile(want, []byte(`{}`), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	got, err := resolveSessionJSONLPath(dir, "abc-123")
-	if err != nil {
-		t.Fatalf("resolveSessionJSONLPath: %v", err)
-	}
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-// TestResolveSessionJSONLPath_DirMissing — when the per-agent projects
-// dir doesn't exist at all (agent spawned before the context bind-mount,
-// or no turn flushed), the operator must get a friendly, actionable
-// message — NOT a raw os.ReadDir ENOENT leaked as INTERNAL. This is the
-// `sextant agents context assistant` bug: a non-nil SessionLog in KV
-// pointing at a dir that was never created on disk.
-//
-// Pattern (per plans/issues/feat-tui-launch-acceptance-gate.md): assert
-// error *messages* on operator surfaces are friendly + actionable and
-// don't leak filesystem internals.
-func TestResolveSessionJSONLPath_DirMissing(t *testing.T) {
-	t.Parallel()
-	missing := filepath.Join(t.TempDir(), "never-created", "claude-projects")
-	_, err := resolveSessionJSONLPath(missing, "abc-123")
-	if err == nil {
-		t.Fatal("expected error for a non-existent projects dir")
-	}
-	// Must NOT leak the raw os.ReadDir error.
-	if strings.Contains(err.Error(), "read projects dir") ||
-		strings.Contains(err.Error(), "no such file or directory") {
-		t.Errorf("leaked raw filesystem error to the operator: %v", err)
-	}
-	// Must be actionable.
-	if !strings.Contains(err.Error(), "retry") {
-		t.Errorf("error is not actionable (no next step): %v", err)
-	}
-}
-
-// TestResolveSessionJSONLPath_NotFound — surfaces a readable error
-// when no matching JSONL exists. Common during the warm-up window
-// before the sidecar has flushed its first turn.
-func TestResolveSessionJSONLPath_NotFound(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	_, err := resolveSessionJSONLPath(dir, "abc-123")
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !strings.Contains(err.Error(), "not found") {
-		t.Errorf("error = %v, want substring 'not found'", err)
+	if !os.IsNotExist(err) {
+		t.Errorf("error = %v, want a not-exist error", err)
 	}
 }
 

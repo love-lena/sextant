@@ -77,10 +77,10 @@ type GetAgentStatusResponse struct {
 // for this agent (e.g., never seen a heartbeat, or the daemon's cache
 // is not wired).
 //
-// SessionLog is populated when the daemon has per-agent session paths
-// wired (the spawn handler bind-mounts ~/.claude/projects/ per agent
-// per the `feat-agents-context-view` plan). Nil for older agents
-// spawned before the bind mount landed, and for daemons that haven't
+// SessionLog is populated when the daemon has an agents data root wired.
+// As of S0 (RFC §5.10) it carries in-container locators + the host
+// snapshot path, not a host bind-mount path (the persistent
+// claude-projects bind-mount was removed). Nil for daemons that haven't
 // configured the agents data root.
 type AgentStatus struct {
 	UUID      uuid.UUID `json:"uuid"`

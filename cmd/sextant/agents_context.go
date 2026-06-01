@@ -7,6 +7,7 @@
 //   - LIVE (default + --follow): the NATS frame stream
 //     (agents.<uuid>.frames). No mount, no file. --follow tails; without
 //     it the verb replays every buffered frame then exits.
+//
 //   - AUTHORITATIVE (--raw / --backup): the in-container session .jsonl,
 //     still ground-truth (never reconstructed from frames). --raw reads
 //     it on demand via the read_file RPC; --backup reads the durable
@@ -14,6 +15,7 @@
 //
 //   - --mode=<raw|conversation|tools|thinking|usage|tree> filters the
 //     printed stream; raw is the floor.
+//
 //   - -i / --tui opens the interactive viewport over the authoritative
 //     .jsonl (pkg/tui/contextview).
 //

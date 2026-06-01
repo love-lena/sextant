@@ -42,12 +42,16 @@ func TestRendersSessionAndWorktreeWhenPresent(t *testing.T) {
 	m := loaded(t, detailLoadedMsg{
 		status: sextantproto.AgentStatus{
 			UUID: id, Name: "a", Lifecycle: "running",
-			SessionLog: &sextantproto.SessionLogInfo{SessionID: "s-123", ProjectsDir: "/data/p"},
+			SessionLog: &sextantproto.SessionLogInfo{
+				SessionID:          "s-123",
+				ContainerJSONLPath: "/home/agent/.claude/projects/-workspace/s-123.jsonl",
+				SnapshotPath:       "/data/agents/snap.jsonl",
+			},
 		},
 		worktree: &sextantproto.WorktreeInfo{Branch: "feat-x", BaseBranch: "main", Status: sextantproto.WorktreeStatusActive, Path: "/wt/feat-x"},
 	})
 	v := m.View()
-	for _, want := range []string{"s-123", "/data/p", "feat-x ⦿ main", "/wt/feat-x"} {
+	for _, want := range []string{"s-123", "s-123.jsonl", "/data/agents/snap.jsonl", "feat-x ⦿ main", "/wt/feat-x"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("detail missing %q in:\n%s", want, v)
 		}

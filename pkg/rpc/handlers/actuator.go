@@ -101,10 +101,10 @@ func (a *Actuator) snapshotSessionLog(ctx context.Context, def sextantproto.Agen
 // is the spawn/restart bodies, relocated behind the reconcile loop so
 // there is exactly one path that builds-and-runs a container.
 type ActuatorDeps struct {
-	Definitions    AgentMutableKV
-	Incarnations   AgentMutableKV
-	Templates      templates.KV
-	Containers     ContainerRunner
+	Definitions  AgentMutableKV
+	Incarnations AgentMutableKV
+	Templates    templates.KV
+	Containers   ContainerRunner
 	// SnapshotCopier is the copy-from-container surface the snapshot-on-stop
 	// path uses (S0, RFC §5.10). Optional: nil disables snapshotting (most
 	// unit tests). The real daemon wires *containermgr.Manager, which copies

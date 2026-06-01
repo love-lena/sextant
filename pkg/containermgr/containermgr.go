@@ -597,24 +597,40 @@ func (m *Manager) CopyFileFromContainer(ctx context.Context, id, srcPath string)
 	}
 	defer rc.Close() //nolint:errcheck // best-effort close
 
-	tr := tar.NewReader(rc)
-	for {
-		hdr, terr := tr.Next()
-		if errors.Is(terr, io.EOF) {
-			return nil, fmt.Errorf("%w: %s in %s (empty archive)", ErrPathNotFound, srcPath, id)
+	buf, err := firstRegularFileFromTar(rc)
+	if err != nil {
+		if errors.Is(err, errTarNoRegularFile) {
+			return nil, fmt.Errorf("%w: %s in %s (no regular file in archive)", ErrPathNotFound, srcPath, id)
 		}
-		if terr != nil {
-			return nil, fmt.Errorf("containermgr: read tar from %s: %w", id, terr)
+		return nil, fmt.Errorf("containermgr: read %s from %s: %w", srcPath, id, err)
+	}
+	return buf, nil
+}
+
+// errTarNoRegularFile signals an archive with no regular-file entry — the
+// caller maps it to ErrPathNotFound.
+var errTarNoRegularFile = errors.New("containermgr: tar has no regular file")
+
+// firstRegularFileFromTar reads a tar stream and returns the contents of
+// the first regular-file entry, capped at CopyFromContainerMaxBytes.
+// Docker's CopyFromContainer returns a tar even for a single file; this is
+// the extraction half of CopyFileFromContainer, factored out so its
+// behavior is unit-testable without a live docker daemon.
+func firstRegularFileFromTar(r io.Reader) ([]byte, error) {
+	tr := tar.NewReader(r)
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return nil, errTarNoRegularFile
+		}
+		if err != nil {
+			return nil, err
 		}
 		if hdr.Typeflag != tar.TypeReg {
 			continue
 		}
 		// Cap the read so a pathological file can't exhaust daemon memory.
-		buf, rerr := io.ReadAll(io.LimitReader(tr, CopyFromContainerMaxBytes))
-		if rerr != nil {
-			return nil, fmt.Errorf("containermgr: read %s from %s: %w", srcPath, id, rerr)
-		}
-		return buf, nil
+		return io.ReadAll(io.LimitReader(tr, CopyFromContainerMaxBytes))
 	}
 }
 

@@ -36,6 +36,9 @@
  *                   the bus integration without an Anthropic API call.
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
+
 import { query as sdkQuery, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Client as MCPClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -488,6 +491,15 @@ function newMockDriver(client: Client, env: SidecarEnv, incarnationId: string): 
             },
             { sessionId, toolName: "mock_echo" },
           );
+          // Mirror the real SDK's on-disk behavior: append a JSONL record
+          // to the in-container session journal at the SDK's canonical path
+          // (~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl, cwd
+          // /workspace → "-workspace"). The persistent claude-projects
+          // bind-mount is gone (S0, RFC §5.10), so this file is read on
+          // demand (agents context --raw) and snapshotted on stop — the
+          // mock writing it lets the e2e exercise that machinery without a
+          // real Anthropic API call.
+          writeMockSessionJSONL(sessionId, prompt.content);
           await publishLifecycle(client, env, incarnationId, "turn_ended");
         }
       } catch (err) {
@@ -498,6 +510,40 @@ function newMockDriver(client: Client, env: SidecarEnv, incarnationId: string): 
       return { sessionId };
     },
   };
+}
+
+/**
+ * writeMockSessionJSONL appends one assistant record to the mock session's
+ * in-container JSONL at the SDK's canonical path. Best-effort: a failure to
+ * write the journal must not break the turn (the frames are the live view;
+ * the JSONL is the authoritative backup). The cwd segment mirrors the
+ * Claude Code SDK's encoding of /workspace ("-workspace").
+ */
+function writeMockSessionJSONL(sessionId: string, prompt: string): void {
+  try {
+    const dir = path.join(
+      process.env["HOME"] ?? "/home/agent",
+      ".claude",
+      "projects",
+      "-workspace",
+    );
+    fs.mkdirSync(dir, { recursive: true });
+    const record =
+      JSON.stringify({
+        type: "assistant",
+        sessionId,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: `ack: ${prompt}` }],
+        },
+        uuid: `mock-${Date.now()}`,
+      }) + "\n";
+    fs.appendFileSync(path.join(dir, `${sessionId}.jsonl`), record);
+  } catch (err) {
+    log("warn", "mock session jsonl write failed", {
+      err: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /**
