@@ -179,7 +179,11 @@ func TestDecideAction_Convergence(t *testing.T) {
 			wantAction: actionNone,
 		},
 		{
-			name: "archive: desired=archived, container live -> teardown",
+			// Finalizer-shaped archive (bug-ctl-archive-volume-leak): a live
+			// container drives a teardown toward the INTERMEDIATE archiving
+			// marker; the shell finalizes to terminal archived only on a
+			// confirmed reclaim.
+			name: "archive: desired=archived, container live -> teardown (archiving)",
 			def: def(
 				sextantproto.AgentSpec{Desired: sextantproto.DesiredArchived, Generation: 1},
 				sextantproto.AgentStatusRecord{
@@ -190,14 +194,16 @@ func TestDecideAction_Convergence(t *testing.T) {
 			),
 			actual:     actualState{ContainerPresent: true, ContainerRunning: true},
 			wantAction: actionTeardown,
-			wantObs:    sextantproto.ObservedEnded,
+			wantObs:    sextantproto.ObservedArchiving,
 		},
 		{
-			name: "archive converged: desired=archived, observed=ended, no container -> none",
+			// Converged ONLY at the terminal archived state (volume reclaimed,
+			// name released) with no container present.
+			name: "archive converged: desired=archived, observed=archived, no container -> none",
 			def: def(
 				sextantproto.AgentSpec{Desired: sextantproto.DesiredArchived, Generation: 1},
 				sextantproto.AgentStatusRecord{
-					Observed:             sextantproto.ObservedEnded,
+					Observed:             sextantproto.ObservedArchived,
 					CurrentIncarnationID: liveIncarnation,
 					ObservedGeneration:   1,
 				},
@@ -206,7 +212,24 @@ func TestDecideAction_Convergence(t *testing.T) {
 			wantAction: actionNone,
 		},
 		{
-			name: "archive still tears down a non-ended record even with no container",
+			// observed=archiving with no container is NOT converged: the volume
+			// reclaim hasn't been confirmed, so keep tearing down (retry) until
+			// it advances to archived. This is the stuck-archiving retry.
+			name: "archive stuck in archiving (reclaim not confirmed) -> teardown retry",
+			def: def(
+				sextantproto.AgentSpec{Desired: sextantproto.DesiredArchived, Generation: 1},
+				sextantproto.AgentStatusRecord{
+					Observed:             sextantproto.ObservedArchiving,
+					CurrentIncarnationID: liveIncarnation,
+					ObservedGeneration:   1,
+				},
+			),
+			actual:     actualState{},
+			wantAction: actionTeardown,
+			wantObs:    sextantproto.ObservedArchiving,
+		},
+		{
+			name: "archive still tears down a non-archived record even with no container",
 			def: def(
 				sextantproto.AgentSpec{Desired: sextantproto.DesiredArchived, Generation: 1},
 				sextantproto.AgentStatusRecord{
@@ -276,10 +299,13 @@ func TestDecideAction_Idempotent(t *testing.T) {
 			actual: actualState{},
 		},
 		{
-			name: "archived+ended is stable",
+			// Only the TERMINAL archived state (volume reclaimed) is stable —
+			// observed=archiving is mid-flight and must keep retrying
+			// (bug-ctl-archive-volume-leak), so it is NOT in the idempotence set.
+			name: "archived (terminal, reclaimed) is stable",
 			def: def(
 				sextantproto.AgentSpec{Desired: sextantproto.DesiredArchived, Generation: 1},
-				sextantproto.AgentStatusRecord{Observed: sextantproto.ObservedEnded, CurrentIncarnationID: liveIncarnation, ObservedGeneration: 1},
+				sextantproto.AgentStatusRecord{Observed: sextantproto.ObservedArchived, CurrentIncarnationID: liveIncarnation, ObservedGeneration: 1},
 			),
 			actual: actualState{},
 		},

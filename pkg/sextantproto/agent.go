@@ -59,12 +59,27 @@ const (
 	// ObservedEnded means the sidecar published an `ended` clean
 	// terminal — the agent finished its work.
 	ObservedEnded ObservedState = "ended"
+	// ObservedArchiving is the FINALIZER-SHAPED intermediate state for an
+	// archive in progress (bug-ctl-archive-volume-leak): the reconciler has
+	// torn the container down but external cleanup (the per-agent volume
+	// reclaim) is NOT yet confirmed. The agent stays here while reclamation
+	// keeps failing so the reconciler retries it every pass; the name is NOT
+	// released until it advances to ObservedArchived. The k8s finalizer
+	// invariant: don't call it gone until cleanup is confirmed.
+	ObservedArchiving ObservedState = "archiving"
+	// ObservedArchived is the TERMINAL archive state: the container is gone
+	// AND the per-agent volume has been reclaimed (confirmed, not
+	// best-effort). Only now is the name released (NameReleased gates on
+	// this). The reconciler converges to it from ObservedArchiving on a
+	// confirmed Teardown.
+	ObservedArchived ObservedState = "archived"
 )
 
 // IsValid reports whether s is a recognized ObservedState.
 func (s ObservedState) IsValid() bool {
 	switch s {
-	case ObservedPending, ObservedRunning, ObservedCrashed, ObservedLost, ObservedEnded:
+	case ObservedPending, ObservedRunning, ObservedCrashed, ObservedLost, ObservedEnded,
+		ObservedArchiving, ObservedArchived:
 		return true
 	default:
 		return false
@@ -75,6 +90,14 @@ func (s ObservedState) IsValid() bool {
 // has left behind — the reconciler does not re-actuate out of a
 // terminal observation except via a reactuation nonce bump (restart) or
 // (in P1) the recovery branch.
+//
+// Deliberately scoped to the RECOVERY-relevant terminals (crashed / lost
+// / ended). ObservedArchived is a desired-state terminal (the operator
+// asked to archive) handled by the archive branch, not the recovery
+// branch — including it here would have the recovery bookkeeping stamp a
+// spurious LastExit, and an archived agent is never desired=run anyway.
+// ObservedArchiving is intentionally NOT terminal: it is in-progress
+// cleanup the reconciler must keep retrying.
 func (s ObservedState) IsTerminal() bool {
 	switch s {
 	case ObservedCrashed, ObservedLost, ObservedEnded:
@@ -277,6 +300,18 @@ type AgentDefinition struct {
 	UpdatedAt   Timestamp `json:"updated_at"`
 	EscalateTo  *string   `json:"escalate_to,omitempty"`
 	Description string    `json:"description,omitempty"`
+}
+
+// NameReleased reports whether the agent's NAME is available for reuse.
+// Archive is finalizer-shaped (bug-ctl-archive-volume-leak): the operator
+// writing desired=archived is NOT enough — the name is held until the
+// reconciler has confirmed the per-agent volume reclaim and finalized the
+// observation to ObservedArchived. While the archive is mid-flight
+// (observed=archiving, e.g. a volume-remove that keeps failing) the name
+// stays claimed so a re-spawn cannot collide with a record whose external
+// state is not yet reclaimed. spawn.agentNameInUse consults this.
+func (d AgentDefinition) NameReleased() bool {
+	return d.Spec.Desired == DesiredArchived && d.Status.Observed == ObservedArchived
 }
 
 // Lifecycle projects the spec/status split back into a single

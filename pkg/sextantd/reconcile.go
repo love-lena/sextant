@@ -470,10 +470,29 @@ func (r *Reconciler) reconcileOnce(ctx context.Context, agentID uuid.UUID) (time
 		return requeue, r.writeObserved(ctx, agentID, statusWrite{dec: dec, rec: rec})
 
 	case actionTeardown:
+		// Finalizer-shaped archive (bug-ctl-archive-volume-leak): reclaim
+		// BEFORE finalizing. Teardown stops the container then reclaims the
+		// per-agent volume; only a CONFIRMED reclaim (Teardown returns nil)
+		// lets us write the terminal observed=archived that releases the
+		// name (AgentDefinition.NameReleased). A reclaim FAILURE records the
+		// intermediate observed=archiving (name still held) and returns the
+		// error so the agent is RETRIED — never finalize over a leaked volume.
 		if terr := r.Actuator.Teardown(ctx, def); terr != nil {
+			// dec.Observed is already ObservedArchiving (the in-progress
+			// marker the decision core picked). Persist it so the operator
+			// sees the archive is mid-reclaim and the name stays claimed,
+			// then surface the error to trigger a retry (sweep / requeue).
+			if werr := r.writeObserved(ctx, agentID, statusWrite{dec: dec, rec: rec}); werr != nil {
+				return 0, errors.Join(fmt.Errorf("teardown: %w", terr), fmt.Errorf("record archiving: %w", werr))
+			}
 			return 0, fmt.Errorf("teardown: %w", terr)
 		}
-		return requeue, r.writeObserved(ctx, agentID, statusWrite{dec: dec, rec: rec})
+		// Reclaim confirmed — finalize to the TERMINAL archived state. Override
+		// the decision's in-progress marker; this is the flip that releases
+		// the name.
+		final := dec
+		final.Observed = sextantproto.ObservedArchived
+		return requeue, r.writeObserved(ctx, agentID, statusWrite{dec: final, rec: rec})
 
 	case actionMarkLost:
 		return requeue, r.writeObserved(ctx, agentID, statusWrite{dec: dec, rec: rec})

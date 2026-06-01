@@ -339,10 +339,21 @@ func (a *Actuator) Stop(ctx context.Context, def sextantproto.AgentDefinition) e
 }
 
 // Teardown is the archived-intent action: stop any live container, mark
-// the incarnation exited, and release the per-agent claude_seed volume.
-// The name release is a property of the desired=archived record
-// (agentNameInUse skips archived defs), so Teardown only owns the
-// runtime side effects. Idempotent.
+// the incarnation exited, and RECLAIM the per-agent claude_seed volume.
+// It is the FINALIZER body (bug-ctl-archive-volume-leak): a volume-remove
+// FAILURE is returned, NOT swallowed to stderr — so the reconciler leaves
+// the agent in observed=archiving (intermediate, name still held) and
+// retries the reclaim next pass, rather than finalizing a "reclaimed"
+// record over a leaked volume. The name release is gated on the TERMINAL
+// observed=archived state the reconciler only reaches once this returns
+// nil (AgentDefinition.NameReleased), so Teardown owning the reclaim is
+// what keeps the name held until cleanup is confirmed.
+//
+// Idempotent: Stop is a no-op without a live incarnation, and RemoveVolume
+// treats an already-gone volume as success — so a retry after a partial
+// teardown converges (the volume reclaim is the only step that can fail,
+// and once it is gone the next pass returns nil and the reconciler
+// finalizes).
 func (a *Actuator) Teardown(ctx context.Context, def sextantproto.AgentDefinition) error {
 	if err := a.Stop(ctx, def); err != nil {
 		return err
@@ -350,9 +361,9 @@ func (a *Actuator) Teardown(ctx context.Context, def sextantproto.AgentDefinitio
 	if a.deps.Volumes != nil {
 		volName := ClaudeSeedVolumeName(def.UUID)
 		if err := a.deps.Volumes.RemoveVolume(ctx, volName, true); err != nil {
-			// Best-effort: a failed volume remove is an operator chore, not
-			// a teardown blocker (matches the legacy archive handler).
-			fmt.Fprintf(os.Stderr, "actuate teardown: remove volume %s: %v\n", volName, err)
+			// NOT best-effort: an unreclaimed volume must keep the agent in
+			// archiving so the reconciler retries — never finalize over a leak.
+			return fmt.Errorf("teardown: reclaim volume %s: %w", volName, err)
 		}
 	}
 	return nil

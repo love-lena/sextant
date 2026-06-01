@@ -26,8 +26,12 @@ const (
 	// actionStop: desired=paused and a live container exists — stop it.
 	// The record is retained; the name stays held.
 	actionStop
-	// actionTeardown: desired=archived — stop any live container, remove
-	// it, release the name + clean per-agent volumes. Terminal.
+	// actionTeardown: desired=archived — stop any live container and
+	// reclaim the per-agent volume (the FINALIZER body). The shell calls
+	// Actuator.Teardown and finalizes to terminal observed=archived ONLY on
+	// a confirmed reclaim; a failed reclaim leaves observed=archiving and is
+	// retried next pass. The name is released only at archived
+	// (bug-ctl-archive-volume-leak).
 	actionTeardown
 	// actionMarkLost: desired=run, the record believes a container should
 	// be live (observed running/pending) but none is present and no
@@ -177,11 +181,18 @@ func decideAction(def sextantproto.AgentDefinition, actual actualState) decision
 
 	switch spec.Desired {
 	case sextantproto.DesiredArchived:
-		// Archive is terminal intent. Tear down while any container or a
-		// non-archived observation remains; once observed==ended and no
-		// container is present we are converged.
-		if actual.ContainerPresent || status.Observed != sextantproto.ObservedEnded {
-			return decision{Action: actionTeardown, Observed: sextantproto.ObservedEnded}
+		// Archive is finalizer-shaped terminal intent
+		// (bug-ctl-archive-volume-leak). We are converged ONLY once the
+		// volume reclaim is confirmed: observed==archived AND no container
+		// present. Until then keep tearing down — the shell calls Teardown
+		// (stop container → reclaim volume) and finalizes to terminal
+		// archived ONLY on a confirmed reclaim. A failed reclaim leaves
+		// observed==archiving (the intermediate the shell writes) and the
+		// reconciler retries it, the name staying held throughout. The
+		// Observed here is the in-progress marker (archiving); the shell
+		// overrides to archived when Teardown returns nil.
+		if actual.ContainerPresent || status.Observed != sextantproto.ObservedArchived {
+			return decision{Action: actionTeardown, Observed: sextantproto.ObservedArchiving}
 		}
 		return decision{Action: actionNone}
 
