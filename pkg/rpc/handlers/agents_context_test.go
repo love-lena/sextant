@@ -27,20 +27,11 @@ func TestSpawnBindsAgentProjectsDir(t *testing.T) {
 	deps, _, _, runner, _ := buildDeps(t)
 	root := t.TempDir()
 	deps.AgentsDataRoot = root
-	h := handlers.NewSpawnAgent(deps)
 
-	cap := &captureEmit{}
-	req := makeReq(t, sextantproto.SpawnAgentRequest{Name: "alpha", Template: "default"})
-	if err := h(context.Background(), req, cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("Error = %+v", cap.resp.Error)
-	}
-	var resp sextantproto.SpawnAgentResponse
-	if err := json.Unmarshal(cap.resp.Result, &resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	// Spawn + actuate: the Actuator (sole actuator) creates the host
+	// projects dir and adds the bind mount to the container spec.
+	agentID := spawnAndActuate(t, deps, "alpha", "default")
+	resp := sextantproto.SpawnAgentResponse{AgentID: agentID}
 
 	// Host dir created with the right layout.
 	projects := filepath.Join(root, resp.AgentID.String(), "claude-projects")
@@ -90,16 +81,9 @@ func TestSpawnBindsAgentProjectsDir(t *testing.T) {
 func TestSpawnSkipsBindWhenAgentsDataRootEmpty(t *testing.T) {
 	deps, _, _, runner, _ := buildDeps(t)
 	// deps.AgentsDataRoot intentionally left empty
-	h := handlers.NewSpawnAgent(deps)
 
-	cap := &captureEmit{}
-	req := makeReq(t, sextantproto.SpawnAgentRequest{Name: "beta", Template: "default"})
-	if err := h(context.Background(), req, cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("Error = %+v", cap.resp.Error)
-	}
+	// Spawn + actuate so the container spec exists to assert against.
+	spawnAndActuate(t, deps, "beta", "default")
 	if len(runner.specs) != 1 {
 		t.Fatalf("runner.specs = %d, want 1", len(runner.specs))
 	}
@@ -119,11 +103,14 @@ func TestGetAgentStatusSurfacesSessionLog(t *testing.T) {
 	id := uuid.New()
 	sid := "session-xyz"
 	def := sextantproto.AgentDefinition{
-		UUID:      id,
-		Name:      "alpha",
-		Lifecycle: sextantproto.LifecycleRunning,
-		Version:   2,
-		Runtime:   sextantproto.RuntimeConfig{SessionID: &sid},
+		UUID:    id,
+		Name:    "alpha",
+		Version: 2,
+		Spec: sextantproto.AgentSpec{
+			Desired: sextantproto.DesiredRun,
+			Runtime: sextantproto.RuntimeConfig{SessionID: &sid},
+		},
+		Status: sextantproto.AgentStatusRecord{Observed: sextantproto.ObservedRunning, ObservedGeneration: 1},
 	}
 	raw, _ := json.Marshal(def)
 	kv.entries[id.String()] = raw
@@ -165,7 +152,7 @@ func TestGetAgentStatusSurfacesSessionLog(t *testing.T) {
 func TestGetAgentStatusSessionLogEmptyWhenRootUnset(t *testing.T) {
 	kv := &fakeKV{entries: map[string][]byte{}}
 	id := uuid.New()
-	def := sextantproto.AgentDefinition{UUID: id, Name: "alpha", Lifecycle: sextantproto.LifecycleRunning}
+	def := sextantproto.AgentDefinition{UUID: id, Name: "alpha", Spec: sextantproto.AgentSpec{Desired: sextantproto.DesiredRun}, Status: sextantproto.AgentStatusRecord{Observed: sextantproto.ObservedRunning, ObservedGeneration: 1}}
 	raw, _ := json.Marshal(def)
 	kv.entries[id.String()] = raw
 
@@ -190,7 +177,7 @@ func TestGetAgentStatusSessionLogEmptyWhenRootUnset(t *testing.T) {
 func TestGetAgentStatusSessionLogIDEmptyBeforeFirstTurn(t *testing.T) {
 	kv := &fakeKV{entries: map[string][]byte{}}
 	id := uuid.New()
-	def := sextantproto.AgentDefinition{UUID: id, Name: "alpha", Lifecycle: sextantproto.LifecycleRunning}
+	def := sextantproto.AgentDefinition{UUID: id, Name: "alpha", Spec: sextantproto.AgentSpec{Desired: sextantproto.DesiredRun}, Status: sextantproto.AgentStatusRecord{Observed: sextantproto.ObservedRunning, ObservedGeneration: 1}}
 	raw, _ := json.Marshal(def)
 	kv.entries[id.String()] = raw
 

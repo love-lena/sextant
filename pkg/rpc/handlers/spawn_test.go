@@ -290,15 +290,92 @@ func writeAll(path string, data []byte) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
-func TestSpawnAgentHappyPath(t *testing.T) {
-	deps, defs, incs, runner, hist := buildDeps(t)
+// actuatorDepsFrom projects the spawn-test SpawnDeps onto the
+// ActuatorDeps the sole-actuator path consumes. Under the declarative
+// model container materialization (mounts, env, JWT, claude_seed volume)
+// moved from the spawn handler into the Actuator, so the materialization
+// tests spawn (desired-state write) and then drive the Actuator.
+func actuatorDepsFrom(deps handlers.SpawnDeps) handlers.ActuatorDeps {
+	return handlers.ActuatorDeps{
+		Definitions:    deps.Definitions,
+		Incarnations:   deps.Incarnations,
+		Templates:      deps.Templates,
+		Containers:     deps.Containers,
+		Volumes:        deps.Volumes,
+		CA:             deps.CA,
+		History:        deps.History,
+		WorkspaceRoot:  deps.WorkspaceRoot,
+		AgentsDataRoot: deps.AgentsDataRoot,
+		Worktree:       deps.Worktree,
+		RepoRoot:       deps.RepoRoot,
+		HostID:         deps.HostID,
+		NATSURL:        deps.NATSURL,
+		NATSUser:       deps.NATSUser,
+		NATSPassword:   deps.NATSPassword,
+		MCPURL:         deps.MCPURL,
+		Issuer:         deps.Issuer,
+		TestRunLabel:   deps.TestRunLabel,
+		Now:            deps.Now,
+	}
+}
+
+// spawnAndActuate runs the spawn handler (writes desired=run) then drives
+// the Actuator once — the reconciler's actuation step — so a test can
+// assert on the resulting container spec / mounts / volumes the same way
+// the old synchronous spawn handler let it. Returns the spawned agent's
+// UUID. Fails the test on a spawn or actuate error.
+func spawnAndActuate(t *testing.T, deps handlers.SpawnDeps, name, template string) uuid.UUID {
+	t.Helper()
+	h := handlers.NewSpawnAgent(deps)
+	cap := &captureEmit{}
+	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+		Name: name, Template: template,
+	}), cap.emit()); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if cap.resp.Error != nil {
+		t.Fatalf("spawn error: %+v", cap.resp.Error)
+	}
+	var resp sextantproto.SpawnAgentResponse
+	if err := json.Unmarshal(cap.resp.Result, &resp); err != nil {
+		t.Fatalf("decode spawn: %v", err)
+	}
+	if err := actuateAgent(t, deps, resp.AgentID); err != nil {
+		t.Fatalf("actuate: %v", err)
+	}
+	return resp.AgentID
+}
+
+// actuateAgent reads the agent def from KV and drives one Actuator pass
+// (the reconciler's container build+run). Returns the actuate error (some
+// tests assert on failure paths) rather than failing the test itself.
+func actuateAgent(t *testing.T, deps handlers.SpawnDeps, agentID uuid.UUID) error {
+	t.Helper()
+	entry, err := deps.Definitions.Get(context.Background(), agentID.String())
+	if err != nil {
+		t.Fatalf("get def for actuate: %v", err)
+	}
+	var def sextantproto.AgentDefinition
+	if err := json.Unmarshal(entry.Value(), &def); err != nil {
+		t.Fatalf("decode def for actuate: %v", err)
+	}
+	act := handlers.NewActuator(actuatorDepsFrom(deps))
+	_, aerr := act.Actuate(context.Background(), def, false)
+	return aerr
+}
+
+// TestSpawnAgentWritesDesiredRunRecord pins the declarative spawn
+// contract: under the control-plane model spawn_agent is a desired-state
+// writer (RFC §5). It persists desired=run + generation=1 + observed=
+// pending with NO container — the reconciler actuates. The container
+// materialization is asserted by TestSpawnAgentHappyPath (which drives the
+// Actuator).
+func TestSpawnAgentWritesDesiredRunRecord(t *testing.T) {
+	deps, defs, _, runner, hist := buildDeps(t)
 	h := handlers.NewSpawnAgent(deps)
 
 	cap := &captureEmit{}
-	req := makeReq(t, sextantproto.SpawnAgentRequest{
-		Name:     "alpha",
-		Template: "default",
-	})
+	req := makeReq(t, sextantproto.SpawnAgentRequest{Name: "alpha", Template: "default"})
 	if err := h(context.Background(), req, cap.emit()); err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -313,7 +390,53 @@ func TestSpawnAgentHappyPath(t *testing.T) {
 		t.Fatal("AgentID is zero")
 	}
 
-	// Definitions bucket has one entry with lifecycle=running and version=2.
+	var def sextantproto.AgentDefinition
+	if err := json.Unmarshal(defs.snapshot()[resp.AgentID.String()], &def); err != nil {
+		t.Fatalf("decode def: %v", err)
+	}
+	if def.Spec.Desired != sextantproto.DesiredRun {
+		t.Errorf("spec.desired = %s, want run", def.Spec.Desired)
+	}
+	if def.Spec.Generation != 1 {
+		t.Errorf("spec.generation = %d, want 1", def.Spec.Generation)
+	}
+	if def.Status.Observed != sextantproto.ObservedPending {
+		t.Errorf("status.observed = %s, want pending", def.Status.Observed)
+	}
+	if def.Status.ObservedGeneration != 0 {
+		t.Errorf("status.observed_generation = %d, want 0 (not yet actuated)", def.Status.ObservedGeneration)
+	}
+	if def.Lifecycle() != sextantproto.LifecycleDefined {
+		t.Errorf("Lifecycle() = %s, want defined (pending pre-actuation)", def.Lifecycle())
+	}
+	if len(def.Spec.Tools) == 0 || def.Spec.Tools[0] != "read.agents" {
+		t.Errorf("spec.tools = %v", def.Spec.Tools)
+	}
+	// The spawn handler does NOT actuate: no container, no incarnation.
+	runner.mu.Lock()
+	nspecs := len(runner.specs)
+	runner.mu.Unlock()
+	if nspecs != 0 {
+		t.Errorf("spawn handler started %d container(s); the reconciler is the sole actuator", nspecs)
+	}
+	// Initial history row written once (spawn). The running row lands when
+	// the reconciler converges, not at spawn time.
+	if hist.calls != 1 {
+		t.Errorf("hist.calls = %d, want 1 (initial spawn row only)", hist.calls)
+	}
+}
+
+func TestSpawnAgentHappyPath(t *testing.T) {
+	deps, defs, incs, runner, _ := buildDeps(t)
+
+	// Spawn (desired-state write) + drive the Actuator (the reconciler's
+	// container build+run step) so the materialization is exercised.
+	agentID := spawnAndActuate(t, deps, "alpha", "default")
+	resp := sextantproto.SpawnAgentResponse{AgentID: agentID}
+
+	// Definition persists desired=run; the Actuator does not write status
+	// (the reconciler is the sole status writer), so observed stays pending
+	// at this layer.
 	defSnap := defs.snapshot()
 	if len(defSnap) != 1 {
 		t.Fatalf("definitions count = %d, want 1", len(defSnap))
@@ -322,17 +445,14 @@ func TestSpawnAgentHappyPath(t *testing.T) {
 	if err := json.Unmarshal(defSnap[resp.AgentID.String()], &def); err != nil {
 		t.Fatalf("decode def: %v", err)
 	}
-	if def.Lifecycle != sextantproto.LifecycleRunning {
-		t.Errorf("Lifecycle = %s, want running", def.Lifecycle)
-	}
-	if def.Version != 2 {
-		t.Errorf("Version = %d, want 2", def.Version)
+	if def.Spec.Desired != sextantproto.DesiredRun {
+		t.Errorf("spec.desired = %s, want run", def.Spec.Desired)
 	}
 	if def.Name != "alpha" {
 		t.Errorf("Name = %q", def.Name)
 	}
-	if len(def.Tools) == 0 || def.Tools[0] != "read.agents" {
-		t.Errorf("Tools = %v", def.Tools)
+	if len(def.Spec.Tools) == 0 || def.Spec.Tools[0] != "read.agents" {
+		t.Errorf("spec.tools = %v", def.Spec.Tools)
 	}
 
 	// Incarnations bucket has exactly one entry, container ID set.
@@ -393,11 +513,6 @@ func TestSpawnAgentHappyPath(t *testing.T) {
 	if len(claims.Capabilities) == 0 {
 		t.Error("jwt has no capabilities")
 	}
-
-	// History was written twice (initial + running).
-	if hist.calls != 2 {
-		t.Errorf("hist.calls = %d, want 2", hist.calls)
-	}
 }
 
 func TestSpawnAgentRejectsDuplicateName(t *testing.T) {
@@ -405,9 +520,10 @@ func TestSpawnAgentRejectsDuplicateName(t *testing.T) {
 
 	// Pre-seed the definitions bucket with an existing "alpha".
 	existing := sextantproto.AgentDefinition{
-		UUID:      uuid.New(),
-		Name:      "alpha",
-		Lifecycle: sextantproto.LifecycleRunning,
+		UUID:   uuid.New(),
+		Name:   "alpha",
+		Spec:   sextantproto.AgentSpec{Desired: sextantproto.DesiredRun, Generation: 1},
+		Status: sextantproto.AgentStatusRecord{Observed: sextantproto.ObservedRunning, ObservedGeneration: 1},
 	}
 	raw, _ := json.Marshal(existing)
 	if _, err := defs.Put(context.Background(), existing.UUID.String(), raw); err != nil {
@@ -441,120 +557,79 @@ func TestSpawnAgentRejectsMissingTemplate(t *testing.T) {
 	}
 }
 
-func TestSpawnAgentRollsBackOnContainerStartFailure(t *testing.T) {
+// TestActuateLeavesNoIncarnationOnContainerStartFailure: under the
+// declarative model the spawn handler never starts a container; the
+// Actuator (sole actuator) does. When Containers.Run fails, Actuate
+// returns an error and persists NO incarnation — the def stays in KV so
+// the reconciler retries idempotently next pass (no destructive rollback
+// of the operator's desired record).
+func TestActuateLeavesNoIncarnationOnContainerStartFailure(t *testing.T) {
 	deps, defs, incs, runner, _ := buildDeps(t)
-	runner.runErr = errors.New("dockerd is asleep")
 
-	h := handlers.NewSpawnAgent(deps)
+	// Spawn writes the desired record (no container yet).
+	spawnH := handlers.NewSpawnAgent(deps)
 	cap := &captureEmit{}
-	req := makeReq(t, sextantproto.SpawnAgentRequest{Name: "alpha", Template: "default"})
-	if err := h(context.Background(), req, cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
+	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+		Name: "alpha", Template: "default",
+	}), cap.emit()); err != nil {
+		t.Fatalf("spawn: %v", err)
 	}
-	if cap.resp.Error == nil {
-		t.Fatal("expected error")
+	var resp sextantproto.SpawnAgentResponse
+	if err := json.Unmarshal(cap.resp.Result, &resp); err != nil {
+		t.Fatalf("decode spawn: %v", err)
 	}
-	// Roll back: no definition, no incarnation.
-	if got := len(defs.snapshot()); got != 0 {
-		t.Errorf("definitions count after rollback = %d, want 0", got)
+
+	// Now make the runtime fail and drive the Actuator.
+	runner.runErr = errors.New("dockerd is asleep")
+	if err := actuateAgent(t, deps, resp.AgentID); err == nil {
+		t.Fatal("expected actuate error when container Run fails")
+	}
+
+	// The desired record stays (the reconciler retries); no incarnation
+	// was persisted behind the failed container.
+	if got := len(defs.snapshot()); got != 1 {
+		t.Errorf("definitions count = %d, want 1 (desired record retained for retry)", got)
 	}
 	if got := len(incs.snapshot()); got != 0 {
-		t.Errorf("incarnations count after rollback = %d, want 0", got)
+		t.Errorf("incarnations count after failed actuate = %d, want 0", got)
 	}
 }
 
-// TestSpawnAgentRollsBackWorkspaceOnContainerFailure pins the
-// workspace-dir leak fix: a container-start failure must remove the
-// per-agent workspace dir from the rollback ledger, not leave it on
-// disk for the next failed spawn to accumulate. Reads the workspace
-// root from deps.WorkspaceRoot and asserts no children remain.
-func TestSpawnAgentRollsBackWorkspaceOnContainerFailure(t *testing.T) {
-	deps, _, _, runner, _ := buildDeps(t)
-	runner.runErr = errors.New("dockerd is asleep")
+// TestActuateRollsBackContainerOnIncarnationPersistFailure: when the
+// incarnation KV Put fails after the container started, the Actuator
+// must stop the orphaned container so it doesn't leak behind a missing
+// incarnation record (the reconciler re-actuates next pass).
+func TestActuateRollsBackContainerOnIncarnationPersistFailure(t *testing.T) {
+	deps, _, incs, runner, _ := buildDeps(t)
 
-	// Sanity: root exists and is empty before the spawn attempt.
-	entries, err := os.ReadDir(deps.WorkspaceRoot)
-	if err != nil {
-		t.Fatalf("ReadDir root: %v", err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("workspace root not empty pre-spawn: %d entries", len(entries))
-	}
-
-	h := handlers.NewSpawnAgent(deps)
+	spawnH := handlers.NewSpawnAgent(deps)
 	cap := &captureEmit{}
-	req := makeReq(t, sextantproto.SpawnAgentRequest{Name: "alpha", Template: "default"})
-	if err := h(context.Background(), req, cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
+	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+		Name: "alpha", Template: "default",
+	}), cap.emit()); err != nil {
+		t.Fatalf("spawn: %v", err)
 	}
-	if cap.resp.Error == nil {
-		t.Fatal("expected error")
-	}
-
-	entries, err = os.ReadDir(deps.WorkspaceRoot)
-	if err != nil {
-		t.Fatalf("ReadDir root post-spawn: %v", err)
-	}
-	if len(entries) != 0 {
-		names := make([]string, 0, len(entries))
-		for _, e := range entries {
-			names = append(names, e.Name())
-		}
-		t.Errorf("workspace root has %d leftover entry/entries after rollback: %v",
-			len(entries), names)
-	}
-}
-
-// TestSpawnAgentRollsBackEverythingOnLifecycleFlipFailure pins the
-// lifecycle-flip rollback fix: when the final definitions Put (the
-// one that flips lifecycle defined→running) fails, the rollback ledger
-// must:
-//
-//   - stop the spawned container,
-//   - delete the incarnation KV entry,
-//   - delete the definition KV entry,
-//   - remove the workspace dir.
-//
-// We inject the failure by counting Put calls on the definitions KV:
-// the first Put is the initial definition (success), the second is
-// the lifecycle flip (fail). The incarnation Put is on a different
-// bucket so it doesn't interfere with the counter.
-func TestSpawnAgentRollsBackEverythingOnLifecycleFlipFailure(t *testing.T) {
-	deps, defs, incs, runner, _ := buildDeps(t)
-	// Fail the SECOND Put on the definitions bucket — that's the
-	// lifecycle flip; the first is the initial definition write.
-	defs.putHook = func(_ string, callIdx int) error {
-		if callIdx == 2 {
-			return errors.New("nats KV unhealthy")
-		}
-		return nil
+	var resp sextantproto.SpawnAgentResponse
+	if err := json.Unmarshal(cap.resp.Result, &resp); err != nil {
+		t.Fatalf("decode spawn: %v", err)
 	}
 
-	h := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	req := makeReq(t, sextantproto.SpawnAgentRequest{Name: "alpha", Template: "default"})
-	if err := h(context.Background(), req, cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
+	// Fail the incarnation Put — the container has already started by then.
+	incs.putHook = func(_ string, _ int) error {
+		return errors.New("nats KV unhealthy")
 	}
-	if cap.resp.Error == nil {
-		t.Fatal("expected error")
-	}
-	if cap.resp.Error.Code != sextantproto.ErrCodeInternal {
-		t.Errorf("Code = %q, want internal", cap.resp.Error.Code)
+	if err := actuateAgent(t, deps, resp.AgentID); err == nil {
+		t.Fatal("expected actuate error when incarnation persist fails")
 	}
 
-	// Container was stopped via the rollback (Stop received the ID).
+	// The started container was stopped (rolled back).
 	runner.mu.Lock()
 	stopped := append([]string(nil), runner.stopped...)
 	runner.mu.Unlock()
 	if len(stopped) != 1 {
-		t.Errorf("runner.stopped = %v, want 1 entry (the rollback Stop)", stopped)
+		t.Errorf("runner.stopped = %v, want 1 entry (the orphaned-container rollback Stop)", stopped)
 	}
-
-	// No definition, no incarnation left in KV.
-	if got := len(defs.snapshot()); got != 0 {
-		t.Errorf("definitions count = %d, want 0", got)
-	}
+	// No incarnation persisted.
 	if got := len(incs.snapshot()); got != 0 {
 		t.Errorf("incarnations count = %d, want 0", got)
 	}
@@ -573,10 +648,16 @@ func TestSpawnAgentRollsBackEverythingOnLifecycleFlipFailure(t *testing.T) {
 	}
 }
 
-func TestKillAgentStopsContainerAndUpdatesKV(t *testing.T) {
+// TestKillAgentSetsDesiredPausedAndDoesNotActuate pins the new kill
+// contract: kill writes desired=paused and enqueues a reconcile — it is
+// NOT an actuator. The container stop + incarnation-exited transitions
+// now belong to the reconciler (pkg/sextantd TestReconcile_StopAndArchive);
+// this test guards that the handler stays a pure desired-state edit.
+func TestKillAgentSetsDesiredPausedAndDoesNotActuate(t *testing.T) {
 	deps, defs, incs, runner, _ := buildDeps(t)
+	enq := &captureEnqueuer{}
 
-	// Run spawn first so we have a live agent.
+	// Spawn writes desired=run (it does not actuate; the reconciler does).
 	spawnH := handlers.NewSpawnAgent(deps)
 	cap := &captureEmit{}
 	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
@@ -588,11 +669,15 @@ func TestKillAgentStopsContainerAndUpdatesKV(t *testing.T) {
 	if err := json.Unmarshal(cap.resp.Result, &spawnResp); err != nil {
 		t.Fatalf("decode spawn resp: %v", err)
 	}
+	runner.mu.Lock()
+	runsAfterSpawn := len(runner.specs)
+	runner.mu.Unlock()
 
 	killH := handlers.NewKillAgent(handlers.KillDeps{
 		Definitions:  defs,
 		Incarnations: incs,
 		Containers:   runner,
+		Enqueue:      enq,
 	})
 	killCap := &captureEmit{}
 	if err := killH(context.Background(), makeReq(t, sextantproto.KillAgentRequest{
@@ -604,33 +689,27 @@ func TestKillAgentStopsContainerAndUpdatesKV(t *testing.T) {
 		t.Fatalf("kill error: %+v", killCap.resp.Error)
 	}
 
-	// Container was stopped.
+	// kill writes the stop intent: desired=paused (Lifecycle() projects paused).
+	def := readDef(t, defs, spawnResp.AgentID)
+	if def.Spec.Desired != sextantproto.DesiredPaused {
+		t.Errorf("Desired = %s, want paused", def.Spec.Desired)
+	}
+	if def.Lifecycle() != sextantproto.LifecyclePaused {
+		t.Errorf("Lifecycle() = %s, want paused", def.Lifecycle())
+	}
+	if got := enq.calls(); len(got) != 1 || got[0] != spawnResp.AgentID {
+		t.Errorf("enqueue = %v, want exactly [%s]", got, spawnResp.AgentID)
+	}
+
+	// Not an actuator: no container Stop, and no Run beyond what spawn did.
 	runner.mu.Lock()
-	stopped := append([]string(nil), runner.stopped...)
+	stopped, runsNow := len(runner.stopped), len(runner.specs)
 	runner.mu.Unlock()
-	if len(stopped) != 1 {
-		t.Fatalf("stopped count = %d, want 1", len(stopped))
+	if stopped != 0 {
+		t.Errorf("runner.stopped = %d, want 0 (kill defers stopping to the reconciler)", stopped)
 	}
-
-	// Incarnation state flipped to exited with EndedAt set.
-	incSnap := incs.snapshot()
-	var inc sextantproto.AgentIncarnation
-	for _, v := range incSnap {
-		_ = json.Unmarshal(v, &inc)
-	}
-	if inc.State != sextantproto.IncarnationExited {
-		t.Errorf("State = %s, want exited", inc.State)
-	}
-	if inc.EndedAt == nil {
-		t.Error("EndedAt is nil after kill")
-	}
-
-	// Definition lifecycle back to defined.
-	defSnap := defs.snapshot()
-	var def sextantproto.AgentDefinition
-	_ = json.Unmarshal(defSnap[spawnResp.AgentID.String()], &def)
-	if def.Lifecycle != sextantproto.LifecycleDefined {
-		t.Errorf("def.Lifecycle = %s, want defined", def.Lifecycle)
+	if runsNow != runsAfterSpawn {
+		t.Errorf("kill issued container Runs: %d→%d, want unchanged", runsAfterSpawn, runsNow)
 	}
 }
 
@@ -714,16 +793,9 @@ func TestSpawnAgentMountsHostGitDirForWorktreeAgents(t *testing.T) {
 	}
 	deps.Worktree = wt
 
-	h := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "alpha", Template: "default",
-	}), cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("Error = %+v", cap.resp.Error)
-	}
+	// Spawn writes desired=run; the Actuator builds+runs the container, so
+	// drive it to materialize the spec we assert on.
+	spawnAndActuate(t, deps, "alpha", "default")
 	if len(runner.specs) != 1 {
 		t.Fatalf("runner.specs = %d, want 1", len(runner.specs))
 	}
@@ -759,15 +831,10 @@ func TestSpawnAgentSkipsGitDirMountWhenNoWorktree(t *testing.T) {
 	deps.RepoRoot = repoRoot
 	// deps.Worktree intentionally nil — fallback workspace path fires.
 
-	h := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "alpha", Template: "default",
-	}), cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("Error = %+v", cap.resp.Error)
+	// Spawn + actuate so the container spec exists to assert against.
+	spawnAndActuate(t, deps, "alpha", "default")
+	if len(runner.specs) != 1 {
+		t.Fatalf("runner.specs = %d, want 1", len(runner.specs))
 	}
 
 	gitDirHost := repoRoot + "/.git"
@@ -786,21 +853,9 @@ func TestSpawnAgentSkipsGitDirMountWhenNoWorktree(t *testing.T) {
 func TestSpawnAgentWritesGitConfigMount(t *testing.T) {
 	deps, _, _, runner, _ := buildDeps(t)
 
-	h := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "alpha", Template: "default",
-	}), cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("Error = %+v", cap.resp.Error)
-	}
-
-	var resp sextantproto.SpawnAgentResponse
-	if err := json.Unmarshal(cap.resp.Result, &resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	// Spawn + actuate so the gitconfig mount the Actuator writes exists.
+	agentID := spawnAndActuate(t, deps, "alpha", "default")
+	resp := sextantproto.SpawnAgentResponse{AgentID: agentID}
 
 	spec := runner.specs[0]
 	var gitconfig *containermgr.MountSpec
@@ -861,16 +916,8 @@ func TestSpawnAgentMountsSSHReadOnlyWhenTemplateOptsIn(t *testing.T) {
 	}
 	deps.Templates = tplKV
 
-	h := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "alpha", Template: "with-ssh",
-	}), cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("Error = %+v", cap.resp.Error)
-	}
+	// Spawn + actuate so the ssh bind mount the Actuator builds exists.
+	spawnAndActuate(t, deps, "alpha", "with-ssh")
 	if len(runner.specs) != 1 {
 		t.Fatalf("runner.specs = %d, want 1", len(runner.specs))
 	}
@@ -911,15 +958,10 @@ func TestSpawnAgentMountsSSHReadOnlyWhenTemplateOptsIn(t *testing.T) {
 func TestSpawnAgentOmitsSSHMountWhenTemplateDoesntOptIn(t *testing.T) {
 	deps, _, _, runner, _ := buildDeps(t)
 
-	h := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "alpha", Template: "default",
-	}), cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("Error = %+v", cap.resp.Error)
+	// Spawn + actuate so the container spec exists to assert against.
+	spawnAndActuate(t, deps, "alpha", "default")
+	if len(runner.specs) != 1 {
+		t.Fatalf("runner.specs = %d, want 1", len(runner.specs))
 	}
 
 	for _, m := range runner.specs[0].Mounts {
@@ -970,16 +1012,8 @@ func TestPermissionCeilingToSDKMode_Auto(t *testing.T) {
 	}
 	deps.Templates = tplKV
 
-	h := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "alpha", Template: "auto-ceiling",
-	}), cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("Error = %+v", cap.resp.Error)
-	}
+	// Spawn + actuate so the permission-mode env the Actuator builds exists.
+	spawnAndActuate(t, deps, "alpha", "auto-ceiling")
 
 	if got := runner.specs[0].Env["SEXTANT_PERMISSION_MODE"]; got != "acceptEdits" {
 		t.Errorf("SEXTANT_PERMISSION_MODE = %q, want %q", got, "acceptEdits")
@@ -995,16 +1029,8 @@ func TestPermissionCeilingToSDKMode_Unset(t *testing.T) {
 
 	// The default template seeded by buildDeps has no permission_ceiling field.
 	// Confirm the env var is still injected with the correct default.
-	h := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "beta", Template: "default",
-	}), cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("Error = %+v", cap.resp.Error)
-	}
+	// Spawn + actuate so the container spec env exists.
+	spawnAndActuate(t, deps, "beta", "default")
 
 	if got := runner.specs[0].Env["SEXTANT_PERMISSION_MODE"]; got != "acceptEdits" {
 		t.Errorf("SEXTANT_PERMISSION_MODE = %q, want %q", got, "acceptEdits")
@@ -1033,16 +1059,8 @@ func TestPermissionCeilingToSDKMode_Plan(t *testing.T) {
 	}
 	deps.Templates = tplKV
 
-	h := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "gamma", Template: "plan-ceiling",
-	}), cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("Error = %+v", cap.resp.Error)
-	}
+	// Spawn + actuate so the permission-mode env the Actuator builds exists.
+	spawnAndActuate(t, deps, "gamma", "plan-ceiling")
 
 	if got := runner.specs[0].Env["SEXTANT_PERMISSION_MODE"]; got != "plan" {
 		t.Errorf("SEXTANT_PERMISSION_MODE = %q, want %q", got, "plan")
@@ -1171,21 +1189,9 @@ func TestSpawnAgentClaudeSeedCopyOnSpawnDefault(t *testing.T) {
 	}
 	deps.Templates = tplKV
 
-	h := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "alpha", Template: "seeded",
-	}), cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("Error = %+v", cap.resp.Error)
-	}
-
-	var resp sextantproto.SpawnAgentResponse
-	if err := json.Unmarshal(cap.resp.Result, &resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	// Spawn + actuate so the Actuator's volume create/populate + mount run.
+	agentID := spawnAndActuate(t, deps, "alpha", "seeded")
+	resp := sextantproto.SpawnAgentResponse{AgentID: agentID}
 
 	// Volume was created (first spawn for this UUID).
 	vols.mu.Lock()
@@ -1302,20 +1308,8 @@ func TestSpawnAgentClaudeSeedCopyOnSpawnReusesExistingVolume(t *testing.T) {
 	// isolation but NOT idempotency. So we exercise idempotency by
 	// inspecting the EnsureVolume return value semantics directly.
 
-	h := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "alpha", Template: "seeded",
-	}), cap.emit()); err != nil {
-		t.Fatalf("first spawn: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("first spawn error: %+v", cap.resp.Error)
-	}
-	var resp1 sextantproto.SpawnAgentResponse
-	if err := json.Unmarshal(cap.resp.Result, &resp1); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	// First spawn + actuate: the Actuator creates+populates the volume once.
+	spawnAndActuate(t, deps, "alpha", "seeded")
 
 	// Pre-seed the fake with a SECOND, distinct UUID's volume name to
 	// simulate "this volume already exists from a prior incarnation"
@@ -1375,16 +1369,8 @@ func TestSpawnAgentClaudeSeedReadonlyModeBindMounts(t *testing.T) {
 	}
 	deps.Templates = tplKV
 
-	h := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "ro-agent", Template: "seeded-ro",
-	}), cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("Error = %+v", cap.resp.Error)
-	}
+	// Spawn + actuate so the Actuator builds the readonly-bind mount.
+	spawnAndActuate(t, deps, "ro-agent", "seeded-ro")
 
 	// Volume manager NOT invoked — readonly-bind doesn't use volumes.
 	vols.mu.Lock()
@@ -1449,18 +1435,28 @@ func TestSpawnAgentRollsBackClaudeSeedVolumeOnContainerFailure(t *testing.T) {
 	}
 	deps.Templates = tplKV
 
-	h := handlers.NewSpawnAgent(deps)
+	// Spawn writes the desired record; the Actuator (sole actuator)
+	// creates the volume and then fails the container Run, which fires
+	// the rollback ledger that removes the just-created volume.
+	spawnH := handlers.NewSpawnAgent(deps)
 	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
 		Name: "alpha", Template: "seeded-fail",
 	}), cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
+		t.Fatalf("spawn: %v", err)
 	}
-	if cap.resp.Error == nil {
-		t.Fatal("expected container-failure error")
+	if cap.resp.Error != nil {
+		t.Fatalf("spawn error: %+v", cap.resp.Error)
+	}
+	var resp sextantproto.SpawnAgentResponse
+	if err := json.Unmarshal(cap.resp.Result, &resp); err != nil {
+		t.Fatalf("decode spawn: %v", err)
+	}
+	if err := actuateAgent(t, deps, resp.AgentID); err == nil {
+		t.Fatal("expected actuate error when container Run fails")
 	}
 
-	// Volume was created during spawn AND then removed by rollback.
+	// Volume was created during actuate AND then removed by rollback.
 	vols.mu.Lock()
 	created := append([]string(nil), vols.created...)
 	removed := append([]string(nil), vols.removed...)
@@ -1483,15 +1479,25 @@ func TestSpawnAgentRollsBackGitConfigOnContainerFailure(t *testing.T) {
 	deps, _, _, runner, _ := buildDeps(t)
 	runner.runErr = errors.New("dockerd is asleep")
 
-	h := handlers.NewSpawnAgent(deps)
+	// Spawn writes the desired record; the Actuator builds the gitconfig
+	// temp + workspace then fails the container Run, firing the rollback
+	// ledger that removes the host dirs it created.
+	spawnH := handlers.NewSpawnAgent(deps)
 	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
 		Name: "alpha", Template: "default",
 	}), cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
+		t.Fatalf("spawn: %v", err)
 	}
-	if cap.resp.Error == nil {
-		t.Fatal("expected container-failure error")
+	if cap.resp.Error != nil {
+		t.Fatalf("spawn error: %+v", cap.resp.Error)
+	}
+	var resp sextantproto.SpawnAgentResponse
+	if err := json.Unmarshal(cap.resp.Result, &resp); err != nil {
+		t.Fatalf("decode spawn: %v", err)
+	}
+	if err := actuateAgent(t, deps, resp.AgentID); err == nil {
+		t.Fatal("expected actuate error when container Run fails")
 	}
 
 	// Workspace root must be empty — the gitconfig temp lives under

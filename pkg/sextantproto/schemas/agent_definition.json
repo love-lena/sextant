@@ -17,26 +17,11 @@
         "template": {
           "type": "string"
         },
-        "runtime": {
-          "$ref": "#/$defs/RuntimeConfig"
+        "spec": {
+          "$ref": "#/$defs/AgentSpec"
         },
-        "sandbox": {
-          "$ref": "#/$defs/SandboxConfig"
-        },
-        "tools": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "host_pin": {
-          "type": "string"
-        },
-        "lifecycle": {
-          "type": "string"
-        },
-        "current_incarnation_id": {
-          "$ref": "#/$defs/UUID"
+        "status": {
+          "$ref": "#/$defs/AgentStatusRecord"
         },
         "version": {
           "type": "integer"
@@ -60,13 +45,130 @@
         "uuid",
         "name",
         "type",
-        "runtime",
-        "sandbox",
-        "lifecycle",
+        "spec",
+        "status",
         "version",
         "created_at",
         "updated_at"
       ]
+    },
+    "AgentSpec": {
+      "properties": {
+        "desired": {
+          "type": "string"
+        },
+        "runtime": {
+          "$ref": "#/$defs/RuntimeConfig"
+        },
+        "sandbox": {
+          "$ref": "#/$defs/SandboxConfig"
+        },
+        "tools": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "host_pin": {
+          "type": "string"
+        },
+        "restart_policy": {
+          "type": "string"
+        },
+        "grace_seconds": {
+          "type": "integer"
+        },
+        "generation": {
+          "type": "integer"
+        },
+        "reactuation_nonce": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "desired",
+        "runtime",
+        "sandbox",
+        "generation",
+        "reactuation_nonce"
+      ]
+    },
+    "AgentStatusRecord": {
+      "properties": {
+        "observed": {
+          "type": "string"
+        },
+        "phase": {
+          "type": "string"
+        },
+        "current_incarnation_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "observed_generation": {
+          "type": "integer"
+        },
+        "observed_nonce": {
+          "type": "integer"
+        },
+        "spec_fingerprint": {
+          "type": "string"
+        },
+        "wire_epoch": {
+          "type": "integer"
+        },
+        "restart_count": {
+          "type": "integer"
+        },
+        "crash_window": {
+          "$ref": "#/$defs/CrashWindow"
+        },
+        "last_exit": {
+          "$ref": "#/$defs/LastExit"
+        },
+        "session_snapshot": {
+          "type": "string"
+        },
+        "last_heartbeat_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "last_reconciled_at": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "observed"
+      ]
+    },
+    "CrashWindow": {
+      "properties": {
+        "count": {
+          "type": "integer"
+        },
+        "since": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "LastExit": {
+      "properties": {
+        "code": {
+          "type": "integer"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "at": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
     },
     "ResourceLimits": {
       "properties": {

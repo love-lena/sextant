@@ -47,15 +47,18 @@ func fullSpecInput(t *testing.T) agentContainerSpecInput {
 			UUID:     agentUUID,
 			Name:     "alpha",
 			Template: "default",
-			Runtime: sextantproto.RuntimeConfig{
-				Model:          "claude-opus-4-7[1m]",
-				PermissionCeil: "auto",
-				InitialPrompt:  "you are alpha",
-			},
-			Sandbox: sextantproto.SandboxConfig{
-				Image:  "sextant-sidecar:latest",
-				Mounts: []string{"worktree", "ssh"},
-				Env:    map[string]string{"SEXTANT_DRIVER": "mock"},
+			Spec: sextantproto.AgentSpec{
+				Desired: sextantproto.DesiredRun,
+				Runtime: sextantproto.RuntimeConfig{
+					Model:          "claude-opus-4-7[1m]",
+					PermissionCeil: "auto",
+					InitialPrompt:  "you are alpha",
+				},
+				Sandbox: sextantproto.SandboxConfig{
+					Image:  "sextant-sidecar:latest",
+					Mounts: []string{"worktree", "ssh"},
+					Env:    map[string]string{"SEXTANT_DRIVER": "mock"},
+				},
 			},
 		},
 		IncarnationID:          uuid.New(),
@@ -204,7 +207,7 @@ func TestSpecFingerprintChangesWithSpecNotIdentity(t *testing.T) {
 
 	// Image change → different fingerprint.
 	img := base
-	img.Def.Sandbox.Image = "sextant-sidecar:next"
+	img.Def.Spec.Sandbox.Image = "sextant-sidecar:next"
 	if got := buildAgentContainerSpec(img).Labels[LabelSpecFingerprint]; got == baseFP {
 		t.Error("fingerprint unchanged when image changed")
 	}
@@ -219,9 +222,38 @@ func TestSpecFingerprintChangesWithSpecNotIdentity(t *testing.T) {
 
 	// Adding an env key → different fingerprint.
 	envKey := base
-	envKey.Def.Sandbox.Env = map[string]string{"SEXTANT_DRIVER": "mock", "EXTRA": "1"}
+	envKey.Def.Spec.Sandbox.Env = map[string]string{"SEXTANT_DRIVER": "mock", "EXTRA": "1"}
 	if got := buildAgentContainerSpec(envKey).Labels[LabelSpecFingerprint]; got == baseFP {
 		t.Error("fingerprint unchanged when an env key was added")
+	}
+}
+
+// TestBuildAgentContainerSpecForwardsAPIKeyAndSession re-homes two
+// regression guards that lived in the old restart_test.go before P0
+// moved actuation behind the reconciler: bug-restart-no-api-key-forwarding
+// and bug-restart-preserve-session-noop. Because every actuation (spawn or
+// restart) now routes through this SOLE builder, asserting the env here
+// guarantees both paths forward the key + session by construction.
+func TestBuildAgentContainerSpecForwardsAPIKeyAndSession(t *testing.T) {
+	t.Parallel()
+	in := fullSpecInput(t)
+	in.APIKey = "sk-ant-restart-forwarding-test"
+	in.SessionID = "sess_01HXYZRESTARTPRESERVES"
+	spec := buildAgentContainerSpec(in)
+
+	if got := spec.Env["ANTHROPIC_API_KEY"]; got != in.APIKey {
+		t.Errorf("ANTHROPIC_API_KEY = %q, want %q", got, in.APIKey)
+	}
+	if got := spec.Env["SEXTANT_SESSION_ID"]; got != in.SessionID {
+		t.Errorf("SEXTANT_SESSION_ID = %q, want %q", got, in.SessionID)
+	}
+
+	// An empty SessionID must NOT set SEXTANT_SESSION_ID — otherwise
+	// --preserve-session=false (which clears Spec.Runtime.SessionID, so the
+	// actuator passes "") would still resume the prior conversation.
+	in.SessionID = ""
+	if got, ok := buildAgentContainerSpec(in).Env["SEXTANT_SESSION_ID"]; ok {
+		t.Errorf("empty SessionID set SEXTANT_SESSION_ID = %q, want unset", got)
 	}
 }
 
