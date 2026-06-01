@@ -16,7 +16,7 @@ export const PROTO_VERSION = "0.5.0";
  * Matches Go sextantproto.WireEpoch; the CI schema-compat gate fails a
  * breaking wire change that did not bump it.
  */
-export const WIRE_EPOCH = 1;
+export const WIRE_EPOCH = 2;
 
 // Recognized envelope kinds. Mirrors sextantproto.Kind.
 export const KIND_AGENT_FRAME = "agent_frame";
