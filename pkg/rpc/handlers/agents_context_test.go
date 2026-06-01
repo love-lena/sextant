@@ -27,20 +27,11 @@ func TestSpawnBindsAgentProjectsDir(t *testing.T) {
 	deps, _, _, runner, _ := buildDeps(t)
 	root := t.TempDir()
 	deps.AgentsDataRoot = root
-	h := handlers.NewSpawnAgent(deps)
 
-	cap := &captureEmit{}
-	req := makeReq(t, sextantproto.SpawnAgentRequest{Name: "alpha", Template: "default"})
-	if err := h(context.Background(), req, cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("Error = %+v", cap.resp.Error)
-	}
-	var resp sextantproto.SpawnAgentResponse
-	if err := json.Unmarshal(cap.resp.Result, &resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	// Spawn + actuate: the Actuator (sole actuator) creates the host
+	// projects dir and adds the bind mount to the container spec.
+	agentID := spawnAndActuate(t, deps, "alpha", "default")
+	resp := sextantproto.SpawnAgentResponse{AgentID: agentID}
 
 	// Host dir created with the right layout.
 	projects := filepath.Join(root, resp.AgentID.String(), "claude-projects")
@@ -90,16 +81,9 @@ func TestSpawnBindsAgentProjectsDir(t *testing.T) {
 func TestSpawnSkipsBindWhenAgentsDataRootEmpty(t *testing.T) {
 	deps, _, _, runner, _ := buildDeps(t)
 	// deps.AgentsDataRoot intentionally left empty
-	h := handlers.NewSpawnAgent(deps)
 
-	cap := &captureEmit{}
-	req := makeReq(t, sextantproto.SpawnAgentRequest{Name: "beta", Template: "default"})
-	if err := h(context.Background(), req, cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("Error = %+v", cap.resp.Error)
-	}
+	// Spawn + actuate so the container spec exists to assert against.
+	spawnAndActuate(t, deps, "beta", "default")
 	if len(runner.specs) != 1 {
 		t.Fatalf("runner.specs = %d, want 1", len(runner.specs))
 	}

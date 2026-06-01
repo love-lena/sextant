@@ -793,16 +793,9 @@ func TestSpawnAgentMountsHostGitDirForWorktreeAgents(t *testing.T) {
 	}
 	deps.Worktree = wt
 
-	h := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "alpha", Template: "default",
-	}), cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("Error = %+v", cap.resp.Error)
-	}
+	// Spawn writes desired=run; the Actuator builds+runs the container, so
+	// drive it to materialize the spec we assert on.
+	spawnAndActuate(t, deps, "alpha", "default")
 	if len(runner.specs) != 1 {
 		t.Fatalf("runner.specs = %d, want 1", len(runner.specs))
 	}
@@ -838,15 +831,10 @@ func TestSpawnAgentSkipsGitDirMountWhenNoWorktree(t *testing.T) {
 	deps.RepoRoot = repoRoot
 	// deps.Worktree intentionally nil — fallback workspace path fires.
 
-	h := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "alpha", Template: "default",
-	}), cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("Error = %+v", cap.resp.Error)
+	// Spawn + actuate so the container spec exists to assert against.
+	spawnAndActuate(t, deps, "alpha", "default")
+	if len(runner.specs) != 1 {
+		t.Fatalf("runner.specs = %d, want 1", len(runner.specs))
 	}
 
 	gitDirHost := repoRoot + "/.git"
@@ -865,21 +853,9 @@ func TestSpawnAgentSkipsGitDirMountWhenNoWorktree(t *testing.T) {
 func TestSpawnAgentWritesGitConfigMount(t *testing.T) {
 	deps, _, _, runner, _ := buildDeps(t)
 
-	h := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "alpha", Template: "default",
-	}), cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("Error = %+v", cap.resp.Error)
-	}
-
-	var resp sextantproto.SpawnAgentResponse
-	if err := json.Unmarshal(cap.resp.Result, &resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	// Spawn + actuate so the gitconfig mount the Actuator writes exists.
+	agentID := spawnAndActuate(t, deps, "alpha", "default")
+	resp := sextantproto.SpawnAgentResponse{AgentID: agentID}
 
 	spec := runner.specs[0]
 	var gitconfig *containermgr.MountSpec
@@ -940,16 +916,8 @@ func TestSpawnAgentMountsSSHReadOnlyWhenTemplateOptsIn(t *testing.T) {
 	}
 	deps.Templates = tplKV
 
-	h := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "alpha", Template: "with-ssh",
-	}), cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("Error = %+v", cap.resp.Error)
-	}
+	// Spawn + actuate so the ssh bind mount the Actuator builds exists.
+	spawnAndActuate(t, deps, "alpha", "with-ssh")
 	if len(runner.specs) != 1 {
 		t.Fatalf("runner.specs = %d, want 1", len(runner.specs))
 	}
@@ -990,15 +958,10 @@ func TestSpawnAgentMountsSSHReadOnlyWhenTemplateOptsIn(t *testing.T) {
 func TestSpawnAgentOmitsSSHMountWhenTemplateDoesntOptIn(t *testing.T) {
 	deps, _, _, runner, _ := buildDeps(t)
 
-	h := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "alpha", Template: "default",
-	}), cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("Error = %+v", cap.resp.Error)
+	// Spawn + actuate so the container spec exists to assert against.
+	spawnAndActuate(t, deps, "alpha", "default")
+	if len(runner.specs) != 1 {
+		t.Fatalf("runner.specs = %d, want 1", len(runner.specs))
 	}
 
 	for _, m := range runner.specs[0].Mounts {
@@ -1049,16 +1012,8 @@ func TestPermissionCeilingToSDKMode_Auto(t *testing.T) {
 	}
 	deps.Templates = tplKV
 
-	h := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "alpha", Template: "auto-ceiling",
-	}), cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("Error = %+v", cap.resp.Error)
-	}
+	// Spawn + actuate so the permission-mode env the Actuator builds exists.
+	spawnAndActuate(t, deps, "alpha", "auto-ceiling")
 
 	if got := runner.specs[0].Env["SEXTANT_PERMISSION_MODE"]; got != "acceptEdits" {
 		t.Errorf("SEXTANT_PERMISSION_MODE = %q, want %q", got, "acceptEdits")
@@ -1074,16 +1029,8 @@ func TestPermissionCeilingToSDKMode_Unset(t *testing.T) {
 
 	// The default template seeded by buildDeps has no permission_ceiling field.
 	// Confirm the env var is still injected with the correct default.
-	h := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "beta", Template: "default",
-	}), cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("Error = %+v", cap.resp.Error)
-	}
+	// Spawn + actuate so the container spec env exists.
+	spawnAndActuate(t, deps, "beta", "default")
 
 	if got := runner.specs[0].Env["SEXTANT_PERMISSION_MODE"]; got != "acceptEdits" {
 		t.Errorf("SEXTANT_PERMISSION_MODE = %q, want %q", got, "acceptEdits")
@@ -1112,16 +1059,8 @@ func TestPermissionCeilingToSDKMode_Plan(t *testing.T) {
 	}
 	deps.Templates = tplKV
 
-	h := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "gamma", Template: "plan-ceiling",
-	}), cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("Error = %+v", cap.resp.Error)
-	}
+	// Spawn + actuate so the permission-mode env the Actuator builds exists.
+	spawnAndActuate(t, deps, "gamma", "plan-ceiling")
 
 	if got := runner.specs[0].Env["SEXTANT_PERMISSION_MODE"]; got != "plan" {
 		t.Errorf("SEXTANT_PERMISSION_MODE = %q, want %q", got, "plan")
@@ -1250,21 +1189,9 @@ func TestSpawnAgentClaudeSeedCopyOnSpawnDefault(t *testing.T) {
 	}
 	deps.Templates = tplKV
 
-	h := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "alpha", Template: "seeded",
-	}), cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("Error = %+v", cap.resp.Error)
-	}
-
-	var resp sextantproto.SpawnAgentResponse
-	if err := json.Unmarshal(cap.resp.Result, &resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	// Spawn + actuate so the Actuator's volume create/populate + mount run.
+	agentID := spawnAndActuate(t, deps, "alpha", "seeded")
+	resp := sextantproto.SpawnAgentResponse{AgentID: agentID}
 
 	// Volume was created (first spawn for this UUID).
 	vols.mu.Lock()
@@ -1381,20 +1308,8 @@ func TestSpawnAgentClaudeSeedCopyOnSpawnReusesExistingVolume(t *testing.T) {
 	// isolation but NOT idempotency. So we exercise idempotency by
 	// inspecting the EnsureVolume return value semantics directly.
 
-	h := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "alpha", Template: "seeded",
-	}), cap.emit()); err != nil {
-		t.Fatalf("first spawn: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("first spawn error: %+v", cap.resp.Error)
-	}
-	var resp1 sextantproto.SpawnAgentResponse
-	if err := json.Unmarshal(cap.resp.Result, &resp1); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	// First spawn + actuate: the Actuator creates+populates the volume once.
+	spawnAndActuate(t, deps, "alpha", "seeded")
 
 	// Pre-seed the fake with a SECOND, distinct UUID's volume name to
 	// simulate "this volume already exists from a prior incarnation"
@@ -1454,16 +1369,8 @@ func TestSpawnAgentClaudeSeedReadonlyModeBindMounts(t *testing.T) {
 	}
 	deps.Templates = tplKV
 
-	h := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "ro-agent", Template: "seeded-ro",
-	}), cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("Error = %+v", cap.resp.Error)
-	}
+	// Spawn + actuate so the Actuator builds the readonly-bind mount.
+	spawnAndActuate(t, deps, "ro-agent", "seeded-ro")
 
 	// Volume manager NOT invoked — readonly-bind doesn't use volumes.
 	vols.mu.Lock()
@@ -1528,18 +1435,28 @@ func TestSpawnAgentRollsBackClaudeSeedVolumeOnContainerFailure(t *testing.T) {
 	}
 	deps.Templates = tplKV
 
-	h := handlers.NewSpawnAgent(deps)
+	// Spawn writes the desired record; the Actuator (sole actuator)
+	// creates the volume and then fails the container Run, which fires
+	// the rollback ledger that removes the just-created volume.
+	spawnH := handlers.NewSpawnAgent(deps)
 	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
 		Name: "alpha", Template: "seeded-fail",
 	}), cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
+		t.Fatalf("spawn: %v", err)
 	}
-	if cap.resp.Error == nil {
-		t.Fatal("expected container-failure error")
+	if cap.resp.Error != nil {
+		t.Fatalf("spawn error: %+v", cap.resp.Error)
+	}
+	var resp sextantproto.SpawnAgentResponse
+	if err := json.Unmarshal(cap.resp.Result, &resp); err != nil {
+		t.Fatalf("decode spawn: %v", err)
+	}
+	if err := actuateAgent(t, deps, resp.AgentID); err == nil {
+		t.Fatal("expected actuate error when container Run fails")
 	}
 
-	// Volume was created during spawn AND then removed by rollback.
+	// Volume was created during actuate AND then removed by rollback.
 	vols.mu.Lock()
 	created := append([]string(nil), vols.created...)
 	removed := append([]string(nil), vols.removed...)
@@ -1562,15 +1479,25 @@ func TestSpawnAgentRollsBackGitConfigOnContainerFailure(t *testing.T) {
 	deps, _, _, runner, _ := buildDeps(t)
 	runner.runErr = errors.New("dockerd is asleep")
 
-	h := handlers.NewSpawnAgent(deps)
+	// Spawn writes the desired record; the Actuator builds the gitconfig
+	// temp + workspace then fails the container Run, firing the rollback
+	// ledger that removes the host dirs it created.
+	spawnH := handlers.NewSpawnAgent(deps)
 	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
 		Name: "alpha", Template: "default",
 	}), cap.emit()); err != nil {
-		t.Fatalf("handler: %v", err)
+		t.Fatalf("spawn: %v", err)
 	}
-	if cap.resp.Error == nil {
-		t.Fatal("expected container-failure error")
+	if cap.resp.Error != nil {
+		t.Fatalf("spawn error: %+v", cap.resp.Error)
+	}
+	var resp sextantproto.SpawnAgentResponse
+	if err := json.Unmarshal(cap.resp.Result, &resp); err != nil {
+		t.Fatalf("decode spawn: %v", err)
+	}
+	if err := actuateAgent(t, deps, resp.AgentID); err == nil {
+		t.Fatal("expected actuate error when container Run fails")
 	}
 
 	// Workspace root must be empty — the gitconfig temp lives under

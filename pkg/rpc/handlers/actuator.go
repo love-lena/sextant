@@ -124,9 +124,13 @@ func (a *Actuator) Actuate(ctx context.Context, def sextantproto.AgentDefinition
 		return ActuateResult{}, fmt.Errorf("actuate: issue jwt: %w", err)
 	}
 
-	// 2. Resolve host state + build the spec input.
-	specIn, err := a.buildSpecInput(ctx, def, incID, jwt, resumeSession)
+	// 2. Resolve host state + build the spec input. rollback fires the
+	// cleanup closures for every host-side artifact this actuation created
+	// (workspace, gitconfig, claude-projects dir, fresh claude_seed volume)
+	// in reverse order — so a failed actuation leaks nothing on the host.
+	specIn, rollback, err := a.buildSpecInput(ctx, def, incID, jwt, resumeSession)
 	if err != nil {
+		rollback()
 		return ActuateResult{}, err
 	}
 
@@ -134,6 +138,7 @@ func (a *Actuator) Actuate(ctx context.Context, def sextantproto.AgentDefinition
 	spec := buildAgentContainerSpec(specIn)
 	container, err := a.deps.Containers.Run(ctx, spec)
 	if err != nil {
+		rollback()
 		return ActuateResult{}, fmt.Errorf("actuate: run container: %w", err)
 	}
 
@@ -148,12 +153,14 @@ func (a *Actuator) Actuate(ctx context.Context, def sextantproto.AgentDefinition
 	}
 	if err := putJSON(ctx, a.deps.Incarnations, incID.String(), inc); err != nil {
 		// Roll the container back so we don't leak it behind a missing
-		// incarnation record. The reconciler will re-actuate next pass.
+		// incarnation record, then unwind the host-side artifacts. The
+		// reconciler will re-actuate next pass.
 		if a.deps.Containers != nil {
 			rbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			_ = a.deps.Containers.Stop(rbCtx, container.ID, 5*time.Second)
 			cancel()
 		}
+		rollback()
 		return ActuateResult{}, fmt.Errorf("actuate: persist incarnation: %w", err)
 	}
 
@@ -219,7 +226,25 @@ func (a *Actuator) graceFor(def sextantproto.AgentDefinition) time.Duration {
 // materialization, so the two paths cannot drift (RFC §5.4). All mounts
 // are projected from the persisted def.Spec — never conditional on
 // "spawn vs restart."
-func (a *Actuator) buildSpecInput(ctx context.Context, def sextantproto.AgentDefinition, incID uuid.UUID, jwt string, resumeSession bool) (agentContainerSpecInput, error) {
+func (a *Actuator) buildSpecInput(ctx context.Context, def sextantproto.AgentDefinition, incID uuid.UUID, jwt string, resumeSession bool) (agentContainerSpecInput, func(), error) {
+	// cleanups collects the host-side artifacts this actuation creates so a
+	// failed actuation can unwind them (no orphaned dirs/volumes on the
+	// host). rollback fires them in reverse order. The reconciler re-actuates
+	// next pass; every create here is idempotent so unwinding between failed
+	// attempts is harmless.
+	var cleanups []func()
+	rollback := func() {
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			if cleanups[i] != nil {
+				cleanups[i]()
+			}
+		}
+	}
+	fail := func(err error) (agentContainerSpecInput, func(), error) {
+		rollback()
+		return agentContainerSpecInput{}, func() {}, err
+	}
+
 	model := def.Spec.Runtime.Model
 	if strings.TrimSpace(model) == "" {
 		model = DefaultModel
@@ -234,17 +259,24 @@ func (a *Actuator) buildSpecInput(ctx context.Context, def sextantproto.AgentDef
 
 	// Workspace: a worktree-class agent re-mounts the SAME worktree
 	// (resolved by the deterministic spawn-worktree name; created on first
-	// actuation), everything else uses the per-UUID stop-gap dir.
+	// actuation), everything else uses the per-UUID stop-gap dir. The
+	// stop-gap dir is this actuation's to clean up on failure; a worktree's
+	// lifecycle belongs to the reconciler/GC, so it is not unwound here.
 	workspace, usingWorktree, err := a.resolveWorkspace(ctx, def)
 	if err != nil {
-		return agentContainerSpecInput{}, err
+		return fail(err)
+	}
+	if !usingWorktree {
+		ws := workspace
+		cleanups = append(cleanups, func() { _ = os.RemoveAll(ws) })
 	}
 
 	// Per-agent gitconfig — idempotent (identical content each incarnation).
-	gitconfigPath, _, err := writeAgentGitConfig(a.deps.WorkspaceRoot, def.UUID, def.Name)
+	gitconfigPath, gitconfigCleanup, err := writeAgentGitConfig(a.deps.WorkspaceRoot, def.UUID, def.Name)
 	if err != nil {
-		return agentContainerSpecInput{}, fmt.Errorf("actuate: write gitconfig: %w", err)
+		return fail(fmt.Errorf("actuate: write gitconfig: %w", err))
 	}
+	cleanups = append(cleanups, gitconfigCleanup)
 
 	specIn := agentContainerSpecInput{
 		Def:               def,
@@ -268,29 +300,32 @@ func (a *Actuator) buildSpecInput(ctx context.Context, def sextantproto.AgentDef
 	if mountClassListed(def.Spec.Sandbox.Mounts, templates.MountClassSSH) {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return agentContainerSpecInput{}, fmt.Errorf("actuate: resolve home for ssh mount: %w", err)
+			return fail(fmt.Errorf("actuate: resolve home for ssh mount: %w", err))
 		}
 		specIn.SSHHostPath = filepath.Join(home, ".ssh")
 	}
 	// claude_seed mount (per-agent named volume, populated on first
-	// actuation, idempotent thereafter).
+	// actuation, idempotent thereafter). The cleanup removes the volume only
+	// when THIS actuation created it.
 	if a.deps.Templates != nil && def.Template != "" {
 		if tpl, terr := templates.LoadFromKV(ctx, a.deps.Templates, def.Template); terr == nil && tpl.ClaudeSeed != "" {
 			if seedPath, eerr := templates.ExpandClaudeSeed(tpl.ClaudeSeed); eerr == nil {
-				seedMount, _, serr := buildClaudeSeedMount(ctx, SpawnDeps{Volumes: a.deps.Volumes}, tpl.ResolveClaudeSeedMode(), seedPath, def.UUID, def.Spec.Sandbox.Image)
+				seedMount, seedCleanup, serr := buildClaudeSeedMount(ctx, SpawnDeps{Volumes: a.deps.Volumes}, tpl.ResolveClaudeSeedMode(), seedPath, def.UUID, def.Spec.Sandbox.Image)
 				if serr == nil {
 					specIn.ClaudeSeedMount = &seedMount
+					cleanups = append(cleanups, seedCleanup)
 				}
 			}
 		}
 	}
 	// Per-agent claude-projects bind-mount.
 	if a.deps.AgentsDataRoot != "" {
-		if projectsHost, _, perr := ensureAgentProjectsDir(a.deps.AgentsDataRoot, def.UUID); perr == nil {
+		if projectsHost, projectsCleanup, perr := ensureAgentProjectsDir(a.deps.AgentsDataRoot, def.UUID); perr == nil {
 			specIn.ClaudeProjectsHostPath = projectsHost
+			cleanups = append(cleanups, projectsCleanup)
 		}
 	}
-	return specIn, nil
+	return specIn, rollback, nil
 }
 
 // resolveWorkspace returns the /workspace host path + whether it is a
