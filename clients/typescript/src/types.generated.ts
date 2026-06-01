@@ -112,6 +112,9 @@ export interface AgentStatusRecord {
   wire_epoch?: number;
   restart_count?: number;
   crash_window?: CrashWindow;
+  backoff_until?: Timestamp;
+  running_since?: Timestamp;
+  liveness_failures?: number;
   last_exit?: LastExit;
   session_snapshot?: string;
   last_heartbeat_at?: Timestamp;
@@ -257,6 +260,8 @@ export interface AgentStatus {
   lifecycle: string;
   version: number;
   updated_at: string;
+  restarts?: number;
+  last_exit_reason?: string;
   heartbeat?: HeartbeatSnapshot;
   session_log?: SessionLogInfo;
 }
@@ -369,6 +374,7 @@ export interface AgentSummary {
   lifecycle: string;
   version: number;
   updated_at: string;
+  restarts?: number;
 }
 /**
  * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
