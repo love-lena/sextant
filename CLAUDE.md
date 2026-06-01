@@ -112,10 +112,20 @@ manages cleanup.
 
 ## Tickets
 
-`plans/issues/` holds bug + feature tickets, one file per issue.
-`plans/issues/README.md` documents the frontmatter schema, priority
-ladder, cross-link syntax (`[[other-slug]]`), and what to file vs
-just fix.
+Bug + feature tickets live in `backlog/` and are driven by the
+[Backlog.md](https://github.com/MrLesk/Backlog.md) CLI — **never
+hand-edit ticket files**, drive them through `backlog` so the board,
+web UI, and on-disk markdown stay in sync. The `backlog` skill
+(`.claude/skills/backlog/SKILL.md`) is the how-to: filing, driving,
+resolving, and finding tickets, plus the P1–P3 priority ladder,
+what-to-file guidance, and the `[[slug]]` cross-link convention.
+
+- `backlog task list --plain` — open work · `backlog board` — kanban
+- `rg "slug:<slug>" backlog/` — resolve a `[[slug]]` to its task
+
+Migrated from the old `plans/issues/` markdown (2026-06); that
+directory is now a tombstone redirect, and the migration is documented
+in `docs/superpowers/specs/2026-06-01-backlog-md-migration-design.md`.
 
 ## Commit footers
 

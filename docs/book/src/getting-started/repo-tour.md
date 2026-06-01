@@ -79,7 +79,7 @@ The design layer. Authoritative for *intent*, sometimes ahead of code.
 The execution layer.
 
 - `plans/bootstrap.md` — M0–M17 master plan.
-- `plans/issues/` — open + closed bugs and feature requests (each a markdown file).
+- `backlog/` — open + closed bugs and feature requests, managed with the Backlog.md CLI (`backlog task list --plain`).
 - `plans/incidents/` — postmortems.
 - `plans/reviews/` — adversarial-review records.
 

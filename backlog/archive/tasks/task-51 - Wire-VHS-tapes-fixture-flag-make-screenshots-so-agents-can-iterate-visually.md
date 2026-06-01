@@ -1,0 +1,149 @@
+---
+id: TASK-51
+title: >-
+  Wire VHS tapes + --fixture flag + make screenshots so agents can iterate
+  visually
+status: Done
+assignee: []
+created_date: '2026-05-26 20:33'
+labels:
+  - feature
+  - tui
+  - testing
+  - design-loop
+  - 'slug:feat-tui-vhs-fixture-design-loop'
+  - P3
+  - 'closed:resolved'
+dependencies: []
+priority: low
+ordinal: 51000
+---
+
+## Description
+
+<!-- SECTION:DESCRIPTION:BEGIN -->
+## Resolution
+
+The load-bearing pieces shipped across three commits:
+
+- `9717abf` — `pkg/fixtures/` package with Demo dataset (agents + transcripts + pending) + in-memory `Bus` that serves it through the same interface methods TUI components consume from `*client.Client`. Tests in `pkg/fixtures/fixture_test.go`.
+- `8972841` — `make screenshots` Makefile target wrapping `ghcr.io/charmbracelet/vhs`, plus `tests/visual/chat_default.tape` (100×30, Tomorrow Night theme).
+- `40ea2a2` — `cmd/sextant-tui-chat-preview/main.go` migrated to consume `pkg/fixtures.Demo` via `fixtures.Get("demo")` + `fixtures.ChatFrames(...)`. 70 lines of bespoke inline fixture data deleted.
+
+The follow-up items the original ticket listed (`--fixture` flag wiring on TUI-entry commands, additional `agents_list`/`pending_list` tapes, optional GH Actions workflow) are each blocked on a separate design-input ticket — see `[[feat-tui-vhs-remaining]]`'s Resolution for the split. The design loop itself is operational: an agent can run `make screenshots` and view the resulting PNGs to iterate on visual changes.
+
+## Summary
+
+`conventions/tui-conventions.md` (Testing → VHS + Runnable mockups)
+makes the design loop load-bearing: headless agents can't iterate on
+a TUI they can't see, and teatest text goldens don't reveal what a
+render *looks* like.
+
+The convention:
+
+- Every component ships at least one `.tape` file in
+  `tests/visual/<surface>.tape`.
+- Tapes set fixed `Width`/`Height`, launch the binary in a known
+  fixture state, screenshot, exit.
+- `make screenshots` runs every tape and writes PNGs to
+  `screenshots/`.
+- Deterministic state comes from a hidden `--fixture <name>` flag
+  that swaps in a fake `client.Client` with canned data.
+- Fixture data lives in `pkg/fixtures/` and is reused at two
+  layers: teatest wires it directly into a fake client; VHS tapes
+  invoke it via `--fixture`. Same data, two entry points.
+- VHS runs via `ghcr.io/charmbracelet/vhs` in CI so it doesn't
+  require local ttyd/ffmpeg.
+
+Current state:
+
+- No `tests/visual/` directory.
+- No `--fixture` flag on any command.
+- No `pkg/fixtures/` package.
+- `cmd/sextant-tui-chat-preview/main.go` exists as a fixture-driven
+  preview binary (the runnable-mockup convention), but the fixture
+  data is bespoke inside the preview binary rather than shared with
+  teatest.
+- No `make screenshots` target.
+
+## Fix shape
+
+1. Create `pkg/fixtures/` housing canned datasets keyed by name:
+
+   ```go
+   var Demo = Fixture{
+       Agents: []sextantproto.AgentSummary{...},
+       Conversations: map[uuid.UUID][]sextantproto.Frame{...},
+       Pending: []sextantproto.UserInputRequest{...},
+   }
+   ```
+
+   With a `client.Client` factory that returns an in-memory fake
+   backed by the fixture.
+
+2. Add `--fixture <name>` (hidden) to every TUI-entry command
+   (`agents list -i`, `conversation`, `pending list -i`, future
+   `dash`). When set, the command wires the in-memory client
+   instead of dialing the daemon.
+
+3. Migrate `cmd/sextant-tui-chat-preview/` to consume the shared
+   `pkg/fixtures/` data so the preview binary and VHS tapes draw
+   from the same source. (Preview binary stays — it's the
+   operator-driven iteration loop; VHS is the automated capture.)
+
+4. Add `tests/visual/<surface>.tape` files. Start with:
+   - `tests/visual/chat_default.tape`
+   - `tests/visual/agents_list.tape`
+   - `tests/visual/pending_list.tape`
+
+5. Add `make screenshots` target:
+
+   ```make
+   screenshots:
+   	docker run --rm -v "$(PWD)":/vhs ghcr.io/charmbracelet/vhs \
+   		sh -c 'for tape in tests/visual/*.tape; do vhs "$$tape"; done'
+   ```
+
+6. Add `.github/workflows/screenshots.yml` (optional but tracked
+   here): on PRs touching `pkg/tui/`, run `make screenshots` and
+   upload PNGs as workflow artifacts.
+
+7. Document the design loop in
+   `conventions/tui-conventions.md` already — this ticket implements
+   it.
+
+## Dependencies
+
+Best landed alongside [[feat-tui-component-interface]]: the fake
+`client.Client` injection point the components use is the same one
+the fixtures supply, so the two ship clean together.
+
+## Acceptance
+
+- `pkg/fixtures/demo.go` exists and exposes at least one canned
+  fixture covering agents + conversations + pending.
+- `sextant agents list --fixture demo` runs without a live daemon
+  and prints the canned agents.
+- `tests/visual/agents_list.tape` produces a PNG via `make
+  screenshots`.
+- The chat-preview binary uses `pkg/fixtures/` data; deleting the
+  bespoke fixture in the preview compiles.
+- An agent can run `make screenshots` and view the resulting PNGs
+  to iterate on visual changes.
+
+## Related
+
+- `conventions/tui-conventions.md` § "Testing → VHS / Runnable
+  mockups"
+- [[feat-tui-component-interface]]
+- `cmd/sextant-tui-chat-preview/` (current single-binary precedent)
+<!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Migrated from plans/issues/feat-tui-vhs-fixture-design-loop.md
+Discovered in: CLI/TUI conventions adoption
+Original created_at: 2026-05-26T20:33-07:00
+Resolved at: 2026-05-27T04:35-07:00
+<!-- SECTION:NOTES:END -->

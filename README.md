@@ -27,7 +27,7 @@ sextant doctor
 
 Runs ~15 checks: config files present, CA keypair valid, sextantd reachable, NATS and ClickHouse running, host binaries on PATH, installed binary's `GitSHA` matches the repo. Exit code `0` on green, `2` if anything failed. `sextant doctor --preflight` runs only the host-binary checks (faster, doesn't need the daemon running).
 
-> **macOS gotcha — do not use plain `cp`.** `cp bin/sextant ~/.local/bin/` stamps `com.apple.provenance` onto the destination, and Gatekeeper SIGKILLs the resulting binary on invocation (exit 137, **no stderr**). The failure looks like the binary itself is broken. `make install` (which `make bootstrap` uses) invokes `/usr/bin/install`, which writes a clean file. Cross-reference: [`plans/issues/docs-install-via-make-install-not-cp.md`](plans/issues/docs-install-via-make-install-not-cp.md).
+> **macOS gotcha — do not use plain `cp`.** `cp bin/sextant ~/.local/bin/` stamps `com.apple.provenance` onto the destination, and Gatekeeper SIGKILLs the resulting binary on invocation (exit 137, **no stderr**). The failure looks like the binary itself is broken. `make install` (which `make bootstrap` uses) invokes `/usr/bin/install`, which writes a clean file. Cross-reference: the `docs-install-via-make-install-not-cp` ticket in [`backlog/`](backlog/).
 
 ### Where to go next
 
@@ -47,7 +47,7 @@ If you're working *on* sextant rather than driving it:
 - **[`CLAUDE.md`](CLAUDE.md)** — auto-loaded project guidance for AI agents (and a useful orientation for humans too).
 - **[`conventions/`](conventions/)** — Go style, git workflow, TUI patterns, operator-experience conventions.
 - **[`plans/bootstrap.md`](plans/bootstrap.md)** — the M0–M17 milestone plan. M0–M15 are merged on `main`; M16 (self-update) and M17 (test environments) are not implemented.
-- **[`plans/issues/`](plans/issues/)** — open + closed bugs and feature requests, one markdown file per issue.
+- **[`backlog/`](backlog/)** — open + closed bugs and feature requests, managed with the [Backlog.md](https://github.com/MrLesk/Backlog.md) CLI (`backlog task list --plain`); see the `backlog` skill.
 
 For the build/test/lint loop, after `make bootstrap`:
 

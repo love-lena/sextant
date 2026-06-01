@@ -73,4 +73,4 @@ If you forget to set this in `sextantd.toml`, the daemon comes up healthy but `w
 
 ## Where to file new drift findings
 
-`plans/issues/`. One file per issue, named `bug-*` or `feat-*`. Each file carries a `status:` field (`open` or `resolved`) and links to source locations. See `plans/issues/README.md` for the template. For the currently-open set, check the directory directly — listings rot quickly here.
+File them in `backlog/` with the Backlog.md CLI: `backlog task create "…" -l bug,<area>` (slug naming `bug-*` / `feat-*` is preserved as a `slug:` label). The `backlog` skill (`.claude/skills/backlog/SKILL.md`) covers the priority ladder and what-to-file. For the currently-open set, run `backlog task list --plain` — listings rot quickly here.

@@ -38,12 +38,12 @@ At the snapshot's commit (`73462f3`), every gate has been hit. Sextant agents ha
 
 ## What's still being worked on inside Phase 1
 
-A handful of fixes and small features have landed in `plans/issues/` since the snapshot was first cut, and a few are still open. Recently landed at the snapshot's commit (`73462f3`):
+A handful of fixes and small features have landed as `backlog/` tickets since the snapshot was first cut, and a few are still open. Recently landed at the snapshot's commit (`73462f3`):
 
 - Bugs: `bug-claude-seed-readonly-breaks-session-persistence`, `bug-classifier-rm-rf-too-broad`, `bug-classifier-curl-multipipe-bypass`, `bug-clienttoml-stale-port-on-restart`, `bug-initial-prompt-not-forwarded-to-sdk`, `bug-name-resolution-inconsistent-across-agents-verbs`, `bug-kill-doesnt-release-name`, `bug-restart-preserve-session-noop`, `docs-install-via-make-install-not-cp`.
 - Features: `feat-sextant-ask-verb` (synchronous prompt CLI verb), `feat-container-ssh-passthrough` (opt-in ssh mount class), `feat-worktree-pruner` (14d archive / 30d delete policy), `feat-doctor-stale-binary-detection`.
 
-For the current open list, check `plans/issues/` directly — the directory rotates faster than this book.
+For the current open list, run `backlog task list --plain` — the ticket set rotates faster than this book.
 
 These are not full milestones; they're targeted fixes layered onto the M0–M14 base.
 
