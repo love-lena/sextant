@@ -433,6 +433,10 @@ func (d *daemon) Start(ctx context.Context) error {
 		Actuator:    actuator,
 		HostID:      spawnRT.hostID,
 		DieDebounce: debounce,
+		// Liveness probe (RFC §8 P1): the in-memory heartbeat cache feeds
+		// the wedged-but-running detection. Nil when the cache failed to
+		// start — the reconciler then assumes a running container is healthy.
+		Heartbeats: heartbeatLookupOrNil(heartbeats),
 	})
 	d.mu.Lock()
 	d.reconciler = reconciler
@@ -582,6 +586,18 @@ func (d *daemon) Start(ctx context.Context) error {
 	log.Printf("sextantd: ready (nats=%s clickhouse=%s control=%s rpc=sextant.rpc.* mcp=%s)",
 		natsSrv.Address(), chSrv.TCPAddress(), d.cfg.Daemon.ControlSocket, mcpRT.server.HTTPURL())
 	return nil
+}
+
+// heartbeatLookupOrNil returns hb as a sextantd.HeartbeatLookup, or a nil
+// interface when hb itself is nil. A nil *HeartbeatCache wrapped in a
+// non-nil interface would panic in LastSeen (it dereferences the cache's
+// mutex); the reconciler's liveness probe is explicitly nil-safe at the
+// interface level, so hand it a true nil.
+func heartbeatLookupOrNil(hb *sextantd.HeartbeatCache) sextantd.HeartbeatLookup {
+	if hb == nil {
+		return nil
+	}
+	return hb
 }
 
 // Wait blocks until both supervisors have returned. Returns a joined

@@ -11,6 +11,22 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
 ## [Unreleased]
 
 ### Added
+- **Lost agents now self-heal.** The reconciler grew a recovery branch
+  (control-plane RFC §5.3, §8): when a `desired=run` agent is observed
+  `lost` or `crashed`, the daemon auto-restarts it via the single-source
+  actuator instead of leaving it parked — closing the "noticed it was
+  lost and wrote that down" gap. Recovery is governed by a per-agent
+  **`RestartPolicy`** (`Always` / `OnFailure` / `Never`, default
+  `OnFailure` — a clean exit is not restarted) and the full safety rails:
+  exponential backoff (10s ×2, cap 300s), a stable-run backoff reset
+  (10 min continuous), a crash budget (5 restarts / 10 min → the agent
+  parks in terminal `crashed`), a SIGTERM→30s→SIGKILL grace, and a
+  **liveness** probe (3 consecutive missed heartbeats / 10s) that catches
+  a wedged-but-still-running agent a container `die` never fires for. All
+  timing runs off an injected clock, so the schedule is deterministic in
+  tests. Operator surface: `sextant agents list` gains a **`RESTARTS`**
+  column and `agents show` reports the restart count + last-exit reason
+  (both also on the `list_agents` / `get_agent_status` wire payloads).
 - **The wire contract is now generated end-to-end, and a CI gate guards
   it.** The `payloads.go → schemas/*.json` generator (`cmd/sextantproto-gen`)
   also emits `schemas/wire.json` — a machine-readable manifest carrying the
