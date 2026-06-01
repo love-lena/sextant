@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // TestRenderConfigHasThreeScopedPrincipals is a fast, server-less guard on
@@ -156,6 +157,73 @@ func TestBrokerAllowsDaemonInboxPublish(t *testing.T) {
 	case <-got:
 	case <-time.After(3 * time.Second):
 		t.Fatal("daemon inbox publish did not round-trip; the sole-publisher grant is broken")
+	}
+}
+
+// TestOperatorCanReadInboxViaJetStream is the regression guard for "reads
+// stay off the gauntlet" (RFC §5.7): even though the operator principal
+// may NOT publish to or core-subscribe agents.*.inbox, it CAN read the
+// agent_inbox stream through the JetStream API ($JS.API.>) — the path
+// pkg/client.Subscribe and the KV-backed read TUIs use. The daemon
+// publishes; the operator consumes via an ordered consumer.
+func TestOperatorCanReadInboxViaJetStream(t *testing.T) {
+	bin := natsServerPath(t)
+	dir := t.TempDir()
+	cfg := DefaultConfig(dir + "/nats")
+	cfg.NATSBinary = bin
+	cfg.LogFile = dir + "/nats.log"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	srv, err := Start(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Stop(context.Background()) })
+
+	// Daemon bootstraps the streams + publishes a prompt onto the inbox.
+	dNC, err := srv.Connect()
+	if err != nil {
+		t.Fatalf("Connect (daemon): %v", err)
+	}
+	defer dNC.Close()
+	if err := Bootstrap(ctx, dNC, cfg.MaxBytesPerStream); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	dJS, err := jetstream.New(dNC)
+	if err != nil {
+		t.Fatalf("daemon jetstream.New: %v", err)
+	}
+	const inbox = "agents.aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.inbox"
+	if _, err := dJS.Publish(ctx, inbox, []byte(`{"kind":"prompt","content":"hi"}`)); err != nil {
+		t.Fatalf("daemon JS publish inbox: %v", err)
+	}
+
+	// Operator consumes the agent_inbox stream via JetStream. This must
+	// succeed despite the operator lacking core inbox permissions.
+	opNC, err := srv.ConnectOperator()
+	if err != nil {
+		t.Fatalf("ConnectOperator: %v", err)
+	}
+	defer opNC.Close()
+	opJS, err := jetstream.New(opNC)
+	if err != nil {
+		t.Fatalf("operator jetstream.New: %v", err)
+	}
+	consumer, err := opJS.OrderedConsumer(ctx, "agent_inbox", jetstream.OrderedConsumerConfig{
+		FilterSubjects: []string{inbox},
+		DeliverPolicy:  jetstream.DeliverAllPolicy,
+	})
+	if err != nil {
+		t.Fatalf("operator ordered consumer on agent_inbox: %v", err)
+	}
+	msg, err := consumer.Next(jetstream.FetchMaxWait(5 * time.Second))
+	if err != nil {
+		t.Fatalf("operator read inbox via JetStream: %v", err)
+	}
+	if !strings.Contains(string(msg.Data()), "prompt") {
+		t.Fatalf("unexpected inbox payload: %s", msg.Data())
 	}
 }
 

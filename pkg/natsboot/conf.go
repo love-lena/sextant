@@ -110,14 +110,18 @@ func renderAuthorization(w io.Writer, cfg Config) error {
 var (
 	// operatorPublishAllow: RPC requests + the ephemeral NATS reply
 	// subjects request/reply provisions (pkg/client uses nats.NewInbox,
-	// which mints _INBOX.<token>). Deliberately omits agents.*.inbox.
+	// which mints _INBOX.<token>) + the JetStream/KV API the read-path
+	// TUIs and pkg/client.Subscribe call (a JS API request is a *publish*
+	// to $JS.API.>; replies come back on the _INBOX). Deliberately omits
+	// agents.*.inbox — the front door (RFC §5.7).
 	operatorPublishAllow = []string{
 		"sextant.rpc.*",
 		"_INBOX.>",
+		"$JS.API.>",
 	}
 	// operatorSubscribeAllow: the diagnostic/read streams the CLI + TUIs
-	// consume, the RPC reply inboxes, and the JetStream/KV management API
-	// the KV-backed read TUIs use (reads stay off the gauntlet).
+	// consume, the RPC + JS reply inboxes, and the raw KV value subjects
+	// the KV-backed read TUIs watch (reads stay off the gauntlet).
 	operatorSubscribeAllow = []string{
 		"agents.*.frames",
 		"agents.*.lifecycle",
@@ -126,19 +130,19 @@ var (
 		"$KV.>",
 	}
 	// sidecarPublishAllow: the per-agent streams the sidecar emits onto,
-	// plus reply inboxes for any request/reply it issues. Omits
-	// sextant.rpc.* (control is the operator/daemon lane) and inboxes.
+	// reply inboxes, and the JS/KV API for its session-snapshot writes.
+	// Omits sextant.rpc.* (control is the operator/daemon lane) and
+	// agents.*.inbox.
 	sidecarPublishAllow = []string{
 		"agents.*.frames",
 		"agents.*.heartbeat",
 		"agents.*.lifecycle",
 		"_INBOX.>",
 		"$JS.API.>",
-		"$KV.>",
 	}
 	// sidecarSubscribeAllow: its own inbox (where the daemon delivers
-	// prompts) + reply inboxes + the JS/KV API used for session snapshot
-	// writes.
+	// prompts) + reply inboxes + the JS/KV subjects used for session
+	// snapshot reads.
 	sidecarSubscribeAllow = []string{
 		"agents.*.inbox",
 		"_INBOX.>",

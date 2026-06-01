@@ -50,12 +50,15 @@ func TestDaemonMCPServerExposesSendMessage(t *testing.T) {
 		t.Fatalf("Issue: %v", err)
 	}
 
-	// Subscribe to the destination inbox via operator NATS.
-	creds, err := sextantd.ReadOperatorCreds(h.cfg.NATS.OperatorCreds)
-	if err != nil {
-		t.Fatalf("ReadOperatorCreds: %v", err)
+	// Subscribe to the destination inbox via the DAEMON principal — since
+	// feat-ctl-f0 the broker-scoped operator credential may not core-
+	// subscribe agents.*.inbox (the front door). The daemon credential is
+	// threaded through runtime.json; the test is a daemon-side witness, so
+	// using it is correct.
+	if rt.NATSDaemonUser == "" {
+		t.Fatal("runtime.json missing nats_daemon_user; daemon did not write the F0 credential")
 	}
-	nc, err := nats.Connect("nats://"+rt.NATSAddr, nats.UserInfo(creds.User, creds.Password))
+	nc, err := nats.Connect("nats://"+rt.NATSAddr, nats.UserInfo(rt.NATSDaemonUser, rt.NATSDaemonPassword))
 	if err != nil {
 		t.Fatalf("nats.Connect: %v", err)
 	}
