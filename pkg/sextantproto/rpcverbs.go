@@ -46,6 +46,10 @@ type AgentSummary struct {
 	Lifecycle string    `json:"lifecycle"`
 	Version   uint64    `json:"version"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// Restarts is the monotonic lifetime auto-restart count
+	// (Status.RestartCount) — the `RESTARTS` column the operator reads to
+	// spot a crash-looper (RFC §2, §8 P1 recovery).
+	Restarts int `json:"restarts,omitempty"`
 }
 
 // GetAgentStatusRequest is the get_agent_status request payload.
@@ -79,13 +83,19 @@ type GetAgentStatusResponse struct {
 // spawned before the bind mount landed, and for daemons that haven't
 // configured the agents data root.
 type AgentStatus struct {
-	UUID       uuid.UUID          `json:"uuid"`
-	Name       string             `json:"name"`
-	Lifecycle  string             `json:"lifecycle"`
-	Version    uint64             `json:"version"`
-	UpdatedAt  time.Time          `json:"updated_at"`
-	Heartbeat  *HeartbeatSnapshot `json:"heartbeat,omitempty"`
-	SessionLog *SessionLogInfo    `json:"session_log,omitempty"`
+	UUID      uuid.UUID `json:"uuid"`
+	Name      string    `json:"name"`
+	Lifecycle string    `json:"lifecycle"`
+	Version   uint64    `json:"version"`
+	UpdatedAt time.Time `json:"updated_at"`
+	// Restarts is the monotonic lifetime auto-restart count
+	// (Status.RestartCount); LastExitReason is the most recent observed
+	// exit cause (Status.LastExit.Reason). Both surface the P1 recovery
+	// score the daemon now keeps (RFC §2).
+	Restarts       int                `json:"restarts,omitempty"`
+	LastExitReason string             `json:"last_exit_reason,omitempty"`
+	Heartbeat      *HeartbeatSnapshot `json:"heartbeat,omitempty"`
+	SessionLog     *SessionLogInfo    `json:"session_log,omitempty"`
 }
 
 // SessionLogInfo describes how to reach the agent's Claude Code SDK

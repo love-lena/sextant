@@ -213,8 +213,27 @@ type AgentStatusRecord struct {
 	// RestartCount is the monotonic lifetime restart counter (operator
 	// visibility, RFC §8).
 	RestartCount int `json:"restart_count,omitempty"`
-	// CrashWindow is the windowed crash budget (RFC §8). P1 trips it.
+	// CrashWindow is the windowed crash budget (RFC §8). The P1 recovery
+	// branch increments it on every auto-restart and flips the agent to
+	// terminal `crashed` once it exceeds the budget (5 / 10 min).
 	CrashWindow CrashWindow `json:"crash_window,omitempty"`
+	// BackoffUntil is the wall-clock instant before which the recovery
+	// branch must NOT re-actuate (RFC §8: exponential backoff 10s ×2 cap
+	// 300s). The reconciler stamps it after each auto-restart; a pass that
+	// finds observed∈{lost,crashed} before this deadline holds off. Zero
+	// means "no backoff pending."
+	BackoffUntil Timestamp `json:"backoff_until,omitempty"`
+	// RunningSince is the wall-clock the current incarnation was first
+	// observed healthy-running. The recovery branch uses it for the
+	// stable-run backoff reset (RFC §8: reset only after ≥10 min of
+	// continuous run, an INDEPENDENT constant). Zero until first observed
+	// running.
+	RunningSince Timestamp `json:"running_since,omitempty"`
+	// LivenessFailures counts CONSECUTIVE health-check failures for the
+	// current incarnation (RFC §8: 3 / 10s → restart path). Reset to 0 on
+	// any healthy observation. Catches a wedged-but-running agent docker
+	// `die` never fires for.
+	LivenessFailures int `json:"liveness_failures,omitempty"`
 	// LastExit records the most recent observed container exit.
 	LastExit *LastExit `json:"last_exit,omitempty"`
 	// SessionSnapshot is the durable JSONL snapshot-on-stop path (RFC

@@ -75,6 +75,35 @@ type actualState struct {
 	// (ended/crashed), valid only when SidecarTerminalObserved. The
 	// reconciler converges observed to this value.
 	SidecarTerminalState sextantproto.ObservedState
+	// Recovery carries the time-dependent recovery verdict the imperative
+	// shell computed under the injected clock. The pure decision core
+	// stays clock-free (RFC §5.9): it composes these booleans with the
+	// RestartPolicy semantics, never re-deriving timing. Zero value =
+	// "no recovery considerations" (the P0 behavior).
+	Recovery recoveryInputs
+}
+
+// recoveryInputs is the P1 recovery branch's time-dependent verdict,
+// computed by the imperative shell (which holds the clock + the windowed
+// crash counter) and handed to the pure decision core. Keeping the timing
+// out here is what lets decideAction stay a clock-free unit-testable
+// function (RFC §5.9, ticket: "all timing MUST be testable under an
+// INJECTED CLOCK; do not call time.Now in the decision path").
+type recoveryInputs struct {
+	// BudgetExhausted is true when the windowed crash count has reached the
+	// budget (CrashBudgetLimit / CrashBudgetWindow) — the agent has given
+	// up; the decision flips it to terminal `crashed` instead of restarting
+	// (RFC §8).
+	BudgetExhausted bool
+	// BackoffElapsed is true when the exponential-backoff deadline has
+	// passed, so a re-actuation is allowed THIS pass. False means hold off
+	// (decision: none) until a later pass (RFC §8: 10s ×2 cap 300s).
+	BackoffElapsed bool
+	// LivenessFailed is true when the liveness probe has tripped
+	// (LivenessFailureThreshold consecutive failures) for a container that
+	// is still observed running — a wedged-but-running agent docker `die`
+	// never catches (RFC §8). It routes through the normal restart path.
+	LivenessFailed bool
 }
 
 // decision is the pure verdict: the action plus the observed-state the
@@ -86,6 +115,12 @@ type decision struct {
 	// ("") means "leave observed unchanged" (e.g. actionStop while the
 	// container is still draining).
 	Observed sextantproto.ObservedState
+	// RecoveryRestart marks an actionActuate that the P1 recovery branch
+	// drove (auto-restart out of a lost/crashed/ended terminal, or a
+	// liveness trip). The shell counts it against the crash budget
+	// (CrashWindow++); a spec-generation / reactuation-nonce re-actuation
+	// is a DELIBERATE restart and is NOT counted. RFC §8.
+	RecoveryRestart bool
 }
 
 // decideAction is the PURE reconcile core (RFC §5.1, §5.9). Given the
@@ -164,6 +199,13 @@ func decideRun(spec sextantproto.AgentSpec, status sextantproto.AgentStatusRecor
 
 	// (2) Caught up to spec. Now it is a liveness question.
 	if actual.ContainerRunning {
+		// Liveness (RFC §8): a container can be running yet WEDGED (hung on a
+		// model call, deadlocked) — docker `die` never fires for it. When the
+		// liveness probe has tripped and the policy permits recovery, route
+		// through the normal restart path (re-actuate a fresh incarnation).
+		if actual.Recovery.LivenessFailed && policyRecovers(spec.RestartPolicy, sextantproto.ObservedLost) {
+			return decision{Action: actionActuate, Observed: sextantproto.ObservedPending, RecoveryRestart: true}
+		}
 		// Healthy: a live running container exists. Converge observed to
 		// running (idempotent when already running).
 		return decision{Action: actionNone, Observed: sextantproto.ObservedRunning}
@@ -181,9 +223,9 @@ func decideRun(spec sextantproto.AgentSpec, status sextantproto.AgentStatusRecor
 	if actual.SidecarTerminalObserved {
 		// The sidecar published ended/crashed. That observed terminal
 		// OUTRANKS a daemon-inferred lost — converge observed to the
-		// reported terminal (never downgrade to lost). P0 does not
-		// auto-restart a terminal agent.
-		return decision{Action: actionNone, Observed: actual.SidecarTerminalState}
+		// reported terminal first (never downgrade to lost), then let the
+		// recovery branch decide whether to re-actuate out of it.
+		return recoverFromTerminal(spec, actual.SidecarTerminalState, actual.Recovery)
 	}
 
 	if neverActuated {
@@ -196,15 +238,75 @@ func decideRun(spec sextantproto.AgentSpec, status sextantproto.AgentStatusRecor
 	case sextantproto.ObservedEnded, sextantproto.ObservedCrashed:
 		// Already a sidecar-observed terminal — same precedence rule as
 		// above even when the hint flag has aged out of the actual probe.
-		// No re-actuation in P0 (recovery is P1).
-		return decision{Action: actionNone}
+		// The P1 recovery branch decides re-actuation (a clean `ended`
+		// under OnFailure is NOT restarted).
+		return recoverFromTerminal(spec, status.Observed, actual.Recovery)
 	case sextantproto.ObservedLost:
-		// Already lost and converged. P0 leaves a lost agent lost
-		// (auto-recovery is restored by feat-ctl-p1-recovery).
-		return decision{Action: actionNone}
+		// Already lost and converged. The P1 recovery branch self-heals it
+		// when the policy permits + the agent is under budget + backoff has
+		// elapsed.
+		return recoverFromTerminal(spec, sextantproto.ObservedLost, actual.Recovery)
 	default:
 		// We had a live incarnation (running/pending) and the container is
-		// gone with no observed cause. Infer lost.
+		// gone with no observed cause. Infer lost. Recovery happens on the
+		// NEXT pass (observed is now lost) so the backoff anchor + crash
+		// window are stamped before we re-actuate.
 		return decision{Action: actionMarkLost, Observed: sextantproto.ObservedLost}
+	}
+}
+
+// recoverFromTerminal is the P1 recovery branch (RFC §5.3): given a
+// terminal observation (lost/crashed/ended), decide whether to re-actuate.
+// It is the pure composition of the RestartPolicy semantics with the
+// time-dependent verdict the shell computed (recoveryInputs). The predicate:
+//
+//	desired=run ∧ observed∈{lost,crashed} (or ended under Always)
+//	  ∧ RestartPolicy≠Never ∧ under crash budget ∧ backoff elapsed → actuate.
+//
+// A clean `ended` under OnFailure is NOT restarted; budget-exhausted flips
+// to terminal `crashed`; a not-yet-elapsed backoff holds (decision: none).
+func recoverFromTerminal(spec sextantproto.AgentSpec, terminal sextantproto.ObservedState, rec recoveryInputs) decision {
+	if !policyRecovers(spec.RestartPolicy, terminal) {
+		// Never, or a clean `ended` under OnFailure — leave it terminal.
+		return decision{Action: actionNone, Observed: terminal}
+	}
+	if rec.BudgetExhausted {
+		// 5 restarts in 10 min — the agent has given up. Flip to terminal
+		// `crashed` (CrashLoopBackOff) and stop auto-restarting (RFC §8).
+		return decision{Action: actionNone, Observed: sextantproto.ObservedCrashed}
+	}
+	if !rec.BackoffElapsed {
+		// Still inside the exponential-backoff window — hold off this pass.
+		// Keep the terminal observation; a later pass (after the deadline)
+		// re-actuates.
+		return decision{Action: actionNone, Observed: terminal}
+	}
+	return decision{Action: actionActuate, Observed: sextantproto.ObservedPending, RecoveryRestart: true}
+}
+
+// policyRecovers reports whether a RestartPolicy auto-restarts out of the
+// given terminal observation (RFC §5.3):
+//   - Never     → nothing.
+//   - OnFailure → failures only (lost / crashed); a clean `ended` is NOT
+//     restarted.
+//   - Always    → any terminal, including a clean `ended`.
+//
+// An empty policy defaults to OnFailure (the spec default; handlers also
+// default it at create — this guards legacy records that predate the field).
+func policyRecovers(policy sextantproto.RestartPolicy, terminal sextantproto.ObservedState) bool {
+	switch policy {
+	case sextantproto.RestartNever:
+		return false
+	case sextantproto.RestartAlways:
+		return terminal == sextantproto.ObservedLost ||
+			terminal == sextantproto.ObservedCrashed ||
+			terminal == sextantproto.ObservedEnded
+	case sextantproto.RestartOnFailure, "":
+		return terminal == sextantproto.ObservedLost ||
+			terminal == sextantproto.ObservedCrashed
+	default:
+		// Unknown policy — be conservative, treat as OnFailure.
+		return terminal == sextantproto.ObservedLost ||
+			terminal == sextantproto.ObservedCrashed
 	}
 }

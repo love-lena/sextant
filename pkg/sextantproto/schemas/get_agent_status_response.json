@@ -21,6 +21,12 @@
           "type": "string",
           "format": "date-time"
         },
+        "restarts": {
+          "type": "integer"
+        },
+        "last_exit_reason": {
+          "type": "string"
+        },
         "heartbeat": {
           "$ref": "#/$defs/HeartbeatSnapshot"
         },
