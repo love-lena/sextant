@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/google/uuid"
@@ -123,6 +124,12 @@ func TestBuildAgentContainerSpecAllSixMounts(t *testing.T) {
 	}
 	if spec.Labels[LabelSpecFingerprint] == "" {
 		t.Error("spec fingerprint label not stamped")
+	}
+	// The wire-epoch label is the runtime half of version-skew detection
+	// (RFC §5.8): the reconciler compares it against the daemon's current
+	// WireEpoch. It must be stamped with the live epoch on every build.
+	if got, want := spec.Labels[LabelWireEpoch], strconv.Itoa(sextantproto.WireEpoch); got != want {
+		t.Errorf("wire-epoch label = %q, want %q", got, want)
 	}
 }
 

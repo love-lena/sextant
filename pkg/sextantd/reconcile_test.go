@@ -3,6 +3,7 @@ package sextantd
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -133,15 +134,35 @@ func (d *fakeDocker) List(_ context.Context, f containermgr.Filter) ([]container
 }
 
 func (d *fakeDocker) setRunning(agentID, incID uuid.UUID) {
+	// A genuinely-converged running container stamps the SAME fingerprint
+	// the fake actuator reports as desired, and the daemon's current epoch —
+	// so the steady-state drift verdict is "not drifted."
+	d.setRunningStamped(agentID, incID, testFingerprint, sextantproto.WireEpoch)
+}
+
+// setRunningStale stamps a running container whose spec-identity labels
+// disagree with the fake actuator's desired values — the drift fixture.
+func (d *fakeDocker) setRunningStale(agentID, incID uuid.UUID, fingerprint string, epoch int) {
+	d.setRunningStamped(agentID, incID, fingerprint, epoch)
+}
+
+func (d *fakeDocker) setRunningStamped(agentID, incID uuid.UUID, fingerprint string, epoch int) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	labels := map[string]string{
+		handlers.LabelAgentUUID:     agentID.String(),
+		handlers.LabelIncarnationID: incID.String(),
+	}
+	if fingerprint != "" {
+		labels[handlers.LabelSpecFingerprint] = fingerprint
+	}
+	if epoch != 0 {
+		labels[handlers.LabelWireEpoch] = strconv.Itoa(epoch)
+	}
 	d.containers = []containermgr.ContainerInfo{{
 		ID:     "ctr",
 		Status: "running",
-		Labels: map[string]string{
-			handlers.LabelAgentUUID:     agentID.String(),
-			handlers.LabelIncarnationID: incID.String(),
-		},
+		Labels: labels,
 	}}
 }
 
@@ -153,12 +174,25 @@ func (d *fakeDocker) clear() {
 
 // --- fake actuator (reconcileActuator) -----------------------------------
 
+// testFingerprint is the desired spec fingerprint the fake actuator
+// reports by default. A genuinely-converged running container (setRunning)
+// stamps this same value, so the steady-state drift verdict is "not
+// drifted." Drift tests stamp a DIFFERENT value via setRunningStale to
+// force a mismatch.
+const testFingerprint = "fp-converged"
+
 type fakeActuator struct {
 	mu         sync.Mutex
 	actuated   int
 	stopped    int
 	torndown   int
 	nextIncTbl []uuid.UUID
+	// desiredFP / desiredEpoch are what DesiredFingerprint reports — the
+	// "desired" half of the drift compare. Zero value: testFingerprint +
+	// the daemon's current WireEpoch (i.e. a converged agent).
+	desiredFP    string
+	desiredEpoch int
+	fpErr        error
 }
 
 func (a *fakeActuator) Actuate(_ context.Context, _ sextantproto.AgentDefinition, _ bool) (handlers.ActuateResult, error) {
@@ -182,6 +216,23 @@ func (a *fakeActuator) Teardown(_ context.Context, _ sextantproto.AgentDefinitio
 	defer a.mu.Unlock()
 	a.torndown++
 	return nil
+}
+
+func (a *fakeActuator) DesiredFingerprint(_ context.Context, _ sextantproto.AgentDefinition) (handlers.DesiredSpecID, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.fpErr != nil {
+		return handlers.DesiredSpecID{}, a.fpErr
+	}
+	fp := a.desiredFP
+	if fp == "" {
+		fp = testFingerprint
+	}
+	epoch := a.desiredEpoch
+	if epoch == 0 {
+		epoch = sextantproto.WireEpoch
+	}
+	return handlers.DesiredSpecID{Fingerprint: fp, WireEpoch: epoch}, nil
 }
 
 func (a *fakeActuator) counts() (int, int, int) {

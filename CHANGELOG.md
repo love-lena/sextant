@@ -11,6 +11,25 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
 ## [Unreleased]
 
 ### Added
+- **Edit a running agent's spec and reality follows; a stale sidecar
+  self-converges after a daemon upgrade.** The reconciler grew a second
+  convergence branch — **drift detection** (control-plane RFC §5.6, §8).
+  It compares the running container's stamped spec-fingerprint + wire-epoch
+  labels against the **recomputed** desired fingerprint (rebuilt from the
+  persisted spec via the same single-source container builder) and the
+  daemon's current `WireEpoch`; a mismatch means the container was built
+  from a stale spec and is converged by **restart at a turn boundary**
+  (the sidecar's `lifecycle.turn_ended`) — never mid-turn, so an
+  in-progress turn is not interrupted. Drift is diffed against *our*
+  recomputed fingerprint, not docker's normalized live spec, so
+  docker-injected mounts/env never read as a false positive, and any
+  recompute error fails safe (a healthy agent is left running). Editing a
+  live spec converges via the `generation` / `observed_generation` pair:
+  the reconciler stamps `observed_generation` once it has actuated the
+  latest edit, so "has it caught up?" is answerable (run-identity stays on
+  `current_incarnation_id`, untouched). Every container now also carries a
+  `sextant.wire_epoch` label so the skew check works even for an exited
+  container.
 - **Lost agents now self-heal.** The reconciler grew a recovery branch
   (control-plane RFC §5.3, §8): when a `desired=run` agent is observed
   `lost` or `crashed`, the daemon auto-restarts it via the single-source
