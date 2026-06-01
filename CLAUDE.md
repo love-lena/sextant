@@ -127,6 +127,23 @@ Migrated from the old `plans/issues/` markdown (2026-06); that
 directory is now a tombstone redirect, and the migration is documented
 in `docs/superpowers/specs/2026-06-01-backlog-md-migration-design.md`.
 
+## Agent skills
+
+Per-repo config for the engineering skills (`to-issues`, `to-prd`,
+`triage`, `improve-codebase-architecture`, `diagnose`, `tdd`,
+`grill-with-docs`), scaffolded by `/setup-matt-pocock-skills`. Details
+live in `docs/agents/`.
+
+- **Issue tracker** — tickets live in Backlog.md (`backlog/`, driven by
+  the `backlog` CLI), not GitHub Issues. See the `## Tickets` section
+  above and `docs/agents/issue-tracker.md`.
+- **Triage labels** — five canonical triage roles, applied as Backlog.md
+  labels under their default names (`needs-triage`, `needs-info`,
+  `ready-for-agent`, `ready-for-human`, `wontfix`). See
+  `docs/agents/triage-labels.md`.
+- **Domain docs** — single-context: one `CONTEXT.md` + `docs/adr/` at the
+  root (neither created yet). See `docs/agents/domain.md`.
+
 ## Commit footers
 
 Every commit on this project carries a
