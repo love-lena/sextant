@@ -207,7 +207,7 @@ func TestArchive_E2E_VolumeReclaimFailureStaysArchiving(t *testing.T) {
 
 	const name = "archive-leak"
 	agentID, volName := spawnSeedAgent(t, h, cli, dockerBin, tplName, name)
-	kv := openDefsKV(t, cli)
+	kv := openDefsKV(t, h)
 
 	// Inject the volume-remove fault at the docker layer: a second container
 	// (NOT carrying the sextant agent label, so the reconciler's container
@@ -280,7 +280,7 @@ func TestArchive_E2E_HealthyArchiveReclaimsVolume(t *testing.T) {
 	h, cli, dockerBin, tplName := bootDaemonWithSeedTemplate(t)
 
 	agentID, volName := spawnSeedAgent(t, h, cli, dockerBin, tplName, "archive-healthy")
-	kv := openDefsKV(t, cli)
+	kv := openDefsKV(t, h)
 
 	if !volumeExists(dockerBin, volName) {
 		t.Fatalf("per-agent volume %s was never created; the template's claude_seed did not take", volName)

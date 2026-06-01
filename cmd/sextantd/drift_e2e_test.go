@@ -10,11 +10,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/love-lena/sextant/pkg/client"
 	"github.com/love-lena/sextant/pkg/rpc"
 	"github.com/love-lena/sextant/pkg/rpc/handlers"
+	"github.com/love-lena/sextant/pkg/sextantd"
 	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
@@ -40,11 +42,33 @@ import (
 
 // openDefsKV connects to the daemon's agent_definitions KV so the e2e can
 // simulate a live spec edit (there is no spec-edit RPC verb yet — the
-// generation seam is the mechanism, RFC §5.6). Reads stay off the RPC
-// gauntlet (the TUIs read KV directly too).
-func openDefsKV(t *testing.T, cli *client.Client) jetstream.KeyValue {
+// generation seam is the mechanism, RFC §5.6).
+//
+// It connects with the DAEMON principal, not the operator's. Under the
+// front door (RFC §5.7) the operator may READ agent_definitions over
+// JetStream but may NOT publish to $KV.agent_definitions.> — a spec WRITE
+// is a privileged mutation. Production spec edits ride an RPC verb the
+// daemon actuates; this test stands in for that internal write path by
+// using the same privileged principal, so the test exercises the real
+// reconcile-on-spec-edit behavior without smuggling a write through a
+// principal the broker would (correctly) reject. The daemon creds are
+// boot-generated and surfaced on runtime.json (mode-0600).
+func openDefsKV(t *testing.T, h *daemonHarness) jetstream.KeyValue {
 	t.Helper()
-	js, err := jetstream.New(cli.Conn())
+	rt, err := sextantd.ReadRuntimeInfo(h.cfg.Paths.RuntimeFile)
+	if err != nil {
+		t.Fatalf("read runtime info: %v", err)
+	}
+	if rt.NATSDaemonUser == "" {
+		t.Fatalf("runtime.json has no daemon NATS principal; cannot simulate a privileged spec edit")
+	}
+	nc, err := nats.Connect("nats://"+rt.NATSAddr,
+		nats.UserInfo(rt.NATSDaemonUser, rt.NATSDaemonPassword))
+	if err != nil {
+		t.Fatalf("daemon nats connect: %v", err)
+	}
+	t.Cleanup(nc.Close)
+	js, err := jetstream.New(nc)
 	if err != nil {
 		t.Fatalf("jetstream: %v", err)
 	}
@@ -222,7 +246,7 @@ func TestDrift_E2E_SpecEditConvergesViaGeneration(t *testing.T) {
 	t.Cleanup(func() { forceRemoveByAgent(dockerBin, agentID) })
 
 	// Edit the live spec: new image + bump Generation (the spec-edit seam).
-	kv := openDefsKV(t, cli)
+	kv := openDefsKV(t, h)
 	editLiveSpec(t, kv, agentID, func(def *sextantproto.AgentDefinition) {
 		def.Spec.Sandbox.Image = newImage
 		def.Spec.Generation++ // the load-bearing edit: observed_generation now lags
@@ -287,7 +311,7 @@ func TestDrift_E2E_StaleImageConvergesAtTurnBoundary(t *testing.T) {
 	// Drive one turn to a known boundary, then drift the image WITHOUT a
 	// generation bump (the silent build-input change of a daemon upgrade).
 	dropMockTurnEnded(t, cli, lifeMsgs, agentID)
-	kv := openDefsKV(t, cli)
+	kv := openDefsKV(t, h)
 	beforeGen := -1
 	editLiveSpec(t, kv, agentID, func(def *sextantproto.AgentDefinition) {
 		beforeGen = def.Spec.Generation
