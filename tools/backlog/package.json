@@ -1,0 +1,9 @@
+{
+  "name": "sextant-backlog-tooling",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pinned Backlog.md CLI for sextant ticket management. Installed by `make bootstrap`; invoked as tools/backlog/node_modules/.bin/backlog.",
+  "dependencies": {
+    "backlog.md": "1.45.1"
+  }
+}

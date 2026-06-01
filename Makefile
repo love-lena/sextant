@@ -24,7 +24,7 @@ CMDS := sextant sextantd sextant-shipper sextant-natsboot sextant-clickhouseboot
 
 .PHONY: all fmt lint lint-go lint-nilaway lint-ts lint-sidecar test test-go test-ts test-sidecar build clean tidy install install-tools uninstall bootstrap \
         ts-install ts-codegen ts-lint ts-test ts-build \
-        sidecar-install sidecar-image sidecar-image-test
+        sidecar-install sidecar-image sidecar-image-test backlog-install
 
 all: lint test
 
@@ -149,6 +149,12 @@ tidy:
 install-tools:
 	@command -v $(GOLANGCI_LINT) >/dev/null || brew install golangci-lint
 	@command -v $(NILAWAY) >/dev/null || $(GO) install go.uber.org/nilaway/cmd/nilaway@latest
+
+## backlog-install — installs the pinned Backlog.md CLI used to manage tickets
+##                    in backlog/. Idempotent; invoked by bootstrap. Run the
+##                    binary as tools/backlog/node_modules/.bin/backlog.
+backlog-install:
+	@[ -d tools/backlog/node_modules ] || $(NPM) --prefix tools/backlog ci
 
 ## bootstrap — green-field setup: host deps + build + install + init.
 ##             Interactive; prompts before brew-installing. Pass YES=1 for

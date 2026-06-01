@@ -35,6 +35,16 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   detection and converge-by-restart (RFC §5.6). No operator-facing
   behavior change beyond the new label; it's inert until the reconciler
   reads it.
+- **Tickets now live in `backlog/`, managed by the
+  [Backlog.md](https://github.com/MrLesk/Backlog.md) CLI**, replacing the
+  hand-rolled `plans/issues/` markdown system. `make bootstrap` installs the
+  pinned CLI via the new `make backlog-install` target (idempotent; binary at
+  `tools/backlog/node_modules/.bin/backlog`). The 94 existing tickets were
+  migrated — original slugs preserved as `slug:` labels, the `[[link]]` graph
+  kept intact, closed tickets imported as `Done` and archived — and
+  `plans/issues/` is now a tombstone redirect. Agents drive tickets through
+  the `backlog` skill (`.claude/skills/backlog/SKILL.md`). No `sextant` binary
+  behavior change.
 
 ### Changed
 - **The TypeScript client's wire constants are now generated, not

@@ -256,6 +256,12 @@ done
 make install
 
 # ---------------------------------------------------------------------------
+# 8b. Backlog.md CLI — pinned tooling for managing tickets in backlog/
+#     (see .claude/skills/backlog). Skipped automatically if already present.
+# ---------------------------------------------------------------------------
+make backlog-install
+
+# ---------------------------------------------------------------------------
 # 9. Preflight: now sextant exists, run the Go-side check
 # ---------------------------------------------------------------------------
 SEXTANT="${HOME}/.local/bin/sextant"
