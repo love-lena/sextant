@@ -302,7 +302,7 @@ func (a *Actuator) Actuate(ctx context.Context, def sextantproto.AgentDefinition
 		rollback()
 		if errors.Is(err, context.DeadlineExceeded) {
 			log.Printf("sextantd: actuate %s: run container timed out after %s (dockerd wedged?)",
-				def.UUID, DockerOpTimeout)
+				def.UUID, a.opTimeout())
 		}
 		return ActuateResult{}, fmt.Errorf("actuate: run container: %w", err)
 	}
@@ -410,7 +410,7 @@ func (a *Actuator) Stop(ctx context.Context, def sextantproto.AgentDefinition) e
 			if err != nil {
 				if errors.Is(err, context.DeadlineExceeded) {
 					log.Printf("sextantd: stop %s: stop container %s timed out after %s (dockerd wedged?)",
-						def.UUID, old.ContainerID, grace+DockerStopGraceBuffer)
+						def.UUID, old.ContainerID, grace+a.stopGraceBuffer())
 				}
 				return fmt.Errorf("stop: stop container %s: %w", old.ContainerID, err)
 			}
@@ -455,7 +455,7 @@ func (a *Actuator) Teardown(ctx context.Context, def sextantproto.AgentDefinitio
 			// archiving so the reconciler retries — never finalize over a leak.
 			if errors.Is(err, context.DeadlineExceeded) {
 				log.Printf("sextantd: teardown %s: reclaim volume %s timed out after %s (dockerd wedged?)",
-					def.UUID, volName, DockerOpTimeout)
+					def.UUID, volName, a.opTimeout())
 			}
 			return fmt.Errorf("teardown: reclaim volume %s: %w", volName, err)
 		}
