@@ -244,6 +244,26 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   up a real `nats-server` and asserts an operator-principal `AckExplicit`
   JetStream consumer can `DoubleAck` without a permissions violation — the
   regression guard the original F0 authz test lacked.
+- **A spawned agent's SDK session is now actually recorded and resumable.**
+  Two front-door regressions, both surfaced the first time the control-plane
+  docker e2e ran on a real host, broke session-id persistence: (1) the
+  sidecar wrote the SDK session_id to the *pre-split* `runtime.session_id`
+  KV path, but the P0 spec/status split moved it to `spec.runtime.session_id`
+  (where the daemon reads it), so it was silently dropped; (2) even with the
+  right path, the sidecar's `agent_definitions` KV update was rejected by the
+  broker — a KV put is a publish to `$KV.<bucket>.<key>`, which the sidecar's
+  `$JS.API.>` grant does not cover, so the front door now grants the sidecar
+  a narrow `$KV.agent_definitions.>` (mirroring the operator's
+  `$KV.ui_state.>`). With both fixed, `get_agent_status` returns the
+  session-log locators and a later spawn resumes the session.
+- **A sidecar now stops promptly on SIGTERM instead of waiting out the full
+  SIGKILL grace.** The graceful-shutdown handler published `lifecycle.ended`
+  and then hung on `mcp.client.close()` / the NATS connection close, so
+  `process.exit(0)` was never reached and docker SIGKILLed the container at
+  the end of its (default 30s) stop grace — making every stop/pause/archive
+  teardown take the full grace. Each close is now bounded by a short budget
+  and an overall hard-deadline backstop guarantees the process exits well
+  inside the grace window. Stops are now ~1s, not ~30s.
 - **Archive no longer leaks the per-agent volume on a cleanup failure.**
   Archive used to flip the record terminal and *then* best-effort remove
   the per-agent `claude_seed` volume, logging any failure to stderr — so a

@@ -350,6 +350,99 @@ func TestOperatorJetStreamConsumerCanAck(t *testing.T) {
 	}
 }
 
+// TestSidecarCanPersistSessionIDToKV is the regression guard for the
+// second front-door perms gap the docker e2e surfaced. The sidecar persists
+// the SDK-issued session_id back to its own agent_definitions KV entry
+// (images/sidecar index.ts persistSessionID) so a later spawn can resume
+// the session. A KV update is a *publish* to $KV.<bucket>.<key> — distinct
+// from the $JS.API.> management surface — so without an explicit
+// $KV.agent_definitions.> grant the broker silently drops the update, the
+// session_id is never stored, and get_agent_status returns an empty
+// SessionLog (resume + the session-record locators break). This stands up
+// a real nats-server, has the daemon create + seed the bucket, then has the
+// SIDECAR principal CAS-update the key — which MUST succeed.
+func TestSidecarCanPersistSessionIDToKV(t *testing.T) {
+	bin := natsServerPath(t)
+	dir := t.TempDir()
+	cfg := DefaultConfig(dir + "/nats")
+	cfg.NATSBinary = bin
+	cfg.LogFile = dir + "/nats.log"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	srv, err := Start(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Stop(context.Background()) })
+
+	// Daemon bootstraps + creates the agent_definitions bucket and seeds a
+	// record (the daemon is the bucket owner; the sidecar only updates its
+	// own entry to stamp session_id).
+	dNC, err := srv.Connect()
+	if err != nil {
+		t.Fatalf("Connect (daemon): %v", err)
+	}
+	defer dNC.Close()
+	if err := Bootstrap(ctx, dNC, cfg.MaxBytesPerStream); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	dJS, err := jetstream.New(dNC)
+	if err != nil {
+		t.Fatalf("daemon jetstream.New: %v", err)
+	}
+	kv, err := dJS.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: "agent_definitions"})
+	if err != nil {
+		t.Fatalf("daemon create kv bucket: %v", err)
+	}
+	const key = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	rev, err := kv.Put(ctx, key, []byte(`{"spec":{"runtime":{}}}`))
+	if err != nil {
+		t.Fatalf("daemon seed kv key: %v", err)
+	}
+
+	// Sidecar principal CAS-updates the entry (the persistSessionID path).
+	sNC, err := nats.Connect(srv.Address(), nats.UserInfo(srv.SidecarUser(), srv.SidecarPassword()))
+	if err != nil {
+		t.Fatalf("sidecar connect: %v", err)
+	}
+	defer sNC.Close()
+	permErr := make(chan error, 1)
+	sNC.SetErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, e error) {
+		select {
+		case permErr <- e:
+		default:
+		}
+	})
+	sJS, err := jetstream.New(sNC)
+	if err != nil {
+		t.Fatalf("sidecar jetstream.New: %v", err)
+	}
+	sKV, err := sJS.KeyValue(ctx, "agent_definitions")
+	if err != nil {
+		t.Fatalf("sidecar open kv: %v", err)
+	}
+	if _, err := sKV.Update(ctx, key, []byte(`{"spec":{"runtime":{"session_id":"sess-1"}}}`), rev); err != nil {
+		t.Fatalf("sidecar KV update (persistSessionID) failed — missing $KV.agent_definitions.> grant: %v", err)
+	}
+	_ = sNC.Flush()
+	select {
+	case e := <-permErr:
+		t.Fatalf("sidecar KV update triggered a permissions violation: %v", e)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	// Confirm the write landed.
+	entry, err := kv.Get(ctx, key)
+	if err != nil {
+		t.Fatalf("re-read kv: %v", err)
+	}
+	if !strings.Contains(string(entry.Value()), "sess-1") {
+		t.Fatalf("session_id not persisted; entry=%s", entry.Value())
+	}
+}
+
 // isPermissionsViolation reports whether err is a NATS authorization /
 // permissions error (the broker's "not allowed to publish" signal).
 func isPermissionsViolation(err error) bool {
