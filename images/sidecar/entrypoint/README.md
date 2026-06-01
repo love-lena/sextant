@@ -9,7 +9,7 @@ Spec: [`specs/components/sidecar-image.md`](../../../specs/components/sidecar-im
 On boot the sidecar:
 
 1. Reads the env-var contract from `specs/components/sidecar-image.md` §"Env vars".
-2. Connects to NATS via `@sextant/client` using the operator credentials sextantd forwards (Option B per the M11 NATS-auth decision; per-incarnation NATS-JWT auth is the long-term replacement).
+2. Connects to NATS via `@sextant/client` using the broker-scoped **sidecar** credentials sextantd forwards (`SEXTANT_NATS_USER=sidecar`; feat-ctl-f0). The sidecar principal may publish only `agents.*.{frames,heartbeat,lifecycle}` and subscribe `agents.*.inbox` — it cannot reach the RPC front door or publish prompts to other agents. (Per-incarnation NATS-JWT auth narrowing this to the single `agents.<uuid>.*` is the long-term replacement.)
 3. Connects to the sextantd MCP server over Streamable HTTP at `SEXTANT_MCP_URL`, presenting `SEXTANT_JWT` as the bearer token.
 4. Publishes `lifecycle.started` on `agents.<uuid>.lifecycle`.
 5. Publishes a `HeartbeatPayload` every 5 seconds on `agents.<uuid>.heartbeat`.
@@ -43,11 +43,17 @@ SEXTANT_AGENT_NAME=test \
 SEXTANT_HOST_ID=local \
 SEXTANT_INCARNATION_ID=$(uuidgen) \
 SEXTANT_NATS_URL=nats://127.0.0.1:4222 \
-SEXTANT_NATS_USER=operator \
-SEXTANT_NATS_PASSWORD=$(cat ~/.config/sextant/operator.creds | yq -r .password) \
+SEXTANT_NATS_USER=sidecar \
+SEXTANT_NATS_PASSWORD=<sidecar password> \
 SEXTANT_MODEL=claude-opus-4-7 \
 node dist/index.js run --driver=mock
 ```
+
+Since feat-ctl-f0 the sidecar + daemon NATS passwords are boot-generated
+and not written to a creds file. For a manual smoke run, start NATS with
+`sextant-natsboot` and copy the printed `sidecar password` (the `daemon`
+password also works for a privileged manual run). Under normal operation
+sextantd forwards these env vars into the container automatically.
 
 In production this is invoked by `entrypoint.sh` (the image's CMD when sextantd spawns an agent).
 
