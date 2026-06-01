@@ -1,6 +1,6 @@
 // dash.go owns the `sextant dash` flagship multi-pane TUI.
 //
-// Shape (per `plans/issues/feat-sextant-dash-multipane.md`):
+// Shape (per `slug:feat-sextant-dash-multipane`):
 //
 //   - Each pane mounts a registered Tier 1 Component from
 //     `pkg/tui/component`'s registry, looked up by the pane's
@@ -316,16 +316,16 @@ func placeholderText(command string) string {
 }
 
 // guessFollowupTicket maps a top-level verb to its follow-up ticket
-// path. Used by placeholder panes so the operator has a one-click
-// jump to the open work.
+// slug, shown by placeholder panes so the operator can find the open
+// work (resolve with `rg slug:<x> backlog/`).
 func guessFollowupTicket(verb string) string {
 	switch verb {
 	case "pending":
-		return "plans/issues/feat-tui-pending-component.md"
+		return "slug:feat-tui-pending-component"
 	case "traces":
-		return "plans/issues/feat-tui-traces-component.md"
+		return "slug:feat-tui-traces-component"
 	default:
-		return "plans/issues/"
+		return "backlog/"
 	}
 }
 

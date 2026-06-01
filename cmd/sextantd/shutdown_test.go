@@ -16,7 +16,7 @@ import (
 )
 
 // TestSextantdShutdownKillsClickHouse is the regression for
-// plans/issues/bug-shutdown-orphan-clickhouse.md.
+// slug:bug-shutdown-orphan-clickhouse.
 //
 // Repro: start the daemon, SIGTERM it, then check `pgrep -f config.xml`.
 // Before the fix, the clickhouse-server leader (and its watchdog child)

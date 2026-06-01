@@ -35,7 +35,7 @@ const (
 	// Diagnostic verb. Implementation in pkg/rpc/handlers/version.go.
 	// Surfaces daemon build + proto + pid + start time so `sextant
 	// doctor` can flag CLI/daemon drift after `make install` without a
-	// daemon restart. See plans/issues/feat-doctor-show-daemon-version.md.
+	// daemon restart. See slug:feat-doctor-show-daemon-version.
 	VerbGetVersion = "get_version"
 )
 

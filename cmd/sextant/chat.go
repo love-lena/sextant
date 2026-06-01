@@ -1,7 +1,7 @@
 // chat.go owns `sextant agents chat <agent> [text]`. This single verb
 // folds the previous `sextant ask` (one-shot send + wait) and
 // `sextant conversation` (interactive TUI) per
-// `plans/issues/feat-cli-resource-verb-cleanup.md`.
+// `slug:feat-cli-resource-verb-cleanup`.
 //
 // Mode selection at runtime:
 //

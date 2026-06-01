@@ -14,7 +14,7 @@ import (
 // pruner already emits its own audit envelopes for the archive /
 // delete actions it takes, so a wrap on top would double-count.
 //
-// See plans/issues/feat-worktree-pruner.md.
+// See slug:feat-worktree-pruner.
 const ControlWorktreePruneSubject = "sextant.control.worktree_prune"
 
 // WorktreePruneRequest is the inbound payload. DryRun=true reports

@@ -2,7 +2,7 @@
 // commit SHA are populated via -ldflags at build time by the Makefile; a
 // `go run` / `go test` binary falls back to "dev" / "unknown".
 //
-// Spec: plans/issues/feat-semver-versioning.md
+// Spec: slug:feat-semver-versioning
 package main
 
 import (

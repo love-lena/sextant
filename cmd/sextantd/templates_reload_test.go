@@ -150,7 +150,7 @@ func TestTemplatesReloadCLISurfacesError(t *testing.T) {
 // using the freshly-added template without a daemon restart. Mirrors
 // `TestM11SpawnFlowAcceptance` but against a runtime-installed
 // template, which is the load-bearing contract in
-// plans/issues/feat-templates-reload-cli-verb.md.
+// slug:feat-templates-reload-cli-verb.
 func TestTemplatesReloadCLIAcceptance(t *testing.T) {
 	dockerBin := requireDocker(t)
 	requireSidecarImage(t, dockerBin)

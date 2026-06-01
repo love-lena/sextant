@@ -167,7 +167,7 @@ func TestRenderAgentCheckJSONShape(t *testing.T) {
 // the daemon's HeartbeatCache reading is older than the staleness
 // threshold → verdict=degraded with the `daemon logs` remedy. This is
 // the defense-in-depth signal added per
-// `plans/issues/feat-agents-check-heartbeat-secondary-signal.md`.
+// `slug:feat-agents-check-heartbeat-secondary-signal`.
 func TestRunAgentCheckDegradedOnStaleHeartbeat(t *testing.T) {
 	id := uuid.New()
 	staleAge := 90.0 // seconds; well over the 30s default

@@ -73,7 +73,7 @@ func (d *daemon) buildWorktreeRuntime(ctx context.Context, nc *nats.Conn) (*work
 	// /var is a symlink to /private/var, so without this the spawn-
 	// side gitdir bind mount lands on the wrong path and `git status`
 	// inside the container errors with "not a git repository". See
-	// plans/issues/bug-worktree-gitdir-unreachable-in-container.md.
+	// slug:bug-worktree-gitdir-unreachable-in-container.
 	repoRoot := d.cfg.Worktree.RepoRoot
 	if resolved, err := filepath.EvalSymlinks(repoRoot); err == nil {
 		repoRoot = resolved

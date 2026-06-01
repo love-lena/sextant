@@ -28,7 +28,7 @@ sextant test <verb>                   # test envs (post-M17)
 
 ### Resource-verb migration (May 2026)
 
-Per `plans/issues/feat-cli-resource-verb-cleanup.md`, the following
+Per `slug:feat-cli-resource-verb-cleanup`, the following
 top-level verbs moved under resource nouns. Old forms remain as
 deprecated aliases for one minor release:
 
@@ -95,7 +95,7 @@ The 2026-05-27 closed-exception verb migration renamed four verbs to the default
 | `sextant audit query` | `sextant audit list` |
 | `sextant worktree destroy` | `sextant worktree delete` |
 
-The wire RPC verb names (`spawn_agent`, `kill_agent`, `query_audit`, `worktree_destroy`) are unchanged — this is a CLI-surface rename only. See `conventions/tui-conventions.md` § "Command design → Fixed verb vocabulary" and `plans/issues/feat-cli-verb-vocabulary-decision.md` for rationale.
+The wire RPC verb names (`spawn_agent`, `kill_agent`, `query_audit`, `worktree_destroy`) are unchanged — this is a CLI-surface rename only. See `conventions/tui-conventions.md` § "Command design → Fixed verb vocabulary" and `slug:feat-cli-verb-vocabulary-decision` for rationale.
 
 ### `sextant pending`
 

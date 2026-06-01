@@ -93,7 +93,7 @@ type daemon struct {
 	// lifecycleRT watches `agents.*.lifecycle` and updates the agent
 	// record so list_agents reflects the latest transition. Built after
 	// rpcRT (we need its operator NATS conn + agent_definitions KV).
-	// See plans/issues/bug-agents-list-stale-lifecycle.md.
+	// See slug:bug-agents-list-stale-lifecycle.
 	lifecycleRT *sextantd.LifecycleWatcher
 
 	// heartbeats is the L1 heartbeat cache. Set after startRPC; nil when

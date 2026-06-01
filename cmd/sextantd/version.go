@@ -7,7 +7,7 @@
 // small helper so main.go can route on the first positional arg before any
 // daemon startup happens.
 //
-// Spec: plans/issues/feat-semver-versioning.md
+// Spec: slug:feat-semver-versioning
 package main
 
 import (

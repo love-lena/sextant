@@ -1,5 +1,5 @@
 // events.go owns the `sextant events` parent command — a new noun
-// per `plans/issues/feat-cli-resource-verb-cleanup.md`. Holds the
+// per `slug:feat-cli-resource-verb-cleanup`. Holds the
 // `tail` verb (subscribe to an arbitrary NATS subject) and is the
 // designated home for future `events pub` / `events sub` debugging
 // verbs against subjects + KV. Internal vocab (`pkg/sextantbus`)

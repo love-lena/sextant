@@ -2,7 +2,7 @@
 // help/errors/version; charmbracelet/log handles diagnostic output.
 //
 // Conventions: see `conventions/tui-conventions.md` § "Tier 0: CLI base".
-// Migration ticket: `plans/issues/feat-cli-cobra-fang-migration.md`.
+// Migration ticket: `slug:feat-cli-cobra-fang-migration`.
 package main
 
 import (
@@ -78,7 +78,7 @@ func configureLoggers(cmd *cobra.Command) {
 // pending.go, ...) and exposes a `newAgentsCmd()` style constructor.
 //
 // The shape lines up with `specs/cli/commands.md` and the migrations in
-// `plans/issues/feat-cli-resource-verb-cleanup.md`.
+// `slug:feat-cli-resource-verb-cleanup`.
 func newRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sextant",
@@ -128,12 +128,12 @@ sextant install itself).`,
 
 	// Discovery menu — opens a Huh-driven select listing every Tier 1
 	// component registered via pkg/tui/component. Per
-	// `plans/issues/feat-sextant-tui-discovery.md`.
+	// `slug:feat-sextant-tui-discovery`.
 	cmd.AddCommand(newTUICmd())
 
 	// Flagship multi-pane TUI — composes registered Tier 1 components
 	// into a Stickers flex layout with BubbleZone mouse regions. Per
-	// `plans/issues/feat-sextant-dash-multipane.md`.
+	// `slug:feat-sextant-dash-multipane`.
 	cmd.AddCommand(newDashCmd())
 
 	// Backwards-compat aliases — each prints a stderr deprecation note

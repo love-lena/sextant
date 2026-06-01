@@ -6,7 +6,7 @@
  * Currently covers `SEXTANT_INITIAL_PROMPT` decoding — the template
  * `initial_prompt` field arrives base64-encoded so multi-line charters
  * survive the env-var transport. See
- * plans/issues/bug-initial-prompt-not-forwarded-to-sdk.md.
+ * slug:bug-initial-prompt-not-forwarded-to-sdk.
  */
 
 /**

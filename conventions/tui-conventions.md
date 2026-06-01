@@ -48,7 +48,7 @@ without a Tier 0 surface cannot have a Tier 1 surface.
 
 Existing commands in `cmd/sextant/` are still on stdlib `flag` + the
 custom `output.go` helpers. Migration is tracked under
-`plans/issues/feat-cli-cobra-fang-migration.md`. New commands should
+`slug:feat-cli-cobra-fang-migration`. New commands should
 land on the target stack.
 
 ### Output discipline
@@ -70,7 +70,7 @@ land on the target stack.
     (initialize, diagnose, identify the install) — folding them under
     a `sextant install <verb>` noun would add an explicit noun for a
     single-instance resource and buy nothing. Rationale tracked at
-    `plans/issues/feat-cli-resource-verb-cleanup.md`.
+    `slug:feat-cli-resource-verb-cleanup`.
 - **Closed-exception verb vocabulary.** Default verbs:
   `list`, `show`, `create`, `update`, `delete`, `run`. New verbs
   should land as flags or subcommands of `update`, not top-level —
@@ -80,7 +80,7 @@ land on the target stack.
     `prompt`, `answer`, `defer`, `escalate`, `tail`, `merge`, `diff`,
     `context`. Each justified by operator clarity that `update --kind=X`
     would erase. (`context` joined per
-    `plans/issues/feat-agents-context-view.md` — inspecting the
+    `slug:feat-agents-context-view` — inspecting the
     agent's prompt buffer is a first-class operator concept distinct
     from reading the agent record.) Adding an eleventh exception
     requires a needs-input ticket and Lena's call.

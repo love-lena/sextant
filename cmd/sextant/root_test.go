@@ -104,7 +104,7 @@ func TestRootCmdWiring(t *testing.T) {
 
 // TestLegacyVerbAliasesResolve pins the four backwards-compat aliases
 // introduced in the closed-exception verb migration
-// (plans/issues/feat-cli-verb-vocabulary-decision.md). Each old verb
+// (slug:feat-cli-verb-vocabulary-decision). Each old verb
 // must continue to resolve to the same cobra command its new spelling
 // resolves to — so `sextant agents kill foo` still runs the stop
 // handler, etc. Aliases are scheduled for removal in v0.2; the test

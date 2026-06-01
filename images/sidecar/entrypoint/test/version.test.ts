@@ -1,7 +1,7 @@
 /**
  * Unit test for `src/version.ts::SIDECAR_VERSION`.
  *
- * Regresses plans/issues/bug-sidecar-version-string-stale.md: the
+ * Regresses slug:bug-sidecar-version-string-stale: the
  * `version` command and the MCP client-identity handshake used to
  * hard-code their version string, which drifted (the `version` command
  * reported 0.2.0 while package.json — and the MCP handshake — said

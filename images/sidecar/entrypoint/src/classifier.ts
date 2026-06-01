@@ -5,7 +5,7 @@
  * allow file-edit tools and safe bash commands; deny the obvious bright-line
  * destructive patterns; allow MCP tools (gated server-side by JWT).
  *
- * Spec: plans/issues/bug-sidecar-bash-still-asks-in-acceptedits.md §"Option A"
+ * Spec: slug:bug-sidecar-bash-still-asks-in-acceptedits §"Option A"
  */
 
 /**
@@ -45,7 +45,7 @@ type DenyPattern =
 // AND "has f" without forcing either order, so `-rf`, `-fr`, `-rfv`, `-fvr`,
 // `-rvf`, `-vrf` all match while a benign `-v` alone does not.
 //
-// Reference: plans/issues/bug-classifier-rm-rf-too-broad.md
+// Reference: slug:bug-classifier-rm-rf-too-broad
 const RM_RF_FLAGS = String.raw`\brm\s+-(?=[a-zA-Z]*r)(?=[a-zA-Z]*f)[a-zA-Z]+\s+`;
 
 const DENY_PATTERNS: DenyPattern[] = [
@@ -91,7 +91,7 @@ const DENY_PATTERNS: DenyPattern[] = [
   // `.*` (not `[^|]*`) so intermediate pipes like
   //   `curl X | tee /tmp/log | bash`
   // still match. Reference:
-  // plans/issues/bug-classifier-curl-multipipe-bypass.md
+  // slug:bug-classifier-curl-multipipe-bypass
   {
     kind: "regex",
     pattern: /\b(curl|wget)\b.*\|\s*(bash|sh)\b/,

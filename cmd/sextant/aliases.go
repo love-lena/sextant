@@ -1,6 +1,6 @@
 // aliases.go owns the backwards-compatibility aliases for legacy
 // top-level verbs that moved under resource nouns per
-// `plans/issues/feat-cli-resource-verb-cleanup.md`. Each alias prints
+// `slug:feat-cli-resource-verb-cleanup`. Each alias prints
 // a stderr deprecation note (suppressed under --json) and delegates to
 // the new home. Removed one minor release after landing.
 package main

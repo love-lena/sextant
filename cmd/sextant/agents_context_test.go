@@ -276,7 +276,7 @@ func TestResolveSessionJSONLPath_PerCwdSubdir(t *testing.T) {
 // `sextant agents context assistant` bug: a non-nil SessionLog in KV
 // pointing at a dir that was never created on disk.
 //
-// Pattern (per plans/issues/feat-tui-launch-acceptance-gate.md): assert
+// Pattern (per slug:feat-tui-launch-acceptance-gate): assert
 // error *messages* on operator surfaces are friendly + actionable and
 // don't leak filesystem internals.
 func TestResolveSessionJSONLPath_DirMissing(t *testing.T) {

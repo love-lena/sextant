@@ -53,7 +53,7 @@ func (d *daemon) startMCP(ctx context.Context) (*mcpRuntime, error) {
 
 	// Reconnect-capable: same rationale as startRPC — a NATS crash
 	// during startup or steady-state must not orphan this connection.
-	// See plans/issues/bug-flake-daemon-restarts-nats-after-kill.md.
+	// See slug:bug-flake-daemon-restarts-nats-after-kill.
 	nc, err := natsSrv.Connect(
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(500*time.Millisecond),

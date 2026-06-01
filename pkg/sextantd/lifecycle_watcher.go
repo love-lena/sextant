@@ -102,7 +102,7 @@ const watcherCASRetries = 3
 // signals were previously not observed by the daemon, leaving operators
 // staring at `lifecycle: running` on dead agents.
 //
-// See plans/issues/bug-agents-list-stale-lifecycle.md.
+// See slug:bug-agents-list-stale-lifecycle.
 //
 // The watcher uses a core NATS subscription (not JetStream) — we want
 // at-most-once delivery of the latest envelope, not a durable replay.

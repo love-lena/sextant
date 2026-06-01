@@ -66,7 +66,7 @@ func (d *daemon) startRPC(ctx context.Context) (*rpcRuntime, error) {
 	// surfaces that share this conn) survives a NATS restart. Without
 	// reconnect, a NATS crash during startup (or any time) leaves every
 	// downstream Put/Subscribe on this conn permanently broken — see
-	// plans/issues/bug-flake-daemon-restarts-nats-after-kill.md for the
+	// slug:bug-flake-daemon-restarts-nats-after-kill for the
 	// failure shape this guards against. Knobs match pkg/client and the
 	// shared-concerns spec.
 	nc, err := natsSrv.Connect(
@@ -125,7 +125,7 @@ func (d *daemon) startRPC(ctx context.Context) (*rpcRuntime, error) {
 	// agentsDataRoot mirrors what buildSpawnRuntime computes for the
 	// spawn handler — surfaced here so get_agent_status can publish
 	// the per-agent claude-projects host path back to the operator.
-	// See plans/issues/feat-agents-context-view.md and the matching
+	// See slug:feat-agents-context-view and the matching
 	// MkdirAll in buildSpawnRuntime that owns directory creation
 	// (this call is read-only on the layout).
 	agentsDataRoot := filepath.Join(d.cfg.Paths.DataDir, "agents")

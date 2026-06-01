@@ -3,7 +3,7 @@
  * failure (bad URL, refused, unreachable) exits the sidecar non-zero
  * rather than hanging. The daemon's supervisor then spawns a fresh
  * incarnation — silent hang is the worst failure mode (ticket
- * `plans/issues/bug-sidecar-nats-disconnect-no-reconnect.md` §"Fix
+ * `slug:bug-sidecar-nats-disconnect-no-reconnect` §"Fix
  * shape" item 3).
  *
  * Extracted from `src/index.ts` so the wiring can be unit-tested

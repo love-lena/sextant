@@ -46,8 +46,8 @@ type ArchiveDeps struct {
 //     scan, so a subsequent spawn under the same name succeeds.
 //  6. Reply {ok: true}.
 //
-// See plans/issues/bug-kill-doesnt-release-name.md and
-// plans/issues/feat-agents-archive-cli-verb.md for the motivating
+// See slug:bug-kill-doesnt-release-name and
+// slug:feat-agents-archive-cli-verb for the motivating
 // gaps. architecture.md §2 ("Identity rules") spells out the
 // name-release semantics.
 func NewArchiveAgent(deps ArchiveDeps) rpc.Handler {

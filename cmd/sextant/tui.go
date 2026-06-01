@@ -4,7 +4,7 @@
 // equivalent `-i` invocation (e.g. picking "Browse and manage running
 // agents" → `sextant agents list -i`).
 //
-// Resolves plans/issues/feat-sextant-tui-discovery.md.
+// Resolves slug:feat-sextant-tui-discovery.
 //
 // Why exec rather than re-enter the cobra dispatcher in-process?
 //

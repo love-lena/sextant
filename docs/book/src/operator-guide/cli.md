@@ -229,7 +229,7 @@ Four CLI verbs were renamed on 2026-05-27 to align with the closed-exception ver
 | `sextant audit query` | `sextant audit list` |
 | `sextant worktree destroy` | `sextant worktree delete` |
 
-Scripts using the old spellings continue to work without change. `sextant agents stop` is more accurate than `kill` — the implementation is a graceful container stop with name release, not SIGKILL. See `plans/issues/feat-cli-verb-vocabulary-decision.md` for the full rationale.
+Scripts using the old spellings continue to work without change. `sextant agents stop` is more accurate than `kill` — the implementation is a graceful container stop with name release, not SIGKILL. See `slug:feat-cli-verb-vocabulary-decision` for the full rationale.
 
 The wire RPC verbs on NATS (`spawn_agent`, `kill_agent`, `query_audit`, `worktree_destroy`) are unchanged by this rename.
 

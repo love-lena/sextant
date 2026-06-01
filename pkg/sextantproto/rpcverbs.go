@@ -55,7 +55,7 @@ type AgentSummary struct {
 // Defaults to false so existing callers keep their narrow response
 // shape; `sextant agents check` opts in to drive the defense-in-depth
 // `degraded` verdict per
-// `plans/issues/feat-agents-check-heartbeat-secondary-signal.md`.
+// `slug:feat-agents-check-heartbeat-secondary-signal`.
 type GetAgentStatusRequest struct {
 	AgentID          uuid.UUID `json:"agent_id"`
 	IncludeHeartbeat bool      `json:"include_heartbeat,omitempty"`

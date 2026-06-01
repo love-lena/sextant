@@ -531,8 +531,7 @@ function newSDKDriver(
         // Set permissionMode so the SDK doesn't fall back to interactive
         // "default" mode. In non-interactive containers there is no granter,
         // so leaving this unset causes every Edit/Write/Bash call to error
-        // with "you haven't granted it yet". See plans/issues/bug-sidecar-
-        // doesnt-set-permission-mode.md.
+        // with "you haven't granted it yet". See slug:bug-sidecar-doesnt-set-permission-mode.
         permissionMode: env.permissionMode,
         // SDK + MCP defer-loading interplay: without alwaysLoad the
         // sextant tools land behind tool search, which costs a turn.
@@ -545,7 +544,7 @@ function newSDKDriver(
         // a plain string installs it as a custom system prompt that the
         // model sees on every turn — the "persistent charter" semantic
         // the issue calls out, not a one-shot first user message. See
-        // plans/issues/bug-initial-prompt-not-forwarded-to-sdk.md.
+        // slug:bug-initial-prompt-not-forwarded-to-sdk.
         sdkOpts["systemPrompt"] = env.initialPrompt;
       }
       if (resumeId) {
@@ -568,7 +567,7 @@ function newSDKDriver(
       // non-interactive containers. This callback extends that to Bash with a
       // safe-command classifier: allows git/make/go/etc., denies bright-line
       // destructive patterns (rm -rf /, sudo, curl|sh, …).
-      // See plans/issues/bug-sidecar-bash-still-asks-in-acceptedits.md.
+      // See slug:bug-sidecar-bash-still-asks-in-acceptedits.
       sdkOpts["canUseTool"] = (
         toolName: string,
         input: Record<string, unknown>,
@@ -831,7 +830,7 @@ class PromptQueue {
  * survive a server restart, so the previous loop's iterator will have
  * ended and a fresh subscribe is required to resume delivery.
  *
- * Regresses plans/issues/bug-sidecar-nats-disconnect-no-reconnect.md
+ * Regresses slug:bug-sidecar-nats-disconnect-no-reconnect
  * §"Fix shape" item 2.
  */
 interface InboxLoopController {
@@ -965,7 +964,7 @@ async function run(driverMode: DriverMode): Promise<void> {
   // SDK's systemPrompt landed. First 80 chars + total length only —
   // charters can be long, and we don't want to dump a full charter to
   // the journal on every spawn. See
-  // plans/issues/bug-initial-prompt-not-forwarded-to-sdk.md.
+  // slug:bug-initial-prompt-not-forwarded-to-sdk.
   if (env.initialPrompt) {
     log("info", "initial_prompt loaded", {
       length: env.initialPrompt.length,
@@ -981,7 +980,7 @@ async function run(driverMode: DriverMode): Promise<void> {
   // process hanging silently. Reconnect handling (for transient
   // failures *after* a successful initial connect) lives in
   // watchNATSStatus / watchNATSClosed below. See
-  // plans/issues/bug-sidecar-nats-disconnect-no-reconnect.md §"Fix
+  // slug:bug-sidecar-nats-disconnect-no-reconnect §"Fix
   // shape" item 3.
   const client = (await connectOrExit(
     () => connectWithConfig(config),
@@ -1016,7 +1015,7 @@ async function run(driverMode: DriverMode): Promise<void> {
   //   - the inbox JetStream consumer is re-armed on reconnect (nats.js
   //     ephemeral consumers don't survive a server restart).
   //
-  // Ticket: plans/issues/bug-sidecar-nats-disconnect-no-reconnect.md.
+  // Ticket: slug:bug-sidecar-nats-disconnect-no-reconnect.
   const statusStop = watchNATSStatus(client.nc as unknown as NATSConnLike, {
     log,
     onReconnect: () => {

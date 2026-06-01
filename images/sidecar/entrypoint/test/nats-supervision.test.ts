@@ -1,7 +1,7 @@
 /**
  * Unit tests for the sidecar's NATS-connection supervision module.
  *
- * Regresses plans/issues/bug-sidecar-nats-disconnect-no-reconnect.md.
+ * Regresses slug:bug-sidecar-nats-disconnect-no-reconnect.
  *
  * The supervision module is the sidecar-side symmetric resilience to
  * the daemon-side `TestDaemonRestartsNATSAfterKill` proof: when the

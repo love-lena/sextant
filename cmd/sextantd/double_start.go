@@ -26,7 +26,7 @@ const defaultRestartWait = 30 * time.Second
 var errAlreadyRunning = errors.New("sextantd already running")
 
 // checkExistingDaemonOrExit runs the pre-startup probe described in
-// plans/issues/feat-daemon-lifecycle-ergonomics.md fix #4. If a healthy
+// slug:feat-daemon-lifecycle-ergonomics fix #4. If a healthy
 // peer daemon owns runtime.json:
 //
 //   - restart=false: print a friendly "already running" message to stderr

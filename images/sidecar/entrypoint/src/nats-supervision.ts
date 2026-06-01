@@ -1,7 +1,7 @@
 /**
  * NATS-connection supervision.
  *
- * Regresses plans/issues/bug-sidecar-nats-disconnect-no-reconnect.md.
+ * Regresses slug:bug-sidecar-nats-disconnect-no-reconnect.
  *
  * The base @sextant/client already pins `maxReconnectAttempts: -1` plus
  * the spec-bounded jitter (see `clients/typescript/src/client.ts`

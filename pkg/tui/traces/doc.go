@@ -5,5 +5,5 @@
 //
 // The pure tree projection (BuildSpanTree / FlattenVisible) is exported
 // so the static `sextant traces show` stdout renderer shares it.
-// Resolves plans/issues/feat-tui-traces-component.md.
+// Resolves slug:feat-tui-traces-component.
 package traces

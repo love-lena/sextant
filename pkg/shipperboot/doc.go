@@ -11,5 +11,5 @@
 // can drive.
 //
 // Spec: specs/components/shipper.md.
-// Issue: plans/issues/feat-shipper-auto-supervise.md.
+// Issue: slug:feat-shipper-auto-supervise.
 package shipperboot

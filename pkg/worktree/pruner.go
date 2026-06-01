@@ -25,7 +25,7 @@ const (
 )
 
 // Audit action names. The values match
-// `plans/issues/feat-worktree-pruner.md` so an operator querying
+// `slug:feat-worktree-pruner` so an operator querying
 // audit by action="audit.worktree_pruned" gets the rows the pruner
 // produced. They are exported so the wiring layer (sextantd) can
 // publish them on the bus without re-defining the strings.

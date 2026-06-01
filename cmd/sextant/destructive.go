@@ -1,9 +1,9 @@
 // destructive.go owns the helper for the destructive-op flag bundle
-// per `plans/issues/feat-cli-destructive-op-flags.md` — every verb
+// per `slug:feat-cli-destructive-op-flags` — every verb
 // that mutates durable state irreversibly gets `--dry-run` and
 // `--yes` via `destructiveFlags`. On an interactive terminal an
 // operator who omits both gets a `huh.NewConfirm()` prompt
-// (per `plans/issues/feat-cli-huh-interactive-confirm.md`); on a
+// (per `slug:feat-cli-huh-interactive-confirm`); on a
 // non-TTY caller (pipe, CI, redirect) the prompt is skipped and
 // the helper returns `errDestructiveNoYes` so scripts fail loud.
 package main

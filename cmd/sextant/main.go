@@ -3,8 +3,8 @@
 // user-facing + diagnostic loggers.
 //
 // Plan: plans/bootstrap.md#M5 (initial scaffold), then
-// plans/issues/feat-cli-cobra-fang-migration.md (framework migration)
-// and plans/issues/feat-cli-resource-verb-cleanup.md (resource-verb
+// slug:feat-cli-cobra-fang-migration (framework migration)
+// and slug:feat-cli-resource-verb-cleanup (resource-verb
 // shape + new daemon/events nouns).
 package main
 

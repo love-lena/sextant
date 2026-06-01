@@ -20,7 +20,7 @@ import (
 // disk and (b) include the bind mount at /home/agent/.claude/projects
 // in the container spec.
 //
-// Phase A of plans/issues/feat-agents-context-view.md. The mount is
+// Phase A of slug:feat-agents-context-view. The mount is
 // what makes the SDK session JSONL host-readable; without it the
 // `agents context` verb has nothing to read.
 func TestSpawnBindsAgentProjectsDir(t *testing.T) {

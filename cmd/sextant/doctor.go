@@ -552,7 +552,7 @@ func truncate(s string, n int) string {
 // after `make install` without a daemon restart the operator's CLI runs
 // the new binary but the daemon is still on the old one.
 //
-// Per plans/issues/feat-doctor-show-daemon-version.md.
+// Per slug:feat-doctor-show-daemon-version.
 func collectVersionChecks(ctx context.Context, daemonReachable bool) []CheckResult {
 	out := make([]CheckResult, 0, 3)
 	out = append(out, CheckResult{
@@ -655,7 +655,7 @@ func versionMismatch(cliVer, daemonVer string) (CheckResult, bool) {
 // runs the shared runAgentCheck (from agents_check.go) against each.
 // Maps the AgentCheck verdict to a CheckResult so doctor's table
 // renders the same way as the host checks. Per
-// `plans/issues/feat-sextant-doctor-agents.md`.
+// `slug:feat-sextant-doctor-agents`.
 func collectAgentChecks(ctx context.Context) ([]CheckResult, error) {
 	cli, _, err := connectAgent(ctx, globalFlags.configDir)
 	if err != nil {

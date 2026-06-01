@@ -15,7 +15,7 @@ import (
 )
 
 // TestSextantdSupervisesShipper is the acceptance test for
-// plans/issues/feat-shipper-auto-supervise.md: with default config
+// slug:feat-shipper-auto-supervise: with default config
 // (auto_supervise=true), `pgrep sextant-shipper` must find a running
 // shipper within 5s of the daemon's control socket coming up.
 //

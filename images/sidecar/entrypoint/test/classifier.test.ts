@@ -3,7 +3,7 @@
  *
  * Exercises `classifyTool` and `isDangerousBashCommand` without requiring a
  * live SDK or NATS connection. All patterns from the denylist in
- * plans/issues/bug-sidecar-bash-still-asks-in-acceptedits.md are covered.
+ * slug:bug-sidecar-bash-still-asks-in-acceptedits are covered.
  */
 
 import { describe, expect, it } from "vitest";

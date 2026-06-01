@@ -29,7 +29,7 @@ they mean `VERSION`.
 > library version (`0.1.0`) has drifted and doesn't move with releases.
 > The sidecar string is hand-edited and stale. The target is four
 > independently-bumped lines; the decoupling work is tracked in
-> `plans/issues/feat-split-version-lines.md`. Until that lands, bump
+> `slug:feat-split-version-lines`. Until that lands, bump
 > proto alongside the binary on a release cut and note the wire delta
 > in the changelog.
 

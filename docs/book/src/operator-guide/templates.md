@@ -81,7 +81,7 @@ If `mounts` includes `worktree`, the spawn handler creates a worktree named `fea
 **`secrets`** is reserved — see [Known gaps and drift](../reference/known-gaps.md). The class is in `KnownMountClasses()` so template validation passes, but the spawn handler does not yet wire a mount for it.
 
 ### `initial_prompt`
-Persistent context. The spawn handler base64-encodes this and injects it as `SEXTANT_INITIAL_PROMPT`; the sidecar decodes it and passes it to the SDK as `systemPrompt` on every turn. **Not** a first user message — use a regular `prompt_agent` call for greetings. See `plans/issues/bug-initial-prompt-not-forwarded-to-sdk.md`.
+Persistent context. The spawn handler base64-encodes this and injects it as `SEXTANT_INITIAL_PROMPT`; the sidecar decodes it and passes it to the SDK as `systemPrompt` on every turn. **Not** a first user message — use a regular `prompt_agent` call for greetings. See `slug:bug-initial-prompt-not-forwarded-to-sdk`.
 
 ### `model`
 The Claude model identifier. Default `claude-opus-4-7[1m]` (sidecar default at `images/sidecar/entrypoint/src/index.ts:62`). The model also accepts `claude-sonnet-4-6`, `claude-haiku-4-5-20251001`, etc.
@@ -106,7 +106,7 @@ How the seed is delivered:
 | (unset or `"copy-on-spawn"`) | On first spawn, copy host dir into a per-agent named volume; mount rw. Volume survives restarts. | Default. Assistant-style multi-turn agents. |
 | `"readonly-bind"`  | Bind-mount the host dir read-only.                                                       | One-shot agents that don't need session resume.      |
 
-> **Caveat**: `"readonly-bind"` breaks SDK session resume because the SDK can't write its journal under `projects/<encoded-cwd>/<session-id>.jsonl`. Pick `"copy-on-spawn"` (or omit) unless you're sure. See `plans/issues/bug-claude-seed-readonly-breaks-session-persistence.md`.
+> **Caveat**: `"readonly-bind"` breaks SDK session resume because the SDK can't write its journal under `projects/<encoded-cwd>/<session-id>.jsonl`. Pick `"copy-on-spawn"` (or omit) unless you're sure. See `slug:bug-claude-seed-readonly-breaks-session-persistence`.
 
 ## Reloading after edits
 

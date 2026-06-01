@@ -218,7 +218,7 @@ func TestStreamConversationTailExitsOnLifecycleEnded(t *testing.T) {
 // the rendered conversation. Before the fix the renderer dropped any
 // transition that wasn't `ended`, so external tooling couldn't tell
 // when a turn finished. Regresses
-// plans/issues/bug-lifecycle-turn-ended-missing.md.
+// slug:bug-lifecycle-turn-ended-missing.
 //
 // Driving with tailUntilEnd=true + a trailing `ended` envelope keeps
 // the exit deterministic. Without it the select between an open

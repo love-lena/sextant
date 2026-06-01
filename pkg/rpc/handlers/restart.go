@@ -258,7 +258,7 @@ func NewRestartAgent(deps RestartDeps) rpc.Handler {
 		// --preserve-session would silently fail because the new
 		// container can't read the journal the SDK recorded in the
 		// previous incarnation's volume. See
-		// plans/issues/bug-claude-seed-readonly-breaks-session-persistence.md.
+		// slug:bug-claude-seed-readonly-breaks-session-persistence.
 		if deps.Templates != nil && def.Template != "" {
 			tpl, err := templates.LoadFromKV(ctx, deps.Templates, def.Template)
 			if err == nil && tpl.ClaudeSeed != "" {
@@ -278,7 +278,7 @@ func NewRestartAgent(deps RestartDeps) rpc.Handler {
 		// and `sextant agents context` can never find it — the
 		// dir-absent bug. The dir is idempotent and must persist across
 		// restarts, so we ignore the rollback cleanup here.
-		// See plans/issues/feat-agents-context-view.md.
+		// See slug:feat-agents-context-view.
 		if deps.AgentsDataRoot != "" {
 			if projectsHost, _, err := ensureAgentProjectsDir(deps.AgentsDataRoot, def.UUID); err == nil {
 				specIn.ClaudeProjectsHostPath = projectsHost

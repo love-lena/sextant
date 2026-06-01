@@ -1,7 +1,7 @@
 /**
  * Unit tests for `src/env.ts::decodeInitialPrompt`.
  *
- * Regresses plans/issues/bug-initial-prompt-not-forwarded-to-sdk.md: the
+ * Regresses slug:bug-initial-prompt-not-forwarded-to-sdk: the
  * sidecar must decode the base64-encoded SEXTANT_INITIAL_PROMPT
  * sextantd injects from the template's `initial_prompt` field, then
  * pass the decoded string to the SDK as `systemPrompt`. This test

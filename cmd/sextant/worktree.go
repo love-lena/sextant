@@ -112,7 +112,7 @@ func newWorktreeCreateCmd() *cobra.Command {
 // newWorktreeDeleteCmd — `sextant worktree delete <name>`.
 //
 // Renamed from `destroy` per the closed-exception verb policy
-// (plans/issues/feat-cli-verb-vocabulary-decision.md). `delete` is the
+// (slug:feat-cli-verb-vocabulary-decision). `delete` is the
 // default CRUD spelling. The old verb is kept as a cobra Alias for one
 // release.
 func newWorktreeDeleteCmd() *cobra.Command {

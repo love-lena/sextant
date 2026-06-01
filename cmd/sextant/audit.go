@@ -33,7 +33,7 @@ func newAuditCmd() *cobra.Command {
 // newAuditListCmd — `sextant audit list [--since ...] [--actor ...] ...`.
 //
 // Renamed from `query` per the closed-exception verb policy
-// (plans/issues/feat-cli-verb-vocabulary-decision.md). `list` is the
+// (slug:feat-cli-verb-vocabulary-decision). `list` is the
 // default CRUD spelling and matches sibling list-shaped verbs like
 // `agents list`, `pending list`, `worktree list`. The old verb is kept
 // as a cobra Alias for one release.

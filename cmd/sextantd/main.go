@@ -66,8 +66,8 @@ func run() error {
 
 	// Pre-startup probe: bail (or replace) if another sextantd already
 	// owns runtime.json. Before this check, a duplicate start crashed on
-	// the NATS/ClickHouse port-bind. See plans/issues/feat-daemon-
-	// lifecycle-ergonomics.md fix #4. This call may os.Exit; survivors
+	// the NATS/ClickHouse port-bind. See slug:feat-daemon-lifecycle-ergonomics
+	// fix #4. This call may os.Exit; survivors
 	// continue with normal startup. Runs before the log file is opened
 	// so a benign double-start doesn't append a "starting…" line to a
 	// log owned by the live daemon.

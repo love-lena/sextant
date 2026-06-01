@@ -326,7 +326,7 @@ func TestM14WorktreeAcceptance(t *testing.T) {
 //     fresh worktree is untouched.
 //
 // The dry-run/perform pair is the load-bearing CLI contract from
-// plans/issues/feat-worktree-pruner.md.
+// slug:feat-worktree-pruner.
 func TestSextantWorktreePruneCLI(t *testing.T) {
 	h, _, worktreesDir := startDaemonHarnessWithWorktree(t)
 	cli := rpcClient(t, h)

@@ -16,7 +16,7 @@ import (
 )
 
 // TestSpawnedContainerHasGitConfig is the acceptance test for
-// plans/issues/feat-container-git-config.md: a spawned container has
+// slug:feat-container-git-config: a spawned container has
 // /home/agent/.gitconfig in place with the expected sextant identity,
 // so any `git commit` the agent runs picks up a meaningful author.
 //
@@ -65,7 +65,7 @@ func TestSpawnedContainerHasGitConfig(t *testing.T) {
 }
 
 // TestSpawnedContainerCanGitCommit is the acceptance test for
-// plans/issues/bug-worktree-gitdir-unreachable-in-container.md: an
+// slug:bug-worktree-gitdir-unreachable-in-container: an
 // agent in a worktree container can `git status` (the gitdir pointer
 // resolves), make a commit, and the commit lands on the host's
 // worktree.

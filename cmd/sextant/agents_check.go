@@ -1,6 +1,6 @@
 // agents_check.go owns `sextant agents check <ref>` — a one-shot
 // health probe that returns a verdict + remedy command per
-// `plans/issues/feat-sextant-agents-check.md`. Pairs with `doctor
+// `slug:feat-sextant-agents-check`. Pairs with `doctor
 // --agents` (bulk variant); both share the AgentCheck struct + the
 // runAgentCheck function so verdict logic lives in one place.
 package main
@@ -128,7 +128,7 @@ func runAgentCheck(ctx context.Context, ch agentChecker, ref string) AgentCheck 
 		// the sidecar in > staleness, downgrade to `degraded` so the
 		// operator looks at the daemon logs instead of trusting
 		// lifecycle=running. See
-		// `plans/issues/feat-agents-check-heartbeat-secondary-signal.md`.
+		// `slug:feat-agents-check-heartbeat-secondary-signal`.
 		if out.HeartbeatAge != nil && *out.HeartbeatAge > sextantd.DefaultHeartbeatStaleness {
 			out.Verdict = "degraded"
 			out.Remedy = "sextant daemon logs --tail 50"

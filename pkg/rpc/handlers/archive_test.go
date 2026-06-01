@@ -320,7 +320,7 @@ func TestArchiveAgentIdempotent(t *testing.T) {
 // unchanged by the closed-exception CLI verb rename; only the user-
 // facing CLI verbs moved (`spawn`→`create`, `kill`→`stop`).
 //
-// Per plans/issues/bug-kill-doesnt-release-name.md Option A.
+// Per slug:bug-kill-doesnt-release-name Option A.
 func TestKillWithArchiveFlag(t *testing.T) {
 	deps, defs, incs, runner, _ := buildDeps(t)
 	spawnH := handlers.NewSpawnAgent(deps)

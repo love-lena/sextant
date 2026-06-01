@@ -34,7 +34,7 @@ const (
 	MountClassSecrets = "secrets"
 	// MountClassSSH → host's ~/.ssh → /home/agent/.ssh read-only. Opt-in
 	// so agents can `git push` over SSH. See
-	// plans/issues/feat-container-ssh-passthrough.md and
+	// slug:feat-container-ssh-passthrough and
 	// specs/components/sidecar-image.md.
 	MountClassSSH = "ssh"
 )
@@ -79,8 +79,8 @@ type Template struct {
 	// the spawn handler leaves /home/agent/.claude as the default
 	// per-agent empty named volume.
 	// See specs/architecture.md §11b,
-	// plans/issues/feat-template-claude-seeding.md, and
-	// plans/issues/bug-claude-seed-readonly-breaks-session-persistence.md.
+	// slug:feat-template-claude-seeding, and
+	// slug:bug-claude-seed-readonly-breaks-session-persistence.
 	ClaudeSeed string `toml:"claude_seed" json:"claude_seed,omitempty"`
 	// ClaudeSeedMode controls how ClaudeSeed is surfaced to the agent:
 	//
@@ -117,7 +117,7 @@ const (
 // string is returned. When ClaudeSeed is set and ClaudeSeedMode is
 // blank, the default "copy-on-spawn" is returned (the right behavior
 // for the assistant-style use case — see
-// plans/issues/bug-claude-seed-readonly-breaks-session-persistence.md).
+// slug:bug-claude-seed-readonly-breaks-session-persistence).
 // Otherwise the explicit ClaudeSeedMode is returned verbatim (already
 // validated at template load time).
 func (t Template) ResolveClaudeSeedMode() string {

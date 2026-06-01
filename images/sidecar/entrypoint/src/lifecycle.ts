@@ -7,7 +7,7 @@
  * `index.ts` (which kicks off `main()` and reads env vars at import
  * time).
  *
- * Regresses plans/issues/bug-lifecycle-turn-ended-missing.md.
+ * Regresses slug:bug-lifecycle-turn-ended-missing.
  */
 
 import {

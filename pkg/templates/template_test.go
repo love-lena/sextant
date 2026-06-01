@@ -209,7 +209,7 @@ claude_seed_mode = "readonly-bind"
 // ~/.ssh bind mount the spawn handler attaches read-only at
 // /home/agent/.ssh. The ssh class is opt-in (no default template lists
 // it); validation must accept it explicitly so a typo'd value (e.g.
-// "shh") still errors. See plans/issues/feat-container-ssh-passthrough.md.
+// "shh") still errors. See slug:feat-container-ssh-passthrough.
 func TestMountsAcceptsSSH(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "with-ssh.toml")

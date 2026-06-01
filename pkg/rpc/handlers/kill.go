@@ -35,7 +35,7 @@ type KillDeps struct {
 // can be stopped again as a no-op — so retrying the def-write after the
 // stop already ran is safe. restart_agent's side effect (spawn a new
 // container) is NOT idempotent, hence its bail-with-rollback shape. See
-// plans/issues/bug-kill-agent-cas-flakes-integration-tests.md.
+// slug:bug-kill-agent-cas-flakes-integration-tests.
 const killCASRetries = 3
 
 // NewKillAgent returns a Handler for the kill_agent verb. Flow:

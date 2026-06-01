@@ -1,7 +1,7 @@
 /**
  * Unit tests for the sidecar lifecycle envelope publisher.
  *
- * Regresses plans/issues/bug-lifecycle-turn-ended-missing.md: the
+ * Regresses slug:bug-lifecycle-turn-ended-missing: the
  * wire-up acceptance requires `lifecycle.turn_ended` envelopes to be
  * published on `agents.<uuid>.lifecycle` at the end of every SDK turn.
  * The SDK driver (src/index.ts::newSDKDriver) already calls

@@ -177,7 +177,7 @@ Networking:
 **Open sub-decisions**:
 - **Custom per-agent images**: do we support agent definitions that declare extra system packages, building a derived image at definition time? Lean: yes for initial, but ship without it and add when first needed.
 - **Image build & distribution**: ship the image build script (operator builds locally), or pull from a registry (and which registry — ghcr.io? docker hub?). Lean: ship the build script for initial; registry distribution later.
-- ~~**`.claude` volume seeding**: when a per-agent `.claude` volume is created, what's it seeded with? Empty (agent starts fresh)? Snapshot from host's `~/.claude`? Per-template defaults? Lean: empty by default; template can declare `.claude` seeding source.~~ **Resolved**: templates carry an optional `claude_seed` host path (§11b). When set, the spawn handler — controlled by `claude_seed_mode` — either copies the host dir into a per-agent named volume (default `copy-on-spawn`, lets the SDK persist its session journal) or bind-mounts it read-only (legacy opt-in `readonly-bind`). Unset = empty per-agent volume (default). See `plans/issues/feat-template-claude-seeding.md` and `plans/issues/bug-claude-seed-readonly-breaks-session-persistence.md`.
+- ~~**`.claude` volume seeding**: when a per-agent `.claude` volume is created, what's it seeded with? Empty (agent starts fresh)? Snapshot from host's `~/.claude`? Per-template defaults? Lean: empty by default; template can declare `.claude` seeding source.~~ **Resolved**: templates carry an optional `claude_seed` host path (§11b). When set, the spawn handler — controlled by `claude_seed_mode` — either copies the host dir into a per-agent named volume (default `copy-on-spawn`, lets the SDK persist its session journal) or bind-mounts it read-only (legacy opt-in `readonly-bind`). Unset = empty per-agent volume (default). See `slug:feat-template-claude-seeding` and `slug:bug-claude-seed-readonly-breaks-session-persistence`.
 
 ## 4. Inter-agent communication
 
@@ -541,16 +541,16 @@ claude_seed = "~/.config/sextant/assistant-claude"  # optional; host dir surface
 claude_seed_mode = "copy-on-spawn"      # optional; "copy-on-spawn" (default) | "readonly-bind"
 ```
 
-**`claude_seed`** (optional): when set, sextantd resolves the path (`~/` expands via `os.UserHomeDir`) and surfaces the directory into the container at `/home/agent/.claude`, replacing the default empty per-agent volume. Use it to pre-load operator-curated CLAUDE.md, slash commands, hooks, or `settings.json` for the agent class. Missing or non-directory paths fail template validation at load time. Two-way sync (operator edits → agent, agent writes → host) is intentionally out of scope; the agent's writes stay container-local. See `plans/issues/feat-template-claude-seeding.md`.
+**`claude_seed`** (optional): when set, sextantd resolves the path (`~/` expands via `os.UserHomeDir`) and surfaces the directory into the container at `/home/agent/.claude`, replacing the default empty per-agent volume. Use it to pre-load operator-curated CLAUDE.md, slash commands, hooks, or `settings.json` for the agent class. Missing or non-directory paths fail template validation at load time. Two-way sync (operator edits → agent, agent writes → host) is intentionally out of scope; the agent's writes stay container-local. See `slug:feat-template-claude-seeding`.
 
 **`claude_seed_mode`** (optional; only meaningful when `claude_seed` is set):
 
 - `"copy-on-spawn"` (default): on first spawn for an agent UUID, sextantd creates a Docker named volume `sextant-claude-seed-<uuid>`, populates it by copying the host seed dir contents, and mounts the volume **rw** at `/home/agent/.claude`. Subsequent spawns of the same agent (e.g. `restart_agent --preserve-session`) reattach the existing volume — the populate step is skipped — so the Claude Agent SDK's session journal under `projects/<encoded-cwd>/<session-id>.jsonl` survives across incarnations. When an agent is archived the volume is removed. This is the right behavior for assistant-style agents that need multi-turn conversation continuity.
 - `"readonly-bind"`: legacy opt-in. Bind-mount the host seed dir read-only at `/home/agent/.claude`. Suitable for one-shot agents that genuinely don't need the SDK to write anything; **multi-turn session resume does not work** in this mode (the SDK can't write its journal to a RO mount, so `SEXTANT_SESSION_ID` resume on the next turn fails). Operators who pick this mode have explicitly opted into that trade-off.
 
-See `plans/issues/bug-claude-seed-readonly-breaks-session-persistence.md`.
+See `slug:bug-claude-seed-readonly-breaks-session-persistence`.
 
-**`initial_prompt`** (optional): persistent context, **not** a one-shot first user message. sextantd base64-encodes the field, injects it as `SEXTANT_INITIAL_PROMPT`, and the sidecar passes the decoded string to the Claude Agent SDK as `systemPrompt` — so the model sees it on every turn for the lifetime of the incarnation (and the next spawn of the same agent, since the field is part of the persisted `AgentDefinition`). Use it for charter / role / preferences that should steer every reply; for one-shot greetings or seeding, just send a regular prompt. See `plans/issues/bug-initial-prompt-not-forwarded-to-sdk.md`.
+**`initial_prompt`** (optional): persistent context, **not** a one-shot first user message. sextantd base64-encodes the field, injects it as `SEXTANT_INITIAL_PROMPT`, and the sidecar passes the decoded string to the Claude Agent SDK as `systemPrompt` — so the model sees it on every turn for the lifetime of the incarnation (and the next spawn of the same agent, since the field is part of the persisted `AgentDefinition`). Use it for charter / role / preferences that should steer every reply; for one-shot greetings or seeding, just send a regular prompt. See `slug:bug-initial-prompt-not-forwarded-to-sdk`.
 
 **Default template**: `default.toml` ships with `sextant init`. Contents:
 
@@ -567,7 +567,7 @@ permission_ceiling = "auto"
 **Mount classes**: declared names that sextantd resolves to actual container mounts at spawn time. Initial classes:
 - `worktree` → the agent's git worktree → `/workspace`
 - `secrets` → the per-template subset of `~/.config/sextant/secrets/` → read-only mount
-- `ssh` → the host's `~/.ssh` directory (resolved via `os.UserHomeDir`) → `/home/agent/.ssh` **read-only**. Opt-in only; default templates do **not** include it. Use when the agent class is trusted to use the operator's SSH identity for `git push` to GitHub. See `plans/issues/feat-container-ssh-passthrough.md`. Unknown values in `mounts` fail template validation at load time so a typo like `"shh"` surfaces immediately rather than silently producing an agent missing the intended mount.
+- `ssh` → the host's `~/.ssh` directory (resolved via `os.UserHomeDir`) → `/home/agent/.ssh` **read-only**. Opt-in only; default templates do **not** include it. Use when the agent class is trusted to use the operator's SSH identity for `git push` to GitHub. See `slug:feat-container-ssh-passthrough`. Unknown values in `mounts` fail template validation at load time so a typo like `"shh"` surfaces immediately rather than silently producing an agent missing the intended mount.
 
 **Open sub-decisions** (defer):
 - Template versioning — do we track template hashes per incarnation for forensics? Lean yes via `agent_definitions_history` table.

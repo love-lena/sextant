@@ -1,6 +1,6 @@
 // exec.go owns `sextant agents exec <agent> -- <cmd>`. Relocated under
 // the `agents` resource from the previous top-level `sextant exec` per
-// `plans/issues/feat-cli-resource-verb-cleanup.md`. The legacy form
+// `slug:feat-cli-resource-verb-cleanup`. The legacy form
 // stays as an alias for one minor release.
 package main
 

@@ -284,7 +284,7 @@ func waitForLifecycleStarted(t *testing.T, ch <-chan client.Message, agentID uui
 // carries SEXTANT_PERMISSION_MODE=acceptEdits. The mock-driver template
 // already has permission_ceiling = "auto" (set in writeMinimalInstall) so
 // this test exercises the full spawn path without needing a real API call.
-// See plans/issues/bug-sidecar-doesnt-set-permission-mode.md.
+// See slug:bug-sidecar-doesnt-set-permission-mode.
 func TestAgentCanEditWorkspaceFile(t *testing.T) {
 	dockerBin := requireDocker(t)
 	requireSidecarImage(t, dockerBin)
@@ -384,13 +384,13 @@ func loadOperatorCreds(t *testing.T, h *daemonHarness) sextantd.OperatorCreds {
 }
 
 // TestSpawnedContainerSeedsClaudeFromHostPath is the acceptance test
-// for plans/issues/feat-template-claude-seeding.md: when a template
+// for slug:feat-template-claude-seeding: when a template
 // carries `claude_seed = "<host dir>"`, a spawned container has the
 // directory's contents visible at /home/agent/.claude. Marker file
 // proves the read path; docker exec inside the container is the
 // observation point.
 //
-// Since plans/issues/bug-claude-seed-readonly-breaks-session-persistence.md
+// Since slug:bug-claude-seed-readonly-breaks-session-persistence
 // the default mode is "copy-on-spawn" — the host dir is copied into a
 // per-agent named volume and the volume is mounted rw. The seed file
 // is still readable (the populate step copies it in), so this test

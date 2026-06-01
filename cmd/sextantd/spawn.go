@@ -45,7 +45,7 @@ type spawnRuntime struct {
 	// agentsDataRoot is the host directory under which the spawn
 	// handler stages per-agent state that the operator needs to read
 	// directly — today only the Claude Code SDK session JSONL bind
-	// mount described in `plans/issues/feat-agents-context-view.md`.
+	// mount described in `slug:feat-agents-context-view`.
 	// Built once at daemon start as <DataDir>/agents and threaded into
 	// every SpawnDeps so the host path is stable across the daemon's
 	// process lifetime.

@@ -3,7 +3,7 @@
 // `pkg/tui/component`'s registry) via `component.Host` instead of
 // printing the static text output.
 //
-// Resolves plans/issues/feat-cli-iflag-tier1-components.md.
+// Resolves slug:feat-cli-iflag-tier1-components.
 //
 // Today the wired commands are:
 //

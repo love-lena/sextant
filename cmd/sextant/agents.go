@@ -192,7 +192,7 @@ func newAgentsShowCmd() *cobra.Command {
 // newAgentsCreateCmd — `sextant agents create <name> --template T`.
 //
 // Renamed from `spawn` per the closed-exception verb policy
-// (plans/issues/feat-cli-verb-vocabulary-decision.md). The old verb is
+// (slug:feat-cli-verb-vocabulary-decision). The old verb is
 // kept as a cobra Alias for one release; tests guard the alias resolution
 // against accidental removal.
 func newAgentsCreateCmd() *cobra.Command {
@@ -241,7 +241,7 @@ func newAgentsCreateCmd() *cobra.Command {
 // newAgentsStopCmd — `sextant agents stop <agent> [--grace 10s] [--archive]`.
 //
 // Renamed from `kill` per the closed-exception verb policy
-// (plans/issues/feat-cli-verb-vocabulary-decision.md). The current
+// (slug:feat-cli-verb-vocabulary-decision). The current
 // implementation is a graceful container stop with name release, not a
 // SIGKILL — `stop` is the friendlier accuracy fix and mirrors
 // `daemon stop`. The old verb is kept as a cobra Alias for one release.
@@ -250,7 +250,7 @@ func newAgentsCreateCmd() *cobra.Command {
 // the same UUID so the agent's name is released back into the
 // uniqueness pool immediately. Without it the agent stays in
 // lifecycle=defined and its name remains claimed — see
-// plans/issues/bug-kill-doesnt-release-name.md.
+// slug:bug-kill-doesnt-release-name.
 func newAgentsStopCmd() *cobra.Command {
 	var grace time.Duration
 	var archive bool

@@ -7,5 +7,5 @@
 //
 // Named contextview (not context) to avoid clashing with the stdlib
 // context package at every import site. Completes
-// plans/issues/feat-agents-context-view.md.
+// slug:feat-agents-context-view.
 package contextview

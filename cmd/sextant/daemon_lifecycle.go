@@ -20,7 +20,7 @@ import (
 // behaviour stays consistent (e.g. "is the daemon up" means the same
 // thing in `start` as it does in `status`).
 //
-// Plan: plans/issues/feat-daemon-lifecycle-ergonomics.md (fix #3).
+// Plan: slug:feat-daemon-lifecycle-ergonomics (fix #3).
 
 // daemonLogFilename is the canonical filename for the daemon's combined
 // stdout/stderr log. Sits inside the configured DataDir so an operator

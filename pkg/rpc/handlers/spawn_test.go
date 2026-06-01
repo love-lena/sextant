@@ -930,7 +930,7 @@ func TestSpawnAgentOmitsSSHMountWhenTemplateDoesntOptIn(t *testing.T) {
 }
 
 // TestSSHMountWorks is the integration-shaped acceptance test from
-// plans/issues/feat-container-ssh-passthrough.md. It actually exec's
+// slug:feat-container-ssh-passthrough. It actually exec's
 // `ssh -T git@github.com` inside a spawned container to confirm the
 // operator's keys reach the agent. Gated behind SEXTANT_INTEGRATION_SSH
 // because it talks to GitHub and requires a real Docker daemon + the
@@ -941,14 +941,14 @@ func TestSSHMountWorks(t *testing.T) {
 	if os.Getenv("SEXTANT_INTEGRATION_SSH") != "1" {
 		t.Skip("set SEXTANT_INTEGRATION_SSH=1 to exercise the real ~/.ssh → container passthrough")
 	}
-	t.Skip("integration harness not yet wired; see plans/issues/feat-container-ssh-passthrough.md acceptance section")
+	t.Skip("integration harness not yet wired; see slug:feat-container-ssh-passthrough acceptance section")
 }
 
 // TestPermissionCeilingToSDKMode_Auto asserts that a template with
 // permission_ceiling = "auto" injects SEXTANT_PERMISSION_MODE=acceptEdits
 // into the container env. This is the default sextant ceiling; the sidecar
 // needs "acceptEdits" to auto-grant Edit/Write without prompting a human
-// granter. See plans/issues/bug-sidecar-doesnt-set-permission-mode.md.
+// granter. See slug:bug-sidecar-doesnt-set-permission-mode.
 func TestPermissionCeilingToSDKMode_Auto(t *testing.T) {
 	deps, _, _, runner, _ := buildDeps(t)
 

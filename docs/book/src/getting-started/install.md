@@ -58,7 +58,7 @@ Override the destination for a system-wide install:
 sudo make install PREFIX=/usr/local
 ```
 
-The Makefile uses `/usr/bin/install` rather than `cp`. On macOS, plain `cp` stamps `com.apple.provenance` onto the destination, and Gatekeeper then SIGKILLs the resulting binary on launch (exit 137, no stderr). `make install` sidesteps that. Cross-reference: `plans/issues/docs-install-via-make-install-not-cp.md`. Linux is unaffected.
+The Makefile uses `/usr/bin/install` rather than `cp`. On macOS, plain `cp` stamps `com.apple.provenance` onto the destination, and Gatekeeper then SIGKILLs the resulting binary on launch (exit 137, no stderr). `make install` sidesteps that. Cross-reference: `slug:docs-install-via-make-install-not-cp`. Linux is unaffected.
 
 `make uninstall` removes the installed binaries (`Makefile:122-127`).
 
@@ -108,4 +108,4 @@ Runs only the host-binary checks; useful right after a fresh install or after a 
 
 ## Snapshot version reporting
 
-`pkg/version` exposes `GitSHA`, populated via `-ldflags` from the build's `git rev-parse HEAD` (`Makefile:100-101`). `sextant doctor` reads it back to detect stale installed binaries (cross-referenced from `plans/issues/feat-doctor-stale-binary-detection.md`).
+`pkg/version` exposes `GitSHA`, populated via `-ldflags` from the build's `git rev-parse HEAD` (`Makefile:100-101`). `sextant doctor` reads it back to detect stale installed binaries (cross-referenced from `slug:feat-doctor-stale-binary-detection`).

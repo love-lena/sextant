@@ -6,7 +6,7 @@
 //	import — copy a base16 YAML into the themes dir after validating it.
 //	show   — preview a theme's role tokens.
 //
-// Per `plans/issues/feat-sextant-theme-cobra-subcommand.md`. Pairs with
+// Per `slug:feat-sextant-theme-cobra-subcommand`. Pairs with
 // the pkg/theme package (commit 7e36bef).
 package main
 

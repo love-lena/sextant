@@ -42,7 +42,7 @@ type containerEnvInput struct {
 	// it and passes it to the SDK as `systemPrompt` so the template's
 	// charter is included on every turn (persistent context, not a
 	// one-shot first user message). See
-	// plans/issues/bug-initial-prompt-not-forwarded-to-sdk.md.
+	// slug:bug-initial-prompt-not-forwarded-to-sdk.
 	InitialPrompt string
 	// EnvOverlay is applied last and can override any of the well-
 	// known SEXTANT_* keys. Spawn passes tpl.Env; restart passes

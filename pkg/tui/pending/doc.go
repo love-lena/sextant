@@ -7,5 +7,5 @@
 // test fixtures do — see plans/rfc-tui-workstream.md §6, Open Q5). This
 // surface renders correctly but is empty against a live daemon until an
 // agent→operator escalation producer lands. Resolves
-// plans/issues/feat-tui-pending-component.md.
+// slug:feat-tui-pending-component.
 package pending

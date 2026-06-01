@@ -3,6 +3,6 @@
 // the precedent for future per-surface TUIs (audit, pending, …) co-located
 // under `pkg/tui/`.
 //
-// Spec: plans/issues/feat-chat-tui.md
+// Spec: slug:feat-chat-tui
 // Plan: plans/feat-chat-tui-impl.md
 package chat

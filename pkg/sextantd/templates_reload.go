@@ -18,7 +18,7 @@ import (
 // idempotency caching or audit. Lightweight semantics keep the surface
 // from accreting infrastructure it doesn't need.
 //
-// See plans/issues/feat-templates-reload-cli-verb.md.
+// See slug:feat-templates-reload-cli-verb.
 const ControlTemplatesReloadSubject = "sextant.control.templates_reload"
 
 // TemplatesReloadRequest is the inbound payload. Empty today; the

@@ -89,7 +89,7 @@ type SpawnDeps struct {
 	// under <root>/<uuid>/claude-projects/, bind-mounted at
 	// /home/agent/.claude/projects/ inside the container so the
 	// SDK's session writer ends up writing to a host-readable path.
-	// See plans/issues/feat-agents-context-view.md.
+	// See slug:feat-agents-context-view.
 	//
 	// When empty, the bind mount is skipped — older spawn paths and
 	// unit tests that don't care about session-log visibility leave
@@ -323,8 +323,7 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 
 		// 6a. Per-spawn gitconfig file. Bind-mounted into the container
 		// at /home/agent/.gitconfig so the agent has a usable git
-		// identity for commits. See plans/issues/feat-container-git-
-		// config.md.
+		// identity for commits. See slug:feat-container-git-config.
 		gitconfigPath, gitconfigCleanup, err := writeAgentGitConfig(deps.WorkspaceRoot, agentUUID, args.Name)
 		if err != nil {
 			return emitErr(emit, sextantproto.ErrCodeInternal,
@@ -390,14 +389,14 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 			TestRunLabel:  deps.TestRunLabel,
 			WorkspacePath: workspace,
 			// gitconfig is written for every spawn (git identity for
-			// commits). See plans/issues/feat-container-git-config.md.
+			// commits). See slug:feat-container-git-config.
 			GitConfigHostPath: gitconfigPath,
 		}
 		// When the workspace is a worktree, the worktree's `.git` is a
 		// pointer file that names <RepoRoot>/.git/worktrees/<branch>
 		// using the host's absolute path. We must expose that exact
 		// path inside the container so git operations resolve. See
-		// plans/issues/bug-worktree-gitdir-unreachable-in-container.md.
+		// slug:bug-worktree-gitdir-unreachable-in-container.
 		if usingWorktree && deps.RepoRoot != "" {
 			specIn.GitDirHostPath = filepath.Join(deps.RepoRoot, ".git")
 		}
@@ -405,7 +404,7 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 		// Mounted at /home/agent/.claude/projects so the SDK writer
 		// inside the container produces files the host can read directly.
 		// Skipped when AgentsDataRoot is empty (legacy spawn paths + unit
-		// tests). See plans/issues/feat-agents-context-view.md.
+		// tests). See slug:feat-agents-context-view.
 		if deps.AgentsDataRoot != "" {
 			projectsHost, projectsCleanup, err := ensureAgentProjectsDir(deps.AgentsDataRoot, agentUUID)
 			if err != nil {
@@ -419,7 +418,7 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 		// /home/agent/.ssh so the agent can authenticate to GitHub for
 		// `git push`. Only fires when the template lists "ssh" in
 		// `mounts` — defaults stay airtight. See
-		// plans/issues/feat-container-ssh-passthrough.md.
+		// slug:feat-container-ssh-passthrough.
 		if wantsSSHMount(tpl) {
 			home, err := os.UserHomeDir()
 			if err != nil {
@@ -436,7 +435,7 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 		//     and mount it rw. This lets the Claude Agent SDK write its
 		//     session journal under /home/agent/.claude/projects/ — which
 		//     a readonly bind blocks. See
-		//     plans/issues/bug-claude-seed-readonly-breaks-session-persistence.md.
+		//     slug:bug-claude-seed-readonly-breaks-session-persistence.
 		//
 		//   - "readonly-bind" (legacy opt-in): bind-mount the host dir
 		//     read-only. Suitable for one-shot agents that don't need
@@ -678,7 +677,7 @@ func materializeWorkspace(ctx context.Context, deps SpawnDeps, tpl templates.Tem
 
 // writeAgentGitConfig stages a per-spawn gitconfig file under root and
 // returns its path + a cleanup closure that removes the file. The body
-// matches plans/issues/feat-container-git-config.md: name = "sextant
+// matches slug:feat-container-git-config: name = "sextant
 // <agent-name>", email = "<uuid>@sextant.local", init.defaultBranch =
 // main. The file is intentionally mode 0o644 (and bind-mounted
 // read-only into the container) so the agent can read it but not
@@ -709,7 +708,7 @@ func wantsWorktreeMount(tpl templates.Template) bool {
 // wantsSSHMount returns true if the template opts into the host
 // ~/.ssh → /home/agent/.ssh read-only bind mount. Opt-in only: default
 // templates never list "ssh". See
-// plans/issues/feat-container-ssh-passthrough.md.
+// slug:feat-container-ssh-passthrough.
 func wantsSSHMount(tpl templates.Template) bool {
 	return mountClassListed(tpl.Mounts, templates.MountClassSSH)
 }

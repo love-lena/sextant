@@ -472,7 +472,7 @@ func TestDoctorFormatBuildLine(t *testing.T) {
 }
 
 // TestDoctorVersionMismatch covers the warn-with-remedy path the issue
-// (`plans/issues/feat-doctor-show-daemon-version.md`) specifies: a CLI
+// (`slug:feat-doctor-show-daemon-version`) specifies: a CLI
 // running newer than the daemon (the common shape after `make install`
 // without `daemon restart`) prints the mismatch warning that names both
 // versions and tells the operator what to run.

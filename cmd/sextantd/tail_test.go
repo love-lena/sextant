@@ -15,7 +15,7 @@ import (
 )
 
 // TestTailGenericSubject is the acceptance test for `sextant tail
-// <subject>` per plans/issues/feat-bus-tail-cli-verb.md.
+// <subject>` per slug:feat-bus-tail-cli-verb.
 //
 // Boots the daemon harness, spawns `sextant tail 'audit.>' --json` as
 // a subprocess, publishes a stub audit envelope on `audit.test`, and

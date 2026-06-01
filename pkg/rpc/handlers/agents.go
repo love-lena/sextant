@@ -116,7 +116,7 @@ type GetAgentStatusDeps struct {
 // wired, the response's AgentStatus.Heartbeat is populated with the
 // last observed timestamp + age. Defense-in-depth for
 // `sextant agents check` per
-// `plans/issues/feat-agents-check-heartbeat-secondary-signal.md`.
+// `slug:feat-agents-check-heartbeat-secondary-signal`.
 func NewGetAgentStatus(kv AgentKV) rpc.Handler {
 	return NewGetAgentStatusWithDeps(GetAgentStatusDeps{KV: kv})
 }

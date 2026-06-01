@@ -1,6 +1,6 @@
 // daemon.go owns the `sextant daemon` parent command. Wraps start /
 // stop / restart / status / logs — verbs that used to live at top
-// level. Migration per `plans/issues/feat-cli-resource-verb-cleanup.md`.
+// level. Migration per `slug:feat-cli-resource-verb-cleanup`.
 //
 // The heavy-lifting helpers (`doStart`, `doStop`, ...) stay in
 // start.go / stop.go / restart.go / status.go / logs.go so the existing

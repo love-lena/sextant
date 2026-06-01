@@ -2,7 +2,7 @@
  * Unit tests for the sidecar's connect-or-exit + reconnect-rearm
  * helpers extracted from `src/index.ts`.
  *
- * Regresses plans/issues/bug-sidecar-nats-disconnect-no-reconnect.md
+ * Regresses slug:bug-sidecar-nats-disconnect-no-reconnect
  * acceptance line: `TestSidecarExitsOnUnrecoverableNATSFailure` —
  * sidecar configured with a bad URL exits non-zero rather than
  * hanging. The integration-shaped repro for that lives at the daemon
