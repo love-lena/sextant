@@ -320,29 +320,65 @@ func (r *Reconciler) sweep(ctx context.Context) {
 func (r *Reconciler) processOne(ctx context.Context, agentID uuid.UUID) {
 	pctx, cancel := context.WithTimeout(ctx, reconcileUpdateTimeout)
 	defer cancel()
-	if err := r.reconcileOne(pctx, agentID); err != nil {
+	requeueAfter, err := r.reconcileOnce(pctx, agentID)
+	if err != nil {
 		log.Printf("sextantd: reconcile %s: %v", agentID, err)
+	}
+	// A recovery hold-off (backoff not yet elapsed) asks to be re-checked
+	// when the deadline passes, rather than waiting for the next periodic
+	// sweep — so the backoff schedule (10s ×2) is actually observed and a
+	// lost agent self-heals promptly. Distinct from the sweep path (routine
+	// re-checks) per RFC §5.1.
+	if requeueAfter > 0 {
+		r.requeueAfter(ctx, agentID, requeueAfter)
 	}
 }
 
-// reconcileOne is the testable single-pass reconcile. Exported-ish for
-// the package's own tests; not part of the public API.
+// requeueAfter enqueues agentID once after d, unless ctx is cancelled
+// first. It mirrors the OnDie debounce-requeue pattern (a single bounded
+// timer goroutine, no unbounded fan-out).
+func (r *Reconciler) requeueAfter(ctx context.Context, agentID uuid.UUID, d time.Duration) {
+	go func() {
+		t := time.NewTimer(d)
+		defer t.Stop()
+		select {
+		case <-ctx.Done():
+		case <-t.C:
+			r.Enqueue(agentID)
+		}
+	}()
+}
+
+// reconcileOne runs one reconcile pass for agentID, discarding the
+// requeue hint. The package's own tests drive single passes through this
+// thin wrapper (they advance the injected clock + re-call rather than
+// relying on a timed requeue).
 func (r *Reconciler) reconcileOne(ctx context.Context, agentID uuid.UUID) error {
+	_, err := r.reconcileOnce(ctx, agentID)
+	return err
+}
+
+// reconcileOnce is the single-pass reconcile core. It re-reads desired,
+// re-observes actual, decides, acts, and writes observed status (sole
+// writer). It returns a requeue hint: a positive duration means "re-check
+// me after this delay" (a recovery hold-off waiting on the backoff
+// deadline); zero means "the periodic sweep is sufficient."
+func (r *Reconciler) reconcileOnce(ctx context.Context, agentID uuid.UUID) (time.Duration, error) {
 	entry, err := r.Defs.Get(ctx, agentID.String())
 	if err != nil {
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			return nil // agent purged; nothing to converge
+			return 0, nil // agent purged; nothing to converge
 		}
-		return fmt.Errorf("get: %w", err)
+		return 0, fmt.Errorf("get: %w", err)
 	}
 	var def sextantproto.AgentDefinition
 	if err := json.Unmarshal(entry.Value(), &def); err != nil {
-		return fmt.Errorf("decode: %w", err)
+		return 0, fmt.Errorf("decode: %w", err)
 	}
 
 	actual, err := r.observe(ctx, def)
 	if err != nil {
-		return fmt.Errorf("observe: %w", err)
+		return 0, fmt.Errorf("observe: %w", err)
 	}
 	// Compute the time-dependent recovery verdict under the injected clock
 	// and hand it to the (pure, clock-free) decision core (RFC §5.9).
@@ -350,22 +386,23 @@ func (r *Reconciler) reconcileOne(ctx context.Context, agentID uuid.UUID) error 
 
 	dec := decideAction(def, actual)
 	rec := actual.Recovery
+	requeue := r.recoveryRequeue(def, dec, rec)
 
 	switch dec.Action {
 	case actionNone:
 		// Converge observed status only if the decision says so (e.g.
 		// container is up but status still says pending → running).
-		return r.writeObserved(ctx, agentID, statusWrite{dec: dec, rec: rec})
+		return requeue, r.writeObserved(ctx, agentID, statusWrite{dec: dec, rec: rec})
 
 	case actionActuate:
 		res, aerr := r.Actuator.Actuate(ctx, def, resumeSessionFor(def))
 		if aerr != nil {
-			return fmt.Errorf("actuate: %w", aerr)
+			return 0, fmt.Errorf("actuate: %w", aerr)
 		}
 		// Stamp the fresh incarnation + caught-up generation/nonce so the
 		// next pass is converged (idempotence). Clear stale precedence
 		// flags for the (now superseded) old incarnation.
-		return r.writeObserved(ctx, agentID, statusWrite{
+		return requeue, r.writeObserved(ctx, agentID, statusWrite{
 			dec:            dec,
 			rec:            rec,
 			newIncarnation: res.IncarnationID,
@@ -375,22 +412,60 @@ func (r *Reconciler) reconcileOne(ctx context.Context, agentID uuid.UUID) error 
 
 	case actionStop:
 		if serr := r.Actuator.Stop(ctx, def); serr != nil {
-			return fmt.Errorf("stop: %w", serr)
+			return 0, fmt.Errorf("stop: %w", serr)
 		}
-		return r.writeObserved(ctx, agentID, statusWrite{dec: dec, rec: rec})
+		return requeue, r.writeObserved(ctx, agentID, statusWrite{dec: dec, rec: rec})
 
 	case actionTeardown:
 		if terr := r.Actuator.Teardown(ctx, def); terr != nil {
-			return fmt.Errorf("teardown: %w", terr)
+			return 0, fmt.Errorf("teardown: %w", terr)
 		}
-		return r.writeObserved(ctx, agentID, statusWrite{dec: dec, rec: rec})
+		return requeue, r.writeObserved(ctx, agentID, statusWrite{dec: dec, rec: rec})
 
 	case actionMarkLost:
-		return r.writeObserved(ctx, agentID, statusWrite{dec: dec, rec: rec})
+		return requeue, r.writeObserved(ctx, agentID, statusWrite{dec: dec, rec: rec})
 
 	default:
-		return nil
+		return 0, nil
 	}
+}
+
+// recoveryRequeue returns how long to wait before re-checking an agent
+// that the recovery branch is holding off (backoff not yet elapsed), so
+// the restart fires near the backoff deadline instead of on the next
+// periodic sweep. Zero when no recovery hold-off applies — every other
+// path relies on the sweep + event hints. It re-derives the same
+// timing computeRecovery used, so the two never disagree.
+func (r *Reconciler) recoveryRequeue(def sextantproto.AgentDefinition, dec decision, rec recoveryInputs) time.Duration {
+	// Only a held-off recoverable terminal asks for a timed re-check: the
+	// decision did nothing (action none), the agent is in a terminal the
+	// policy recovers, it is under budget, and the backoff has not elapsed.
+	if dec.Action != actionNone || def.Spec.Desired != sextantproto.DesiredRun {
+		return 0
+	}
+	if !def.Status.Observed.IsTerminal() || !policyRecovers(def.Spec.RestartPolicy, def.Status.Observed) {
+		return 0
+	}
+	if rec.BudgetExhausted || rec.BackoffElapsed {
+		return 0
+	}
+	if def.Status.LastExit == nil || def.Status.LastExit.At.IsZero() {
+		// No anchor yet (the loss was only just marked this pass). The
+		// MarkLost write stamps LastExit; a follow-up enqueue happens via the
+		// die-hint requeue / sweep, after which the anchor exists.
+		return 0
+	}
+	count := 0
+	if !def.Status.CrashWindow.Since.IsZero() &&
+		r.Now().Sub(def.Status.CrashWindow.Since.Time) < CrashBudgetWindow {
+		count = def.Status.CrashWindow.Count
+	}
+	remaining := backoffFor(count+1) - r.Now().Sub(def.Status.LastExit.At.Time)
+	if remaining <= 0 {
+		return 0
+	}
+	// A small slop so the re-check lands just after the deadline, not on it.
+	return remaining + 100*time.Millisecond
 }
 
 // resumeSessionFor decides whether the actuation should resume the SDK

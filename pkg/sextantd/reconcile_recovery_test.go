@@ -418,6 +418,48 @@ func TestRecovery_StableRunResetsCrashWindow(t *testing.T) {
 	}
 }
 
+// TestRecovery_HeldOffTerminalRequeuesNearBackoffDeadline: while a lost
+// agent is holding off on its backoff, reconcileOnce returns a positive
+// requeue hint (so the daemon re-checks near the deadline instead of
+// waiting a full sweep); once the backoff elapses the hint is zero (the
+// pass actuates instead).
+func TestRecovery_HeldOffTerminalRequeuesNearBackoffDeadline(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1_000_000, 0).UTC()}
+	r, kv, dk, _ := newRecoveryReconciler(t, clock, nil)
+	id := uuid.New()
+	inc := uuid.New()
+	kv.put(id, runningDef(id, inc))
+	dk.clear()
+	ctx := context.Background()
+
+	// Pass 1: mark lost (stamps the backoff anchor). No requeue yet — the
+	// anchor was only just written this pass.
+	if _, err := r.reconcileOnce(ctx, id); err != nil {
+		t.Fatalf("reconcile 1: %v", err)
+	}
+
+	// Pass 2: 5s in, inside the 10s backoff → hold off, requeue for the
+	// remaining ~5s.
+	clock.advance(5 * time.Second)
+	requeue, err := r.reconcileOnce(ctx, id)
+	if err != nil {
+		t.Fatalf("reconcile 2: %v", err)
+	}
+	if requeue <= 0 || requeue > 6*time.Second {
+		t.Fatalf("held-off requeue = %s, want ~5s remaining", requeue)
+	}
+
+	// Pass 3: past the deadline → actuate, no requeue.
+	clock.advance(6 * time.Second)
+	requeue, err = r.reconcileOnce(ctx, id)
+	if err != nil {
+		t.Fatalf("reconcile 3: %v", err)
+	}
+	if requeue != 0 {
+		t.Fatalf("post-backoff requeue = %s, want 0 (actuated this pass)", requeue)
+	}
+}
+
 // --- fake heartbeat lookup -----------------------------------------------
 
 type fakeHeartbeats struct {
