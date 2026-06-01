@@ -99,6 +99,15 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   restart but cannot restart the operator's CLI (RFC §5.8 "stale peer").
 
 ### Changed
+- **New internal `archiving` observed-state in the agent lifecycle
+  enum** (declared breakage for the archive volume-leak fix, above). The
+  finalizer-shaped archive adds `ObservedArchiving` (intermediate, name
+  held) and `ObservedArchived` (terminal, name released, replacing the
+  former reuse of `ended` for archive convergence). Internal and minor:
+  exhaustive switches over observed/lifecycle states handle the new value,
+  and the operator-facing `archived` lifecycle label is unchanged (the
+  `Lifecycle()` projection maps both new states to `archived`). No wire
+  change (the `observed` field is a free-form string on the wire).
 - **The persistent `claude-projects` bind-mount is gone, killing the
   mount-drift class at the root.** The per-agent host bind-mount at
   `/home/agent/.claude/projects` (the mount restart had to learn to
@@ -219,6 +228,23 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   `WireEpoch` bump). RFC §5.8.
 
 ### Fixed
+- **Archive no longer leaks the per-agent volume on a cleanup failure.**
+  Archive used to flip the record terminal and *then* best-effort remove
+  the per-agent `claude_seed` volume, logging any failure to stderr — so a
+  failed reclaim left a "reclaimed" record (name released) sitting on a
+  **leaked volume**, silently. Archive is now finalizer-shaped
+  (control-plane RFC §10.1): the reconciler reclaims the volume **before**
+  finalizing — tear down container → reclaim volume → only on a *confirmed*
+  reclaim flip to terminal. A reclaim failure parks the agent in a new
+  intermediate **`archiving`** observed-state and the reconciler **retries**
+  it every pass (level-triggered) instead of swallowing the error. The
+  **name is held until reclamation is confirmed** (`agentNameInUse` /
+  `AgentDefinition.NameReleased` now gate on the terminal archived state,
+  not merely `desired=archived`), so a re-spawn can't collide with a record
+  whose volume isn't actually gone. The operator-facing `archived` lifecycle
+  label is unchanged (both `archiving` and `archived` project to it). No
+  wire change — `observed` is a free-form string on the wire, so adding the
+  enum value is additive and needs no `WireEpoch` bump.
 - **`restart_agent` silently dropped three mounts `spawn_agent` adds —
   the gitconfig, the worktree `<repo>/.git` bind, and the opt-in SSH
   bind.** A restarted agent lost its git identity (`user.name`/`email`),

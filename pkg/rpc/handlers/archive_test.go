@@ -11,6 +11,34 @@ import (
 	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
+// finalizeArchive simulates the reconciler's terminal-archive write
+// (bug-ctl-archive-volume-leak): once the per-agent volume reclaim is
+// CONFIRMED, the reconciler (sole status writer) flips
+// status.observed=archived, which is the flip that releases the name
+// (AgentDefinition.NameReleased). These handler-level tests have no
+// reconciler, so we stand in for that single confirmed-reclaim write.
+// Archive verbs only edit spec.desired; the name stays HELD until this
+// runs, which is exactly the new invariant under test.
+func finalizeArchive(t *testing.T, kv *fakeMutableKV, id uuid.UUID) {
+	t.Helper()
+	entry, err := kv.Get(context.Background(), id.String())
+	if err != nil {
+		t.Fatalf("finalizeArchive: get %s: %v", id, err)
+	}
+	var def sextantproto.AgentDefinition
+	if err := json.Unmarshal(entry.Value(), &def); err != nil {
+		t.Fatalf("finalizeArchive: decode %s: %v", id, err)
+	}
+	def.Status.Observed = sextantproto.ObservedArchived
+	raw, err := json.Marshal(def)
+	if err != nil {
+		t.Fatalf("finalizeArchive: marshal %s: %v", id, err)
+	}
+	if _, err := kv.Update(context.Background(), id.String(), raw, entry.Revision()); err != nil {
+		t.Fatalf("finalizeArchive: update %s: %v", id, err)
+	}
+}
+
 // TestArchiveAgentRespectsConcurrentRestart pins the symmetric race to
 // TestRestartAgentRespectsConcurrentArchive: if a concurrent writer (the
 // reconciler's status write, or a racing restart) bumps the definition's
@@ -157,6 +185,24 @@ func TestArchiveAgentReleasesName(t *testing.T) {
 	if archivedDef.Lifecycle() != sextantproto.LifecycleArchived {
 		t.Errorf("Lifecycle() after archive = %s, want archived", archivedDef.Lifecycle())
 	}
+
+	// 3b) Name is NOT yet released: the archive only wrote spec.desired; the
+	// reconciler hasn't confirmed the per-agent volume reclaim
+	// (bug-ctl-archive-volume-leak). Re-spawning must still collide until
+	// the terminal observed=archived flip.
+	heldCap := &captureEmit{}
+	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
+		Name: "agent-foo", Template: "default",
+	}), heldCap.emit()); err != nil {
+		t.Fatalf("pre-finalize spawn: %v", err)
+	}
+	if heldCap.resp.Error == nil {
+		t.Fatal("name released before the volume reclaim was confirmed; the leak guard is broken")
+	}
+
+	// 3c) Reconciler confirms the reclaim and finalizes observed=archived —
+	// only NOW is the name released.
+	finalizeArchive(t, defs, spawnResp1.AgentID)
 
 	// 4) Spawn agent-foo again — succeeds. This is the acceptance
 	// criterion stated in bug-kill-doesnt-release-name.md.
@@ -334,6 +380,11 @@ func TestKillWithArchiveFlag(t *testing.T) {
 		t.Fatalf("archive error: %+v", archCap.resp.Error)
 	}
 
+	// The reconciler confirms the per-agent volume reclaim and finalizes
+	// observed=archived — the flip that releases the name
+	// (bug-ctl-archive-volume-leak). Until then the name stays held.
+	finalizeArchive(t, defs, spawnResp.AgentID)
+
 	// Re-spawn with the same name — succeeds.
 	reCap := &captureEmit{}
 	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
@@ -417,7 +468,10 @@ func TestArchiveAllDead(t *testing.T) {
 		t.Fatalf("paused agents = %d, want %d", len(listResp.Agents), len(names))
 	}
 
-	// Archive each.
+	// Archive each, then let the reconciler confirm the per-agent volume
+	// reclaim + finalize observed=archived (the flip that releases the
+	// name, bug-ctl-archive-volume-leak). The --all-dead loop's promise
+	// ("names reusable") holds only after reclamation is confirmed.
 	for _, a := range listResp.Agents {
 		cap := &captureEmit{}
 		if err := archiveH(context.Background(), makeReq(t, sextantproto.ArchiveAgentRequest{
@@ -428,6 +482,7 @@ func TestArchiveAllDead(t *testing.T) {
 		if cap.resp.Error != nil {
 			t.Fatalf("archive %s error: %+v", a.UUID, cap.resp.Error)
 		}
+		finalizeArchive(t, defs, a.UUID)
 	}
 
 	// After the bulk archive, list_agents(filter=paused) returns 0,

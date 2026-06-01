@@ -3,6 +3,7 @@ package sextantd
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"sync"
 	"testing"
@@ -193,6 +194,11 @@ type fakeActuator struct {
 	desiredFP    string
 	desiredEpoch int
 	fpErr        error
+	// teardownFailFor is the number of Teardown calls that should FAIL (the
+	// injected volume-reclaim fault, bug-ctl-archive-volume-leak). It is
+	// decremented on each failing call; once zero, Teardown succeeds. Models
+	// "the reclaim keeps failing, then succeeds on a later pass."
+	teardownFailFor int
 }
 
 func (a *fakeActuator) Actuate(_ context.Context, _ sextantproto.AgentDefinition, _ bool) (handlers.ActuateResult, error) {
@@ -215,6 +221,10 @@ func (a *fakeActuator) Teardown(_ context.Context, _ sextantproto.AgentDefinitio
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.torndown++
+	if a.teardownFailFor > 0 {
+		a.teardownFailFor--
+		return fmt.Errorf("injected volume-reclaim failure")
+	}
 	return nil
 }
 
@@ -539,6 +549,102 @@ func TestReconcile_StopAndArchive(t *testing.T) {
 	}
 	if _, _, td := act.counts(); td != 1 {
 		t.Fatalf("archived did not Teardown (torndown=%d), want 1", td)
+	}
+}
+
+// TestReconcile_ArchiveReclaimsBeforeFinalizing is the finalizer happy
+// path (bug-ctl-archive-volume-leak): a healthy agent with desired=archived
+// is torn down (container stopped + volume reclaimed) and the reconciler
+// finalizes to the TERMINAL observed=archived — the flip that releases the
+// name (NameReleased). Re-archiving the archived agent is then a no-op.
+func TestReconcile_ArchiveReclaimsBeforeFinalizing(t *testing.T) {
+	r, kv, dk, act := newTestReconciler(t)
+	id := uuid.New()
+	inc := uuid.New()
+
+	d := runningDef(id, inc)
+	d.Spec.Desired = sextantproto.DesiredArchived
+	kv.put(id, d)
+	dk.clear() // container already gone; the reclaim is the only remaining step
+
+	// Pass 1: teardown succeeds → finalize to archived.
+	if err := r.reconcileOne(context.Background(), id); err != nil {
+		t.Fatalf("reconcile archive: %v", err)
+	}
+	if _, _, td := act.counts(); td != 1 {
+		t.Fatalf("archive did not Teardown (torndown=%d), want 1", td)
+	}
+	got := kv.get(id)
+	if got.Status.Observed != sextantproto.ObservedArchived {
+		t.Fatalf("observed = %q, want archived (terminal flip after confirmed reclaim)", got.Status.Observed)
+	}
+	if !got.NameReleased() {
+		t.Fatalf("NameReleased() = false after finalized archive; name must be reusable now")
+	}
+
+	// Pass 2: converged — no further teardown, no KV churn (idempotent).
+	w1 := kv.writeCount()
+	if err := r.reconcileOne(context.Background(), id); err != nil {
+		t.Fatalf("reconcile archive 2: %v", err)
+	}
+	if _, _, td := act.counts(); td != 1 {
+		t.Fatalf("archived re-torn-down (torndown=%d); archive not idempotent", td)
+	}
+	if kv.writeCount() != w1 {
+		t.Fatalf("steady-state archived reconcile wrote the KV (%d → %d); not idempotent", w1, kv.writeCount())
+	}
+}
+
+// TestReconcile_ArchiveStaysArchivingOnReclaimFailure is the leak guard
+// (bug-ctl-archive-volume-leak): when the per-agent volume reclaim FAILS,
+// the reconciler must NOT finalize. It records the intermediate
+// observed=archiving (name still held), surfaces the error, and RETRIES
+// next pass; once the reclaim succeeds it advances to terminal archived and
+// releases the name. The name must NOT be reusable while archiving.
+func TestReconcile_ArchiveStaysArchivingOnReclaimFailure(t *testing.T) {
+	r, kv, dk, act := newTestReconciler(t)
+	act.teardownFailFor = 2 // first two reclaim attempts fail, third succeeds
+	id := uuid.New()
+	inc := uuid.New()
+
+	d := runningDef(id, inc)
+	d.Spec.Desired = sextantproto.DesiredArchived
+	kv.put(id, d)
+	dk.clear()
+
+	// Pass 1: reclaim fails → archiving, error surfaced (triggers retry).
+	if err := r.reconcileOne(context.Background(), id); err == nil {
+		t.Fatal("reclaim failure did not surface an error; the reconciler would not retry")
+	}
+	got := kv.get(id)
+	if got.Status.Observed != sextantproto.ObservedArchiving {
+		t.Fatalf("observed = %q, want archiving (intermediate, NOT finalized) after a failed reclaim", got.Status.Observed)
+	}
+	if got.NameReleased() {
+		t.Fatal("name released while archiving (reclaim not confirmed); this is the leak the ticket fixes")
+	}
+
+	// Pass 2: still failing → still archiving, still held.
+	if err := r.reconcileOne(context.Background(), id); err == nil {
+		t.Fatal("second reclaim failure did not surface an error")
+	}
+	if kv.get(id).Status.Observed != sextantproto.ObservedArchiving {
+		t.Fatalf("observed = %q, want archiving on the second failed pass", kv.get(id).Status.Observed)
+	}
+
+	// Pass 3: reclaim succeeds → finalize to terminal archived, name released.
+	if err := r.reconcileOne(context.Background(), id); err != nil {
+		t.Fatalf("reconcile after reclaim recovers: %v", err)
+	}
+	got = kv.get(id)
+	if got.Status.Observed != sextantproto.ObservedArchived {
+		t.Fatalf("observed = %q, want archived once the reclaim succeeded", got.Status.Observed)
+	}
+	if !got.NameReleased() {
+		t.Fatal("NameReleased() = false after a confirmed reclaim; name must be reusable now")
+	}
+	if _, _, td := act.counts(); td != 3 {
+		t.Fatalf("Teardown called %d times, want 3 (retry until reclaim confirmed)", td)
 	}
 }
 

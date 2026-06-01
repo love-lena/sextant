@@ -267,7 +267,12 @@ func NewSpawnAgent(deps SpawnDeps) rpc.Handler {
 }
 
 // agentNameInUse returns true if there's an entry in the definitions
-// bucket whose Name matches and whose desired intent is not archived.
+// bucket whose Name matches and whose name has NOT been released. A name
+// is released only once the archive is FULLY reclaimed (desired=archived
+// AND observed=archived) — bug-ctl-archive-volume-leak: an archive that is
+// still mid-flight (observed=archiving, e.g. the per-agent volume reclaim
+// keeps failing) holds the name so a re-spawn cannot collide with a record
+// whose external state isn't reclaimed yet. See AgentDefinition.NameReleased.
 //
 // O(N) scan over the bucket; very few entries so this is fine.
 func agentNameInUse(ctx context.Context, kv AgentMutableKV, name string) (bool, error) {
@@ -292,7 +297,7 @@ func agentNameInUse(ctx context.Context, kv AgentMutableKV, name string) (bool, 
 			fmt.Fprintf(os.Stderr, "spawn_agent: agentNameInUse: decode %s: %v\n", key, err)
 			continue
 		}
-		if def.Name == name && def.Spec.Desired != sextantproto.DesiredArchived {
+		if def.Name == name && !def.NameReleased() {
 			return true, nil
 		}
 	}
