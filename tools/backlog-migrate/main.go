@@ -91,7 +91,7 @@ func main() {
 		if !res.archive {
 			continue
 		}
-		cmd := exec.Command(*backlogBin, "task", "archive", res.id)
+		cmd := exec.Command(*backlogBin, "task", "archive", res.id) //nolint:gosec // G204: same as createTask — invoking the pinned backlog CLI
 		cmd.Dir = root
 		if out, err := cmd.CombinedOutput(); err != nil {
 			failures = append(failures, fmt.Sprintf("archive %s: %v: %s", res.slug, err, out))
@@ -145,11 +145,11 @@ func createTask(bin, root string, t ticket) (createResult, error) {
 	// "`--help` prints empty output...") aren't parsed as flags.
 	args = append(args, "--", t.fm.Title)
 
-	cmd := exec.Command(bin, args...)
+	cmd := exec.Command(bin, args...) //nolint:gosec // G204: invoking the pinned backlog CLI with fields mapped from local repo tickets is this tool's sole purpose
 	cmd.Dir = root
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return createResult{}, fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
+		return createResult{}, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}
 	id := reTaskID.FindStringSubmatch(string(out))
 	file := reTaskFile.FindStringSubmatch(string(out))
@@ -173,7 +173,7 @@ func restoreCreatedDate(file, createdAt string) error {
 	if ts == "" {
 		return fmt.Errorf("unparseable created_at %q", createdAt)
 	}
-	b, err := os.ReadFile(file)
+	b, err := os.ReadFile(file) //nolint:gosec // G304: reading a backlog-generated file by the path backlog reported
 	if err != nil {
 		return err
 	}
@@ -181,7 +181,7 @@ func restoreCreatedDate(file, createdAt string) error {
 		return fmt.Errorf("no created_date line in %s", file)
 	}
 	out := reCreated.ReplaceAll(b, []byte("created_date: '"+ts+"'"))
-	return os.WriteFile(file, out, 0o644)
+	return os.WriteFile(file, out, 0o600) //nolint:gosec // G304/G703: file is the path backlog reported for a file it just created under backlog/
 }
 
 func normalizeDate(s string) string {
@@ -276,7 +276,7 @@ func loadTickets(dir string) ([]ticket, error) {
 		if e.IsDir() || !strings.HasSuffix(name, ".md") || name == "README.md" {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(dir, name))
+		b, err := os.ReadFile(filepath.Join(dir, name)) //nolint:gosec // G304: reading local ticket markdown from the issues dir
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", name, err)
 		}
