@@ -69,15 +69,23 @@ func run() error {
 		stopCancel()
 	}()
 
+	// Three role-scoped principals since feat-ctl-f0 (RFC §5.7). The
+	// daemon is the broker-enforced sole publisher to agent inboxes; the
+	// operator is scoped to sextant.rpc.* + reads; the sidecar to its own
+	// per-agent streams. The daemon + sidecar passwords are boot-generated.
 	fmt.Printf("nats-server listening on %s\n", srv.Address())
+	fmt.Printf("daemon user        %s\n", srv.DaemonUser())
+	fmt.Printf("daemon password    %s\n", srv.DaemonPassword())
 	fmt.Printf("operator user      %s\n", srv.OperatorUser())
 	fmt.Printf("operator password  %s\n", srv.OperatorPassword())
+	fmt.Printf("sidecar user       %s\n", srv.SidecarUser())
+	fmt.Printf("sidecar password   %s\n", srv.SidecarPassword())
 	fmt.Printf("config             %s\n", srv.ConfigPath())
 	fmt.Printf("data dir           %s\n", srv.DataDir())
 
 	nc, err := srv.Connect()
 	if err != nil {
-		return fmt.Errorf("operator connect: %w", err)
+		return fmt.Errorf("daemon connect: %w", err)
 	}
 	defer nc.Close()
 

@@ -54,4 +54,11 @@ const (
 	// cache) stale heartbeat. Distinct from ErrCodeAgentNotFound so the
 	// CLI can render a specific remedy (`sextant agents restart`).
 	ErrCodeAgentNotReachable = "agent_not_reachable"
+	// ErrCodeWireEpochMismatch is returned by the admission front door
+	// (RFC §5.7/§5.8, feat-ctl-f0) when an inbound RPC envelope's wire
+	// epoch does not match the daemon's WireEpoch — a stale peer the
+	// daemon cannot restart. The Details carry client_proto_version,
+	// daemon_proto_version, and daemon_wire_epoch so the CLI can render
+	// the reinstall remedy (`make install`) without parsing the message.
+	ErrCodeWireEpochMismatch = "wire_epoch_mismatch"
 )
