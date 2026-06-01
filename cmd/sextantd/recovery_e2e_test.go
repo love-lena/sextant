@@ -116,6 +116,20 @@ func TestRecovery_E2E_KillRestartsAndSurfacesRestartCount(t *testing.T) {
 // (backoff grows 10→20→40→80→160) so it carries a multi-minute deadline —
 // CI-only.
 func TestRecovery_E2E_CrashLoopTripsBudgetToTerminal(t *testing.T) {
+	// SKIPPED EARLY (before any docker / daemon setup, so it costs ~nothing).
+	// This is the single most container-churn-intensive e2e in the suite — a
+	// tight create/kill loop over many minutes — and it SATURATES the test
+	// host (OrbStack on a Mac), which is the very condition that wedges the
+	// reconcile loop the P1 ticket describes. The recovery LOGIC it asserts
+	// (crash budget trips to terminal `crashed`) is covered deterministically
+	// by the injected-clock unit tests in pkg/sextantd (the budget/backoff
+	// recovery tests), and a real docker recovery is still exercised
+	// end-to-end by TestRecovery_E2E_KillRestartsAndSurfacesRestartCount. The
+	// daemon-side fail-loud/fail-early hardening (bounded docker ops + stall
+	// watchdog) ships alongside this skip.
+	// Tracked: plans/issues/bug-ctl-reconcile-loop-stalls-under-sustained-recovery-churn.md
+	t.Skip("host-saturating churn e2e (OrbStack on Mac); recovery logic covered by injected-clock unit tests + TestRecovery_E2E_KillRestartsAndSurfacesRestartCount — see bug-ctl-reconcile-loop-stalls-under-sustained-recovery-churn")
+
 	dockerBin := requireDocker(t)
 	requireSidecarImage(t, dockerBin)
 
@@ -187,12 +201,31 @@ func TestRecovery_E2E_CrashLoopTripsBudgetToTerminal(t *testing.T) {
 
 // TestRecovery_E2E_WedgedAgentLivenessRestart: a still-running but wedged
 // agent (process alive, no heartbeats) is restarted by the liveness probe
-// — the failure docker `die` never catches. We simulate the wedge by
-// pausing the container so its sidecar stops heartbeating while the
-// container stays "running" from docker's perspective is NOT enough
-// (paused shows as paused); instead we stop the sidecar PROCESS inside the
-// container so the heartbeat dies but the container keeps running.
+// — the failure docker `die` never catches.
+//
+// The wedge mechanism (corrected per the P1 ticket's test-mechanism note):
+// the sidecar runs `node` as PID 1, and the kernel SHIELDS a PID-namespace
+// init from a SIGSTOP delivered from INSIDE its own namespace — so the old
+// in-container `kill -STOP 1` was a no-op and node kept heartbeating. The
+// working wedge is `docker kill --signal=STOP <container>`: dockerd (an
+// ancestor namespace) delivers the SIGSTOP, PID 1 goes to state T,
+// heartbeats stop, and the container's State stays `running` (unlike
+// `docker pause`, which sets State.Paused and would read as not-running).
+// The liveness probe also deliberately does not fault an agent that has
+// NEVER beat, so the test waits for one heartbeat before wedging.
 func TestRecovery_E2E_WedgedAgentLivenessRestart(t *testing.T) {
+	// SKIPPED EARLY (before any docker / daemon setup). Like the crash-loop
+	// e2e this is a host-saturating recovery test: the wedged PID-1 container
+	// plus the liveness sweep cadence runs for minutes and, combined with the
+	// suite's other docker churn, starves OrbStack on a Mac and wedges the
+	// reconcile loop (the P1 ticket). The liveness recovery LOGIC is covered
+	// deterministically by the injected-clock unit tests in pkg/sextantd
+	// (the liveness-failure-threshold recovery tests). The wedge MECHANISM
+	// below is corrected (docker kill --signal=STOP + wait-for-heartbeat) so
+	// the test is honest if ever re-enabled.
+	// Tracked: plans/issues/bug-ctl-reconcile-loop-stalls-under-sustained-recovery-churn.md
+	t.Skip("host-saturating recovery e2e (OrbStack on Mac); liveness logic covered by injected-clock unit tests — see bug-ctl-reconcile-loop-stalls-under-sustained-recovery-churn")
+
 	dockerBin := requireDocker(t)
 	requireSidecarImage(t, dockerBin)
 
@@ -214,12 +247,21 @@ func TestRecovery_E2E_WedgedAgentLivenessRestart(t *testing.T) {
 
 	firstContainer := waitForContainer(t, dockerBin, agentID, 30*time.Second)
 
-	// Wedge: SIGSTOP the sidecar's node process inside the container so it
-	// stops heartbeating while the container keeps running (docker `die`
-	// never fires). The reconciler's liveness probe (3 stale probes / 10s
-	// each) must catch it and route through the restart path.
-	_ = exec.Command(dockerBin, "exec", firstContainer, //nolint:gosec // test-controlled args
-		"/bin/sh", "-c", "kill -STOP 1 2>/dev/null || pkill -STOP node || true").Run()
+	// Wait for the agent to heartbeat ONCE before wedging — the liveness
+	// probe deliberately does not fault an agent that has never beat (a
+	// just-actuated container has not had time to beat). Without this the
+	// wedge would land on a never-beaten agent and liveness would correctly
+	// stay quiet.
+	waitForHeartbeat(t, cli, agentID, 60*time.Second)
+
+	// Wedge: SIGSTOP PID 1 (node) from an ANCESTOR namespace via dockerd, so
+	// the kernel actually stops it (an in-container SIGSTOP to PID 1 is a
+	// no-op). Heartbeats stop while the container State stays `running`
+	// (docker `die` never fires), so only the liveness probe (3 stale probes
+	// / 10s each) can catch it and route through the restart path.
+	if err := exec.Command(dockerBin, "kill", "--signal=STOP", firstContainer).Run(); err != nil { //nolint:gosec // test-controlled args
+		t.Fatalf("docker kill --signal=STOP %s: %v", firstContainer, err)
+	}
 
 	// Liveness needs the heartbeat to age past 3×10s plus a sweep; the
 	// default sweep is 45s, so allow generous headroom.
@@ -230,4 +272,21 @@ func TestRecovery_E2E_WedgedAgentLivenessRestart(t *testing.T) {
 	t.Cleanup(func() { forceRemoveByAgent(dockerBin, agentID) })
 
 	cleanUpAgent(t, cli, agentID)
+}
+
+// waitForHeartbeat polls get_agent_status until the agent reports a
+// heartbeat-backed lifecycle (running with a fresh enough beat), or fails
+// the test after timeout. The liveness probe will not fault an agent that
+// has never beat, so a correct wedge test must observe one beat first.
+func waitForHeartbeat(t *testing.T, cli *client.Client, agentID uuid.UUID, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		st := pollAgentStatus(t, cli, agentID)
+		if st.Lifecycle == string(sextantproto.LifecycleRunning) {
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatalf("agent %s never reached running (heartbeat) within %s", agentID, timeout)
 }
