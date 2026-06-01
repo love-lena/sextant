@@ -228,6 +228,35 @@ func TestSpecFingerprintChangesWithSpecNotIdentity(t *testing.T) {
 	}
 }
 
+// TestBuildAgentContainerSpecForwardsAPIKeyAndSession re-homes two
+// regression guards that lived in the old restart_test.go before P0
+// moved actuation behind the reconciler: bug-restart-no-api-key-forwarding
+// and bug-restart-preserve-session-noop. Because every actuation (spawn or
+// restart) now routes through this SOLE builder, asserting the env here
+// guarantees both paths forward the key + session by construction.
+func TestBuildAgentContainerSpecForwardsAPIKeyAndSession(t *testing.T) {
+	t.Parallel()
+	in := fullSpecInput(t)
+	in.APIKey = "sk-ant-restart-forwarding-test"
+	in.SessionID = "sess_01HXYZRESTARTPRESERVES"
+	spec := buildAgentContainerSpec(in)
+
+	if got := spec.Env["ANTHROPIC_API_KEY"]; got != in.APIKey {
+		t.Errorf("ANTHROPIC_API_KEY = %q, want %q", got, in.APIKey)
+	}
+	if got := spec.Env["SEXTANT_SESSION_ID"]; got != in.SessionID {
+		t.Errorf("SEXTANT_SESSION_ID = %q, want %q", got, in.SessionID)
+	}
+
+	// An empty SessionID must NOT set SEXTANT_SESSION_ID — otherwise
+	// --preserve-session=false (which clears Spec.Runtime.SessionID, so the
+	// actuator passes "") would still resume the prior conversation.
+	in.SessionID = ""
+	if got, ok := buildAgentContainerSpec(in).Env["SEXTANT_SESSION_ID"]; ok {
+		t.Errorf("empty SessionID set SEXTANT_SESSION_ID = %q, want unset", got)
+	}
+}
+
 func sortedKeys(m map[string]string) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

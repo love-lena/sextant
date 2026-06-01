@@ -130,12 +130,34 @@ func TestPromptAgentNotFound(t *testing.T) {
 
 func seedAgentDefinition(t *testing.T, kv *fakeMutableKV, id uuid.UUID, name string, lifecycle sextantproto.LifecycleState) {
 	t.Helper()
+	// Translate the legacy single-field lifecycle into the spec/status
+	// split (RFC §5.2): the desired half is the operator intent, the
+	// observed half is what the reconciler would have written.
+	spec := sextantproto.AgentSpec{Desired: sextantproto.DesiredRun, Generation: 1}
+	var status sextantproto.AgentStatusRecord
+	switch lifecycle {
+	case sextantproto.LifecycleRunning:
+		status.Observed, status.ObservedGeneration = sextantproto.ObservedRunning, 1
+	case sextantproto.LifecyclePaused:
+		spec.Desired = sextantproto.DesiredPaused
+	case sextantproto.LifecycleArchived:
+		spec.Desired = sextantproto.DesiredArchived
+	case sextantproto.LifecycleEndedState:
+		status.Observed = sextantproto.ObservedEnded
+	case sextantproto.LifecycleCrashedState:
+		status.Observed = sextantproto.ObservedCrashed
+	case sextantproto.LifecycleLostState:
+		status.Observed = sextantproto.ObservedLost
+	default: // LifecycleDefined / pre-actuation
+		status.Observed = sextantproto.ObservedPending
+	}
 	def := sextantproto.AgentDefinition{
 		UUID:      id,
 		Name:      name,
 		Type:      "assistant",
 		Template:  "default",
-		Lifecycle: lifecycle,
+		Spec:      spec,
+		Status:    status,
 		Version:   1,
 		CreatedAt: sextantproto.NowTimestamp(),
 		UpdatedAt: sextantproto.NowTimestamp(),

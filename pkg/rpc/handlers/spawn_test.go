@@ -600,7 +600,7 @@ func TestActuateLeavesNoIncarnationOnContainerStartFailure(t *testing.T) {
 // must stop the orphaned container so it doesn't leak behind a missing
 // incarnation record (the reconciler re-actuates next pass).
 func TestActuateRollsBackContainerOnIncarnationPersistFailure(t *testing.T) {
-	deps, defs, incs, runner, _ := buildDeps(t)
+	deps, _, incs, runner, _ := buildDeps(t)
 
 	spawnH := handlers.NewSpawnAgent(deps)
 	cap := &captureEmit{}
@@ -648,10 +648,16 @@ func TestActuateRollsBackContainerOnIncarnationPersistFailure(t *testing.T) {
 	}
 }
 
-func TestKillAgentStopsContainerAndUpdatesKV(t *testing.T) {
+// TestKillAgentSetsDesiredPausedAndDoesNotActuate pins the new kill
+// contract: kill writes desired=paused and enqueues a reconcile — it is
+// NOT an actuator. The container stop + incarnation-exited transitions
+// now belong to the reconciler (pkg/sextantd TestReconcile_StopAndArchive);
+// this test guards that the handler stays a pure desired-state edit.
+func TestKillAgentSetsDesiredPausedAndDoesNotActuate(t *testing.T) {
 	deps, defs, incs, runner, _ := buildDeps(t)
+	enq := &captureEnqueuer{}
 
-	// Run spawn first so we have a live agent.
+	// Spawn writes desired=run (it does not actuate; the reconciler does).
 	spawnH := handlers.NewSpawnAgent(deps)
 	cap := &captureEmit{}
 	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
@@ -663,11 +669,15 @@ func TestKillAgentStopsContainerAndUpdatesKV(t *testing.T) {
 	if err := json.Unmarshal(cap.resp.Result, &spawnResp); err != nil {
 		t.Fatalf("decode spawn resp: %v", err)
 	}
+	runner.mu.Lock()
+	runsAfterSpawn := len(runner.specs)
+	runner.mu.Unlock()
 
 	killH := handlers.NewKillAgent(handlers.KillDeps{
 		Definitions:  defs,
 		Incarnations: incs,
 		Containers:   runner,
+		Enqueue:      enq,
 	})
 	killCap := &captureEmit{}
 	if err := killH(context.Background(), makeReq(t, sextantproto.KillAgentRequest{
@@ -679,33 +689,27 @@ func TestKillAgentStopsContainerAndUpdatesKV(t *testing.T) {
 		t.Fatalf("kill error: %+v", killCap.resp.Error)
 	}
 
-	// Container was stopped.
+	// kill writes the stop intent: desired=paused (Lifecycle() projects paused).
+	def := readDef(t, defs, spawnResp.AgentID)
+	if def.Spec.Desired != sextantproto.DesiredPaused {
+		t.Errorf("Desired = %s, want paused", def.Spec.Desired)
+	}
+	if def.Lifecycle() != sextantproto.LifecyclePaused {
+		t.Errorf("Lifecycle() = %s, want paused", def.Lifecycle())
+	}
+	if got := enq.calls(); len(got) != 1 || got[0] != spawnResp.AgentID {
+		t.Errorf("enqueue = %v, want exactly [%s]", got, spawnResp.AgentID)
+	}
+
+	// Not an actuator: no container Stop, and no Run beyond what spawn did.
 	runner.mu.Lock()
-	stopped := append([]string(nil), runner.stopped...)
+	stopped, runsNow := len(runner.stopped), len(runner.specs)
 	runner.mu.Unlock()
-	if len(stopped) != 1 {
-		t.Fatalf("stopped count = %d, want 1", len(stopped))
+	if stopped != 0 {
+		t.Errorf("runner.stopped = %d, want 0 (kill defers stopping to the reconciler)", stopped)
 	}
-
-	// Incarnation state flipped to exited with EndedAt set.
-	incSnap := incs.snapshot()
-	var inc sextantproto.AgentIncarnation
-	for _, v := range incSnap {
-		_ = json.Unmarshal(v, &inc)
-	}
-	if inc.State != sextantproto.IncarnationExited {
-		t.Errorf("State = %s, want exited", inc.State)
-	}
-	if inc.EndedAt == nil {
-		t.Error("EndedAt is nil after kill")
-	}
-
-	// Definition lifecycle back to defined.
-	defSnap := defs.snapshot()
-	var def sextantproto.AgentDefinition
-	_ = json.Unmarshal(defSnap[spawnResp.AgentID.String()], &def)
-	if def.Lifecycle != sextantproto.LifecycleDefined {
-		t.Errorf("def.Lifecycle = %s, want defined", def.Lifecycle)
+	if runsNow != runsAfterSpawn {
+		t.Errorf("kill issued container Runs: %d→%d, want unchanged", runsAfterSpawn, runsNow)
 	}
 }
 
