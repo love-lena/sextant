@@ -124,6 +124,13 @@ func newFixture(t *testing.T) *fixture {
 	cfg := DefaultConfig(configDir, dataDir)
 	cfg.NATS.URL = natsSrv.PublicURL()
 	cfg.NATS.OperatorCreds = credsPath
+	// feat-ctl-f0: the shipper consumes every stream via JetStream and
+	// publishes its own telemetry, so it connects with the privileged
+	// daemon principal (in production threaded through runtime.json). The
+	// broker-scoped operator credential is rejected on $JS.ACK.> and
+	// telemetry.* publishes.
+	cfg.NATS.DaemonUser = natsSrv.DaemonUser()
+	cfg.NATS.DaemonPassword = natsSrv.DaemonPassword()
 	cfg.ClickHouse.Addr = chSrv.TCPAddress()
 	cfg.ClickHouse.Database = chSrv.Database()
 	cfg.ClickHouse.User = chSrv.User()

@@ -18,7 +18,6 @@ import (
 	"github.com/love-lena/sextant/pkg/containermgr"
 	"github.com/love-lena/sextant/pkg/mcpserver"
 	"github.com/love-lena/sextant/pkg/rpc/handlers"
-	"github.com/love-lena/sextant/pkg/sextantd"
 	"github.com/love-lena/sextant/pkg/sextantproto"
 	"github.com/love-lena/sextant/pkg/templates"
 )
@@ -104,12 +103,6 @@ func (d *daemon) buildSpawnRuntime(ctx context.Context, nc *nats.Conn, agentDefs
 		return nil, fmt.Errorf("containermgr: %w", err)
 	}
 
-	creds, err := sextantd.ReadOperatorCreds(d.cfg.NATS.OperatorCreds)
-	if err != nil {
-		_ = mgr.Close()
-		return nil, fmt.Errorf("read operator creds: %w", err)
-	}
-
 	hostID, err := os.Hostname()
 	if err != nil || hostID == "" {
 		hostID = "local"
@@ -120,6 +113,14 @@ func (d *daemon) buildSpawnRuntime(ctx context.Context, nc *nats.Conn, agentDefs
 		_ = mgr.Close()
 		return nil, fmt.Errorf("no live NATS")
 	}
+	// Sidecars connect with the broker-scoped SIDECAR principal
+	// (feat-ctl-f0), not the operator creds: a sidecar may publish only
+	// its agents.*.{frames,heartbeat,lifecycle} streams and subscribe its
+	// inbox — it cannot reach the RPC front door or publish prompts. The
+	// password is the daemon's boot-generated sidecar secret, never
+	// persisted to a creds file.
+	sidecarUser := natsSrv.SidecarUser()
+	sidecarPassword := natsSrv.SidecarPassword()
 	// Sidecars reach NATS via host.docker.internal on macOS (OrbStack /
 	// Docker Desktop both resolve it to the loopback host). The port
 	// component matches whatever the kernel allocated on first boot.
@@ -144,8 +145,8 @@ func (d *daemon) buildSpawnRuntime(ctx context.Context, nc *nats.Conn, agentDefs
 		templatesKV:  tplKV,
 		hostID:       hostID,
 		natsURL:      natsURL,
-		natsUser:     creds.User,
-		natsPassword: creds.Password,
+		natsUser:     sidecarUser,
+		natsPassword: sidecarPassword,
 		// mcpURL is populated by setMCPURL after the MCP server binds.
 		mcpURL:         "",
 		issuer:         "sextantd@" + hostID,
