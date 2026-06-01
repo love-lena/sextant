@@ -35,10 +35,12 @@ func mountKeysOf(mounts []containermgr.MountSpec) []mountKey {
 	return out
 }
 
-// fullSpecInput returns a builder input exercising ALL six mounts: a
-// worktree workspace, the git-dir, gitconfig, claude-projects, ssh, and
-// a claude_seed named volume. The def lists both "worktree" and "ssh"
-// mount classes so the projection is faithful.
+// fullSpecInput returns a builder input exercising ALL FIVE mounts: a
+// worktree workspace, the git-dir, gitconfig, ssh, and a claude_seed named
+// volume. The persistent claude-projects bind-mount was removed in S0 (RFC
+// §5.10) — the SDK session JSONL stays in-container, read on demand. The
+// def lists both "worktree" and "ssh" mount classes so the projection is
+// faithful.
 func fullSpecInput(t *testing.T) agentContainerSpecInput {
 	t.Helper()
 	agentUUID := uuid.New()
@@ -62,20 +64,19 @@ func fullSpecInput(t *testing.T) agentContainerSpecInput {
 				},
 			},
 		},
-		IncarnationID:          uuid.New(),
-		JWT:                    "jwt-token",
-		HostID:                 "host-1",
-		NATSURL:                "nats://localhost:4222",
-		NATSUser:               "operator",
-		NATSPassword:           "secret",
-		MCPURL:                 "http://localhost:5172/mcp",
-		Model:                  "claude-opus-4-7[1m]",
-		APIKey:                 "sk-ant-test",
-		WorkspacePath:          "/wt/feat-default-deadbeef",
-		GitDirHostPath:         "/repo/.git",
-		GitConfigHostPath:      "/ws/gitconfig-" + agentUUID.String(),
-		ClaudeProjectsHostPath: "/data/agents/" + agentUUID.String() + "/claude-projects",
-		SSHHostPath:            "/home/op/.ssh",
+		IncarnationID:     uuid.New(),
+		JWT:               "jwt-token",
+		HostID:            "host-1",
+		NATSURL:           "nats://localhost:4222",
+		NATSUser:          "operator",
+		NATSPassword:      "secret",
+		MCPURL:            "http://localhost:5172/mcp",
+		Model:             "claude-opus-4-7[1m]",
+		APIKey:            "sk-ant-test",
+		WorkspacePath:     "/wt/feat-default-deadbeef",
+		GitDirHostPath:    "/repo/.git",
+		GitConfigHostPath: "/ws/gitconfig-" + agentUUID.String(),
+		SSHHostPath:       "/home/op/.ssh",
 		ClaudeSeedMount: &containermgr.MountSpec{
 			VolumeName:    seedVol,
 			ContainerPath: "/home/agent/.claude",
@@ -83,10 +84,13 @@ func fullSpecInput(t *testing.T) agentContainerSpecInput {
 	}
 }
 
-// TestBuildAgentContainerSpecAllSixMounts confirms the builder emits all
-// six mounts, in the documented order, when every source is present.
-// This is the spawn-shape baseline the restart projection must match.
-func TestBuildAgentContainerSpecAllSixMounts(t *testing.T) {
+// TestBuildAgentContainerSpecAllFiveMounts confirms the builder emits all
+// FIVE mounts, in the documented order, when every source is present. The
+// persistent claude-projects bind-mount was removed in S0 (RFC §5.10), so
+// the full set is workspace, git-dir, gitconfig, ssh, claude-seed — NO
+// claude-projects. This is the spawn-shape baseline the restart projection
+// must match.
+func TestBuildAgentContainerSpecAllFiveMounts(t *testing.T) {
 	t.Parallel()
 	spec := buildAgentContainerSpec(fullSpecInput(t))
 
@@ -94,9 +98,14 @@ func TestBuildAgentContainerSpecAllSixMounts(t *testing.T) {
 		WorkspaceMountPath,
 		"/repo/.git",
 		"/home/agent/.gitconfig",
-		"/home/agent/.claude/projects",
 		"/home/agent/.ssh",
 		"/home/agent/.claude",
+	}
+	// Defensive: the dropped claude-projects mount must NOT reappear.
+	for _, m := range spec.Mounts {
+		if m.ContainerPath == "/home/agent/.claude/projects" {
+			t.Errorf("claude-projects bind-mount present but was removed in S0: %+v", m)
+		}
 	}
 	if len(spec.Mounts) != len(wantTargets) {
 		t.Fatalf("mount count = %d, want %d; mounts = %+v", len(spec.Mounts), len(wantTargets), spec.Mounts)

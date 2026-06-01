@@ -15,6 +15,7 @@ type recordingLauncher struct {
 	called             bool
 	pendingCalled      bool
 	tracesID           string
+	contextAgentRef    string
 	contextProjectsDir string
 	contextSessionID   string
 	daemonLogPath      string
@@ -45,8 +46,9 @@ func (r *recordingLauncher) RunTracesShow(_ context.Context, configDir, traceID 
 	return r.returnErr
 }
 
-func (r *recordingLauncher) RunAgentsContext(_ context.Context, configDir, projectsDir, sessionID string) error {
-	r.contextProjectsDir = projectsDir
+func (r *recordingLauncher) RunAgentsContext(_ context.Context, configDir, agentRef, containerJSONLPath, sessionID string) error {
+	r.contextAgentRef = agentRef
+	r.contextProjectsDir = containerJSONLPath
 	r.contextSessionID = sessionID
 	r.configDir = configDir
 	return r.returnErr

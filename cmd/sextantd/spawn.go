@@ -219,6 +219,7 @@ func (r *spawnRuntime) asActuatorDeps(ca *authjwt.CA, chConn driver.Conn) handle
 		Incarnations:   kvMutableAdapter{kv: r.incsKV},
 		Templates:      r.templatesKV,
 		Containers:     r.containers,
+		SnapshotCopier: r.containers, // *containermgr.Manager also satisfies ContainerFileCopier
 		Volumes:        r.containers,
 		CA:             ca,
 		History:        hist,

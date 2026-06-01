@@ -280,6 +280,8 @@ export interface HeartbeatSnapshot {
  */
 export interface SessionLogInfo {
   projects_dir?: string;
+  container_jsonl_path?: string;
+  snapshot_path?: string;
   session_id?: string;
 }
 /**
