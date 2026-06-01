@@ -171,6 +171,51 @@ func (a *Actuator) Actuate(ctx context.Context, def sextantproto.AgentDefinition
 	return ActuateResult{IncarnationID: incID, ContainerID: container.ID}, nil
 }
 
+// DesiredSpecID is the C0-builder-derived identity of the spec the
+// reconciler WOULD build for def right now — the desired half of the P2
+// drift compare (RFC §5.6, §5.8). The reconciler compares it against the
+// labels stamped on the RUNNING container; any mismatch is drift.
+//
+// Fingerprint is recomputed via the SAME buildAgentContainerSpec path the
+// actuation uses (RFC §5.6: "recompute the desired fingerprint from the
+// AgentDefinition via the same builder"). This is what avoids
+// false-positives: we diff OUR builder's output, never docker's
+// normalized/injected live spec. WireEpoch is the daemon's current epoch
+// (RFC §5.8); a running container stamped with an older epoch is drift.
+type DesiredSpecID struct {
+	Fingerprint string
+	WireEpoch   int
+}
+
+// DesiredFingerprint recomputes the desired spec identity for def via the
+// C0 single-source builder (RFC §5.6). It resolves the same host state an
+// actuation would (the projection must match byte-for-byte to compare
+// against the stamped label) but does NOT run a container, mint a usable
+// JWT, or write status — it is a pure read used by the drift branch.
+//
+// Drift is only evaluated for a RUNNING container, so the host artifacts
+// (workspace/worktree, gitconfig, projects dir, seed volume) already exist
+// and buildSpecInput's resolution is idempotent reattachment — it
+// materializes nothing new here. The placeholder JWT only contributes the
+// (always-present) SEXTANT_JWT env KEY, which is all the fingerprint folds
+// in; the token VALUE is deliberately excluded from the fingerprint.
+func (a *Actuator) DesiredFingerprint(ctx context.Context, def sextantproto.AgentDefinition) (DesiredSpecID, error) {
+	// Use the agent's recorded session-resume disposition so the recomputed
+	// env-key set matches what the live incarnation was built with (the
+	// SEXTANT_SESSION_ID env key is gated on it). resumeSessionFor mirrors
+	// the reconciler's actuation call.
+	resume := def.Spec.Runtime.SessionID != nil
+	specIn, _, err := a.buildSpecInput(ctx, def, def.Status.CurrentIncarnationID, "fingerprint-probe", resume)
+	if err != nil {
+		return DesiredSpecID{}, fmt.Errorf("desired fingerprint: build spec input: %w", err)
+	}
+	spec := buildAgentContainerSpec(specIn)
+	return DesiredSpecID{
+		Fingerprint: spec.Labels[LabelSpecFingerprint],
+		WireEpoch:   sextantproto.WireEpoch,
+	}, nil
+}
+
 // Stop stops the agent's live container (the paused-intent action). The
 // record + name are retained. Idempotent: no live incarnation is a
 // no-op.

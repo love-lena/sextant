@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"sync"
 	"time"
 
@@ -105,10 +106,16 @@ type ContainerObserver interface {
 // reconcileActuator is the surface the reconciler drives — the sole
 // actuator (handlers.Actuator satisfies it). Splitting it as an
 // interface keeps the reconciler unit-testable with a fake actuator.
+//
+// DesiredFingerprint recomputes the desired spec identity for the P2
+// drift compare (RFC §5.6, §5.8) via the SAME C0 builder the actuation
+// uses — comparing OUR recomputed fingerprint (never docker's live spec)
+// is what keeps drift detection free of false positives.
 type reconcileActuator interface {
 	Actuate(ctx context.Context, def sextantproto.AgentDefinition, resumeSession bool) (handlers.ActuateResult, error)
 	Stop(ctx context.Context, def sextantproto.AgentDefinition) error
 	Teardown(ctx context.Context, def sextantproto.AgentDefinition) error
+	DesiredFingerprint(ctx context.Context, def sextantproto.AgentDefinition) (handlers.DesiredSpecID, error)
 }
 
 // Reconciler is the spine (RFC §5.1): one idempotent, level-triggered
@@ -150,6 +157,16 @@ type Reconciler struct {
 	// `die` per incarnation — the 5s debounce window. Keyed by incarnation
 	// id.
 	dieAt map[uuid.UUID]time.Time
+	// atTurnBoundary tracks whether each incarnation is currently parked at
+	// a TURN BOUNDARY — the only moment the P2 drift branch may converge a
+	// drifted-but-healthy agent by restart (RFC §5.6: "never mid-turn").
+	// The sidecar emits no turn-START signal, only `lifecycle.turn_ended`,
+	// so the model is: a freshly-started incarnation is mid (its initial
+	// turn) → absent from the map = false; `turn_ended` sets it true (idle,
+	// awaiting the next prompt); `started`/`resumed` re-arm it to false.
+	// Keyed by incarnation id, so a fresh incarnation starts mid-turn with
+	// no stale carry-over. The drift restart waits for true.
+	atTurnBoundary map[uuid.UUID]bool
 }
 
 // NewReconciler constructs a Reconciler with its work queue ready from a
@@ -179,6 +196,7 @@ func NewReconciler(cfg *Reconciler) *Reconciler {
 	r.queue = newWorkQueue()
 	r.sidecarTerminal = make(map[uuid.UUID]sextantproto.ObservedState)
 	r.dieAt = make(map[uuid.UUID]time.Time)
+	r.atTurnBoundary = make(map[uuid.UUID]bool)
 	return r
 }
 
@@ -216,8 +234,10 @@ func (r *Reconciler) OnDie(agentID, incarnationID uuid.UUID) {
 // OnSidecarLifecycle is the hint path for sidecar-driven lifecycle
 // envelopes. A terminal transition (ended/crashed) records the
 // precedence flag (so the reconciler will not downgrade it to lost) and
-// enqueues. Non-terminal transitions (started/resumed) just enqueue so
-// the reconciler converges observed=running.
+// enqueues. A `turn_ended` parks the incarnation at a turn boundary (the
+// P2 drift branch may now converge it by restart); a `started`/`resumed`
+// re-arms it mid-turn. Every transition enqueues so the reconciler
+// re-reads desired + re-observes actual and converges (sole writer).
 func (r *Reconciler) OnSidecarLifecycle(p sextantproto.LifecyclePayload) {
 	if p.AgentUUID == uuid.Nil {
 		return
@@ -230,7 +250,38 @@ func (r *Reconciler) OnSidecarLifecycle(p sextantproto.LifecyclePayload) {
 		delete(r.dieAt, p.IncarnationID)
 		r.mu.Unlock()
 	}
+	// Turn-boundary tracking for the drift branch (RFC §5.6: converge a
+	// drifted agent ONLY at a turn boundary). turn_ended → idle at a
+	// boundary (safe to restart); started/resumed → re-entered a turn.
+	if p.IncarnationID != uuid.Nil {
+		switch p.Transition {
+		case sextantproto.LifecycleTurnEnded:
+			r.mu.Lock()
+			r.atTurnBoundary[p.IncarnationID] = true
+			r.mu.Unlock()
+		case sextantproto.LifecycleStarted, sextantproto.LifecycleResumedEvent:
+			r.mu.Lock()
+			r.atTurnBoundary[p.IncarnationID] = false
+			r.mu.Unlock()
+		}
+	}
 	r.Enqueue(p.AgentUUID)
+}
+
+// forgetIncarnation drops the in-memory per-incarnation hint state for a
+// superseded incarnation (terminal precedence, die-debounce anchor,
+// turn-boundary flag) so the maps don't grow unbounded across restarts.
+// Called when a fresh incarnation is actuated; the old id is dead and its
+// hints are meaningless. Nil id is a no-op.
+func (r *Reconciler) forgetIncarnation(incID uuid.UUID) {
+	if incID == uuid.Nil {
+		return
+	}
+	r.mu.Lock()
+	delete(r.sidecarTerminal, incID)
+	delete(r.dieAt, incID)
+	delete(r.atTurnBoundary, incID)
+	r.mu.Unlock()
 }
 
 // sidecarTerminalObserved maps a wire lifecycle transition to the
@@ -400,8 +451,10 @@ func (r *Reconciler) reconcileOnce(ctx context.Context, agentID uuid.UUID) (time
 			return 0, fmt.Errorf("actuate: %w", aerr)
 		}
 		// Stamp the fresh incarnation + caught-up generation/nonce so the
-		// next pass is converged (idempotence). Clear stale precedence
-		// flags for the (now superseded) old incarnation.
+		// next pass is converged (idempotence). Clear stale per-incarnation
+		// hint state for the (now superseded) old incarnation — including its
+		// turn-boundary flag, so it neither leaks nor lingers.
+		r.forgetIncarnation(def.Status.CurrentIncarnationID)
 		return requeue, r.writeObserved(ctx, agentID, statusWrite{
 			dec:            dec,
 			rec:            rec,
@@ -614,6 +667,7 @@ func (r *Reconciler) observe(ctx context.Context, def sextantproto.AgentDefiniti
 	if err != nil {
 		return actual, fmt.Errorf("list containers: %w", err)
 	}
+	var runningLabels map[string]string
 	for _, info := range infos {
 		// Scope to this host (multi-host safety, mirrors the old L2).
 		if r.HostID != "" && info.Labels[handlers.LabelHostID] != r.HostID {
@@ -622,9 +676,90 @@ func (r *Reconciler) observe(ctx context.Context, def sextantproto.AgentDefiniti
 		actual.ContainerPresent = true
 		if info.Status == "running" {
 			actual.ContainerRunning = true
+			runningLabels = info.Labels
 		}
 	}
+
+	// Drift (RFC §5.6, §5.8) is only actionable against a live RUNNING
+	// container — a stale spec on an exited/lost container is converged by
+	// the loss/recovery paths instead. Compute the verdict here so the pure
+	// decision core stays IO-free.
+	if actual.ContainerRunning {
+		actual.Drift = r.computeDrift(ctx, def, incID, runningLabels)
+	}
 	return actual, nil
+}
+
+// computeDrift compares the RUNNING container's stamped spec-identity
+// labels against the recomputed desired spec identity (RFC §5.6, §5.8) and
+// folds in the turn-boundary gate. It is the imperative shell's drift
+// sensor: it does the IO (recompute via the C0 builder) and the in-memory
+// turn-state read, handing the pure decision core a verdict.
+//
+// FALSE-POSITIVE SAFETY: we diff OUR recomputed fingerprint (rebuilt from
+// the persisted spec via the same buildAgentContainerSpec) against the
+// label WE stamped — never docker's normalized/injected live spec. So
+// docker-added mounts/env never read as drift. Every uncertainty
+// (no fingerprinter wired, missing label, recompute error) fails SAFE:
+// Drifted stays false and a healthy agent is left running.
+func (r *Reconciler) computeDrift(ctx context.Context, def sextantproto.AgentDefinition, incID uuid.UUID, runningLabels map[string]string) driftInputs {
+	var d driftInputs
+
+	r.mu.Lock()
+	d.AtTurnBoundary = r.atTurnBoundary[incID]
+	r.mu.Unlock()
+
+	if r.Actuator == nil || runningLabels == nil {
+		return d
+	}
+	stampedFP, hasFP := runningLabels[handlers.LabelSpecFingerprint]
+	if !hasFP || stampedFP == "" {
+		// No fingerprint stamped (a container that predates C0). Can't make a
+		// safe comparison — leave it converged rather than risk a false
+		// restart. The epoch label is checked below independently.
+		stampedFP = ""
+	}
+
+	desired, err := r.Actuator.DesiredFingerprint(ctx, def)
+	if err != nil {
+		// Recompute failed (e.g. transient host-state resolution error). Fail
+		// safe — do not restart a healthy agent on a probe error; the next
+		// sweep re-checks.
+		log.Printf("sextantd: reconcile %s: drift recompute: %v", def.UUID, err)
+		return d
+	}
+
+	// Fingerprint mismatch ⇒ the running container was built from a stale
+	// spec (only assert it when both sides are present, so a missing stamp
+	// never reads as drift).
+	if stampedFP != "" && desired.Fingerprint != "" && stampedFP != desired.Fingerprint {
+		d.Drifted = true
+	}
+
+	// Epoch skew (RFC §5.8): a container stamped with an OLDER wire-epoch
+	// than the daemon's was built by a since-upgraded daemon ⇒ drift. A
+	// missing/garbage label is treated as 0 (older than any real epoch),
+	// which correctly flags pre-epoch containers as needing a rebuild onto
+	// the current epoch. Only label < current is drift; never label > current
+	// (a newer container the daemon hasn't caught up to — leave it be).
+	if stampedEpoch, ok := parseEpochLabel(runningLabels[handlers.LabelWireEpoch]); !ok || stampedEpoch < desired.WireEpoch {
+		d.Drifted = true
+	}
+
+	return d
+}
+
+// parseEpochLabel parses a stamped wire-epoch label. ok=false for an
+// absent or non-integer value (treated by the caller as stale).
+func parseEpochLabel(s string) (int, bool) {
+	if s == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 // statusWrite bundles everything a single status update applies. It keeps

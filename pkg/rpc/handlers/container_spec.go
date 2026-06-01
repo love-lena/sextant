@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -23,6 +24,17 @@ import (
 // contract (pkg/sextantproto) is owned by a parallel workstream, so
 // the fingerprint must not reach into it yet.
 const LabelSpecFingerprint = "sextant.spec_fingerprint"
+
+// LabelWireEpoch stamps the daemon's sextantproto.WireEpoch onto every
+// container the spec builder produces — the runtime half of version-skew
+// detection (RFC §5.8). The reconciler compares this label against the
+// daemon's current WireEpoch; a container stamped with an older epoch was
+// built by a since-upgraded daemon and is drift (RFC §5.6) → converge by
+// restart at a turn boundary. The label lets this work even for an exited
+// container (no live process to interrogate). Kept distinct from the spec
+// fingerprint so an epoch bump alone (no image/mount/env delta) is still
+// detected, and so the reason a restart fired stays legible.
+const LabelWireEpoch = "sextant.wire_epoch"
 
 // SidecarEntrypoint is the in-image path of the sidecar runtime's
 // entrypoint script. The image's default CMD is /bin/bash (so the M9
@@ -212,6 +224,7 @@ func buildAgentContainerSpec(in agentContainerSpecInput) containermgr.ContainerS
 		labels[LabelTestRun] = in.TestRunLabel
 	}
 	labels[LabelSpecFingerprint] = specFingerprint(def.Spec.Sandbox.Image, mounts, env)
+	labels[LabelWireEpoch] = strconv.Itoa(sextantproto.WireEpoch)
 
 	return containermgr.ContainerSpec{
 		Name:       containerName(def.Name, in.IncarnationID),

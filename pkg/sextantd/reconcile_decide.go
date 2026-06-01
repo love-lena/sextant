@@ -81,6 +81,34 @@ type actualState struct {
 	// RestartPolicy semantics, never re-deriving timing. Zero value =
 	// "no recovery considerations" (the P0 behavior).
 	Recovery recoveryInputs
+	// Drift carries the P2 drift verdict the imperative shell computed by
+	// comparing the RUNNING container's stamped fingerprint/epoch labels
+	// against the recomputed desired spec identity (RFC §5.6, §5.8). The
+	// pure decision core composes it with the turn-boundary gate. Zero value
+	// = "no drift considerations" (drift disabled / never evaluated).
+	Drift driftInputs
+}
+
+// driftInputs is the P2 drift branch's verdict, computed by the imperative
+// shell (which holds the container labels + the C0 builder + the turn-state
+// map) and handed to the pure decision core. Like recoveryInputs, keeping
+// the comparison + turn tracking out here is what lets decideRun stay a
+// clock-free, IO-free unit-testable function (RFC §5.9). It is only ever
+// populated when a container is observed RUNNING (drift on a stale spec is
+// only actionable against a live container).
+type driftInputs struct {
+	// Drifted is true when the running container's stamped spec fingerprint
+	// differs from the recomputed desired fingerprint, OR its stamped
+	// wire-epoch is older than the daemon's current WireEpoch (RFC §5.6,
+	// §5.8). False = converged (or drift detection unavailable, e.g. the
+	// fingerprint label was missing or the recompute failed — fail-safe: a
+	// healthy agent is never restarted on a recompute error).
+	Drifted bool
+	// AtTurnBoundary is true when the sidecar last published
+	// `lifecycle.turn_ended` for this incarnation (it is parked idle between
+	// turns). The drift convergence fires ONLY when this is true — a
+	// mid-turn agent must never be interrupted (RFC §5.6).
+	AtTurnBoundary bool
 }
 
 // recoveryInputs is the P1 recovery branch's time-dependent verdict,
@@ -203,7 +231,7 @@ func decideRun(spec sextantproto.AgentSpec, status sextantproto.AgentStatusRecor
 		return decision{Action: actionActuate, Observed: sextantproto.ObservedPending}
 	}
 
-	// (2) Caught up to spec. Now it is a liveness question.
+	// (2) Caught up to spec. Now it is a liveness + drift question.
 	if actual.ContainerRunning {
 		// Liveness (RFC §8): a container can be running yet WEDGED (hung on a
 		// model call, deadlocked) — docker `die` never fires for it. When the
@@ -212,8 +240,26 @@ func decideRun(spec sextantproto.AgentSpec, status sextantproto.AgentStatusRecor
 		if actual.Recovery.LivenessFailed && policyRecovers(spec.RestartPolicy, sextantproto.ObservedLost) {
 			return decision{Action: actionActuate, Observed: sextantproto.ObservedPending, RecoveryRestart: true}
 		}
-		// Healthy: a live running container exists. Converge observed to
-		// running (idempotent when already running).
+		// Drift (RFC §5.6, §5.8): the running container was built from a
+		// stale spec (its stamped fingerprint ≠ the recomputed desired one,
+		// or its stamped wire-epoch < the daemon's). Converge by REBUILD —
+		// but ONLY at a turn boundary, never mid-turn. This is a DELIBERATE
+		// re-actuation (like a generation bump), not a crash, so it does NOT
+		// set RecoveryRestart (it must not spend the crash budget). A drifted
+		// agent mid-turn falls through to the healthy return below and waits
+		// for `turn_ended`; the next pass (or the periodic sweep) re-checks.
+		//
+		// This is distinct from the generation/nonce gap in (1): that path
+		// fires on an operator spec EDIT (observed_generation < generation)
+		// and replaces the agent immediately. Drift here catches the case
+		// where generation/nonce are already caught up but the BUILD INPUTS
+		// changed underneath a live agent — chiefly a daemon/image upgrade
+		// that moved the desired fingerprint or bumped WireEpoch.
+		if actual.Drift.Drifted && actual.Drift.AtTurnBoundary {
+			return decision{Action: actionActuate, Observed: sextantproto.ObservedPending}
+		}
+		// Healthy (or drifted-but-mid-turn): a live running container exists.
+		// Converge observed to running (idempotent when already running).
 		return decision{Action: actionNone, Observed: sextantproto.ObservedRunning}
 	}
 
