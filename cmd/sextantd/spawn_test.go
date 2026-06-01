@@ -126,30 +126,49 @@ func TestM11SpawnFlowAcceptance(t *testing.T) {
 		}
 	})
 
-	// 5. Container running.
-	if running := containersWithLabel(t, dockerBin, handlers.LabelAgentUUID, agentID.String()); len(running) == 0 {
-		t.Fatalf("no container found with label %s=%s\n--- daemon log ---\n%s",
-			handlers.LabelAgentUUID, agentID, h.tail(t))
-	}
+	// 5. Container running. spawn_agent is ASYNC under the declarative
+	// model (RFC §5.1): the handler writes spec.desired=run and the
+	// reconciler actuates the container on a subsequent pass. So poll for
+	// the container instead of checking once right after the RPC returns
+	// (matches how the Recovery/Archive e2e wait for actuation).
+	// waitForContainer fails the test itself on timeout.
+	_ = waitForContainer(t, dockerBin, agentID, 30*time.Second)
 
-	// 6. list_agents shows it.
-	listCtx, listCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer listCancel()
-	var listResp sextantproto.ListAgentsResponse
-	if err := cli.RPC(listCtx, rpc.VerbListAgents, sextantproto.ListAgentsRequest{}, &listResp); err != nil {
-		t.Fatalf("list_agents: %v", err)
-	}
-	found := false
-	for _, a := range listResp.Agents {
-		if a.UUID == agentID {
-			found = true
-			if a.Lifecycle != "running" {
-				t.Errorf("Lifecycle = %q, want running", a.Lifecycle)
+	// 6. list_agents shows it as running. The reconciler stamps
+	// observed=running on a pass after the container is up, so poll until
+	// the projection catches up rather than asserting on the first read.
+	deadline := time.Now().Add(30 * time.Second)
+	var (
+		found      bool
+		lastLife   string
+		agentCount int
+	)
+	for time.Now().Before(deadline) {
+		listCtx, listCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		var listResp sextantproto.ListAgentsResponse
+		err := cli.RPC(listCtx, rpc.VerbListAgents, sextantproto.ListAgentsRequest{}, &listResp)
+		listCancel()
+		if err != nil {
+			t.Fatalf("list_agents: %v", err)
+		}
+		agentCount = len(listResp.Agents)
+		found = false
+		for _, a := range listResp.Agents {
+			if a.UUID == agentID {
+				found = true
+				lastLife = a.Lifecycle
 			}
 		}
+		if found && lastLife == "running" {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
 	if !found {
-		t.Fatalf("agent %s missing from list_agents (got %d agents)", agentID, len(listResp.Agents))
+		t.Fatalf("agent %s missing from list_agents (got %d agents)", agentID, agentCount)
+	}
+	if lastLife != "running" {
+		t.Fatalf("agent %s Lifecycle = %q, want running\n--- daemon log ---\n%s", agentID, lastLife, h.tail(t))
 	}
 
 	// 7. lifecycle.started envelope arrived.
