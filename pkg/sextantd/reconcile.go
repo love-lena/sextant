@@ -38,6 +38,54 @@ const (
 	reconcileCASRetries = 5
 )
 
+// Recovery safety-rail constants (RFC §8). These govern the P1 recovery
+// branch — auto-restart of an involuntarily-lost agent. They are the
+// k8s-calibrated, agent-adjusted defaults; every one is exercised under
+// the injected clock (Reconciler.Now) so the schedule is deterministic in
+// tests (RFC §5.9).
+const (
+	// RecoveryBackoffInitial is the first wait before re-actuating a
+	// lost/crashed agent. The schedule is RecoveryBackoffInitial ×
+	// RecoveryBackoffFactor each restart, capped at RecoveryBackoffCap:
+	// 10 → 20 → 40 → 80 → 160 → 300 (RFC §8). No per-item jitter (a
+	// multi-node concern).
+	RecoveryBackoffInitial = 10 * time.Second
+	// RecoveryBackoffFactor is the exponential growth factor (×2).
+	RecoveryBackoffFactor = 2
+	// RecoveryBackoffCap is the maximum backoff wait (RFC §8: 300s).
+	RecoveryBackoffCap = 300 * time.Second
+	// RecoveryBackoffReset is how long an agent must run CONTINUOUSLY
+	// before its backoff counter (the windowed crash count) resets. RFC
+	// §8 is emphatic this is an INDEPENDENT constant, NOT 2×the cap —
+	// KEP-4603's own evolution proves coupling them is a trap.
+	RecoveryBackoffReset = 10 * time.Minute
+	// RecoveryStableRun is the minimum continuous run that counts as
+	// "stable" for the reset (RFC §8: ≥30s) — without it an agent whose
+	// container exits right after start would reset its budget every loop.
+	RecoveryStableRun = 30 * time.Second
+	// CrashBudgetLimit is the windowed restart budget: more than this many
+	// auto-restarts inside CrashBudgetWindow flips the agent to terminal
+	// `crashed` (CrashLoopBackOff) and stops auto-restarting (RFC §8).
+	CrashBudgetLimit = 5
+	// CrashBudgetWindow is the crash-budget window (RFC §8: 10 min).
+	CrashBudgetWindow = 10 * time.Minute
+	// LivenessFailureThreshold is the consecutive health-check failure
+	// count that trips the restart path for a wedged-but-running agent
+	// (RFC §8: 3 consecutive failures).
+	LivenessFailureThreshold = 3
+	// LivenessPeriod is the health-check period (RFC §8: 10s). The
+	// reconciler treats a heartbeat older than this as one failed probe.
+	LivenessPeriod = 10 * time.Second
+)
+
+// HeartbeatLookup is the narrow surface the reconciler uses for the
+// liveness probe — the last time a heartbeat was seen for an agent. The
+// in-memory HeartbeatCache (heartbeat_cache.go) satisfies it. Nil-safe:
+// a reconciler with no lookup simply skips the liveness probe.
+type HeartbeatLookup interface {
+	LastSeen(agentID uuid.UUID) (time.Time, bool)
+}
+
 // ReconcileDefsKV is the read+write KV surface the reconciler needs on
 // agent_definitions. The reconciler is the SOLE writer of status, and it
 // retry-rebases on CAS conflict rather than bailing.
@@ -74,6 +122,13 @@ type Reconciler struct {
 	Actuator   reconcileActuator
 	HostID     string
 
+	// Heartbeats is the liveness probe source (RFC §8 P1 liveness). When
+	// non-nil, the reconciler treats a heartbeat staler than LivenessPeriod
+	// as one failed health-check; LivenessFailureThreshold consecutive
+	// failures route a still-running agent through the restart path. Nil
+	// disables the probe (a still-running agent is assumed healthy).
+	Heartbeats HeartbeatLookup
+
 	// SweepInterval is the periodic full-reconcile cadence (default
 	// DefaultSweepInterval). DieDebounce is the lost-suppression window
 	// after an observed die (default DefaultDieDebounce).
@@ -107,6 +162,7 @@ func NewReconciler(cfg *Reconciler) *Reconciler {
 		Containers:    cfg.Containers,
 		Actuator:      cfg.Actuator,
 		HostID:        cfg.HostID,
+		Heartbeats:    cfg.Heartbeats,
 		SweepInterval: cfg.SweepInterval,
 		DieDebounce:   cfg.DieDebounce,
 		Now:           cfg.Now,
@@ -264,67 +320,152 @@ func (r *Reconciler) sweep(ctx context.Context) {
 func (r *Reconciler) processOne(ctx context.Context, agentID uuid.UUID) {
 	pctx, cancel := context.WithTimeout(ctx, reconcileUpdateTimeout)
 	defer cancel()
-	if err := r.reconcileOne(pctx, agentID); err != nil {
+	requeueAfter, err := r.reconcileOnce(pctx, agentID)
+	if err != nil {
 		log.Printf("sextantd: reconcile %s: %v", agentID, err)
+	}
+	// A recovery hold-off (backoff not yet elapsed) asks to be re-checked
+	// when the deadline passes, rather than waiting for the next periodic
+	// sweep — so the backoff schedule (10s ×2) is actually observed and a
+	// lost agent self-heals promptly. Distinct from the sweep path (routine
+	// re-checks) per RFC §5.1.
+	if requeueAfter > 0 {
+		r.requeueAfter(ctx, agentID, requeueAfter)
 	}
 }
 
-// reconcileOne is the testable single-pass reconcile. Exported-ish for
-// the package's own tests; not part of the public API.
+// requeueAfter enqueues agentID once after d, unless ctx is cancelled
+// first. It mirrors the OnDie debounce-requeue pattern (a single bounded
+// timer goroutine, no unbounded fan-out).
+func (r *Reconciler) requeueAfter(ctx context.Context, agentID uuid.UUID, d time.Duration) {
+	go func() {
+		t := time.NewTimer(d)
+		defer t.Stop()
+		select {
+		case <-ctx.Done():
+		case <-t.C:
+			r.Enqueue(agentID)
+		}
+	}()
+}
+
+// reconcileOne runs one reconcile pass for agentID, discarding the
+// requeue hint. The package's own tests drive single passes through this
+// thin wrapper (they advance the injected clock + re-call rather than
+// relying on a timed requeue).
 func (r *Reconciler) reconcileOne(ctx context.Context, agentID uuid.UUID) error {
+	_, err := r.reconcileOnce(ctx, agentID)
+	return err
+}
+
+// reconcileOnce is the single-pass reconcile core. It re-reads desired,
+// re-observes actual, decides, acts, and writes observed status (sole
+// writer). It returns a requeue hint: a positive duration means "re-check
+// me after this delay" (a recovery hold-off waiting on the backoff
+// deadline); zero means "the periodic sweep is sufficient."
+func (r *Reconciler) reconcileOnce(ctx context.Context, agentID uuid.UUID) (time.Duration, error) {
 	entry, err := r.Defs.Get(ctx, agentID.String())
 	if err != nil {
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			return nil // agent purged; nothing to converge
+			return 0, nil // agent purged; nothing to converge
 		}
-		return fmt.Errorf("get: %w", err)
+		return 0, fmt.Errorf("get: %w", err)
 	}
 	var def sextantproto.AgentDefinition
 	if err := json.Unmarshal(entry.Value(), &def); err != nil {
-		return fmt.Errorf("decode: %w", err)
+		return 0, fmt.Errorf("decode: %w", err)
 	}
 
 	actual, err := r.observe(ctx, def)
 	if err != nil {
-		return fmt.Errorf("observe: %w", err)
+		return 0, fmt.Errorf("observe: %w", err)
 	}
+	// Compute the time-dependent recovery verdict under the injected clock
+	// and hand it to the (pure, clock-free) decision core (RFC §5.9).
+	actual.Recovery = r.computeRecovery(def, actual)
 
 	dec := decideAction(def, actual)
+	rec := actual.Recovery
+	requeue := r.recoveryRequeue(def, dec, rec)
 
 	switch dec.Action {
 	case actionNone:
 		// Converge observed status only if the decision says so (e.g.
 		// container is up but status still says pending → running).
-		return r.writeObserved(ctx, agentID, dec, uuid.Nil, 0, 0)
+		return requeue, r.writeObserved(ctx, agentID, statusWrite{dec: dec, rec: rec})
 
 	case actionActuate:
 		res, aerr := r.Actuator.Actuate(ctx, def, resumeSessionFor(def))
 		if aerr != nil {
-			return fmt.Errorf("actuate: %w", aerr)
+			return 0, fmt.Errorf("actuate: %w", aerr)
 		}
 		// Stamp the fresh incarnation + caught-up generation/nonce so the
 		// next pass is converged (idempotence). Clear stale precedence
 		// flags for the (now superseded) old incarnation.
-		return r.writeObserved(ctx, agentID, dec, res.IncarnationID, def.Spec.Generation, def.Spec.ReactuationNonce)
+		return requeue, r.writeObserved(ctx, agentID, statusWrite{
+			dec:            dec,
+			rec:            rec,
+			newIncarnation: res.IncarnationID,
+			gen:            def.Spec.Generation,
+			nonce:          def.Spec.ReactuationNonce,
+		})
 
 	case actionStop:
 		if serr := r.Actuator.Stop(ctx, def); serr != nil {
-			return fmt.Errorf("stop: %w", serr)
+			return 0, fmt.Errorf("stop: %w", serr)
 		}
-		return r.writeObserved(ctx, agentID, dec, uuid.Nil, 0, 0)
+		return requeue, r.writeObserved(ctx, agentID, statusWrite{dec: dec, rec: rec})
 
 	case actionTeardown:
 		if terr := r.Actuator.Teardown(ctx, def); terr != nil {
-			return fmt.Errorf("teardown: %w", terr)
+			return 0, fmt.Errorf("teardown: %w", terr)
 		}
-		return r.writeObserved(ctx, agentID, dec, uuid.Nil, 0, 0)
+		return requeue, r.writeObserved(ctx, agentID, statusWrite{dec: dec, rec: rec})
 
 	case actionMarkLost:
-		return r.writeObserved(ctx, agentID, dec, uuid.Nil, 0, 0)
+		return requeue, r.writeObserved(ctx, agentID, statusWrite{dec: dec, rec: rec})
 
 	default:
-		return nil
+		return 0, nil
 	}
+}
+
+// recoveryRequeue returns how long to wait before re-checking an agent
+// that the recovery branch is holding off (backoff not yet elapsed), so
+// the restart fires near the backoff deadline instead of on the next
+// periodic sweep. Zero when no recovery hold-off applies — every other
+// path relies on the sweep + event hints. It re-derives the same
+// timing computeRecovery used, so the two never disagree.
+func (r *Reconciler) recoveryRequeue(def sextantproto.AgentDefinition, dec decision, rec recoveryInputs) time.Duration {
+	// Only a held-off recoverable terminal asks for a timed re-check: the
+	// decision did nothing (action none), the agent is in a terminal the
+	// policy recovers, it is under budget, and the backoff has not elapsed.
+	if dec.Action != actionNone || def.Spec.Desired != sextantproto.DesiredRun {
+		return 0
+	}
+	if !def.Status.Observed.IsTerminal() || !policyRecovers(def.Spec.RestartPolicy, def.Status.Observed) {
+		return 0
+	}
+	if rec.BudgetExhausted || rec.BackoffElapsed {
+		return 0
+	}
+	if def.Status.LastExit == nil || def.Status.LastExit.At.IsZero() {
+		// No anchor yet (the loss was only just marked this pass). The
+		// MarkLost write stamps LastExit; a follow-up enqueue happens via the
+		// die-hint requeue / sweep, after which the anchor exists.
+		return 0
+	}
+	count := 0
+	if !def.Status.CrashWindow.Since.IsZero() &&
+		r.Now().Sub(def.Status.CrashWindow.Since.Time) < CrashBudgetWindow {
+		count = def.Status.CrashWindow.Count
+	}
+	remaining := backoffFor(count+1) - r.Now().Sub(def.Status.LastExit.At.Time)
+	if remaining <= 0 {
+		return 0
+	}
+	// A small slop so the re-check lands just after the deadline, not on it.
+	return remaining + 100*time.Millisecond
 }
 
 // resumeSessionFor decides whether the actuation should resume the SDK
@@ -333,6 +474,99 @@ func (r *Reconciler) reconcileOne(ctx context.Context, agentID uuid.UUID) error 
 // the resume signal.
 func resumeSessionFor(def sextantproto.AgentDefinition) bool {
 	return def.Spec.Runtime.SessionID != nil
+}
+
+// computeRecovery derives the time-dependent recovery verdict for the
+// current pass (RFC §8). It is the ONLY place in the decision path that
+// reads the clock; the pure decision core (decideAction) composes the
+// booleans this returns. All timing flows through r.Now, so the schedule
+// is deterministic under an injected clock (RFC §5.9).
+//
+//   - BudgetExhausted: the windowed crash count has reached CrashBudgetLimit
+//     (5) within CrashBudgetWindow (10 min). A stale window (its `since`
+//     older than the window) is treated as reset — a long-stable agent does
+//     not carry an ancient crash count.
+//   - BackoffElapsed: the exponential backoff (10s ×2 cap 300s) for the
+//     UPCOMING restart (step = current crash count + 1) has elapsed since
+//     the last observed exit (Status.LastExit.At, stamped when the terminal
+//     was first observed).
+//   - LivenessFailed: the heartbeat for a still-running container is staler
+//     than LivenessFailureThreshold × LivenessPeriod — the windowed
+//     equivalent of "3 consecutive failed probes" a single periodic read can
+//     assert without holding per-probe state.
+func (r *Reconciler) computeRecovery(def sextantproto.AgentDefinition, actual actualState) recoveryInputs {
+	now := r.Now()
+	status := def.Status
+
+	var rec recoveryInputs
+
+	// Crash budget. Only counts within the live window; a window whose
+	// `since` predates the window has lapsed and does not count.
+	windowLive := !status.CrashWindow.Since.IsZero() &&
+		now.Sub(status.CrashWindow.Since.Time) < CrashBudgetWindow
+	if windowLive && status.CrashWindow.Count >= CrashBudgetLimit {
+		rec.BudgetExhausted = true
+	}
+
+	// Backoff. The step is the count of restarts already taken in this
+	// window (so the FIRST restart waits backoffFor(1)=10s, the second
+	// backoffFor(2)=20s, …). Anchored on the observed exit time.
+	count := 0
+	if windowLive {
+		count = status.CrashWindow.Count
+	}
+	wait := backoffFor(count + 1)
+	var exitAt time.Time
+	if status.LastExit != nil {
+		exitAt = status.LastExit.At.Time
+	}
+	if exitAt.IsZero() {
+		// No recorded exit yet — the terminal was only just observed this
+		// pass (e.g. actionMarkLost stamps LastExit on the way out). Hold
+		// off until a later pass has the anchor.
+		rec.BackoffElapsed = false
+	} else {
+		rec.BackoffElapsed = now.Sub(exitAt) >= wait
+	}
+
+	// Liveness probe (only meaningful while the container is observed
+	// running). A heartbeat staler than LivenessPeriod is one failed probe;
+	// the persisted LivenessFailures counter accumulates CONSECUTIVE
+	// failures, and the THIRD (LivenessFailureThreshold) trips the restart
+	// path for a wedged-but-running agent docker `die` never catches.
+	if actual.ContainerRunning && r.Heartbeats != nil {
+		rec.livenessProbedRunning = true
+		last, ok := r.Heartbeats.LastSeen(def.UUID)
+		// No heartbeat ever seen is NOT a failure here — a just-actuated
+		// container has not had time to beat; the periodic sweep re-probes.
+		if ok && now.Sub(last) >= LivenessPeriod {
+			rec.livenessProbeFailed = true
+			// Effective consecutive-failure count INCLUDING this pass.
+			if status.LivenessFailures+1 >= LivenessFailureThreshold {
+				rec.LivenessFailed = true
+			}
+		}
+	}
+
+	return rec
+}
+
+// backoffFor returns the exponential backoff wait for the nth restart
+// (1-indexed) in a crash window: RecoveryBackoffInitial × Factor^(n-1),
+// capped at RecoveryBackoffCap. n≤1 → initial (RFC §8: 10 → 20 → 40 → 80
+// → 160 → 300).
+func backoffFor(n int) time.Duration {
+	if n <= 1 {
+		return RecoveryBackoffInitial
+	}
+	wait := RecoveryBackoffInitial
+	for i := 1; i < n; i++ {
+		wait *= RecoveryBackoffFactor
+		if wait >= RecoveryBackoffCap {
+			return RecoveryBackoffCap
+		}
+	}
+	return wait
 }
 
 // observe re-reads actual container reality for def (level-triggered).
@@ -393,18 +627,39 @@ func (r *Reconciler) observe(ctx context.Context, def sextantproto.AgentDefiniti
 	return actual, nil
 }
 
+// statusWrite bundles everything a single status update applies. It keeps
+// the recovery bookkeeping (crash window, backoff anchor, liveness
+// counter) readable rather than smearing positional args across
+// writeObserved's signature.
+type statusWrite struct {
+	dec decision
+	// rec is this pass's recovery verdict; it carries the raw liveness
+	// probe outcome the bookkeeping persists into the consecutive-failure
+	// counter.
+	rec recoveryInputs
+	// newIncarnation/gen/nonce are stamped on an actuation so the next
+	// pass is converged. Zero newIncarnation means "no actuation."
+	newIncarnation uuid.UUID
+	gen            int
+	nonce          int
+}
+
 // writeObserved is the SOLE-writer status update (RFC §5.2). It
 // retry-rebases on CAS conflict (RFC §5.8: a background loop must not
 // bail on 409). When dec.Observed is empty it leaves observed unchanged
-// (e.g. a stop still draining). newIncarnation/gen/nonce are stamped on
-// an actuation so the next pass is converged.
+// (e.g. a stop still draining). It also owns the P1 recovery bookkeeping:
+// the monotonic RestartCount, the windowed CrashWindow budget, the
+// exponential-backoff anchor (LastExit.At), the stable-run RunningSince,
+// and the liveness counter (RFC §8).
 //
 // CRITICAL guardrail (RFC §5.2): a status-only write must NOT itself
 // trigger a reconcile. This method does not Enqueue — the daemon wires
 // the watch so status-only KV changes are filtered (see the daemon
 // wiring + the no-self-reconcile test).
-func (r *Reconciler) writeObserved(ctx context.Context, agentID uuid.UUID, dec decision, newIncarnation uuid.UUID, gen, nonce int) error {
-	now := sextantproto.AtTimestamp(r.Now().UTC())
+func (r *Reconciler) writeObserved(ctx context.Context, agentID uuid.UUID, sw statusWrite) error {
+	dec := sw.dec
+	nowT := r.Now().UTC()
+	now := sextantproto.AtTimestamp(nowT)
 	for attempt := 0; attempt < reconcileCASRetries; attempt++ {
 		entry, err := r.Defs.Get(ctx, agentID.String())
 		if err != nil {
@@ -419,22 +674,31 @@ func (r *Reconciler) writeObserved(ctx context.Context, agentID uuid.UUID, dec d
 		}
 
 		before := def.Status
+		prevObserved := def.Status.Observed
 		def.Status.LastReconciledAt = now
 		if dec.Observed != "" {
 			def.Status.Observed = dec.Observed
 			def.Status.Phase = string(dec.Observed)
 		}
-		if newIncarnation != uuid.Nil {
-			def.Status.CurrentIncarnationID = newIncarnation
-			def.Status.ObservedGeneration = gen
-			def.Status.ObservedNonce = nonce
+
+		// Recovery bookkeeping driven by the observed transition (RFC §8).
+		r.applyRecoveryBookkeeping(&def.Status, sw, prevObserved, nowT, now)
+
+		if sw.newIncarnation != uuid.Nil {
+			def.Status.CurrentIncarnationID = sw.newIncarnation
+			def.Status.ObservedGeneration = sw.gen
+			def.Status.ObservedNonce = sw.nonce
 			def.Status.RestartCount++
+			// A fresh incarnation has not yet been observed running; reset the
+			// per-incarnation liveness counter and the stable-run anchor.
+			def.Status.LivenessFailures = 0
+			def.Status.RunningSince = sextantproto.Timestamp{}
 		}
 
 		// Idempotence shortcut: nothing meaningful changed (only
 		// LastReconciledAt would move) — skip the write so a steady-state
 		// reconcile is a true no-op and does not churn the KV / version.
-		if newIncarnation == uuid.Nil && statusEqualIgnoringReconcileTime(before, def.Status) {
+		if sw.newIncarnation == uuid.Nil && statusEqualIgnoringReconcileTime(before, def.Status) {
 			return nil
 		}
 
@@ -456,6 +720,67 @@ func (r *Reconciler) writeObserved(ctx context.Context, agentID uuid.UUID, dec d
 		// rather than surfacing the 409.
 	}
 	return fmt.Errorf("status write for %s: gave up after %d CAS conflicts", agentID, reconcileCASRetries)
+}
+
+// applyRecoveryBookkeeping mutates the recovery counters per the observed
+// transition (RFC §8). It runs BEFORE the actuation stamp so a recovery
+// restart sees the pre-restart crash window.
+//
+//   - Into a terminal (lost/crashed/ended) from a non-terminal: stamp
+//     LastExit.At (the backoff anchor) and clear the stable-run anchor.
+//   - A recovery restart (RecoveryRestart actuation): increment the
+//     windowed crash count (opening the window if empty/lapsed).
+//   - Into healthy running: set RunningSince on first sight, reset the
+//     liveness counter, and reset the crash window once the run has been
+//     stable ≥ RecoveryBackoffReset (an INDEPENDENT constant — RFC §8).
+func (r *Reconciler) applyRecoveryBookkeeping(status *sextantproto.AgentStatusRecord, sw statusWrite, prevObserved sextantproto.ObservedState, nowT time.Time, now sextantproto.Timestamp) {
+	dec := sw.dec
+	newObserved := status.Observed
+
+	// (a) First observation of a terminal — anchor the backoff on the exit
+	// time so computeRecovery can measure the wait next pass.
+	if newObserved.IsTerminal() && prevObserved != newObserved {
+		status.LastExit = &sextantproto.LastExit{
+			Reason: string(newObserved),
+			At:     now,
+		}
+		status.RunningSince = sextantproto.Timestamp{}
+		status.LivenessFailures = 0
+	}
+
+	// (b) A recovery restart spends one unit of crash budget. A deliberate
+	// re-actuation (spec/nonce bump) does NOT — it is not a crash.
+	if dec.Action == actionActuate && dec.RecoveryRestart {
+		windowLive := !status.CrashWindow.Since.IsZero() &&
+			nowT.Sub(status.CrashWindow.Since.Time) < CrashBudgetWindow
+		if !windowLive {
+			status.CrashWindow = sextantproto.CrashWindow{Since: now}
+		}
+		status.CrashWindow.Count++
+	}
+
+	// (c) Healthy running — track the stable-run anchor, accumulate the
+	// liveness counter, and reset the crash window after a stable run.
+	if newObserved == sextantproto.ObservedRunning {
+		// Liveness counter: a failed probe this pass increments the
+		// consecutive-failure count; a healthy probe (or no probe) resets it.
+		// (When the decision is a liveness-driven restart, newObserved is
+		// pending, not running, so we are not in this branch — the counter is
+		// cleared by the actuation reset instead.)
+		if sw.rec.livenessProbedRunning && sw.rec.livenessProbeFailed {
+			status.LivenessFailures++
+		} else {
+			status.LivenessFailures = 0
+		}
+		if status.RunningSince.IsZero() {
+			status.RunningSince = now
+		} else if nowT.Sub(status.RunningSince.Time) >= RecoveryBackoffReset {
+			// Stable for the full reset window — clear the crash budget so a
+			// later transient crash starts fresh (RFC §8: reset only after a
+			// stable run; an INDEPENDENT constant, not 2×cap).
+			status.CrashWindow = sextantproto.CrashWindow{}
+		}
+	}
 }
 
 // statusEqualIgnoringReconcileTime compares two status records ignoring

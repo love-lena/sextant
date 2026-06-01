@@ -124,6 +124,15 @@
         "crash_window": {
           "$ref": "#/$defs/CrashWindow"
         },
+        "backoff_until": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "running_since": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "liveness_failures": {
+          "type": "integer"
+        },
         "last_exit": {
           "$ref": "#/$defs/LastExit"
         },

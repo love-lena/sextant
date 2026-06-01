@@ -83,6 +83,7 @@ func NewListAgents(kv AgentKV) rpc.Handler {
 				Lifecycle: string(def.Lifecycle()),
 				Version:   def.Version,
 				UpdatedAt: def.UpdatedAt.Time,
+				Restarts:  def.Status.RestartCount,
 			})
 		}
 		return emitOK(emit, sextantproto.ListAgentsResponse{Agents: summaries})
@@ -155,6 +156,10 @@ func NewGetAgentStatusWithDeps(deps GetAgentStatusDeps) rpc.Handler {
 			Lifecycle: string(def.Lifecycle()),
 			Version:   def.Version,
 			UpdatedAt: def.UpdatedAt.Time,
+			Restarts:  def.Status.RestartCount,
+		}
+		if def.Status.LastExit != nil {
+			status.LastExitReason = def.Status.LastExit.Reason
 		}
 		if args.IncludeHeartbeat {
 			status.Heartbeat = buildHeartbeatSnapshot(deps, def.UUID)

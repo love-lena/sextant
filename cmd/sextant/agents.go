@@ -132,10 +132,10 @@ func newAgentsListCmd() *cobra.Command {
 				return errNoResults
 			}
 			tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
-			println(tw, "UUID\tNAME\tTEMPLATE\tLIFECYCLE\tVERSION\tUPDATED")
+			println(tw, "UUID\tNAME\tTEMPLATE\tLIFECYCLE\tRESTARTS\tVERSION\tUPDATED")
 			for _, a := range resp.Agents {
-				printf(tw, "%s\t%s\t%s\t%s\t%d\t%s\n",
-					a.UUID, a.Name, a.Template, a.Lifecycle, a.Version,
+				printf(tw, "%s\t%s\t%s\t%s\t%d\t%d\t%s\n",
+					a.UUID, a.Name, a.Template, a.Lifecycle, a.Restarts, a.Version,
 					a.UpdatedAt.Format(time.RFC3339))
 			}
 			return tw.Flush()
@@ -180,6 +180,10 @@ func newAgentsShowCmd() *cobra.Command {
 			printf(out, "UUID:      %s\n", resp.Status.UUID)
 			printf(out, "Name:      %s\n", resp.Status.Name)
 			printf(out, "Lifecycle: %s\n", resp.Status.Lifecycle)
+			printf(out, "Restarts:  %d\n", resp.Status.Restarts)
+			if resp.Status.LastExitReason != "" {
+				printf(out, "Last exit: %s\n", resp.Status.LastExitReason)
+			}
 			printf(out, "Version:   %d\n", resp.Status.Version)
 			printf(out, "Updated:   %s\n", resp.Status.UpdatedAt.Format(time.RFC3339))
 			return nil
