@@ -349,12 +349,13 @@ func (r *Reconciler) reconcileOne(ctx context.Context, agentID uuid.UUID) error 
 	actual.Recovery = r.computeRecovery(def, actual)
 
 	dec := decideAction(def, actual)
+	rec := actual.Recovery
 
 	switch dec.Action {
 	case actionNone:
 		// Converge observed status only if the decision says so (e.g.
 		// container is up but status still says pending → running).
-		return r.writeObserved(ctx, agentID, statusWrite{dec: dec})
+		return r.writeObserved(ctx, agentID, statusWrite{dec: dec, rec: rec})
 
 	case actionActuate:
 		res, aerr := r.Actuator.Actuate(ctx, def, resumeSessionFor(def))
@@ -366,6 +367,7 @@ func (r *Reconciler) reconcileOne(ctx context.Context, agentID uuid.UUID) error 
 		// flags for the (now superseded) old incarnation.
 		return r.writeObserved(ctx, agentID, statusWrite{
 			dec:            dec,
+			rec:            rec,
 			newIncarnation: res.IncarnationID,
 			gen:            def.Spec.Generation,
 			nonce:          def.Spec.ReactuationNonce,
@@ -375,16 +377,16 @@ func (r *Reconciler) reconcileOne(ctx context.Context, agentID uuid.UUID) error 
 		if serr := r.Actuator.Stop(ctx, def); serr != nil {
 			return fmt.Errorf("stop: %w", serr)
 		}
-		return r.writeObserved(ctx, agentID, statusWrite{dec: dec})
+		return r.writeObserved(ctx, agentID, statusWrite{dec: dec, rec: rec})
 
 	case actionTeardown:
 		if terr := r.Actuator.Teardown(ctx, def); terr != nil {
 			return fmt.Errorf("teardown: %w", terr)
 		}
-		return r.writeObserved(ctx, agentID, statusWrite{dec: dec})
+		return r.writeObserved(ctx, agentID, statusWrite{dec: dec, rec: rec})
 
 	case actionMarkLost:
-		return r.writeObserved(ctx, agentID, statusWrite{dec: dec})
+		return r.writeObserved(ctx, agentID, statusWrite{dec: dec, rec: rec})
 
 	default:
 		return nil
@@ -453,11 +455,19 @@ func (r *Reconciler) computeRecovery(def sextantproto.AgentDefinition, actual ac
 	}
 
 	// Liveness probe (only meaningful while the container is observed
-	// running). A heartbeat staler than the failure threshold × period is
-	// treated as the wedged-but-running case docker `die` never catches.
+	// running). A heartbeat staler than LivenessPeriod is one failed probe;
+	// the persisted LivenessFailures counter accumulates CONSECUTIVE
+	// failures, and the THIRD (LivenessFailureThreshold) trips the restart
+	// path for a wedged-but-running agent docker `die` never catches.
 	if actual.ContainerRunning && r.Heartbeats != nil {
-		if last, ok := r.Heartbeats.LastSeen(def.UUID); ok {
-			if now.Sub(last) >= time.Duration(LivenessFailureThreshold)*LivenessPeriod {
+		rec.livenessProbedRunning = true
+		last, ok := r.Heartbeats.LastSeen(def.UUID)
+		// No heartbeat ever seen is NOT a failure here — a just-actuated
+		// container has not had time to beat; the periodic sweep re-probes.
+		if ok && now.Sub(last) >= LivenessPeriod {
+			rec.livenessProbeFailed = true
+			// Effective consecutive-failure count INCLUDING this pass.
+			if status.LivenessFailures+1 >= LivenessFailureThreshold {
 				rec.LivenessFailed = true
 			}
 		}
@@ -548,6 +558,10 @@ func (r *Reconciler) observe(ctx context.Context, def sextantproto.AgentDefiniti
 // writeObserved's signature.
 type statusWrite struct {
 	dec decision
+	// rec is this pass's recovery verdict; it carries the raw liveness
+	// probe outcome the bookkeeping persists into the consecutive-failure
+	// counter.
+	rec recoveryInputs
 	// newIncarnation/gen/nonce are stamped on an actuation so the next
 	// pass is converged. Zero newIncarnation means "no actuation."
 	newIncarnation uuid.UUID
@@ -593,7 +607,7 @@ func (r *Reconciler) writeObserved(ctx context.Context, agentID uuid.UUID, sw st
 		}
 
 		// Recovery bookkeeping driven by the observed transition (RFC §8).
-		r.applyRecoveryBookkeeping(&def.Status, dec, prevObserved, nowT, now)
+		r.applyRecoveryBookkeeping(&def.Status, sw, prevObserved, nowT, now)
 
 		if sw.newIncarnation != uuid.Nil {
 			def.Status.CurrentIncarnationID = sw.newIncarnation
@@ -644,7 +658,8 @@ func (r *Reconciler) writeObserved(ctx context.Context, agentID uuid.UUID, sw st
 //   - Into healthy running: set RunningSince on first sight, reset the
 //     liveness counter, and reset the crash window once the run has been
 //     stable ≥ RecoveryBackoffReset (an INDEPENDENT constant — RFC §8).
-func (r *Reconciler) applyRecoveryBookkeeping(status *sextantproto.AgentStatusRecord, dec decision, prevObserved sextantproto.ObservedState, nowT time.Time, now sextantproto.Timestamp) {
+func (r *Reconciler) applyRecoveryBookkeeping(status *sextantproto.AgentStatusRecord, sw statusWrite, prevObserved sextantproto.ObservedState, nowT time.Time, now sextantproto.Timestamp) {
+	dec := sw.dec
 	newObserved := status.Observed
 
 	// (a) First observation of a terminal — anchor the backoff on the exit
@@ -669,10 +684,19 @@ func (r *Reconciler) applyRecoveryBookkeeping(status *sextantproto.AgentStatusRe
 		status.CrashWindow.Count++
 	}
 
-	// (c) Healthy running — track the stable-run anchor and reset the crash
-	// window after a continuously-stable run.
+	// (c) Healthy running — track the stable-run anchor, accumulate the
+	// liveness counter, and reset the crash window after a stable run.
 	if newObserved == sextantproto.ObservedRunning {
-		status.LivenessFailures = 0
+		// Liveness counter: a failed probe this pass increments the
+		// consecutive-failure count; a healthy probe (or no probe) resets it.
+		// (When the decision is a liveness-driven restart, newObserved is
+		// pending, not running, so we are not in this branch — the counter is
+		// cleared by the actuation reset instead.)
+		if sw.rec.livenessProbedRunning && sw.rec.livenessProbeFailed {
+			status.LivenessFailures++
+		} else {
+			status.LivenessFailures = 0
+		}
 		if status.RunningSince.IsZero() {
 			status.RunningSince = now
 		} else if nowT.Sub(status.RunningSince.Time) >= RecoveryBackoffReset {

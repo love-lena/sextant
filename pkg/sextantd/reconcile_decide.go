@@ -104,6 +104,12 @@ type recoveryInputs struct {
 	// is still observed running — a wedged-but-running agent docker `die`
 	// never catches (RFC §8). It routes through the normal restart path.
 	LivenessFailed bool
+	// livenessProbedRunning / livenessProbeFailed carry this pass's raw
+	// probe outcome to the status bookkeeping (which persists the
+	// consecutive-failure counter). Unexported: the pure decision core
+	// reads only LivenessFailed.
+	livenessProbedRunning bool
+	livenessProbeFailed   bool
 }
 
 // decision is the pure verdict: the action plus the observed-state the
