@@ -324,3 +324,107 @@ func TestDecideAction_RestartNonceAppliedIsConverged(t *testing.T) {
 		t.Fatalf("after applying nonce, decision = %v, want none", got.Action)
 	}
 }
+
+// TestDecideDrift_TurnBoundaryGate is the truth table for the P2 drift
+// branch (RFC §5.6, §5.8). For a desired=run agent that is caught up to
+// its generation/nonce and running, the verdict is:
+//
+//	drifted ∧ at turn boundary → actuate (converge by restart)
+//	drifted ∧ mid-turn         → none (wait for turn_ended, NEVER interrupt)
+//	not drifted                → none (no false-positive restart)
+//
+// The decision core stays IO-free: the drift verdict (compare + turn
+// state) is supplied directly via actualState.Drift, exactly as the
+// recovery verdict is. A drift restart is a DELIBERATE re-actuation, so it
+// must NOT set RecoveryRestart (it does not spend the crash budget).
+func TestDecideDrift_TurnBoundaryGate(t *testing.T) {
+	t.Parallel()
+
+	caughtUp := func(drift driftInputs) decision {
+		d := def(
+			sextantproto.AgentSpec{Desired: sextantproto.DesiredRun, Generation: 1},
+			sextantproto.AgentStatusRecord{
+				Observed:             sextantproto.ObservedRunning,
+				CurrentIncarnationID: liveIncarnation,
+				ObservedGeneration:   1,
+			},
+		)
+		return decideAction(d, actualState{ContainerPresent: true, ContainerRunning: true, Drift: drift})
+	}
+
+	cases := []struct {
+		name       string
+		drift      driftInputs
+		wantAction actionKind
+		wantObs    sextantproto.ObservedState
+		wantRecov  bool
+	}{
+		{
+			name:       "drifted + at turn boundary -> actuate (deliberate, not a recovery restart)",
+			drift:      driftInputs{Drifted: true, AtTurnBoundary: true},
+			wantAction: actionActuate, wantObs: sextantproto.ObservedPending, wantRecov: false,
+		},
+		{
+			name:       "drifted + mid-turn -> none (do not interrupt a turn)",
+			drift:      driftInputs{Drifted: true, AtTurnBoundary: false},
+			wantAction: actionNone, wantObs: sextantproto.ObservedRunning,
+		},
+		{
+			name:       "not drifted + at turn boundary -> none (no false-positive restart)",
+			drift:      driftInputs{Drifted: false, AtTurnBoundary: true},
+			wantAction: actionNone, wantObs: sextantproto.ObservedRunning,
+		},
+		{
+			name:       "no drift considerations (zero value) -> none",
+			drift:      driftInputs{},
+			wantAction: actionNone, wantObs: sextantproto.ObservedRunning,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := caughtUp(tc.drift)
+			if got.Action != tc.wantAction {
+				t.Fatalf("action = %v, want %v", got.Action, tc.wantAction)
+			}
+			if tc.wantObs != "" && got.Observed != tc.wantObs {
+				t.Fatalf("observed = %q, want %q", got.Observed, tc.wantObs)
+			}
+			if got.Action == actionActuate && got.RecoveryRestart != tc.wantRecov {
+				t.Fatalf("RecoveryRestart = %v, want %v (drift restart must not spend crash budget)", got.RecoveryRestart, tc.wantRecov)
+			}
+		})
+	}
+}
+
+// TestDecideDrift_GenerationGapTakesPrecedence proves an operator spec
+// EDIT (Generation bumped, observed_generation behind) re-actuates
+// IMMEDIATELY — it does NOT wait for a turn boundary. The turn-boundary
+// gate is only for the silent fingerprint/epoch drift of a caught-up
+// agent; an explicit edit is the operator's deliberate intent and converges
+// at once (RFC §5.6: generation/observed_generation is how editing a live
+// spec converges). Even mid-turn, even "not drifted" per the fingerprint.
+func TestDecideDrift_GenerationGapTakesPrecedence(t *testing.T) {
+	t.Parallel()
+
+	d := def(
+		sextantproto.AgentSpec{Desired: sextantproto.DesiredRun, Generation: 2},
+		sextantproto.AgentStatusRecord{
+			Observed:             sextantproto.ObservedRunning,
+			CurrentIncarnationID: liveIncarnation,
+			ObservedGeneration:   1, // behind: an edit landed
+		},
+	)
+	// Mid-turn, fingerprint "not drifted": the generation gap still wins.
+	got := decideAction(d, actualState{
+		ContainerPresent: true, ContainerRunning: true,
+		Drift: driftInputs{Drifted: false, AtTurnBoundary: false},
+	})
+	if got.Action != actionActuate {
+		t.Fatalf("generation gap did not actuate (action=%v); an edit must converge immediately", got.Action)
+	}
+	if got.RecoveryRestart {
+		t.Fatalf("a spec-edit re-actuation must not count against the crash budget")
+	}
+}
