@@ -61,7 +61,16 @@ func renderConfig(w io.Writer, cfg Config) error {
 //
 // The JetStream/KV management API ($JS.API.>) is allowed for operator and
 // sidecar so existing read-path TUIs (KV-backed) keep working off the
-// gauntlet (RFC §5.7: "reads stay off the gauntlet").
+// gauntlet (RFC §5.7: "reads stay off the gauntlet"). The JetStream ACK
+// subject space ($JS.ACK.>) is likewise allowed for both: a consumer acks
+// (and flow-controls / terms) by *publishing* to a $JS.ACK reply subject,
+// which is distinct from $JS.API — the operator's read-path OrderedConsumers
+// and the sidecar's inbox AckPolicy.Explicit consumer both ack, so omitting
+// it wedges every non-daemon JetStream consumer. Finally, two narrow KV
+// *write* grants: the operator gets $KV.ui_state.> (inter-UI selected-agent
+// coordination) and the sidecar gets $KV.agent_definitions.> (persisting the
+// SDK-issued session_id back to its own record) — a KV put is a publish to
+// $KV.<bucket>.<key>, which $JS.API.> does not cover.
 func renderAuthorization(w io.Writer, cfg Config) error {
 	write := func(format string, args ...any) error {
 		_, err := fmt.Fprintf(w, format, args...)
@@ -117,11 +126,21 @@ var (
 	// user_input request, and persisting per-operator ui_state (the
 	// inter-UI selected-agent coordination key the agents TUI writes).
 	// Deliberately omits agents.*.inbox — the front door (RFC §5.7).
+	//
+	// $JS.ACK.>: a JetStream consumer acknowledges (and flow-controls /
+	// terms) by *publishing* to the per-message $JS.ACK reply subject.
+	// pkg/client.Subscribe drives the frame/lifecycle streams via an
+	// OrderedConsumer (and Term()s undecodable messages), so the operator
+	// principal MUST be allowed to publish $JS.ACK.> or every read-path
+	// consumer (`agents context`, the frame/lifecycle TUIs) gets a
+	// "Permissions Violation for Publish to $JS.ACK.…" the moment it acks.
+	// $JS.API.> alone is insufficient — ack is a distinct subject space.
 	operatorPublishAllow = []string{
 		"sextant.rpc.*",
 		"user_input.responses.*",
 		"_INBOX.>",
 		"$JS.API.>",
+		"$JS.ACK.>",
 		"$KV.ui_state.>",
 	}
 	// operatorSubscribeAllow: the diagnostic/read streams the CLI + TUIs
@@ -140,12 +159,33 @@ var (
 	// reply inboxes, and the JS/KV API for its session-snapshot writes.
 	// Omits sextant.rpc.* (control is the operator/daemon lane) and
 	// agents.*.inbox.
+	//
+	// $JS.ACK.>: the sidecar consumes its prompt inbox (agents.<uuid>.inbox)
+	// through an AckPolicy.Explicit JetStream consumer and acks every
+	// delivered prompt (clients/typescript subscribe.ts → images/sidecar
+	// index.ts `await msg.ack()`). Without $JS.ACK.> the ack is a
+	// permissions violation, the prompt is never acknowledged, and the
+	// inbox consumer wedges/redelivers — prompts silently stop flowing.
+	//
+	// $KV.agent_definitions.>: the sidecar persists the SDK-issued
+	// session_id back to its own agent_definitions KV entry so a later
+	// spawn can resume the session (images/sidecar index.ts
+	// persistSessionID). A KV put/update is a *publish* to
+	// $KV.<bucket>.<key> — the $JS.API.> management grant does NOT cover
+	// it (mirrors the operator's narrow $KV.ui_state.> grant). Without it
+	// the CAS update is silently dropped by the broker, the session_id is
+	// never stored, and get_agent_status returns an empty SessionLog —
+	// resume + the session-record locators break. Scoped to the one bucket
+	// the sidecar legitimately writes; everything else stays read-only via
+	// $JS.API.>.
 	sidecarPublishAllow = []string{
 		"agents.*.frames",
 		"agents.*.heartbeat",
 		"agents.*.lifecycle",
 		"_INBOX.>",
 		"$JS.API.>",
+		"$JS.ACK.>",
+		"$KV.agent_definitions.>",
 	}
 	// sidecarSubscribeAllow: its own inbox (where the daemon delivers
 	// prompts) + reply inboxes + the JS/KV subjects used for session
