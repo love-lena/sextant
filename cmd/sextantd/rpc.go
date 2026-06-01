@@ -123,11 +123,11 @@ func (d *daemon) startRPC(ctx context.Context) (*rpcRuntime, error) {
 	}
 
 	// agentsDataRoot mirrors what buildSpawnRuntime computes for the
-	// spawn handler — surfaced here so get_agent_status can publish
-	// the per-agent claude-projects host path back to the operator.
-	// See plans/issues/feat-agents-context-view.md and the matching
-	// MkdirAll in buildSpawnRuntime that owns directory creation
-	// (this call is read-only on the layout).
+	// spawn handler — surfaced here so get_agent_status can publish the
+	// per-agent session-log locators (in-container JSONL path + durable
+	// host snapshot path) back to the operator. The persistent
+	// claude-projects bind-mount is gone (S0, RFC §5.10); this root now
+	// holds the snapshot-on-stop the reconciler writes.
 	agentsDataRoot := filepath.Join(d.cfg.Paths.DataDir, "agents")
 
 	if err := registerInitialVerbs(srv, kv, chConn, rt.heartbeatLookup(), d.startedAt, agentsDataRoot); err != nil {
@@ -198,8 +198,9 @@ func (l rpcHeartbeatLookup) LastSeen(id uuid.UUID) (time.Time, bool) {
 // reports the actual boot time rather than the time-of-call.
 //
 // agentsDataRoot is the per-agent runtime root (`<DataDir>/agents`);
-// get_agent_status uses it to compute the claude-projects host path
-// the operator's `agents context` verb reads from.
+// get_agent_status uses it to compute the session-log locators (the
+// in-container JSONL path + the durable host snapshot path) the
+// operator's `agents context` verb reads from.
 func registerInitialVerbs(srv *rpc.Server, kv handlers.AgentKV, chConn handlers.QueryHistoryDB, heartbeats handlers.HeartbeatLookup, startedAt time.Time, agentsDataRoot string) error {
 	factories := map[string]func() rpc.Handler{
 		rpc.VerbListAgents: func() rpc.Handler { return handlers.NewListAgents(kv) },
