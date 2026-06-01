@@ -112,19 +112,26 @@ var (
 	// subjects request/reply provisions (pkg/client uses nats.NewInbox,
 	// which mints _INBOX.<token>) + the JetStream/KV API the read-path
 	// TUIs and pkg/client.Subscribe call (a JS API request is a *publish*
-	// to $JS.API.>; replies come back on the _INBOX). Deliberately omits
-	// agents.*.inbox — the front door (RFC §5.7).
+	// to $JS.API.>; replies come back on the _INBOX). Also the two
+	// legitimate operator-originated writes: answering an agent's
+	// user_input request, and persisting per-operator ui_state (the
+	// inter-UI selected-agent coordination key the agents TUI writes).
+	// Deliberately omits agents.*.inbox — the front door (RFC §5.7).
 	operatorPublishAllow = []string{
 		"sextant.rpc.*",
+		"user_input.responses.*",
 		"_INBOX.>",
 		"$JS.API.>",
+		"$KV.ui_state.>",
 	}
 	// operatorSubscribeAllow: the diagnostic/read streams the CLI + TUIs
-	// consume, the RPC + JS reply inboxes, and the raw KV value subjects
-	// the KV-backed read TUIs watch (reads stay off the gauntlet).
+	// consume, the user_input request stream the `pending` command tails,
+	// the RPC + JS reply inboxes, and the raw KV value subjects the
+	// KV-backed read TUIs watch (reads stay off the gauntlet).
 	operatorSubscribeAllow = []string{
 		"agents.*.frames",
 		"agents.*.lifecycle",
+		"user_input.>",
 		"_INBOX.>",
 		"$JS.API.>",
 		"$KV.>",
