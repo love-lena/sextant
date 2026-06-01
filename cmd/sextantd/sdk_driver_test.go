@@ -215,7 +215,7 @@ func killAndConfirm(
 		t.Fatalf("kill_agent: %v\n--- daemon log ---\n%s", err, h.tail(t))
 	}
 	if err := waitForContainerGone(dockerBin, handlers.LabelAgentUUID, agentID.String(), 20*time.Second); err != nil {
-		t.Fatalf("container still present after kill_agent: %v", err)
+		t.Fatalf("container still present after kill_agent: %v\n--- daemon log ---\n%s", err, h.tail(t))
 	}
 }
 

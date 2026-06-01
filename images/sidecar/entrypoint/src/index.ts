@@ -331,6 +331,25 @@ const SHUTDOWN_TURN_WAIT_MS = 5_000;
 const SHUTDOWN_TICK_WAIT_MS = 2_000;
 
 /**
+ * Per-resource close budget on the shutdown path (MCP client, NATS
+ * connection). A close that hangs (e.g. an MCP HTTP transport whose
+ * server side already went away) must NOT hold the process open until
+ * docker's SIGKILL grace elapses — that turns every graceful stop into a
+ * full grace-period wait. Each close is raced against this budget.
+ */
+const SHUTDOWN_CLOSE_WAIT_MS = 2_000;
+
+/**
+ * Hard backstop: no matter what the close sequence does, force the
+ * process to exit this long after SIGTERM. The graceful path (drain +
+ * lifecycle.ended + close) normally finishes in well under a second;
+ * this is the last-resort guarantee that `process.exit` fires far inside
+ * docker's stop grace so the container goes away promptly instead of
+ * being SIGKILLed at the end of the grace window.
+ */
+const SHUTDOWN_HARD_DEADLINE_MS = 8_000;
+
+/**
  * Decoded inbox payload. The publisher (pkg/rpc/handlers/prompt.go) puts
  * `{kind: "prompt", content, from}` inside the envelope payload.
  */
@@ -374,13 +393,21 @@ async function persistSessionID(
     try {
       const entry = await client.getKVEntry(AGENT_DEFINITIONS_BUCKET, env.agentUuid);
       const def = JSON.parse(new TextDecoder().decode(entry.value)) as Record<string, unknown>;
-      const runtime = (def["runtime"] as Record<string, unknown> | undefined) ?? {};
+      // The control-plane spec/status split (RFC §5.2) moved `runtime`
+      // under `spec`: the resume key the container builder reads is
+      // spec.runtime.session_id, not the old top-level runtime.session_id.
+      // Writing the old path silently dropped the session_id (the daemon
+      // reads def.Spec.Runtime.SessionID), breaking resume + the session
+      // record's SessionLog locators.
+      const spec = (def["spec"] as Record<string, unknown> | undefined) ?? {};
+      const runtime = (spec["runtime"] as Record<string, unknown> | undefined) ?? {};
       const existing = typeof runtime["session_id"] === "string" ? (runtime["session_id"] as string) : "";
       if (existing === sessionId) {
         return;
       }
       runtime["session_id"] = sessionId;
-      def["runtime"] = runtime;
+      spec["runtime"] = runtime;
+      def["spec"] = spec;
       const currentVersion =
         typeof def["version"] === "number" ? (def["version"] as number) : 0;
       def["version"] = currentVersion + 1;
@@ -1112,6 +1139,19 @@ async function run(driverMode: DriverMode): Promise<void> {
     // initiated the close (and doesn't trigger a non-zero exit on top
     // of the graceful one).
     shuttingDown = true;
+    // Arm a hard backstop the moment we begin shutting down: if any close
+    // below wedges (a hung MCP transport, a NATS drain that never
+    // settles), force the process out well inside docker's stop grace so
+    // the container is removed promptly instead of lingering until the
+    // grace-period SIGKILL. unref() so the timer itself never keeps the
+    // event loop alive once the graceful path has already exited.
+    const hardExit = setTimeout(() => {
+      log("warn", "shutdown hard deadline elapsed; forcing exit", {
+        budgetMs: SHUTDOWN_HARD_DEADLINE_MS,
+      });
+      process.exit(0);
+    }, SHUTDOWN_HARD_DEADLINE_MS);
+    hardExit.unref();
     clearInterval(heartbeat);
     inboxLoop.stop();
     log("info", "shutdown received", { signal });
@@ -1140,11 +1180,16 @@ async function run(driverMode: DriverMode): Promise<void> {
       });
     }
     if (mcp) {
-      try {
-        await mcp.client.close();
-      } catch (err) {
-        log("error", "mcp client close failed", {
-          err: err instanceof Error ? err.message : String(err),
+      // Bound the MCP close: a streamable-HTTP transport whose server
+      // side is already gone can leave close() pending forever, which
+      // would otherwise hold the process open until the hard deadline.
+      const closed = await awaitOrTimeout(
+        mcp.client.close(),
+        SHUTDOWN_CLOSE_WAIT_MS,
+      );
+      if (!closed) {
+        log("warn", "mcp client close did not settle within budget", {
+          budgetMs: SHUTDOWN_CLOSE_WAIT_MS,
         });
       }
     }
@@ -1156,13 +1201,18 @@ async function run(driverMode: DriverMode): Promise<void> {
     } catch {
       /* statusStop swallows internally; defensive guard. */
     }
-    try {
-      await client.close();
-    } catch (err) {
-      log("error", "client close failed", {
-        err: err instanceof Error ? err.message : String(err),
+    // Bound the NATS close too — a drain that never settles must not
+    // wedge the shutdown.
+    const natsClosed = await awaitOrTimeout(
+      client.close(),
+      SHUTDOWN_CLOSE_WAIT_MS,
+    );
+    if (!natsClosed) {
+      log("warn", "nats client close did not settle within budget", {
+        budgetMs: SHUTDOWN_CLOSE_WAIT_MS,
       });
     }
+    clearTimeout(hardExit);
     process.exit(0);
   };
 

@@ -19,7 +19,8 @@ starting work; follow the links when the matching domain comes up.
   `main` is configured with `enforce_admins: true` so every merge
   — including the repo owner's — must pass the required CI checks
   (`lint + test (Go)`, `lint + test (TypeScript)`, `sidecar image
-  build + smoke`, `changelog entry required`). The `--admin`
+  build + smoke`, `changelog entry required`, `wire schema-compat
+  (WireEpoch gate)`). The `--admin`
   override is a manual escape hatch the human owner uses
   deliberately in genuine emergencies, NOT a thing Claude reaches
   for. If CI fails: fix the underlying issue and push a new
