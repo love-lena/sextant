@@ -52,7 +52,8 @@ type LifecycleHintSource struct {
 // running hint source. Caller calls Stop() at shutdown.
 func NewLifecycleHintSource(nc *nats.Conn, sink interface {
 	OnSidecarLifecycle(sextantproto.LifecyclePayload)
-}) (*LifecycleHintSource, error) {
+},
+) (*LifecycleHintSource, error) {
 	if nc == nil {
 		return nil, fmt.Errorf("lifecycle hint source: nats conn is nil")
 	}
@@ -128,7 +129,8 @@ type DieHintSource struct {
 // NewDieHintSource constructs a DieHintSource.
 func NewDieHintSource(src DieEventSource, sink interface {
 	OnDie(agentID, incarnationID uuid.UUID)
-}) *DieHintSource {
+},
+) *DieHintSource {
 	return &DieHintSource{src: src, sink: sink}
 }
 

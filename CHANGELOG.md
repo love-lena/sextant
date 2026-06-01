@@ -37,6 +37,41 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   reads it.
 
 ### Changed
+- **`sextantd` is now a declarative control plane: handlers write
+  desired state, a single reconciler is the sole actuator.** `spawn`,
+  `stop` (the `kill_agent` verb), and `archive` no longer touch Docker
+  — they write `spec.desired` (`run` / `paused` / `archived`) to KV and
+  enqueue a reconcile; `restart` bumps `spec.reactuation_nonce` to
+  request a fresh incarnation of the same desired state. One
+  level-triggered reconcile loop — fed by a work queue, a 30–60s
+  periodic sweep, and sensor events treated strictly as *hints* (never
+  the source of truth) — is the only thing that builds + runs + stops
+  containers (via the single-source `buildAgentContainerSpec`) and the
+  only writer of `status.observed`. The `AgentDefinition` record is
+  split into `spec` (operator/desired intent: `desired`, `runtime`,
+  `sandbox`, `generation`, `reactuation_nonce`, …) and `status`
+  (reconciler-observed reality: `observed`, `observed_generation`,
+  `current_incarnation_id`, …); the old top-level `lifecycle` field is
+  gone and `Lifecycle()` is now a derived method projecting spec/status
+  onto the legacy strings (RFC §5, §5.2, Appendix C). The
+  carried-forward runtime invariants — incarnation-CAS, a terminal
+  sidecar status outranking a `lost` reading, and the 5s container-die
+  debounce — are unchanged and covered in
+  `pkg/sextantd/reconcile_test.go`. `WireEpoch` bumps 1→2: the
+  persisted `AgentDefinition` shape changed.
+
+  **Declared breakage (operators):**
+  - **Old persisted KV agent records do not auto-migrate.** There is no
+    in-place migration; a record written under the pre-split (`v1`)
+    shape will not decode into the new `spec`/`status` layout. Operators
+    upgrading an existing daemon must perform a **one-time reset** of the
+    agents/incarnations KV buckets (drain or delete running agents
+    first). This is acceptable at the current pre-1.0 stage; a real
+    migration is a separate follow-up if/when one is warranted.
+  - **Auto-recovery is still absent: a `lost` agent stays `lost`.** The
+    reconciler observes and records loss but does not yet re-actuate a
+    crashed/ended incarnation back to its desired `run` state. That
+    closed-loop recovery is restored by `feat-ctl-p1-recovery`.
 - **The TypeScript client's wire constants are now generated, not
   hand-written.** `PROTO_VERSION`, the `KIND_*` / `ADDRESS_*` / `FRAME_*`
   constant sets, and the new `WIRE_EPOCH` live in a generated

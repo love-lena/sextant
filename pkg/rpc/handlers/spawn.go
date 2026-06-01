@@ -497,7 +497,8 @@ func insertDefinitionHistory(ctx context.Context, hw HistoryWriter, def sextantp
 	q := `INSERT INTO agent_definitions_history
 		(agent_uuid, version, ts, actor, change_kind, definition)
 		VALUES (?, ?, ?, ?, ?, ?)`
-	return hw.Exec(ctx, q,
+	return hw.Exec(
+		ctx, q,
 		def.UUID.String(),
 		def.Version,
 		def.UpdatedAt.Time,

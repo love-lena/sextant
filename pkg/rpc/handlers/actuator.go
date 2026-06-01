@@ -156,9 +156,13 @@ func (a *Actuator) Actuate(ctx context.Context, def sextantproto.AgentDefinition
 		// incarnation record, then unwind the host-side artifacts. The
 		// reconciler will re-actuate next pass.
 		if a.deps.Containers != nil {
-			rbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			_ = a.deps.Containers.Stop(rbCtx, container.ID, 5*time.Second)
-			cancel()
+			//nolint:contextcheck // rollback against fresh ctx is intentional: the request ctx may be cancelled
+			stopRollback := func() {
+				rbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				_ = a.deps.Containers.Stop(rbCtx, container.ID, 5*time.Second)
+			}
+			stopRollback()
 		}
 		rollback()
 		return ActuateResult{}, fmt.Errorf("actuate: persist incarnation: %w", err)

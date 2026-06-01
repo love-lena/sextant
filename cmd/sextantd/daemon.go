@@ -104,11 +104,11 @@ type daemon struct {
 	// observed status AND (via the Actuator) the sole actuator of the
 	// container runtime. reconcileCtx cancels its loop; reconcileDone is
 	// closed when the loop exits.
-	reconciler     *sextantd.Reconciler
-	reconcileCtx   context.CancelFunc
-	reconcileDone  chan struct{}
-	dieHintCtx     context.CancelFunc
-	dieHintDone    chan struct{}
+	reconciler    *sextantd.Reconciler
+	reconcileCtx  context.CancelFunc
+	reconcileDone chan struct{}
+	dieHintCtx    context.CancelFunc
+	dieHintDone   chan struct{}
 
 	shutdownOnce sync.Once
 	shutdownErr  error
