@@ -30,14 +30,44 @@ const (
 	// wins the precedence contest (RFC §8: 5s). Carried forward from the
 	// L3 container watcher.
 	DefaultDieDebounce = 5 * time.Second
-	// reconcileUpdateTimeout caps a single reconcile pass's KV/docker IO.
-	reconcileUpdateTimeout = 30 * time.Second
+	// ReconcileKVTimeout caps a single KV read/write the reconciler does on
+	// the reconcile path (Get, ListKeys, Update). It is short — KV is the
+	// embedded NATS JetStream, which should answer fast or not at all; a
+	// hang here is a loud signal (fail-early,
+	// bug-ctl-reconcile-loop-stalls-under-sustained-recovery-churn).
+	ReconcileKVTimeout = 10 * time.Second
+	// ReconcileObserveTimeout caps a single docker observe call (List /
+	// DesiredFingerprint host-state resolution) the reconciler does to
+	// re-observe actual reality. A wedged dockerd surfaces a loud deadline
+	// error rather than blocking the single worker.
+	ReconcileObserveTimeout = handlers.DockerOpTimeout
+	// reconcilePassEnvelope is the OUTER deadline on one processOne pass —
+	// the fail-early cap that guarantees the single worker advances even if
+	// an actuation's bounded sub-ops (a Stop up to grace+buffer, then a Run
+	// up to DockerOpTimeout) all run long. It must comfortably exceed the
+	// sum of those bounded sub-ops so a LEGITIMATE slow actuation is not
+	// cancelled mid-flight; the per-op deadlines (not this envelope) are
+	// what surface a wedged single op. Roughly 2× the worst-case bounded
+	// actuation.
+	reconcilePassEnvelope = 3 * time.Minute
+	// reconcileWorkerStallThreshold is the watchdog trip: if a single
+	// processOne is still in flight after this long the monitor logs a LOUD
+	// "worker stalled on agent <uuid>" — 2× DockerOpTimeout per the P1
+	// ticket, the point past which a wedged-but-not-yet-timed-out op is
+	// worth shouting about.
+	reconcileWorkerStallThreshold = 2 * handlers.DockerOpTimeout
 	// reconcileCASRetries caps the status-write CAS retry budget. The
 	// reconciler RETRIES on conflict (it is a background loop — RFC §5.8:
 	// "reconciler writes retry-rebase on conflict; only operator RPCs
 	// surface the 409 to a human").
 	reconcileCASRetries = 5
 )
+
+// SweepOverdueFactor is how many SweepIntervals may elapse with no sweep
+// tick before the watchdog logs a LOUD "sweep overdue" — the periodic
+// sweep ticker going silent is the exact symptom the P1 stall ticket
+// describes, so the watchdog makes it observable immediately.
+const SweepOverdueFactor = 2
 
 // Recovery safety-rail constants (RFC §8). These govern the P1 recovery
 // branch — auto-restart of an involuntarily-lost agent. They are the
@@ -146,6 +176,19 @@ type Reconciler struct {
 	Now func() time.Time
 
 	queue *workQueue
+
+	// progress is the FAIL-LOUD watchdog state (RFC §5.1 spine
+	// observability; bug-ctl-reconcile-loop-stalls-under-sustained-recovery
+	// -churn). It records the worker's current pass and the last successful
+	// sweep so a lightweight monitor goroutine can SHOUT when either goes
+	// silent — and so the daemon can surface "last reconcile pass age" to an
+	// operator. Guarded by its own mutex (progressMu), separate from the
+	// hint-state mu, so the watchdog read never contends with a reconcile.
+	progressMu   sync.Mutex
+	passAgent    uuid.UUID // agent the worker is mid-pass on (Nil = idle)
+	passStart    time.Time // when the in-flight pass began
+	lastProgress time.Time // when the worker last FINISHED a pass
+	lastSweep    time.Time // when a sweep last completed
 
 	mu sync.Mutex
 	// sidecarTerminal tracks incarnations for which a sidecar terminal
@@ -302,6 +345,20 @@ func sidecarTerminalObserved(t sextantproto.LifecycleEvent) (sextantproto.Observ
 // blocks until ctx is cancelled. One worker (RFC §5.1) serializes
 // reconciles so they don't race the docker socket.
 func (r *Reconciler) Run(ctx context.Context) error {
+	// Seed the watchdog clocks so a never-yet-swept reconciler does not read
+	// as instantly overdue before the first tick.
+	now := r.Now()
+	r.progressMu.Lock()
+	r.lastProgress = now
+	r.lastSweep = now
+	r.progressMu.Unlock()
+
+	// FAIL-LOUD watchdog: a lightweight monitor that SHOUTS if the worker
+	// wedges on one agent or the sweep ticker goes silent — the two symptoms
+	// the P1 stall ticket describes
+	// (bug-ctl-reconcile-loop-stalls-under-sustained-recovery-churn).
+	go r.watchdogLoop(ctx)
+
 	// Periodic sweep: enqueue a full reconcile of every agent each tick —
 	// the backstop for missed events (RFC §5.1).
 	go r.sweepLoop(ctx)
@@ -342,9 +399,172 @@ func (r *Reconciler) sweepLoop(ctx context.Context) {
 	}
 }
 
-// sweep enqueues a reconcile for every agent in the bucket.
+// --- FAIL-LOUD reconcile watchdog ---------------------------------------
+
+// beginPass records that the worker has started a reconcile pass for
+// agentID (the watchdog reads this to name a stall). endPass clears it and
+// stamps last-progress.
+func (r *Reconciler) beginPass(agentID uuid.UUID) {
+	now := r.Now()
+	r.progressMu.Lock()
+	r.passAgent = agentID
+	r.passStart = now
+	r.progressMu.Unlock()
+}
+
+func (r *Reconciler) endPass() {
+	now := r.Now()
+	r.progressMu.Lock()
+	r.passAgent = uuid.Nil
+	r.passStart = time.Time{}
+	r.lastProgress = now
+	r.progressMu.Unlock()
+}
+
+// markSwept stamps a completed sweep so the watchdog can tell the periodic
+// ticker is still firing.
+func (r *Reconciler) markSwept() {
+	now := r.Now()
+	r.progressMu.Lock()
+	r.lastSweep = now
+	r.progressMu.Unlock()
+}
+
+// ReconcileProgress is the snapshot the daemon surfaces so an operator can
+// SEE a stall (RFC §5.1 observability). LastPassAge is how long since the
+// worker last finished a pass; LastSweepAge how long since the periodic
+// sweep last completed; InFlightAgent + InFlightFor describe the pass the
+// worker is currently on (InFlightAgent == uuid.Nil when idle).
+type ReconcileProgress struct {
+	LastPassAge   time.Duration
+	LastSweepAge  time.Duration
+	InFlightAgent uuid.UUID
+	InFlightFor   time.Duration
+}
+
+// Progress returns the current watchdog snapshot. Safe to call from any
+// goroutine (e.g. a daemon health/status handler).
+func (r *Reconciler) Progress() ReconcileProgress {
+	now := r.Now()
+	r.progressMu.Lock()
+	defer r.progressMu.Unlock()
+	var p ReconcileProgress
+	if !r.lastProgress.IsZero() {
+		p.LastPassAge = now.Sub(r.lastProgress)
+	}
+	if !r.lastSweep.IsZero() {
+		p.LastSweepAge = now.Sub(r.lastSweep)
+	}
+	if r.passAgent != uuid.Nil {
+		p.InFlightAgent = r.passAgent
+		p.InFlightFor = now.Sub(r.passStart)
+	}
+	return p
+}
+
+// watchdogLoop is the lightweight monitor that turns a SILENT reconcile
+// loop into a LOUD log line. It wakes on a tick (a fraction of the stall
+// threshold so a stall is caught promptly) and, when either symptom of the
+// P1 stall is present, logs once per crossing:
+//
+//   - the worker has been mid-pass on one agent longer than
+//     reconcileWorkerStallThreshold ("worker stalled on agent <uuid>");
+//   - no sweep has completed within SweepOverdueFactor × SweepInterval
+//     ("sweep overdue by <dur>").
+//
+// It only OBSERVES — the per-op deadlines (fail-early) are what actually
+// unblock the loop; the watchdog makes a regression observable immediately
+// instead of inferred after the fact.
+func (r *Reconciler) watchdogLoop(ctx context.Context) {
+	interval := reconcileWorkerStallThreshold / 2
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	var loggedStallAgent uuid.UUID
+	sweepOverdueLogged := false
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			r.watchdogCheck(&loggedStallAgent, &sweepOverdueLogged)
+		}
+	}
+}
+
+// watchdogCheck performs one watchdog evaluation. It is split out so a test
+// can drive it directly under the injected clock. The two *de-dup args
+// carry per-loop state so a sustained stall logs once per crossing rather
+// than every tick.
+func (r *Reconciler) watchdogCheck(loggedStallAgent *uuid.UUID, sweepOverdueLogged *bool) {
+	now := r.Now()
+	r.progressMu.Lock()
+	passAgent := r.passAgent
+	passStart := r.passStart
+	lastSweep := r.lastSweep
+	r.progressMu.Unlock()
+
+	// Worker stall: mid-pass on one agent past the threshold.
+	if passAgent != uuid.Nil && !passStart.IsZero() {
+		stalledFor := now.Sub(passStart)
+		if stalledFor >= reconcileWorkerStallThreshold {
+			if *loggedStallAgent != passAgent {
+				log.Printf("sextantd: reconcile: worker stalled on agent %s for %s "+
+					"(threshold %s) — dockerd/KV may be wedged",
+					passAgent, stalledFor.Round(time.Second), reconcileWorkerStallThreshold)
+				*loggedStallAgent = passAgent
+			}
+		}
+	} else {
+		// Worker idle or advanced — clear the stall de-dup.
+		*loggedStallAgent = uuid.Nil
+	}
+
+	// Sweep overdue: the periodic ticker has gone silent.
+	sweepDeadline := time.Duration(SweepOverdueFactor) * r.SweepInterval
+	if !lastSweep.IsZero() && sweepDeadline > 0 {
+		overdue := now.Sub(lastSweep)
+		if overdue >= sweepDeadline {
+			if !*sweepOverdueLogged {
+				log.Printf("sextantd: reconcile: sweep overdue by %s "+
+					"(no sweep in %s; interval %s) — reconcile loop may be stalled",
+					overdue.Round(time.Second), overdue.Round(time.Second), r.SweepInterval)
+				*sweepOverdueLogged = true
+			}
+		} else {
+			*sweepOverdueLogged = false
+		}
+	}
+}
+
+// --- bounded KV helpers (fail-early) ------------------------------------
+
+// kvGet wraps a KV Get with ReconcileKVTimeout so a wedged JetStream
+// surfaces a loud deadline instead of blocking the worker.
+func (r *Reconciler) kvGet(ctx context.Context, key string) (jetstream.KeyValueEntry, error) {
+	gctx, cancel := context.WithTimeout(ctx, ReconcileKVTimeout)
+	defer cancel()
+	return r.Defs.Get(gctx, key)
+}
+
+// kvUpdate wraps a KV Update with ReconcileKVTimeout.
+func (r *Reconciler) kvUpdate(ctx context.Context, key string, value []byte, rev uint64) (uint64, error) {
+	uctx, cancel := context.WithTimeout(ctx, ReconcileKVTimeout)
+	defer cancel()
+	return r.Defs.Update(uctx, key, value, rev)
+}
+
+// sweep enqueues a reconcile for every agent in the bucket. It records a
+// successful pass via markSwept so the watchdog can detect a silent
+// ticker (the P1 stall symptom).
 func (r *Reconciler) sweep(ctx context.Context) {
-	sctx, cancel := context.WithTimeout(ctx, reconcileUpdateTimeout)
+	defer r.markSwept()
+	// Bound the KV list: the embedded JetStream should answer fast; a hang
+	// here is the exact "sweep goes silent" symptom the watchdog also
+	// guards. The deadline surfaces it as a loud error, not a blocked loop.
+	sctx, cancel := context.WithTimeout(ctx, ReconcileKVTimeout)
 	defer cancel()
 	lister, err := r.Defs.ListKeys(sctx)
 	if err != nil {
@@ -369,7 +589,16 @@ func (r *Reconciler) sweep(ctx context.Context) {
 // actual, decide, act, write observed status (sole writer). Errors are
 // logged + the agent re-enqueued (the periodic sweep is the backstop).
 func (r *Reconciler) processOne(ctx context.Context, agentID uuid.UUID) {
-	pctx, cancel := context.WithTimeout(ctx, reconcileUpdateTimeout)
+	// Mark the worker busy on this agent so the watchdog can name a stall
+	// ("worker stalled on agent <uuid>"); cleared when the pass returns.
+	r.beginPass(agentID)
+	defer r.endPass()
+	// Outer envelope: the fail-early cap that guarantees the worker
+	// advances. It is deliberately GENEROUS (reconcilePassEnvelope) so a
+	// legitimate slow actuation — whose docker sub-ops each carry their own
+	// tighter per-op deadline — is not cancelled mid-flight; the per-op
+	// deadlines are what surface a single wedged op.
+	pctx, cancel := context.WithTimeout(ctx, reconcilePassEnvelope)
 	defer cancel()
 	requeueAfter, err := r.reconcileOnce(pctx, agentID)
 	if err != nil {
@@ -415,7 +644,7 @@ func (r *Reconciler) reconcileOne(ctx context.Context, agentID uuid.UUID) error 
 // me after this delay" (a recovery hold-off waiting on the backoff
 // deadline); zero means "the periodic sweep is sufficient."
 func (r *Reconciler) reconcileOnce(ctx context.Context, agentID uuid.UUID) (time.Duration, error) {
-	entry, err := r.Defs.Get(ctx, agentID.String())
+	entry, err := r.kvGet(ctx, agentID.String())
 	if err != nil {
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
 			return 0, nil // agent purged; nothing to converge
@@ -677,13 +906,21 @@ func (r *Reconciler) observe(ctx context.Context, def sextantproto.AgentDefiniti
 		return actual, nil
 	}
 
-	infos, err := r.Containers.List(ctx, containermgr.Filter{
+	// Bound the docker observe: a wedged dockerd must surface a loud
+	// deadline error rather than block the single worker on the List.
+	lctx, lcancel := context.WithTimeout(ctx, ReconcileObserveTimeout)
+	infos, err := r.Containers.List(lctx, containermgr.Filter{
 		Labels: map[string]string{
 			handlers.LabelAgentUUID:     def.UUID.String(),
 			handlers.LabelIncarnationID: incID.String(),
 		},
 	})
+	lcancel()
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			log.Printf("sextantd: reconcile %s: observe (docker list) timed out after %s (dockerd wedged?)",
+				def.UUID, ReconcileObserveTimeout)
+		}
 		return actual, fmt.Errorf("list containers: %w", err)
 	}
 	var runningLabels map[string]string
@@ -739,11 +976,17 @@ func (r *Reconciler) computeDrift(ctx context.Context, def sextantproto.AgentDef
 		stampedFP = ""
 	}
 
-	desired, err := r.Actuator.DesiredFingerprint(ctx, def)
+	// Bound the recompute: DesiredFingerprint resolves host state (and may
+	// touch docker/volumes); a wedged backend must fail the probe loudly,
+	// not block the worker. Fail-safe semantics below treat the error as
+	// "no drift" so a healthy agent is never restarted on a probe stall.
+	fctx, fcancel := context.WithTimeout(ctx, ReconcileObserveTimeout)
+	desired, err := r.Actuator.DesiredFingerprint(fctx, def)
+	fcancel()
 	if err != nil {
-		// Recompute failed (e.g. transient host-state resolution error). Fail
-		// safe — do not restart a healthy agent on a probe error; the next
-		// sweep re-checks.
+		// Recompute failed (e.g. transient host-state resolution error, or a
+		// deadline because the backend is wedged). Fail safe — do not restart
+		// a healthy agent on a probe error; the next sweep re-checks.
 		log.Printf("sextantd: reconcile %s: drift recompute: %v", def.UUID, err)
 		return d
 	}
@@ -815,7 +1058,7 @@ func (r *Reconciler) writeObserved(ctx context.Context, agentID uuid.UUID, sw st
 	nowT := r.Now().UTC()
 	now := sextantproto.AtTimestamp(nowT)
 	for attempt := 0; attempt < reconcileCASRetries; attempt++ {
-		entry, err := r.Defs.Get(ctx, agentID.String())
+		entry, err := r.kvGet(ctx, agentID.String())
 		if err != nil {
 			if errors.Is(err, jetstream.ErrKeyNotFound) {
 				return nil
@@ -862,7 +1105,7 @@ func (r *Reconciler) writeObserved(ctx context.Context, agentID uuid.UUID, sw st
 		if err != nil {
 			return fmt.Errorf("marshal for status write: %w", err)
 		}
-		_, err = r.Defs.Update(ctx, agentID.String(), raw, entry.Revision())
+		_, err = r.kvUpdate(ctx, agentID.String(), raw, entry.Revision())
 		if err == nil {
 			return nil
 		}

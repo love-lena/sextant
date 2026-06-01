@@ -19,6 +19,58 @@ import (
 	"github.com/love-lena/sextant/pkg/worktree"
 )
 
+// DockerOpTimeout caps a SINGLE external runtime operation the actuator
+// performs (container run, file-copy snapshot, volume reclaim) — the
+// fail-early budget so a wedged dockerd surfaces a loud `context deadline
+// exceeded` instead of blocking the single reconcile worker forever
+// (bug-ctl-reconcile-loop-stalls-under-sustained-recovery-churn). Each op
+// is wrapped with a deadline DERIVED FROM the passed reconcile ctx (never
+// context.Background), so a daemon shutdown still cancels it promptly.
+//
+// Stop is the one op exempt from this flat cap: a SIGTERM→SIGKILL stop
+// legitimately takes up to the agent's grace, so its deadline is
+// grace + DockerStopGraceBuffer (see graceDeadline).
+const DockerOpTimeout = 30 * time.Second
+
+// DockerStopGraceBuffer is the headroom added on top of the SIGTERM grace
+// when bounding a container Stop: dockerd needs a little slack past the
+// grace to deliver SIGKILL and remove the container, so the deadline is
+// grace + this buffer rather than the flat DockerOpTimeout.
+const DockerStopGraceBuffer = 15 * time.Second
+
+// opTimeout resolves the per-operation deadline (deps override or the
+// DockerOpTimeout default). stopGraceBuffer resolves the Stop grace
+// headroom (deps override or DockerStopGraceBuffer).
+func (a *Actuator) opTimeout() time.Duration {
+	if a.deps.DockerOpTimeout > 0 {
+		return a.deps.DockerOpTimeout
+	}
+	return DockerOpTimeout
+}
+
+func (a *Actuator) stopGraceBuffer() time.Duration {
+	if a.deps.DockerStopGraceBuffer > 0 {
+		return a.deps.DockerStopGraceBuffer
+	}
+	return DockerStopGraceBuffer
+}
+
+// boundedOp derives a child context capped at the op timeout from the
+// passed (reconcile) ctx. Cancellation still propagates — a daemon
+// shutdown cancels the parent, which cancels this — so the wrapper only
+// ever SHORTENS the deadline, never detaches from cancellation.
+func (a *Actuator) boundedOp(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, a.opTimeout())
+}
+
+// boundedStop derives a child context for a container Stop, whose deadline
+// is grace + the stop grace buffer (a SIGTERM→SIGKILL stop legitimately
+// runs the full grace). Derived from the passed ctx so shutdown still
+// cancels it.
+func (a *Actuator) boundedStop(ctx context.Context, grace time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, grace+a.stopGraceBuffer())
+}
+
 // ContainerProjectsDir is the in-container base where the Claude Code SDK
 // writes its per-session journal: <ContainerProjectsDir>/<encoded-cwd>/
 // <sessionId>.jsonl. With the persistent claude-projects bind-mount gone
@@ -70,7 +122,11 @@ func (a *Actuator) snapshotSessionLog(ctx context.Context, def sextantproto.Agen
 		return
 	}
 	srcPath := ContainerSessionJSONLPath(*def.Spec.Runtime.SessionID)
-	data, err := a.deps.SnapshotCopier.CopyFileFromContainer(ctx, containerID, srcPath)
+	// Bound the copy: a wedged dockerd must not let a best-effort snapshot
+	// block the stop/teardown that drives the reconcile worker.
+	cctx, cancel := a.boundedOp(ctx)
+	defer cancel()
+	data, err := a.deps.SnapshotCopier.CopyFileFromContainer(cctx, containerID, srcPath)
 	if err != nil {
 		if errors.Is(err, containermgr.ErrPathNotFound) {
 			// The session id is recorded but the JSONL isn't where we expect
@@ -125,6 +181,13 @@ type ActuatorDeps struct {
 	Issuer         string
 	TestRunLabel   string
 	Now            func() time.Time
+	// DockerOpTimeout / DockerStopGraceBuffer override the per-operation
+	// fail-early deadlines (defaults: the package DockerOpTimeout /
+	// DockerStopGraceBuffer constants). Tests shrink these to prove a wedged
+	// runtime op surfaces a deadline error promptly without waiting the real
+	// 30s; production leaves them zero (defaults apply).
+	DockerOpTimeout       time.Duration
+	DockerStopGraceBuffer time.Duration
 }
 
 // Actuator is the sole actuator (RFC §5). It is the only thing in the
@@ -183,7 +246,16 @@ func (a *Actuator) Actuate(ctx context.Context, def sextantproto.AgentDefinition
 			// the durable transcript must be captured here too (S0, RFC §5.10).
 			a.snapshotSessionLog(ctx, def, old.ContainerID)
 			if a.deps.Containers != nil {
-				_ = a.deps.Containers.Stop(ctx, old.ContainerID, a.graceFor(def))
+				grace := a.graceFor(def)
+				sctx, scancel := a.boundedStop(ctx, grace)
+				if serr := a.deps.Containers.Stop(sctx, old.ContainerID, grace); serr != nil {
+					// Best-effort (a fresh incarnation supersedes it regardless),
+					// but a timeout here is a loud signal that dockerd is wedged —
+					// log it with the agent + op so a stall is observable.
+					log.Printf("sextantd: actuate %s: stop prior incarnation %s: %v",
+						def.UUID, old.ContainerID, serr)
+				}
+				scancel()
 			}
 		}
 		ended := sextantproto.AtTimestamp(now)
@@ -220,11 +292,18 @@ func (a *Actuator) Actuate(ctx context.Context, def sextantproto.AgentDefinition
 		return ActuateResult{}, err
 	}
 
-	// 4. Build + run.
+	// 4. Build + run. Bound the run so a wedged dockerd surfaces a loud
+	// deadline error instead of blocking the single reconcile worker.
 	spec := buildAgentContainerSpec(specIn)
-	container, err := a.deps.Containers.Run(ctx, spec)
+	rctx, rcancel := a.boundedOp(ctx)
+	container, err := a.deps.Containers.Run(rctx, spec)
+	rcancel()
 	if err != nil {
 		rollback()
+		if errors.Is(err, context.DeadlineExceeded) {
+			log.Printf("sextantd: actuate %s: run container timed out after %s (dockerd wedged?)",
+				def.UUID, a.opTimeout())
+		}
 		return ActuateResult{}, fmt.Errorf("actuate: run container: %w", err)
 	}
 
@@ -324,7 +403,15 @@ func (a *Actuator) Stop(ctx context.Context, def sextantproto.AgentDefinition) e
 		// is an observability gap, never a stop blocker.
 		a.snapshotSessionLog(ctx, def, old.ContainerID)
 		if a.deps.Containers != nil {
-			if err := a.deps.Containers.Stop(ctx, old.ContainerID, a.graceFor(def)); err != nil {
+			grace := a.graceFor(def)
+			sctx, scancel := a.boundedStop(ctx, grace)
+			err := a.deps.Containers.Stop(sctx, old.ContainerID, grace)
+			scancel()
+			if err != nil {
+				if errors.Is(err, context.DeadlineExceeded) {
+					log.Printf("sextantd: stop %s: stop container %s timed out after %s (dockerd wedged?)",
+						def.UUID, old.ContainerID, grace+a.stopGraceBuffer())
+				}
 				return fmt.Errorf("stop: stop container %s: %w", old.ContainerID, err)
 			}
 		}
@@ -360,9 +447,16 @@ func (a *Actuator) Teardown(ctx context.Context, def sextantproto.AgentDefinitio
 	}
 	if a.deps.Volumes != nil {
 		volName := ClaudeSeedVolumeName(def.UUID)
-		if err := a.deps.Volumes.RemoveVolume(ctx, volName, true); err != nil {
+		vctx, vcancel := a.boundedOp(ctx)
+		err := a.deps.Volumes.RemoveVolume(vctx, volName, true)
+		vcancel()
+		if err != nil {
 			// NOT best-effort: an unreclaimed volume must keep the agent in
 			// archiving so the reconciler retries — never finalize over a leak.
+			if errors.Is(err, context.DeadlineExceeded) {
+				log.Printf("sextantd: teardown %s: reclaim volume %s timed out after %s (dockerd wedged?)",
+					def.UUID, volName, a.opTimeout())
+			}
 			return fmt.Errorf("teardown: reclaim volume %s: %w", volName, err)
 		}
 	}

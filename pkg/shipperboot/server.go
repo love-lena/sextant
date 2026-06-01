@@ -65,8 +65,11 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 	// Stop. sextant-shipper currently has no children, but matching the
 	// natsboot/clickhouseboot pattern guards against drift and ensures
 	// the daemon-ctx-cancel path (cmd.Cancel below) does the right
-	// thing.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// thing. On Linux this ALSO sets Pdeathsig=SIGKILL so a HARD-killed
+	// daemon (SIGKILL, no Go cleanup) does not leak the shipper as a
+	// PPID=1 orphan — the kernel reaps it (failed test runs were observed
+	// leaving ~8 orphaned sextant-shippers).
+	cmd.SysProcAttr = shipperProcAttr()
 	cmd.Cancel = func() error {
 		return signalProcessGroup(cmd, syscall.SIGKILL)
 	}
