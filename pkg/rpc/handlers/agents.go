@@ -99,9 +99,9 @@ func NewListAgents(kv AgentKV) rpc.Handler {
 // fail-soft posture when the cache failed to start.
 //
 // AgentsDataRoot, when non-empty, populates Status.SessionLog on every
-// response — the handler computes the per-agent claude-projects host
-// path via handlers.AgentProjectsDir(root, uuid). When empty (older
-// daemons + most unit tests), SessionLog stays nil.
+// response — the handler computes the in-container projects base, the
+// deterministic in-container JSONL path, and the host snapshot path. When
+// empty (older daemons + most unit tests), SessionLog stays nil.
 type GetAgentStatusDeps struct {
 	KV             AgentKV
 	Heartbeats     HeartbeatLookup
@@ -166,10 +166,16 @@ func NewGetAgentStatusWithDeps(deps GetAgentStatusDeps) rpc.Handler {
 		}
 		if deps.AgentsDataRoot != "" {
 			info := &sextantproto.SessionLogInfo{
-				ProjectsDir: AgentProjectsDir(deps.AgentsDataRoot, def.UUID),
+				// The persistent claude-projects bind-mount is gone (S0, RFC
+				// §5.10): ProjectsDir is now the IN-CONTAINER base the CLI reads
+				// from on demand, not a host path. SnapshotPath is the durable
+				// host copy the reconciler writes on stop.
+				ProjectsDir:  ContainerProjectsDir,
+				SnapshotPath: SessionSnapshotPath(deps.AgentsDataRoot, def.UUID),
 			}
 			if def.Spec.Runtime.SessionID != nil {
 				info.SessionID = *def.Spec.Runtime.SessionID
+				info.ContainerJSONLPath = ContainerSessionJSONLPath(*def.Spec.Runtime.SessionID)
 			}
 			status.SessionLog = info
 		}

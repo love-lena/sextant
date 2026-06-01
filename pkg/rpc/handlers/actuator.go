@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,10 +13,83 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/love-lena/sextant/pkg/authjwt"
+	"github.com/love-lena/sextant/pkg/containermgr"
 	"github.com/love-lena/sextant/pkg/sextantproto"
 	"github.com/love-lena/sextant/pkg/templates"
 	"github.com/love-lena/sextant/pkg/worktree"
 )
+
+// ContainerProjectsDir is the in-container base where the Claude Code SDK
+// writes its per-session journal: <ContainerProjectsDir>/<encoded-cwd>/
+// <sessionId>.jsonl. With the persistent claude-projects bind-mount gone
+// (S0, RFC §5.10) this path is read on demand (read_file) and snapshotted
+// on stop; it is no longer a host bind target.
+const ContainerProjectsDir = "/home/agent/.claude/projects"
+
+// containerCWDEncoded is the SDK's encoding of the sidecar working
+// directory (/workspace, set by the image's WORKDIR). Claude Code encodes
+// a cwd into the projects-dir segment by replacing every "/" with "-", so
+// "/workspace" → "-workspace". The sidecar always runs the SDK from
+// /workspace, so this segment is deterministic and shared by the
+// snapshot + on-demand read paths.
+const containerCWDEncoded = "-workspace"
+
+// ContainerSessionJSONLPath returns the deterministic in-container path of
+// the session JSONL for sessionID. Empty sessionID returns "" (no turn has
+// flushed a session yet).
+func ContainerSessionJSONLPath(sessionID string) string {
+	if strings.TrimSpace(sessionID) == "" {
+		return ""
+	}
+	return ContainerProjectsDir + "/" + containerCWDEncoded + "/" + sessionID + ".jsonl"
+}
+
+// SessionSnapshotPath returns the host path of the durable session-log
+// snapshot for an agent (<root>/<uuid>/session-snapshot.jsonl). Empty root
+// returns "" — snapshotting is disabled when the daemon has no data root.
+func SessionSnapshotPath(root string, agentUUID uuid.UUID) string {
+	if root == "" {
+		return ""
+	}
+	return filepath.Join(root, agentUUID.String(), "session-snapshot.jsonl")
+}
+
+// snapshotSessionLog copies the authoritative in-container session JSONL
+// to the durable host snapshot (S0, RFC §5.10). Best-effort throughout:
+// every failure is logged and swallowed so a missing snapshot never blocks
+// a stop/teardown. A snapshot exists so an operator can still read the
+// transcript after the (AutoRemove) container is gone (agents context
+// --backup falls back to it).
+func (a *Actuator) snapshotSessionLog(ctx context.Context, def sextantproto.AgentDefinition, containerID string) {
+	if a.deps.SnapshotCopier == nil || a.deps.AgentsDataRoot == "" {
+		return
+	}
+	if def.Spec.Runtime.SessionID == nil || strings.TrimSpace(*def.Spec.Runtime.SessionID) == "" {
+		// No SDK session was ever recorded — nothing to snapshot (the agent
+		// never completed a turn). Not an error.
+		return
+	}
+	srcPath := ContainerSessionJSONLPath(*def.Spec.Runtime.SessionID)
+	data, err := a.deps.SnapshotCopier.CopyFileFromContainer(ctx, containerID, srcPath)
+	if err != nil {
+		if errors.Is(err, containermgr.ErrPathNotFound) {
+			// The session id is recorded but the JSONL isn't where we expect
+			// (a different cwd encoding, or never flushed). Soft skip.
+			return
+		}
+		log.Printf("sextantd: snapshot session log for %s: %v", def.UUID, err)
+		return
+	}
+	dst := SessionSnapshotPath(a.deps.AgentsDataRoot, def.UUID)
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		log.Printf("sextantd: snapshot session log for %s: mkdir: %v", def.UUID, err)
+		return
+	}
+	// 0o600: the transcript may contain prompt content; keep it operator-only.
+	if err := os.WriteFile(dst, data, 0o600); err != nil {
+		log.Printf("sextantd: snapshot session log for %s: write %s: %v", def.UUID, dst, err)
+	}
+}
 
 // ActuatorDeps is the dependency bundle the reconciler hands the
 // Actuator. It is the union of the host-environment context plus the
@@ -26,10 +101,15 @@ import (
 // is the spawn/restart bodies, relocated behind the reconcile loop so
 // there is exactly one path that builds-and-runs a container.
 type ActuatorDeps struct {
-	Definitions    AgentMutableKV
-	Incarnations   AgentMutableKV
-	Templates      templates.KV
-	Containers     ContainerRunner
+	Definitions  AgentMutableKV
+	Incarnations AgentMutableKV
+	Templates    templates.KV
+	Containers   ContainerRunner
+	// SnapshotCopier is the copy-from-container surface the snapshot-on-stop
+	// path uses (S0, RFC §5.10). Optional: nil disables snapshotting (most
+	// unit tests). The real daemon wires *containermgr.Manager, which copies
+	// the session JSONL out of an already-stopped container.
+	SnapshotCopier ContainerFileCopier
 	Volumes        VolumeManager
 	CA             *authjwt.CA
 	History        HistoryWriter
@@ -78,7 +158,7 @@ type ActuateResult struct {
 //
 //  1. Stops + marks-exited the prior live incarnation (if any).
 //  2. Resolves the per-incarnation host state (workspace, gitconfig,
-//     claude-projects dir, claude_seed volume) — the lossless projection.
+//     claude_seed volume) — the lossless projection.
 //  3. Mints a fresh per-incarnation JWT.
 //  4. Builds the spec via the C0 single-source builder and Runs it.
 //  5. Persists the new AgentIncarnation (state=starting).
@@ -97,8 +177,14 @@ func (a *Actuator) Actuate(ctx context.Context, def sextantproto.AgentDefinition
 	// 1. Stop the prior live incarnation, if any. Best-effort — a fresh
 	// incarnation supersedes it regardless.
 	if old, oldKey, err := findLiveIncarnation(ctx, a.deps.Incarnations, def.UUID); err == nil && old != nil {
-		if old.ContainerID != "" && a.deps.Containers != nil {
-			_ = a.deps.Containers.Stop(ctx, old.ContainerID, a.graceFor(def))
+		if old.ContainerID != "" {
+			// Snapshot the outgoing incarnation's session log before stopping
+			// it — a re-actuation (restart/recovery) also leaves running, so
+			// the durable transcript must be captured here too (S0, RFC §5.10).
+			a.snapshotSessionLog(ctx, def, old.ContainerID)
+			if a.deps.Containers != nil {
+				_ = a.deps.Containers.Stop(ctx, old.ContainerID, a.graceFor(def))
+			}
 		}
 		ended := sextantproto.AtTimestamp(now)
 		old.State = sextantproto.IncarnationExited
@@ -126,7 +212,7 @@ func (a *Actuator) Actuate(ctx context.Context, def sextantproto.AgentDefinition
 
 	// 2. Resolve host state + build the spec input. rollback fires the
 	// cleanup closures for every host-side artifact this actuation created
-	// (workspace, gitconfig, claude-projects dir, fresh claude_seed volume)
+	// (workspace, gitconfig, fresh claude_seed volume)
 	// in reverse order — so a failed actuation leaks nothing on the host.
 	specIn, rollback, err := a.buildSpecInput(ctx, def, incID, jwt, resumeSession)
 	if err != nil {
@@ -227,9 +313,20 @@ func (a *Actuator) Stop(ctx context.Context, def sextantproto.AgentDefinition) e
 	if old == nil {
 		return nil
 	}
-	if old.ContainerID != "" && a.deps.Containers != nil {
-		if err := a.deps.Containers.Stop(ctx, old.ContainerID, a.graceFor(def)); err != nil {
-			return fmt.Errorf("stop: stop container %s: %w", old.ContainerID, err)
+	if old.ContainerID != "" {
+		// Durable snapshot-on-stop (S0, RFC §5.10): capture the
+		// authoritative in-container session JSONL into the agent data dir
+		// BEFORE issuing the stop. The agent containers run with
+		// AutoRemove=true, so once Stop's grace elapses the container (and
+		// its filesystem layer) is gone — copying first, while the layer is
+		// still readable, sidesteps the removal race and still captures the
+		// flushed-at-turn-boundary transcript. Best-effort: a failed snapshot
+		// is an observability gap, never a stop blocker.
+		a.snapshotSessionLog(ctx, def, old.ContainerID)
+		if a.deps.Containers != nil {
+			if err := a.deps.Containers.Stop(ctx, old.ContainerID, a.graceFor(def)); err != nil {
+				return fmt.Errorf("stop: stop container %s: %w", old.ContainerID, err)
+			}
 		}
 	}
 	ended := sextantproto.AtTimestamp(a.deps.Now().UTC())
@@ -367,13 +464,10 @@ func (a *Actuator) buildSpecInput(ctx context.Context, def sextantproto.AgentDef
 			}
 		}
 	}
-	// Per-agent claude-projects bind-mount.
-	if a.deps.AgentsDataRoot != "" {
-		if projectsHost, projectsCleanup, perr := ensureAgentProjectsDir(a.deps.AgentsDataRoot, def.UUID); perr == nil {
-			specIn.ClaudeProjectsHostPath = projectsHost
-			cleanups = append(cleanups, projectsCleanup)
-		}
-	}
+	// NOTE: the persistent claude-projects bind-mount is gone (S0, RFC
+	// §5.10). The SDK session JSONL stays in-container ground-truth; it is
+	// read on demand (read_file) and snapshotted to the agent data dir when
+	// the reconciler observes the agent leave running (snapshotSessionLog).
 	return specIn, rollback, nil
 }
 

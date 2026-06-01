@@ -1,6 +1,7 @@
 package containermgr
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"errors"
@@ -549,6 +550,88 @@ func (m *Manager) Logs(ctx context.Context, id string, tail int) (string, error)
 		return "", fmt.Errorf("containermgr: read logs %s: %w", id, err)
 	}
 	return string(raw), nil
+}
+
+// ErrPathNotFound is returned by CopyFileFromContainer when the source
+// path does not exist inside the container (a session that never flushed
+// a turn, a stale path). Callers test with errors.Is so the snapshot path
+// can treat "no file yet" as a soft skip rather than a hard failure.
+var ErrPathNotFound = errors.New("containermgr: path not found in container")
+
+// CopyFromContainerMaxBytes caps how many bytes CopyFileFromContainer
+// will read out of a container, mirroring ReadFile's NATS-payload-driven
+// ceiling. A session JSONL larger than this is truncated on snapshot
+// (the live in-container file stays authoritative); 64 MiB is generous
+// headroom for a long conversation transcript.
+const CopyFromContainerMaxBytes int64 = 64 * 1024 * 1024
+
+// CopyFileFromContainer copies a SINGLE regular file out of a container
+// and returns its raw bytes — the docker-cp primitive, and crucially one
+// that works on an EXITED container (Docker's copy API reads the
+// container's filesystem layer, not a live process). This is the
+// snapshot-on-stop path's read side (RFC §5.10): when the reconciler
+// observes an agent leave running, it copies the authoritative session
+// JSONL out of the (already-stopped) container into the agent data dir.
+//
+// Docker's CopyFromContainer returns a tar stream even for a single file;
+// we walk the archive, take the first regular-file entry, and return its
+// contents. A missing path surfaces as ErrPathNotFound so the caller can
+// treat "no session flushed yet" as a non-error.
+func (m *Manager) CopyFileFromContainer(ctx context.Context, id, srcPath string) ([]byte, error) {
+	if m == nil {
+		return nil, fmt.Errorf("%w: nil manager", ErrDaemonUnavailable)
+	}
+	if strings.TrimSpace(id) == "" {
+		return nil, fmt.Errorf("containermgr: CopyFileFromContainer requires a container id")
+	}
+	if strings.TrimSpace(srcPath) == "" {
+		return nil, fmt.Errorf("containermgr: CopyFileFromContainer requires a source path")
+	}
+
+	rc, _, err := m.cli.CopyFromContainer(ctx, id, srcPath)
+	if err != nil {
+		if isNotFound(err) {
+			return nil, fmt.Errorf("%w: %s in %s", ErrPathNotFound, srcPath, id)
+		}
+		return nil, fmt.Errorf("%w: copy %s from %s: %w", ErrDaemonUnavailable, srcPath, id, err)
+	}
+	defer rc.Close() //nolint:errcheck // best-effort close
+
+	buf, err := firstRegularFileFromTar(rc)
+	if err != nil {
+		if errors.Is(err, errTarNoRegularFile) {
+			return nil, fmt.Errorf("%w: %s in %s (no regular file in archive)", ErrPathNotFound, srcPath, id)
+		}
+		return nil, fmt.Errorf("containermgr: read %s from %s: %w", srcPath, id, err)
+	}
+	return buf, nil
+}
+
+// errTarNoRegularFile signals an archive with no regular-file entry — the
+// caller maps it to ErrPathNotFound.
+var errTarNoRegularFile = errors.New("containermgr: tar has no regular file")
+
+// firstRegularFileFromTar reads a tar stream and returns the contents of
+// the first regular-file entry, capped at CopyFromContainerMaxBytes.
+// Docker's CopyFromContainer returns a tar even for a single file; this is
+// the extraction half of CopyFileFromContainer, factored out so its
+// behavior is unit-testable without a live docker daemon.
+func firstRegularFileFromTar(r io.Reader) ([]byte, error) {
+	tr := tar.NewReader(r)
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return nil, errTarNoRegularFile
+		}
+		if err != nil {
+			return nil, err
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		// Cap the read so a pathological file can't exhaust daemon memory.
+		return io.ReadAll(io.LimitReader(tr, CopyFromContainerMaxBytes))
+	}
 }
 
 // EnsureVolume creates a Docker named volume with the given name if it

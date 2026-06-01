@@ -80,6 +80,12 @@
         "projects_dir": {
           "type": "string"
         },
+        "container_jsonl_path": {
+          "type": "string"
+        },
+        "snapshot_path": {
+          "type": "string"
+        },
         "session_id": {
           "type": "string"
         }

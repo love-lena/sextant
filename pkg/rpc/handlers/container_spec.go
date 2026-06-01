@@ -56,8 +56,8 @@ var SidecarEntrypoint = []string{"/opt/sextant/sidecar/entrypoint.sh"}
 // git-dir mounts because they only existed in spawn's inline code.
 //
 // Callers resolve the side-effecting host state (materialize the
-// workspace, write the gitconfig file, ensure the claude-projects dir,
-// ensure+populate the claude_seed volume) BEFORE calling the builder,
+// workspace, write the gitconfig file, ensure+populate the
+// claude_seed volume) BEFORE calling the builder,
 // because those steps own rollback ledgers that differ between spawn
 // (create-and-roll-back) and restart (reattach-idempotently). The
 // builder is pure: given identical resolved inputs it emits an
@@ -121,11 +121,6 @@ type agentContainerSpecInput struct {
 	// bind-mounted read-only at /home/agent/.gitconfig.
 	GitConfigHostPath string
 
-	// ClaudeProjectsHostPath, when non-empty, is the per-agent host dir
-	// bind-mounted at /home/agent/.claude/projects so the SDK's session
-	// journal lands on a host-readable path (`agents context`).
-	ClaudeProjectsHostPath string
-
 	// SSHHostPath, when non-empty, is the host ~/.ssh dir bind-mounted
 	// read-only at /home/agent/.ssh. Set only when the template opts in
 	// via the "ssh" mount class.
@@ -177,9 +172,14 @@ func buildAgentContainerSpec(in agentContainerSpecInput) containermgr.ContainerS
 	//  1. workspace      — always.
 	//  2. git-dir        — worktree workspaces with a known repo root.
 	//  3. gitconfig (ro) — every agent (git identity for commits).
-	//  4. claude-projects — when the daemon stages per-agent SDK state.
-	//  5. ssh (ro)       — template opt-in ("ssh" mount class).
-	//  6. claude_seed    — template-declared /home/agent/.claude seed.
+	//  4. ssh (ro)       — template opt-in ("ssh" mount class).
+	//  5. claude_seed    — template-declared /home/agent/.claude seed.
+	//
+	// The persistent claude-projects bind-mount was REMOVED (S0, RFC
+	// §5.10): the SDK session JSONL stays in-container ground-truth, read
+	// on demand via read_file and snapshotted on stop. Removing it kills
+	// the #49/#50 mount-drift class at the root — there is no longer a
+	// mount restart must remember.
 	mounts := []containermgr.MountSpec{
 		{HostPath: in.WorkspacePath, ContainerPath: WorkspaceMountPath},
 	}
@@ -194,12 +194,6 @@ func buildAgentContainerSpec(in agentContainerSpecInput) containermgr.ContainerS
 			HostPath:      in.GitConfigHostPath,
 			ContainerPath: "/home/agent/.gitconfig",
 			ReadOnly:      true,
-		})
-	}
-	if in.ClaudeProjectsHostPath != "" {
-		mounts = append(mounts, containermgr.MountSpec{
-			HostPath:      in.ClaudeProjectsHostPath,
-			ContainerPath: "/home/agent/.claude/projects",
 		})
 	}
 	if in.SSHHostPath != "" {

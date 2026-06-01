@@ -5,99 +5,50 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
-	"github.com/love-lena/sextant/pkg/containermgr"
 	"github.com/love-lena/sextant/pkg/rpc/handlers"
 	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
-// TestSpawnBindsAgentProjectsDir — when AgentsDataRoot is set, the
-// spawn handler must (a) create <root>/<uuid>/claude-projects/ on
-// disk and (b) include the bind mount at /home/agent/.claude/projects
-// in the container spec.
-//
-// Phase A of plans/issues/feat-agents-context-view.md. The mount is
-// what makes the SDK session JSONL host-readable; without it the
-// `agents context` verb has nothing to read.
-func TestSpawnBindsAgentProjectsDir(t *testing.T) {
+// TestActuateNeverBindsClaudeProjects — the persistent claude-projects
+// bind-mount was REMOVED in S0 (RFC §5.10). Even with AgentsDataRoot set,
+// the Actuator must NOT add a /home/agent/.claude/projects bind, and must
+// NOT create a per-agent claude-projects host dir: the SDK session JSONL
+// stays in-container ground-truth, read on demand (read_file) and
+// snapshotted on stop. This is the root fix for the #49/#50 mount-drift
+// class — restart has no mount to forget.
+func TestActuateNeverBindsClaudeProjects(t *testing.T) {
 	deps, _, _, runner, _ := buildDeps(t)
 	root := t.TempDir()
 	deps.AgentsDataRoot = root
 
-	// Spawn + actuate: the Actuator (sole actuator) creates the host
-	// projects dir and adds the bind mount to the container spec.
 	agentID := spawnAndActuate(t, deps, "alpha", "default")
-	resp := sextantproto.SpawnAgentResponse{AgentID: agentID}
 
-	// Host dir created with the right layout.
-	projects := filepath.Join(root, resp.AgentID.String(), "claude-projects")
-	st, err := os.Stat(projects)
-	if err != nil {
-		t.Fatalf("stat %s: %v", projects, err)
-	}
-	if !st.IsDir() {
-		t.Errorf("%s is not a directory", projects)
-	}
-	if got := st.Mode().Perm(); got != 0o700 {
-		t.Errorf("mode = %v, want 0o700", got)
+	// No host claude-projects dir is created.
+	projects := filepath.Join(root, agentID.String(), "claude-projects")
+	if _, err := os.Stat(projects); !os.IsNotExist(err) {
+		t.Errorf("claude-projects host dir %s exists (err=%v); it must not be created", projects, err)
 	}
 
-	// AgentProjectsDir returns the same path the spawn handler created.
-	if got := handlers.AgentProjectsDir(root, resp.AgentID); got != projects {
-		t.Errorf("AgentProjectsDir = %q, want %q", got, projects)
-	}
-
-	// Container spec carries the bind mount at the SDK's expected path.
-	if len(runner.specs) != 1 {
-		t.Fatalf("runner.specs = %d, want 1", len(runner.specs))
-	}
-	spec := runner.specs[0]
-	var bind *containermgr.MountSpec
-	for i := range spec.Mounts {
-		if spec.Mounts[i].ContainerPath == "/home/agent/.claude/projects" {
-			bind = &spec.Mounts[i]
-			break
-		}
-	}
-	if bind == nil {
-		t.Fatalf("no mount at /home/agent/.claude/projects in:\n%+v", spec.Mounts)
-	}
-	if bind.HostPath != projects {
-		t.Errorf("mount HostPath = %q, want %q", bind.HostPath, projects)
-	}
-	if bind.ReadOnly {
-		t.Errorf("mount is read-only; SDK writes session JSONL, must be rw")
-	}
-}
-
-// TestSpawnSkipsBindWhenAgentsDataRootEmpty — legacy fall-back
-// behavior. Daemons that haven't been upgraded (or unit-test wirings
-// that don't care about session-log visibility) skip the mount
-// entirely.
-func TestSpawnSkipsBindWhenAgentsDataRootEmpty(t *testing.T) {
-	deps, _, _, runner, _ := buildDeps(t)
-	// deps.AgentsDataRoot intentionally left empty
-
-	// Spawn + actuate so the container spec exists to assert against.
-	spawnAndActuate(t, deps, "beta", "default")
+	// No claude-projects bind in the container spec.
 	if len(runner.specs) != 1 {
 		t.Fatalf("runner.specs = %d, want 1", len(runner.specs))
 	}
 	for _, m := range runner.specs[0].Mounts {
 		if m.ContainerPath == "/home/agent/.claude/projects" {
-			t.Errorf("unexpected projects bind mount in legacy mode: %+v", m)
+			t.Errorf("unexpected claude-projects bind mount (removed in S0): %+v", m)
 		}
 	}
 }
 
 // TestGetAgentStatusSurfacesSessionLog — when AgentsDataRoot is wired
-// and the agent definition has a session_id, the handler must echo
-// the per-agent projects host path + session id back on AgentStatus
-// so the CLI verb can resolve the JSONL.
+// and the agent definition has a session_id, the handler must echo the
+// in-container projects base, the deterministic in-container JSONL path,
+// the host snapshot path, and the session id back on AgentStatus so the
+// CLI verb can read the authoritative .jsonl on demand.
 func TestGetAgentStatusSurfacesSessionLog(t *testing.T) {
 	kv := &fakeKV{entries: map[string][]byte{}}
 	id := uuid.New()
@@ -139,9 +90,16 @@ func TestGetAgentStatusSurfacesSessionLog(t *testing.T) {
 	if resp.Status.SessionLog.SessionID != sid {
 		t.Errorf("SessionLog.SessionID = %q, want %q", resp.Status.SessionLog.SessionID, sid)
 	}
-	wantDir := filepath.Join(root, id.String(), "claude-projects")
-	if resp.Status.SessionLog.ProjectsDir != wantDir {
-		t.Errorf("SessionLog.ProjectsDir = %q, want %q", resp.Status.SessionLog.ProjectsDir, wantDir)
+	// ProjectsDir is now the IN-CONTAINER base, not a host path.
+	if got, want := resp.Status.SessionLog.ProjectsDir, handlers.ContainerProjectsDir; got != want {
+		t.Errorf("SessionLog.ProjectsDir = %q, want in-container base %q", got, want)
+	}
+	if got, want := resp.Status.SessionLog.ContainerJSONLPath, handlers.ContainerSessionJSONLPath(sid); got != want {
+		t.Errorf("SessionLog.ContainerJSONLPath = %q, want %q", got, want)
+	}
+	wantSnap := filepath.Join(root, id.String(), "session-snapshot.jsonl")
+	if resp.Status.SessionLog.SnapshotPath != wantSnap {
+		t.Errorf("SessionLog.SnapshotPath = %q, want %q", resp.Status.SessionLog.SnapshotPath, wantSnap)
 	}
 }
 
@@ -198,7 +156,12 @@ func TestGetAgentStatusSessionLogIDEmptyBeforeFirstTurn(t *testing.T) {
 	if resp.Status.SessionLog.SessionID != "" {
 		t.Errorf("SessionLog.SessionID = %q, want empty", resp.Status.SessionLog.SessionID)
 	}
-	if !strings.HasSuffix(resp.Status.SessionLog.ProjectsDir, "claude-projects") {
-		t.Errorf("ProjectsDir = %q, want suffix claude-projects", resp.Status.SessionLog.ProjectsDir)
+	// Before the first turn there's no session id, so no in-container JSONL
+	// path either — but the in-container projects base is always set.
+	if resp.Status.SessionLog.ContainerJSONLPath != "" {
+		t.Errorf("ContainerJSONLPath = %q, want empty before first turn", resp.Status.SessionLog.ContainerJSONLPath)
+	}
+	if got, want := resp.Status.SessionLog.ProjectsDir, handlers.ContainerProjectsDir; got != want {
+		t.Errorf("ProjectsDir = %q, want in-container base %q", got, want)
 	}
 }

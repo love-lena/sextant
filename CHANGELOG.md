@@ -99,6 +99,32 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   restart but cannot restart the operator's CLI (RFC §5.8 "stale peer").
 
 ### Changed
+- **The persistent `claude-projects` bind-mount is gone, killing the
+  mount-drift class at the root.** The per-agent host bind-mount at
+  `/home/agent/.claude/projects` (the mount restart had to learn to
+  re-apply, the source of the #49/#50 mount-drift bugs) is **removed** from
+  the single-source container-spec builder — the agent container now mounts
+  **five** things (workspace, git-dir, gitconfig, ssh, claude-seed), not
+  six, and restart has no projects-mount to forget by construction
+  (control-plane RFC §5.10). The SDK session JSONL stays **in-container
+  ground-truth**, and its two former jobs split: `sextant agents context`
+  now reads the **live NATS frame stream** (`agents.<uuid>.frames`) by
+  default — `--follow` tails it; the **authoritative `.jsonl`** is read
+  **on demand** via `--raw` (the `read_file` RPC against the in-container
+  path) or `--backup` (the durable host snapshot); and the reconciler takes
+  a **durable snapshot-on-stop** into the agent data dir
+  (`<data>/agents/<uuid>/session-snapshot.jsonl`) whenever an agent leaves
+  `running`, via a new docker-cp-style `containermgr.CopyFileFromContainer`
+  that works on an already-stopped container. `get_agent_status`'s
+  `session_log` is reinterpreted accordingly: `projects_dir` is now the
+  **in-container** base, plus new `container_jsonl_path` + `snapshot_path`
+  fields (additive wire change; no `WireEpoch` bump).
+  - **Behavior change (declared):** `agents context --follow` switches from
+    tailing a host file to tailing the **frame stream**. Anything that read
+    the host-mounted `claude-projects` path directly no longer works (the
+    only in-tree reader, the CLI's `resolveSessionJSONLPath` host-dir walk,
+    is **retired**). The `-i` viewport reads the on-demand in-container
+    `.jsonl` via `read_file` instead of tailing a host file.
 - **BREAKING — direct publishing to `agents.*.inbox` is now forbidden,
   and the unrestricted NATS credential is gone.** Any client or test that
   published straight to an agent inbox (bypassing the `prompt_agent` /

@@ -16,20 +16,22 @@
 //     (ListPane over the span-tree projection; shared with the static
 //     renderer).
 //   - sextant agents context <id> -i → pkg/tui/contextview.Model
-//     (StreamViewport tail over the SDK session JSONL; mode keys 1-6).
+//     (viewport over the on-demand authoritative session JSONL read via
+//     read_file; mode keys 1-6).
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/nxadm/tail"
 	"github.com/spf13/cobra"
 
+	"github.com/love-lena/sextant/pkg/rpc"
 	"github.com/love-lena/sextant/pkg/sessionlog"
+	"github.com/love-lena/sextant/pkg/sextantproto"
 	"github.com/love-lena/sextant/pkg/tui/agentdetail"
 	"github.com/love-lena/sextant/pkg/tui/agents"
 	"github.com/love-lena/sextant/pkg/tui/auditlist"
@@ -48,7 +50,7 @@ type tuiLauncher interface {
 	RunAgentsList(ctx context.Context, configDir, selectedID string) error
 	RunPendingList(ctx context.Context, configDir string) error
 	RunTracesShow(ctx context.Context, configDir, traceID string) error
-	RunAgentsContext(ctx context.Context, configDir, projectsDir, sessionID string) error
+	RunAgentsContext(ctx context.Context, configDir, agentRef, containerJSONLPath, sessionID string) error
 	RunDaemonLogs(ctx context.Context, logPath string) error
 	RunWorktreeList(ctx context.Context, configDir string) error
 	RunAuditList(ctx context.Context, configDir string) error
@@ -71,8 +73,8 @@ func (realTUI) RunTracesShow(ctx context.Context, configDir, traceID string) err
 	return runTracesShowTUI(ctx, configDir, traceID)
 }
 
-func (realTUI) RunAgentsContext(ctx context.Context, _ /*configDir*/, projectsDir, sessionID string) error {
-	return runAgentsContextTUI(ctx, projectsDir, sessionID)
+func (realTUI) RunAgentsContext(ctx context.Context, configDir, agentRef, containerJSONLPath, sessionID string) error {
+	return runAgentsContextTUI(ctx, configDir, agentRef, containerJSONLPath, sessionID)
 }
 
 func (realTUI) RunDaemonLogs(ctx context.Context, logPath string) error {
@@ -188,52 +190,33 @@ func runDaemonLogsTUI(ctx context.Context, logPath string) error {
 	return nil
 }
 
-// runAgentsContextTUI tails the agent's session JSONL and runs the
-// contextview Component over the parsed event stream. No daemon
-// connection — the caller already resolved the session-log paths.
-func runAgentsContextTUI(ctx context.Context, projectsDir, sessionID string) error {
-	jsonl, err := resolveSessionJSONLPath(projectsDir, sessionID)
+// runAgentsContextTUI reads the agent's AUTHORITATIVE in-container session
+// JSONL on demand (read_file RPC) and runs the contextview Component over
+// the parsed event stream. As of S0 (RFC §5.10) there is no host-mounted
+// session file to tail; the interactive viewport renders the on-demand
+// transcript with its mode-switching chrome (keys 1-6).
+func runAgentsContextTUI(ctx context.Context, configDir, agentRef, containerJSONLPath, sessionID string) error {
+	if containerJSONLPath == "" || sessionID == "" {
+		return fmt.Errorf("agent %s has not recorded a session yet (no SDK turn has completed; prompt the agent then retry)", agentRef)
+	}
+	cli, _, err := connectAgent(ctx, configDir)
 	if err != nil {
 		return err
 	}
-	t, err := tail.TailFile(jsonl, tail.Config{
-		Follow:    true,
-		ReOpen:    true,
-		MustExist: true,
-		Logger:    tail.DiscardingLogger,
-	})
-	if err != nil {
-		return fmt.Errorf("tail %s: %w", jsonl, err)
-	}
-	defer func() { _ = t.Stop() }()
+	defer cli.Close() //nolint:errcheck // best-effort close
 
-	pr, pw := io.Pipe()
-	go func() {
-		defer func() { _ = pw.Close() }()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case line, ok := <-t.Lines:
-				if !ok {
-					return
-				}
-				if line.Err != nil {
-					return
-				}
-				if _, err := io.WriteString(pw, line.Text+"\n"); err != nil {
-					return
-				}
-			}
-		}
-	}()
-	go func() {
-		<-ctx.Done()
-		_ = t.Stop()
-	}()
+	id, err := resolveAgentRef(ctx, cli, agentRef)
+	if err != nil {
+		return fmt.Errorf("agent: %w", err)
+	}
+	var resp sextantproto.ReadFileResponse
+	if err := cli.RPC(ctx, rpc.VerbReadFile,
+		sextantproto.ReadFileRequest{AgentID: id, Path: containerJSONLPath}, &resp); err != nil {
+		return fmt.Errorf("read_file %s: %w", containerJSONLPath, err)
+	}
 
 	m := contextview.New(contextview.Options{
-		Events:      sessionlog.Stream(pr),
+		Events:      sessionlog.Stream(bytes.NewReader(resp.Content)),
 		InitialMode: sessionlog.ModeConversation,
 	})
 	prog := tea.NewProgram(contextview.NewStandalone(m), tea.WithAltScreen(), tea.WithContext(ctx))

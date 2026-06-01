@@ -159,10 +159,14 @@ func buildSections(d detailLoadedMsg) []widget.Section {
 	sections := []widget.Section{agent}
 
 	if s.SessionLog != nil && s.SessionLog.SessionID != "" {
-		sections = append(sections, widget.Section{Title: "session", Rows: []widget.Row{
+		rows := []widget.Row{
 			{Label: "session_id", Value: s.SessionLog.SessionID},
-			{Label: "projects", Value: s.SessionLog.ProjectsDir},
-		}})
+			{Label: "jsonl", Value: s.SessionLog.ContainerJSONLPath},
+		}
+		if s.SessionLog.SnapshotPath != "" {
+			rows = append(rows, widget.Row{Label: "snapshot", Value: s.SessionLog.SnapshotPath})
+		}
+		sections = append(sections, widget.Section{Title: "session", Rows: rows})
 	} else {
 		sections = append(sections, widget.Section{Title: "session", Rows: []widget.Row{
 			{Label: "state", Value: "no session yet"},
