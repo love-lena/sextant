@@ -99,6 +99,26 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   restart but cannot restart the operator's CLI (RFC §5.8 "stale peer").
 
 ### Changed
+- **The reconcile worker now bounds every external op on the reconcile
+  path with a per-operation deadline.** Each docker call the actuator
+  performs (container run, stop, volume reclaim, session-log copy) and
+  each reconciler-side op (docker list/drift-recompute, KV get/update/
+  list) is wrapped with a timeout DERIVED FROM the reconcile ctx
+  (`handlers.DockerOpTimeout` 30s; a container stop gets `grace +
+  DockerStopGraceBuffer`; KV ops `ReconcileKVTimeout` 10s). A wedged
+  dockerd or JetStream now surfaces a LOUD `context deadline exceeded`
+  (logged with agent uuid + which op) and the existing retry/backoff
+  re-enqueues, instead of blocking the single worker forever. Fixes the
+  silent reconcile-loop stall observed under sustained recovery churn
+  (`bug-ctl-reconcile-loop-stalls-under-sustained-recovery-churn`).
+- **A reconcile-loop stall watchdog logs loudly when the loop goes
+  silent.** A lightweight monitor shouts `reconcile: worker stalled on
+  agent <uuid> for <dur>` when a single pass exceeds 2× the docker-op
+  timeout, and `reconcile: sweep overdue by <dur>` when the periodic
+  sweep ticker hasn't fired within 2× `SweepInterval` — so a future
+  stall is observable in the logs immediately. `Reconciler.Progress()`
+  exposes last-pass / last-sweep age + the in-flight agent for a future
+  daemon health surface.
 - **New internal `archiving` observed-state in the agent lifecycle
   enum** (declared breakage for the archive volume-leak fix, above). The
   finalizer-shaped archive adds `ObservedArchiving` (intermediate, name
@@ -228,6 +248,30 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   `WireEpoch` bump). RFC §5.8.
 
 ### Fixed
+- **A hard-killed daemon no longer orphans its `sextant-shipper`
+  child (Linux).** When the daemon was SIGKILLed (e.g. a timed-out test
+  binary) it ran no Go cleanup, so the shipper survived as a PPID=1
+  orphan (failed test runs were observed leaving ~8). On Linux the
+  shipper child now starts with `Pdeathsig=SIGKILL`, so the kernel reaps
+  it when the parent dies regardless of how. Darwin (the local dev/test
+  host) has no `Pdeathsig` equivalent and still relies on the graceful
+  shutdown path + `stopShipperNow` safety net; `natsboot`/`clickhouseboot`
+  share the same hard-kill exposure and can take the same split later.
+- **The two host-saturating recovery e2e
+  (`TestRecovery_E2E_CrashLoopTripsBudgetToTerminal`,
+  `TestRecovery_E2E_WedgedAgentLivenessRestart`) now skip cleanly
+  instead of hanging the suite.** They are by far the most
+  container-churn-intensive tests and saturate OrbStack on a Mac — the
+  exact host condition that wedged the reconcile loop. The recovery
+  logic they assert is covered by the injected-clock unit tests in
+  `pkg/sextantd` plus the lighter real-docker
+  `TestRecovery_E2E_KillRestartsAndSurfacesRestartCount`; the
+  host-saturation cause is tracked by
+  `bug-ctl-reconcile-loop-stalls-under-sustained-recovery-churn`. The
+  wedge test's mechanism was also corrected (kept honest if re-enabled):
+  `docker kill --signal=STOP` from an ancestor namespace (the in-container
+  `kill -STOP 1` was a no-op on a PID-namespace init) plus a
+  wait-for-first-heartbeat before wedging.
 - **Operator and sidecar JetStream consumers can now acknowledge —
   `$JS.ACK.>` was missing from the front-door publish allow-lists.** The
   role-scoped principals (RFC §5.7) granted the JetStream *management* API

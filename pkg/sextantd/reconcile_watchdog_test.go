@@ -28,6 +28,7 @@ func (deadlineActuator) Stop(_ context.Context, _ sextantproto.AgentDefinition) 
 func (deadlineActuator) Teardown(_ context.Context, _ sextantproto.AgentDefinition) error {
 	return nil
 }
+
 func (deadlineActuator) DesiredFingerprint(_ context.Context, _ sextantproto.AgentDefinition) (handlers.DesiredSpecID, error) {
 	return handlers.DesiredSpecID{}, nil
 }
