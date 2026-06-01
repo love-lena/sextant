@@ -124,6 +124,11 @@ type SpawnDeps struct {
 	// so every spawn via the MCP path stamps sextant.test_run=<value>.
 	// Empty in production.
 	TestRunLabel string
+	// Enqueue, when non-nil, is forwarded to the desired-state handlers so
+	// an MCP-path spawn/stop/archive hints the daemon's reconciler to
+	// converge the agent right away (RFC §5.1). Nil falls back to the
+	// periodic sweep.
+	Enqueue handlers.ReconcileEnqueuer
 }
 
 // Server is the in-process MCP server. One Server per daemon. Build
@@ -945,6 +950,7 @@ func (s *Server) handleSpawnAgent(ctx context.Context, _ Caller, in SpawnAgentAr
 		MCPURL:        deps.MCPURL,
 		Issuer:        deps.Issuer,
 		TestRunLabel:  deps.TestRunLabel,
+		Enqueue:       deps.Enqueue,
 	}), env)
 }
 
@@ -969,6 +975,7 @@ func (s *Server) handleKillAgent(ctx context.Context, _ Caller, in KillAgentArgs
 		Definitions:  deps.Definitions,
 		Incarnations: deps.Incarnations,
 		Containers:   deps.Containers,
+		Enqueue:      deps.Enqueue,
 	}), env)
 }
 
@@ -994,6 +1001,7 @@ func (s *Server) handleArchiveAgent(ctx context.Context, _ Caller, in ArchiveAge
 		Incarnations: deps.Incarnations,
 		Containers:   deps.Containers,
 		Volumes:      deps.Volumes,
+		Enqueue:      deps.Enqueue,
 	}), env)
 }
 

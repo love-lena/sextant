@@ -18,16 +18,17 @@ import (
 const killCASRetriesExpected = 3
 
 // TestKillAgentRetriesOnReconcilerRace pins the
-// bug-kill-agent-cas-flakes-integration-tests fix: when a legitimate
-// daemon-side writer (the L2 reconciler, the LifecycleWatcher) commits
-// a def update between kill_agent's initial Get and its final Update,
-// the CAS conflict must trigger a retry instead of an immediate
-// BAD_REQUEST. The retry budget is 3 (mirroring lifecycle_watcher.go's
-// watcherCASRetries).
+// bug-kill-agent-cas-flakes-integration-tests fix carried forward into
+// the declarative model: when the reconciler (the sole status writer)
+// commits a def update between kill_agent's initial Get and its final
+// Update, the CAS conflict must trigger a retry instead of an immediate
+// BAD_REQUEST. The retry budget is killCASRetries (3).
 //
-// The injected race fires exactly once before kill's first Update
-// attempt, so the first retry sees a clean revision and the kill
-// commits cleanly.
+// Under the declarative model kill_agent is a desired-state edit
+// (spec.desired=paused) — it no longer stops the container itself (the
+// reconciler does, as sole actuator). So the race is injected on the
+// def-key Update path (a `oneShotBumpKV` wrapper that bumps the revision
+// once before the first Update), exactly the window the CAS guard covers.
 func TestKillAgentRetriesOnReconcilerRace(t *testing.T) {
 	deps, defs, incs, runner, _ := buildDeps(t)
 
@@ -46,21 +47,13 @@ func TestKillAgentRetriesOnReconcilerRace(t *testing.T) {
 		t.Fatalf("decode spawn: %v", err)
 	}
 
-	// Race injection: on the "mark incarnation exited" incs Put
-	// (callIdx == 2 — spawn writes call 1, kill writes call 2),
-	// simulate a reconciler-shaped def update by Putting a no-op
-	// revision bump on the def key. This fires exactly once so the
-	// kill's first retry sees a clean revision and succeeds.
-	var injected int32
-	incs.putHook = func(_ string, callIdx int) error {
-		if callIdx == 2 && atomic.CompareAndSwapInt32(&injected, 0, 1) {
-			bumpDefRevision(context.Background(), defs, spawnResp.AgentID.String())
-		}
-		return nil
-	}
+	// Race injection: bump the def revision exactly once before kill's
+	// first Update, simulating a reconciler status write slipping in. The
+	// first retry sees a clean revision and the kill commits cleanly.
+	raceDefs := &oneShotBumpKV{wrapped: defs, key: spawnResp.AgentID.String()}
 
 	killH := handlers.NewKillAgent(handlers.KillDeps{
-		Definitions:  defs,
+		Definitions:  raceDefs,
 		Incarnations: incs,
 		Containers:   runner,
 	})
@@ -75,25 +68,20 @@ func TestKillAgentRetriesOnReconcilerRace(t *testing.T) {
 			killCap.resp.Error)
 	}
 
-	// Container was stopped exactly once — side effects do NOT replay
-	// on CAS retry. This is the kill_agent vs restart_agent asymmetry
-	// the fix comment documents.
-	runner.mu.Lock()
-	stopped := append([]string(nil), runner.stopped...)
-	runner.mu.Unlock()
-	if len(stopped) != 1 {
-		t.Errorf("container Stop count = %d, want 1 (side effect must not replay on retry)", len(stopped))
-	}
-
-	// Final def state is kill-intended: lifecycle=defined.
+	// Final def state is kill-intended: spec.desired=paused, which
+	// projects to lifecycle=paused (the reconciler converges observed and
+	// stops the container out-of-band).
 	defSnap := defs.snapshot()
 	var def sextantproto.AgentDefinition
 	if err := json.Unmarshal(defSnap[spawnResp.AgentID.String()], &def); err != nil {
 		t.Fatalf("decode def: %v", err)
 	}
-	if def.Lifecycle != sextantproto.LifecycleDefined {
-		t.Errorf("def.Lifecycle = %s, want defined (kill's mutation must be the final state after the retry)",
-			def.Lifecycle)
+	if def.Spec.Desired != sextantproto.DesiredPaused {
+		t.Errorf("def.Spec.Desired = %s, want paused (kill's mutation must be the final state after the retry)",
+			def.Spec.Desired)
+	}
+	if def.Lifecycle() != sextantproto.LifecyclePaused {
+		t.Errorf("def.Lifecycle() = %s, want paused", def.Lifecycle())
 	}
 }
 
@@ -143,15 +131,6 @@ func TestKillAgentExhaustsRetryBudget(t *testing.T) {
 	if killCap.resp.Error.Code != sextantproto.ErrCodeBadRequest {
 		t.Errorf("Error.Code = %q, want %q (exhausted CAS budget surfaces as bad_request)",
 			killCap.resp.Error.Code, sextantproto.ErrCodeBadRequest)
-	}
-
-	// The container was still stopped — the side effect ran once
-	// before the CAS loop, regardless of the eventual bail.
-	runner.mu.Lock()
-	stopped := append([]string(nil), runner.stopped...)
-	runner.mu.Unlock()
-	if len(stopped) != 1 {
-		t.Errorf("container Stop count = %d, want 1 (stop runs once before the retry loop)", len(stopped))
 	}
 
 	// At least killCASRetries Update attempts were made (the budget).
@@ -222,4 +201,37 @@ func (b *bumpingKV) Delete(ctx context.Context, key string, opts ...jetstream.KV
 
 func (b *bumpingKV) updateAttempts() int {
 	return int(atomic.LoadInt64(&b.updateAttemptsAtomic))
+}
+
+// oneShotBumpKV is an AgentMutableKV wrapper that bumps the target key's
+// revision exactly once, before the first Update against it — simulating
+// a single concurrent reconciler status write. The CAS retry should
+// absorb it and commit cleanly on the next attempt.
+type oneShotBumpKV struct {
+	wrapped  *fakeMutableKV
+	key      string
+	injected int32
+}
+
+func (o *oneShotBumpKV) Get(ctx context.Context, key string) (jetstream.KeyValueEntry, error) {
+	return o.wrapped.Get(ctx, key)
+}
+
+func (o *oneShotBumpKV) ListKeys(ctx context.Context, opts ...jetstream.WatchOpt) (jetstream.KeyLister, error) {
+	return o.wrapped.ListKeys(ctx, opts...)
+}
+
+func (o *oneShotBumpKV) Put(ctx context.Context, key string, value []byte) (uint64, error) {
+	return o.wrapped.Put(ctx, key, value)
+}
+
+func (o *oneShotBumpKV) Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error) {
+	if key == o.key && atomic.CompareAndSwapInt32(&o.injected, 0, 1) {
+		bumpDefRevision(ctx, o.wrapped, key)
+	}
+	return o.wrapped.Update(ctx, key, value, revision)
+}
+
+func (o *oneShotBumpKV) Delete(ctx context.Context, key string, opts ...jetstream.KVDeleteOpt) error {
+	return o.wrapped.Delete(ctx, key, opts...)
 }

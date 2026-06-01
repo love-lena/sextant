@@ -120,7 +120,8 @@ func TestListAgentsReturnsRegisteredAgents(t *testing.T) {
 		Name:      "alpha",
 		Type:      "dev",
 		Template:  "default",
-		Lifecycle: sextantproto.LifecycleDefined,
+		Spec:      sextantproto.AgentSpec{Desired: sextantproto.DesiredRun, Generation: 1},
+		Status:    sextantproto.AgentStatusRecord{Observed: sextantproto.ObservedPending},
 		Version:   1,
 		UpdatedAt: sextantproto.NowTimestamp(),
 	}
@@ -169,7 +170,8 @@ func TestGetAgentStatusKnownReturnsStatus(t *testing.T) {
 	def := sextantproto.AgentDefinition{
 		UUID:      id,
 		Name:      "beta",
-		Lifecycle: sextantproto.LifecycleRunning,
+		Spec:      sextantproto.AgentSpec{Desired: sextantproto.DesiredRun, Generation: 1},
+		Status:    sextantproto.AgentStatusRecord{Observed: sextantproto.ObservedRunning, ObservedGeneration: 1},
 		Version:   3,
 		UpdatedAt: sextantproto.NowTimestamp(),
 	}
@@ -217,7 +219,8 @@ func TestGetAgentStatusIncludeHeartbeatFresh(t *testing.T) {
 	def := sextantproto.AgentDefinition{
 		UUID:      id,
 		Name:      "alpha",
-		Lifecycle: sextantproto.LifecycleRunning,
+		Spec:      sextantproto.AgentSpec{Desired: sextantproto.DesiredRun, Generation: 1},
+		Status:    sextantproto.AgentStatusRecord{Observed: sextantproto.ObservedRunning, ObservedGeneration: 1},
 		Version:   1,
 		UpdatedAt: sextantproto.NowTimestamp(),
 	}
@@ -265,7 +268,8 @@ func TestGetAgentStatusIncludeHeartbeatMiss(t *testing.T) {
 	def := sextantproto.AgentDefinition{
 		UUID:      id,
 		Name:      "beta",
-		Lifecycle: sextantproto.LifecycleRunning,
+		Spec:      sextantproto.AgentSpec{Desired: sextantproto.DesiredRun, Generation: 1},
+		Status:    sextantproto.AgentStatusRecord{Observed: sextantproto.ObservedRunning, ObservedGeneration: 1},
 		Version:   1,
 		UpdatedAt: sextantproto.NowTimestamp(),
 	}
@@ -305,7 +309,8 @@ func TestGetAgentStatusOmitsHeartbeatWhenNotRequested(t *testing.T) {
 	def := sextantproto.AgentDefinition{
 		UUID:      id,
 		Name:      "gamma",
-		Lifecycle: sextantproto.LifecycleRunning,
+		Spec:      sextantproto.AgentSpec{Desired: sextantproto.DesiredRun, Generation: 1},
+		Status:    sextantproto.AgentStatusRecord{Observed: sextantproto.ObservedRunning, ObservedGeneration: 1},
 		Version:   1,
 		UpdatedAt: sextantproto.NowTimestamp(),
 	}

@@ -39,17 +39,28 @@ export interface AgentDefinition {
   name: string;
   type: string;
   template?: string;
-  runtime: RuntimeConfig;
-  sandbox: SandboxConfig;
-  tools?: string[];
-  host_pin?: string;
-  lifecycle: string;
-  current_incarnation_id?: UUID;
+  spec: AgentSpec;
+  status: AgentStatusRecord;
   version: number;
   created_at: Timestamp;
   updated_at: Timestamp;
   escalate_to?: string;
   description?: string;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "AgentSpec".
+ */
+export interface AgentSpec {
+  desired: string;
+  runtime: RuntimeConfig;
+  sandbox: SandboxConfig;
+  tools?: string[];
+  host_pin?: string;
+  restart_policy?: string;
+  grace_seconds?: number;
+  generation: number;
+  reactuation_nonce: number;
 }
 /**
  * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
@@ -86,6 +97,42 @@ export interface SandboxConfig {
 export interface ResourceLimits {
   cpu_shares?: number;
   memory_mib?: number;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "AgentStatusRecord".
+ */
+export interface AgentStatusRecord {
+  observed: string;
+  phase?: string;
+  current_incarnation_id?: UUID;
+  observed_generation?: number;
+  observed_nonce?: number;
+  spec_fingerprint?: string;
+  wire_epoch?: number;
+  restart_count?: number;
+  crash_window?: CrashWindow;
+  last_exit?: LastExit;
+  session_snapshot?: string;
+  last_heartbeat_at?: Timestamp;
+  last_reconciled_at?: Timestamp;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "CrashWindow".
+ */
+export interface CrashWindow {
+  count?: number;
+  since?: Timestamp;
+}
+/**
+ * This interface was referenced by `SextantProtoBundle`'s JSON-Schema
+ * via the `definition` "LastExit".
+ */
+export interface LastExit {
+  code?: number;
+  reason?: string;
+  at?: Timestamp;
 }
 /**
  * This interface was referenced by `SextantProtoBundle`'s JSON-Schema

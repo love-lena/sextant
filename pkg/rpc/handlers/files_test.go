@@ -46,10 +46,11 @@ func (s *stubExec) Exec(_ context.Context, _ string, spec containermgr.ExecSpec)
 func seedAgent(t *testing.T, defs, incs *fakeMutableKV, agentID uuid.UUID, containerID string) {
 	t.Helper()
 	def := sextantproto.AgentDefinition{
-		UUID:      agentID,
-		Name:      "alpha",
-		Lifecycle: sextantproto.LifecycleRunning,
-		Version:   1,
+		UUID:    agentID,
+		Name:    "alpha",
+		Spec:    sextantproto.AgentSpec{Desired: sextantproto.DesiredRun, Generation: 1},
+		Status:  sextantproto.AgentStatusRecord{Observed: sextantproto.ObservedRunning, ObservedGeneration: 1},
+		Version: 1,
 	}
 	raw, _ := json.Marshal(def)
 	if _, err := defs.Put(context.Background(), agentID.String(), raw); err != nil {
@@ -263,9 +264,10 @@ func TestReadFileNoLiveIncarnationReturnsBadRequest(t *testing.T) {
 	agentID := uuid.New()
 	// Seed only the def — no incarnation.
 	def := sextantproto.AgentDefinition{
-		UUID:      agentID,
-		Name:      "alpha",
-		Lifecycle: sextantproto.LifecycleDefined,
+		UUID:   agentID,
+		Name:   "alpha",
+		Spec:   sextantproto.AgentSpec{Desired: sextantproto.DesiredRun, Generation: 1},
+		Status: sextantproto.AgentStatusRecord{Observed: sextantproto.ObservedPending},
 	}
 	raw, _ := json.Marshal(def)
 	if _, err := defs.Put(context.Background(), agentID.String(), raw); err != nil {

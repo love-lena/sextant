@@ -3,975 +3,252 @@ package handlers_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"os"
-	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
 
-	"github.com/love-lena/sextant/pkg/containermgr"
 	"github.com/love-lena/sextant/pkg/rpc/handlers"
 	"github.com/love-lena/sextant/pkg/sextantproto"
 )
 
-// mountByContainerPath returns the first mount in the spec targeting
-// the given container path, or nil. Test helper for the lossless-restart
-// assertions below.
-func mountByContainerPath(spec containermgr.ContainerSpec, containerPath string) *containermgr.MountSpec {
-	for i := range spec.Mounts {
-		if spec.Mounts[i].ContainerPath == containerPath {
-			return &spec.Mounts[i]
-		}
-	}
-	return nil
+// Under the declarative model (RFC §5) restart_agent is NOT an actuator:
+// it bumps spec.reactuation_nonce, re-asserts desired=run, optionally
+// clears the recorded session, and enqueues a reconcile. The reconciler's
+// Actuator is the sole thing that stops/starts containers — so these
+// tests assert KV + enqueue effects and that the handler touches no
+// container runtime. The actuation behavior the OLD restart_test.go
+// exercised now lives in pkg/sextantd/reconcile_test.go
+// (TestReconcile_RestartNonceReactuates, _StopAndArchive, …) and the
+// lossless spec projection in container_spec_test.go.
+
+// captureEnqueuer records the agent ids a handler hints for reconcile.
+type captureEnqueuer struct {
+	mu  sync.Mutex
+	ids []uuid.UUID
 }
 
-// TestRestartReproducesLatentSpawnMounts is the C0 regression: pre-fix,
-// restart appended only 3 mounts (workspace + claude_seed +
-// claude-projects) and silently dropped gitconfig, SSH, and the git-dir
-// bind. With the single-source builder, a restart of a worktree+ssh
-// agent must carry ALL SIX mounts spawn produces, and the workspace
-// must resolve to the SAME worktree (not the stop-gap dir). This is the
-// unit-shaped expression of the docker-backed e2e acceptance criterion.
-func TestRestartReproducesLatentSpawnMounts(t *testing.T) {
-	deps, defs, incs, runner, _ := buildDeps(t)
+func (c *captureEnqueuer) Enqueue(id uuid.UUID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ids = append(c.ids, id)
+}
 
-	// Worktree-enabled agent: template lists "worktree" + "ssh", and the
-	// daemon knows the repo root. This is the exact shape that exercised
-	// all six spawn mounts.
-	repoRoot := t.TempDir()
-	if err := os.MkdirAll(repoRoot+"/.git", 0o750); err != nil {
-		t.Fatalf("mkdir .git: %v", err)
+func (c *captureEnqueuer) calls() []uuid.UUID {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]uuid.UUID(nil), c.ids...)
+}
+
+// seedDef writes an AgentDefinition straight into the definitions KV with
+// the given desired/observed split (and optional recorded session), the
+// way an already-actuated agent would look. Returns its uuid.
+func seedDef(t *testing.T, defs *fakeMutableKV, name string, desired sextantproto.DesiredState, observed sextantproto.ObservedState, sessionID *string) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	def := sextantproto.AgentDefinition{
+		UUID:     id,
+		Name:     name,
+		Type:     "assistant",
+		Template: "default",
+		Spec: sextantproto.AgentSpec{
+			Desired:    desired,
+			Generation: 1,
+			Runtime:    sextantproto.RuntimeConfig{Model: "claude-opus-4-7[1m]", SessionID: sessionID},
+		},
+		Status:    sextantproto.AgentStatusRecord{Observed: observed},
+		Version:   1,
+		CreatedAt: sextantproto.NowTimestamp(),
+		UpdatedAt: sextantproto.NowTimestamp(),
 	}
-	wtPath := t.TempDir()
-	wt := &stubWorktreeProvider{path: wtPath, branch: "feat-default-deadbeef"}
-	deps.Worktree = wt
-	deps.RepoRoot = repoRoot
-
-	tplJSON, err := json.Marshal(map[string]any{
-		"name":        "wt-ssh",
-		"image":       "sextant-sidecar:latest",
-		"permissions": []string{"read.agents", "control.prompt"},
-		"mounts":      []string{"worktree", "ssh"},
-		"model":       "claude-opus-4-7[1m]",
-	})
+	raw, err := json.Marshal(def)
 	if err != nil {
-		t.Fatalf("marshal template: %v", err)
+		t.Fatalf("marshal def: %v", err)
 	}
-	tplKV := &fakeTemplatesKV{}
-	if _, err := tplKV.Put(context.Background(), "wt-ssh", tplJSON); err != nil {
-		t.Fatalf("seed template: %v", err)
+	if _, err := defs.Put(context.Background(), id.String(), raw); err != nil {
+		t.Fatalf("seed def: %v", err)
 	}
-	deps.Templates = tplKV
-
-	spawnH := handlers.NewSpawnAgent(deps)
-	scap := &captureEmit{}
-	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "alpha", Template: "wt-ssh",
-	}), scap.emit()); err != nil {
-		t.Fatalf("spawn: %v", err)
-	}
-	if scap.resp.Error != nil {
-		t.Fatalf("spawn error: %+v", scap.resp.Error)
-	}
-	var spawnResp sextantproto.SpawnAgentResponse
-	if err := json.Unmarshal(scap.resp.Result, &spawnResp); err != nil {
-		t.Fatalf("decode spawn: %v", err)
-	}
-
-	restartH := handlers.NewRestartAgent(handlers.RestartDeps{
-		Definitions:   defs,
-		Incarnations:  incs,
-		Containers:    runner,
-		Templates:     tplKV,
-		Worktree:      wt,
-		RepoRoot:      repoRoot,
-		CA:            deps.CA,
-		WorkspaceRoot: deps.WorkspaceRoot,
-		HostID:        deps.HostID,
-		NATSURL:       deps.NATSURL,
-		NATSUser:      deps.NATSUser,
-		NATSPassword:  deps.NATSPassword,
-		MCPURL:        deps.MCPURL,
-		Issuer:        deps.Issuer,
-	})
-	rcap := &captureEmit{}
-	if err := restartH(context.Background(), makeReq(t, sextantproto.RestartAgentRequest{
-		AgentID: spawnResp.AgentID,
-	}), rcap.emit()); err != nil {
-		t.Fatalf("restart: %v", err)
-	}
-	if rcap.resp.Error != nil {
-		t.Fatalf("restart error: %+v", rcap.resp.Error)
-	}
-
-	if len(runner.specs) != 2 {
-		t.Fatalf("runner.specs = %d, want 2 (spawn + restart)", len(runner.specs))
-	}
-	spawnSpec := runner.specs[0]
-	restartSpec := runner.specs[1]
-
-	// The three latent mounts must be present on restart.
-	gitDirHost := repoRoot + "/.git"
-	if m := mountByContainerPath(restartSpec, gitDirHost); m == nil {
-		t.Errorf("restart missing git-dir mount at %s; mounts = %v", gitDirHost, mountSummary(restartSpec))
-	} else if m.HostPath != gitDirHost {
-		t.Errorf("git-dir mount HostPath = %q, want %q", m.HostPath, gitDirHost)
-	}
-	if m := mountByContainerPath(restartSpec, "/home/agent/.gitconfig"); m == nil {
-		t.Errorf("restart missing gitconfig mount; mounts = %v", mountSummary(restartSpec))
-	} else if !m.ReadOnly {
-		t.Error("restart gitconfig mount must be ReadOnly")
-	}
-	if m := mountByContainerPath(restartSpec, "/home/agent/.ssh"); m == nil {
-		t.Errorf("restart missing ssh mount; mounts = %v", mountSummary(restartSpec))
-	} else if !m.ReadOnly {
-		t.Error("restart ssh mount must be ReadOnly")
-	}
-
-	// Workspace resolves to the SAME worktree, not the stop-gap dir.
-	if m := mountByContainerPath(restartSpec, "/workspace"); m == nil {
-		t.Errorf("restart missing /workspace mount; mounts = %v", mountSummary(restartSpec))
-	} else if m.HostPath != wtPath {
-		t.Errorf("restart /workspace HostPath = %q, want worktree path %q", m.HostPath, wtPath)
-	}
-
-	// The container-side mount shape (path + ro + bind/volume) is
-	// identical spawn-vs-restart, modulo identity. Compare the
-	// identity-stripped projection.
-	spawnKeys := mountKeyStrings(spawnSpec)
-	restartKeys := mountKeyStrings(restartSpec)
-	if len(spawnKeys) != len(restartKeys) {
-		t.Fatalf("mount-count drift: spawn=%v restart=%v", spawnKeys, restartKeys)
-	}
-	for i := range spawnKeys {
-		if spawnKeys[i] != restartKeys[i] {
-			t.Errorf("mount[%d] drift: spawn=%q restart=%q", i, spawnKeys[i], restartKeys[i])
-		}
-	}
-
-	// Env key sets are identical (values differ only on identity keys).
-	if got, want := len(restartSpec.Env), len(spawnSpec.Env); got != want {
-		t.Errorf("env key count drift: spawn=%d restart=%d", want, got)
-	}
-	for k := range spawnSpec.Env {
-		if _, ok := restartSpec.Env[k]; !ok {
-			t.Errorf("restart env missing key %q present on spawn", k)
-		}
-	}
-
-	// Fingerprints match: an unchanged def restarted must not look like
-	// drift (the P2 contract this label seeds).
-	if spawnSpec.Labels[handlers.LabelSpecFingerprint] != restartSpec.Labels[handlers.LabelSpecFingerprint] {
-		t.Errorf("spec fingerprint drift: spawn=%q restart=%q",
-			spawnSpec.Labels[handlers.LabelSpecFingerprint],
-			restartSpec.Labels[handlers.LabelSpecFingerprint])
-	}
+	return id
 }
 
-func mountSummary(spec containermgr.ContainerSpec) []string {
-	var out []string
-	for _, m := range spec.Mounts {
-		out = append(out, m.HostPath+m.VolumeName+"->"+m.ContainerPath)
-	}
-	return out
-}
-
-func mountKeyStrings(spec containermgr.ContainerSpec) []string {
-	out := make([]string, 0, len(spec.Mounts))
-	for _, m := range spec.Mounts {
-		kind := "bind"
-		if m.VolumeName != "" && m.HostPath == "" {
-			kind = "volume"
-		}
-		ro := "rw"
-		if m.ReadOnly {
-			ro = "ro"
-		}
-		out = append(out, kind+":"+m.ContainerPath+":"+ro)
-	}
-	return out
-}
-
-// TestRestartAgentReplacesLiveIncarnation walks the happy path:
-// spawn, then restart, and assert the new incarnation is in KV with
-// a fresh container ID, the old one is exited, and the definition's
-// lifecycle stayed at running.
-func TestRestartAgentReplacesLiveIncarnation(t *testing.T) {
-	deps, defs, incs, runner, _ := buildDeps(t)
-	spawnH := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "alpha", Template: "default",
-	}), cap.emit()); err != nil {
-		t.Fatalf("spawn: %v", err)
-	}
-	var spawnResp sextantproto.SpawnAgentResponse
-	if err := json.Unmarshal(cap.resp.Result, &spawnResp); err != nil {
-		t.Fatalf("decode spawn: %v", err)
-	}
-	// Capture the original container id so we can prove it changed.
-	preSnap := incs.snapshot()
-	var preInc sextantproto.AgentIncarnation
-	for _, v := range preSnap {
-		_ = json.Unmarshal(v, &preInc)
-	}
-	origContainerID := preInc.ContainerID
-
-	restartH := handlers.NewRestartAgent(handlers.RestartDeps{
-		Definitions:   defs,
-		Incarnations:  incs,
-		Containers:    runner,
-		CA:            deps.CA,
-		WorkspaceRoot: deps.WorkspaceRoot,
-		HostID:        deps.HostID,
-		NATSURL:       deps.NATSURL,
-		NATSUser:      deps.NATSUser,
-		NATSPassword:  deps.NATSPassword,
-		MCPURL:        deps.MCPURL,
-		Issuer:        deps.Issuer,
-	})
-	rcap := &captureEmit{}
-	if err := restartH(context.Background(), makeReq(t, sextantproto.RestartAgentRequest{
-		AgentID: spawnResp.AgentID,
-	}), rcap.emit()); err != nil {
-		t.Fatalf("restart: %v", err)
-	}
-	if rcap.resp.Error != nil {
-		t.Fatalf("restart error: %+v", rcap.resp.Error)
-	}
-	var restartResp sextantproto.RestartAgentResponse
-	if err := json.Unmarshal(rcap.resp.Result, &restartResp); err != nil {
-		t.Fatalf("decode restart resp: %v", err)
-	}
-	if !restartResp.OK || restartResp.AgentID != spawnResp.AgentID {
-		t.Errorf("RestartAgentResponse = %+v", restartResp)
-	}
-
-	// Old container was stopped via the rollback path of kill (Stop
-	// received its ID).
-	runner.mu.Lock()
-	stopped := append([]string(nil), runner.stopped...)
-	runner.mu.Unlock()
-	if len(stopped) != 1 || stopped[0] != origContainerID {
-		t.Errorf("stopped containers = %v, want [%s]", stopped, origContainerID)
-	}
-
-	// Two incarnations now exist: the old one (exited) and the new one
-	// (starting). The definition still has lifecycle=running.
-	incSnap := incs.snapshot()
-	if len(incSnap) != 2 {
-		t.Fatalf("incarnation count = %d, want 2 (old exited + new running)", len(incSnap))
-	}
-	var live, exited int
-	for _, v := range incSnap {
-		var inc sextantproto.AgentIncarnation
-		_ = json.Unmarshal(v, &inc)
-		switch inc.State {
-		case sextantproto.IncarnationStarting:
-			live++
-		case sextantproto.IncarnationExited:
-			exited++
-		}
-	}
-	if live != 1 || exited != 1 {
-		t.Errorf("live=%d exited=%d, want live=1 exited=1", live, exited)
-	}
-
-	defSnap := defs.snapshot()
+func readDef(t *testing.T, defs *fakeMutableKV, id uuid.UUID) sextantproto.AgentDefinition {
+	t.Helper()
 	var def sextantproto.AgentDefinition
-	_ = json.Unmarshal(defSnap[spawnResp.AgentID.String()], &def)
-	if def.Lifecycle != sextantproto.LifecycleRunning {
-		t.Errorf("Lifecycle = %s, want running", def.Lifecycle)
+	raw, ok := defs.snapshot()[id.String()]
+	if !ok {
+		t.Fatalf("def %s absent from KV", id)
 	}
-}
-
-// TestRestartAgentRollsBackLifecycleOnIncarnationPersistFailure pins
-// the partial-failure rollback fix in pkg/rpc/handlers/restart.go.
-//
-// Sequence of Puts on the incarnations bucket during a spawn+restart:
-//   - call 1 (spawn): the initial incarnation record.
-//   - call 2 (restart step 2): mark old incarnation as exited.
-//   - call 3 (restart step 5): persist the *new* incarnation.
-//
-// Failing call 3 simulates a KV write error after the old container
-// has already been stopped + marked exited and after the new container
-// is running. The handler's rollback must:
-//   - stop the new container (already covered by the previous patch).
-//   - flip the definition back to lifecycle=defined so list_agents
-//     doesn't lie about a running agent with zero live incarnations.
-//
-// Pre-fix the test would observe Lifecycle = "running" even though
-// the only live incarnation marker was rolled back, leaving the
-// operator with no clear recovery path.
-func TestRestartAgentRollsBackLifecycleOnIncarnationPersistFailure(t *testing.T) {
-	deps, defs, incs, runner, _ := buildDeps(t)
-	spawnH := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "alpha", Template: "default",
-	}), cap.emit()); err != nil {
-		t.Fatalf("spawn: %v", err)
-	}
-	var spawnResp sextantproto.SpawnAgentResponse
-	if err := json.Unmarshal(cap.resp.Result, &spawnResp); err != nil {
-		t.Fatalf("decode spawn: %v", err)
-	}
-
-	// Inject the failure on the third Put against the incarnations
-	// bucket — the new-incarnation persist step (see comment above).
-	incs.putHook = func(_ string, callIdx int) error {
-		if callIdx == 3 {
-			return errors.New("nats KV unhealthy")
-		}
-		return nil
-	}
-
-	restartH := handlers.NewRestartAgent(handlers.RestartDeps{
-		Definitions:   defs,
-		Incarnations:  incs,
-		Containers:    runner,
-		CA:            deps.CA,
-		WorkspaceRoot: deps.WorkspaceRoot,
-		HostID:        deps.HostID,
-		NATSURL:       deps.NATSURL,
-		NATSUser:      deps.NATSUser,
-		NATSPassword:  deps.NATSPassword,
-		MCPURL:        deps.MCPURL,
-		Issuer:        deps.Issuer,
-	})
-	rcap := &captureEmit{}
-	if err := restartH(context.Background(), makeReq(t, sextantproto.RestartAgentRequest{
-		AgentID: spawnResp.AgentID,
-	}), rcap.emit()); err != nil {
-		t.Fatalf("restart: %v", err)
-	}
-	if rcap.resp.Error == nil {
-		t.Fatal("expected an error from the persist-failure path")
-	}
-	if rcap.resp.Error.Code != sextantproto.ErrCodeInternal {
-		t.Errorf("Code = %q, want internal", rcap.resp.Error.Code)
-	}
-
-	// Two Stop calls landed on the runner: the old incarnation's
-	// container (step 2) AND the new container's rollback (step 5
-	// failure path).
-	runner.mu.Lock()
-	stopped := append([]string(nil), runner.stopped...)
-	runner.mu.Unlock()
-	if len(stopped) != 2 {
-		t.Errorf("runner.stopped = %v, want 2 entries", stopped)
-	}
-
-	// The critical fix: definition's lifecycle is now defined, not
-	// running. Otherwise list_agents would advertise a running agent
-	// with no live incarnation behind it.
-	defSnap := defs.snapshot()
-	var def sextantproto.AgentDefinition
-	if err := json.Unmarshal(defSnap[spawnResp.AgentID.String()], &def); err != nil {
+	if err := json.Unmarshal(raw, &def); err != nil {
 		t.Fatalf("decode def: %v", err)
 	}
-	if def.Lifecycle != sextantproto.LifecycleDefined {
-		t.Errorf("def.Lifecycle = %s, want defined (rollback must flip back from running)",
-			def.Lifecycle)
-	}
+	return def
 }
 
-// TestRestartAgentRespectsConcurrentArchive pins the Codex
-// adversarial-review finding: if archive_agent (or any other writer)
-// flips the definition to archived between restart's initial Get and
-// its final Put, the restart handler must NOT overwrite the archive
-// with `lifecycle=running` + a fresh CurrentIncarnationID. Without
-// the re-read-and-check guard, restart would resurrect a stopped
-// agent and undo the operator's archive decision.
-func TestRestartAgentRespectsConcurrentArchive(t *testing.T) {
-	deps, defs, incs, runner, _ := buildDeps(t)
+// TestRestartBumpsNonceReassertsRunAndEnqueues is the core declarative
+// contract: a restart of a running agent bumps the re-actuation nonce,
+// re-asserts desired=run, enqueues exactly one reconcile, and replies OK
+// — without touching the container runtime (the reconciler actuates).
+func TestRestartBumpsNonceReassertsRunAndEnqueues(t *testing.T) {
+	_, defs, incs, runner, _ := buildDeps(t)
+	enq := &captureEnqueuer{}
+	id := seedDef(t, defs, "alpha", sextantproto.DesiredRun, sextantproto.ObservedRunning, nil)
 
-	// Spawn the agent so the rest of the restart flow has live state.
-	spawnH := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "beta", Template: "default",
-	}), cap.emit()); err != nil {
-		t.Fatalf("spawn: %v", err)
-	}
-	var spawnResp sextantproto.SpawnAgentResponse
-	if err := json.Unmarshal(cap.resp.Result, &spawnResp); err != nil {
-		t.Fatalf("decode spawn: %v", err)
-	}
-
-	// Race injection: on the new-incarnation persist (incs Put call 3,
-	// per the existing rollback test's sequence comment), simulate
-	// archive_agent racing in by writing an archived def directly into
-	// the defs bucket. The restart's re-read after this Put must see
-	// the archive and rollback.
-	incs.putHook = func(_ string, callIdx int) error {
-		if callIdx == 3 {
-			entry, err := defs.Get(context.Background(), spawnResp.AgentID.String())
-			if err != nil {
-				return nil // best-effort race injection
-			}
-			var current sextantproto.AgentDefinition
-			if err := json.Unmarshal(entry.Value(), &current); err != nil {
-				return nil
-			}
-			current.Lifecycle = sextantproto.LifecycleArchived
-			current.Version++
-			raw, err := json.Marshal(current)
-			if err != nil {
-				return nil
-			}
-			_, _ = defs.Put(context.Background(), spawnResp.AgentID.String(), raw)
-		}
-		return nil
-	}
-
-	restartH := handlers.NewRestartAgent(handlers.RestartDeps{
-		Definitions:   defs,
-		Incarnations:  incs,
-		Containers:    runner,
-		CA:            deps.CA,
-		WorkspaceRoot: deps.WorkspaceRoot,
-		HostID:        deps.HostID,
-		NATSURL:       deps.NATSURL,
-		NATSUser:      deps.NATSUser,
-		NATSPassword:  deps.NATSPassword,
-		MCPURL:        deps.MCPURL,
-		Issuer:        deps.Issuer,
-	})
-	rcap := &captureEmit{}
-	if err := restartH(context.Background(), makeReq(t, sextantproto.RestartAgentRequest{
-		AgentID: spawnResp.AgentID,
-	}), rcap.emit()); err != nil {
-		t.Fatalf("restart: %v", err)
-	}
-	if rcap.resp.Error == nil {
-		t.Fatal("expected an error — restart must refuse to overwrite the concurrent archive")
-	}
-
-	// Definition must still be archived. If restart's final Put had
-	// gone through with lifecycle=running, this assertion would fail.
-	defSnap := defs.snapshot()
-	var def sextantproto.AgentDefinition
-	if err := json.Unmarshal(defSnap[spawnResp.AgentID.String()], &def); err != nil {
-		t.Fatalf("decode def: %v", err)
-	}
-	if def.Lifecycle != sextantproto.LifecycleArchived {
-		t.Errorf("def.Lifecycle = %s, want archived (restart must not resurrect)",
-			def.Lifecycle)
-	}
-}
-
-// TestRestartAgentRespectsConcurrentKill pins the 6th-round Codex
-// finding: the archive guard alone isn't enough, because kill_agent
-// flips the def to LifecycleDefined (not archived). Without the
-// revision-mismatch check, restart's CAS would overwrite the
-// kill with `lifecycle=running` and a fresh CurrentIncarnationID.
-//
-// The revision check catches every external writer, regardless of
-// whether they moved the lifecycle to archived or defined. The
-// rollback returns the new container.
-func TestRestartAgentRespectsConcurrentKill(t *testing.T) {
-	deps, defs, incs, runner, _ := buildDeps(t)
-
-	spawnH := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "gamma", Template: "default",
-	}), cap.emit()); err != nil {
-		t.Fatalf("spawn: %v", err)
-	}
-	var spawnResp sextantproto.SpawnAgentResponse
-	if err := json.Unmarshal(cap.resp.Result, &spawnResp); err != nil {
-		t.Fatalf("decode spawn: %v", err)
-	}
-
-	// On the new-incarnation persist (incs Put call 3), simulate
-	// kill_agent racing in. Kill's signature: flip def to
-	// LifecycleDefined and bump the revision.
-	incs.putHook = func(_ string, callIdx int) error {
-		if callIdx == 3 {
-			entry, err := defs.Get(context.Background(), spawnResp.AgentID.String())
-			if err != nil {
-				return nil
-			}
-			var current sextantproto.AgentDefinition
-			if err := json.Unmarshal(entry.Value(), &current); err != nil {
-				return nil
-			}
-			current.Lifecycle = sextantproto.LifecycleDefined
-			current.Version++
-			raw, err := json.Marshal(current)
-			if err != nil {
-				return nil
-			}
-			_, _ = defs.Put(context.Background(), spawnResp.AgentID.String(), raw)
-		}
-		return nil
-	}
-
-	restartH := handlers.NewRestartAgent(handlers.RestartDeps{
-		Definitions:   defs,
-		Incarnations:  incs,
-		Containers:    runner,
-		CA:            deps.CA,
-		WorkspaceRoot: deps.WorkspaceRoot,
-		HostID:        deps.HostID,
-		NATSURL:       deps.NATSURL,
-		NATSUser:      deps.NATSUser,
-		NATSPassword:  deps.NATSPassword,
-		MCPURL:        deps.MCPURL,
-		Issuer:        deps.Issuer,
-	})
-	rcap := &captureEmit{}
-	if err := restartH(context.Background(), makeReq(t, sextantproto.RestartAgentRequest{
-		AgentID: spawnResp.AgentID,
-	}), rcap.emit()); err != nil {
-		t.Fatalf("restart: %v", err)
-	}
-	if rcap.resp.Error == nil {
-		t.Fatal("expected an error — restart must refuse to overwrite the concurrent kill")
-	}
-
-	defSnap := defs.snapshot()
-	var def sextantproto.AgentDefinition
-	if err := json.Unmarshal(defSnap[spawnResp.AgentID.String()], &def); err != nil {
-		t.Fatalf("decode def: %v", err)
-	}
-	if def.Lifecycle != sextantproto.LifecycleDefined {
-		t.Errorf("def.Lifecycle = %s, want defined (restart must not resurrect a killed agent)",
-			def.Lifecycle)
-	}
-}
-
-// TestRestartForwardsAPIKey pins [[bug-restart-no-api-key-forwarding]]:
-// the restart handler must forward ANTHROPIC_API_KEY from the daemon's
-// own env into the new container's env, the same way spawn does. Pre-
-// fix, the restart path silently dropped it and the freshly-restarted
-// sidecar would fail its next prompt with "Not logged in".
-//
-// Mirrors the issue's acceptance criterion in a unit-test shape:
-// instead of `docker exec env | grep ANTHROPIC` we inspect the spec
-// the handler hands to ContainerRunner.Run.
-func TestRestartForwardsAPIKey(t *testing.T) {
-	const apiKey = "sk-ant-restart-forwarding-test"
-	t.Setenv("ANTHROPIC_API_KEY", apiKey)
-
-	deps, defs, incs, runner, _ := buildDeps(t)
-	spawnH := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "alpha", Template: "default",
-	}), cap.emit()); err != nil {
-		t.Fatalf("spawn: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("spawn error: %+v", cap.resp.Error)
-	}
-	var spawnResp sextantproto.SpawnAgentResponse
-	if err := json.Unmarshal(cap.resp.Result, &spawnResp); err != nil {
-		t.Fatalf("decode spawn: %v", err)
-	}
-
-	// Sanity: the spawn already forwarded it (regression guard so a
-	// future refactor that loses the spawn-side forwarding fails here
-	// too, not just in TestSpawnAgentHappyPath).
-	if got := runner.specs[0].Env["ANTHROPIC_API_KEY"]; got != apiKey {
-		t.Fatalf("spawn ANTHROPIC_API_KEY = %q, want %q", got, apiKey)
-	}
-
-	restartH := handlers.NewRestartAgent(handlers.RestartDeps{
-		Definitions:   defs,
-		Incarnations:  incs,
-		Containers:    runner,
-		CA:            deps.CA,
-		WorkspaceRoot: deps.WorkspaceRoot,
-		HostID:        deps.HostID,
-		NATSURL:       deps.NATSURL,
-		NATSUser:      deps.NATSUser,
-		NATSPassword:  deps.NATSPassword,
-		MCPURL:        deps.MCPURL,
-		Issuer:        deps.Issuer,
-	})
-	rcap := &captureEmit{}
-	if err := restartH(context.Background(), makeReq(t, sextantproto.RestartAgentRequest{
-		AgentID:         spawnResp.AgentID,
-		PreserveSession: true,
-	}), rcap.emit()); err != nil {
-		t.Fatalf("restart: %v", err)
-	}
-	if rcap.resp.Error != nil {
-		t.Fatalf("restart error: %+v", rcap.resp.Error)
-	}
-
-	// runner.specs[0] is the spawn; runner.specs[1] is the restart.
-	if len(runner.specs) != 2 {
-		t.Fatalf("runner.specs = %d, want 2 (spawn + restart)", len(runner.specs))
-	}
-	restartSpec := runner.specs[1]
-	if got := restartSpec.Env["ANTHROPIC_API_KEY"]; got != apiKey {
-		t.Errorf("restart ANTHROPIC_API_KEY = %q, want %q", got, apiKey)
-	}
-	// The other env vars the issue's wire-up commit added (SEXTANT_MODEL,
-	// SEXTANT_PERMISSION_MODE) must flow through restart too — otherwise
-	// the sidecar falls back to its own defaults and we lose the
-	// per-template settings. Cheap to assert here while we're already
-	// inspecting the spec.
-	if got := restartSpec.Env["SEXTANT_MODEL"]; got == "" {
-		t.Errorf("restart SEXTANT_MODEL is empty; env = %v", restartSpec.Env)
-	}
-	if got := restartSpec.Env["SEXTANT_PERMISSION_MODE"]; got != "acceptEdits" {
-		t.Errorf("restart SEXTANT_PERMISSION_MODE = %q, want %q (default for unset/auto ceiling)",
-			got, "acceptEdits")
-	}
-}
-
-// TestRestartPreservesSession pins [[bug-restart-preserve-session-noop]]:
-// when --preserve-session is true and the definition has a recorded
-// SDK session id, the restart handler must inject SEXTANT_SESSION_ID
-// into the new container so the sidecar resumes the prior Claude
-// conversation. Pre-fix, the flag was logged-and-ignored.
-//
-// The issue's acceptance flow ("prompt → kill → restart → prompt and
-// look for '42'") requires a live SDK; we substitute the on-the-wire
-// effect of that flow: seed def.Runtime.SessionID directly in KV as
-// the sidecar would have via CAS, then assert the restart spec's env
-// carries that exact id.
-func TestRestartPreservesSession(t *testing.T) {
-	const sessionID = "sess_01HXYZRESTARTPRESERVES"
-
-	deps, defs, incs, runner, _ := buildDeps(t)
-	spawnH := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "alpha", Template: "default",
-	}), cap.emit()); err != nil {
-		t.Fatalf("spawn: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("spawn error: %+v", cap.resp.Error)
-	}
-	var spawnResp sextantproto.SpawnAgentResponse
-	if err := json.Unmarshal(cap.resp.Result, &spawnResp); err != nil {
-		t.Fatalf("decode spawn: %v", err)
-	}
-
-	// Simulate the sidecar's "first turn captured a session id and
-	// persisted it via CAS" step: load the def, set SessionID, write
-	// back. The unit-test version of the issue's repro `sextant agents
-	// prompt smoke "remember 42"` flow.
-	defEntry, err := defs.Get(context.Background(), spawnResp.AgentID.String())
-	if err != nil {
-		t.Fatalf("get def: %v", err)
-	}
-	var def sextantproto.AgentDefinition
-	if err := json.Unmarshal(defEntry.Value(), &def); err != nil {
-		t.Fatalf("decode def: %v", err)
-	}
-	sid := sessionID
-	def.Runtime.SessionID = &sid
-	raw, _ := json.Marshal(def)
-	if _, err := defs.Put(context.Background(), def.UUID.String(), raw); err != nil {
-		t.Fatalf("put def: %v", err)
-	}
-
-	restartH := handlers.NewRestartAgent(handlers.RestartDeps{
-		Definitions:   defs,
-		Incarnations:  incs,
-		Containers:    runner,
-		CA:            deps.CA,
-		WorkspaceRoot: deps.WorkspaceRoot,
-		HostID:        deps.HostID,
-		NATSURL:       deps.NATSURL,
-		NATSUser:      deps.NATSUser,
-		NATSPassword:  deps.NATSPassword,
-		MCPURL:        deps.MCPURL,
-		Issuer:        deps.Issuer,
-	})
-
-	// Case 1: --preserve-session true → SEXTANT_SESSION_ID carries through.
-	rcap := &captureEmit{}
-	if err := restartH(context.Background(), makeReq(t, sextantproto.RestartAgentRequest{
-		AgentID:         spawnResp.AgentID,
-		PreserveSession: true,
-	}), rcap.emit()); err != nil {
-		t.Fatalf("restart: %v", err)
-	}
-	if rcap.resp.Error != nil {
-		t.Fatalf("restart error: %+v", rcap.resp.Error)
-	}
-	if len(runner.specs) < 2 {
-		t.Fatalf("runner.specs = %d, want at least 2 (spawn + restart)", len(runner.specs))
-	}
-	if got := runner.specs[1].Env["SEXTANT_SESSION_ID"]; got != sessionID {
-		t.Errorf("preserve-session=true: SEXTANT_SESSION_ID = %q, want %q", got, sessionID)
-	}
-
-	// Case 2: --preserve-session false → SEXTANT_SESSION_ID must NOT be
-	// set, otherwise the flag has no behavioral difference and the bug
-	// is half-fixed. We need a fresh agent + def-with-SessionID for
-	// this leg because the previous restart bumped lifecycle to running
-	// and recovering the def shape is more bookkeeping than a second
-	// agent buys us.
-	cap2 := &captureEmit{}
-	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "beta", Template: "default",
-	}), cap2.emit()); err != nil {
-		t.Fatalf("second spawn: %v", err)
-	}
-	if cap2.resp.Error != nil {
-		t.Fatalf("second spawn error: %+v", cap2.resp.Error)
-	}
-	var spawnResp2 sextantproto.SpawnAgentResponse
-	if err := json.Unmarshal(cap2.resp.Result, &spawnResp2); err != nil {
-		t.Fatalf("decode second spawn: %v", err)
-	}
-	defEntry2, err := defs.Get(context.Background(), spawnResp2.AgentID.String())
-	if err != nil {
-		t.Fatalf("get def2: %v", err)
-	}
-	var def2 sextantproto.AgentDefinition
-	if err := json.Unmarshal(defEntry2.Value(), &def2); err != nil {
-		t.Fatalf("decode def2: %v", err)
-	}
-	sid2 := sessionID
-	def2.Runtime.SessionID = &sid2
-	raw2, _ := json.Marshal(def2)
-	if _, err := defs.Put(context.Background(), def2.UUID.String(), raw2); err != nil {
-		t.Fatalf("put def2: %v", err)
-	}
-
-	specsBefore := len(runner.specs)
-	rcap2 := &captureEmit{}
-	if err := restartH(context.Background(), makeReq(t, sextantproto.RestartAgentRequest{
-		AgentID:         spawnResp2.AgentID,
-		PreserveSession: false,
-	}), rcap2.emit()); err != nil {
-		t.Fatalf("restart (no-preserve): %v", err)
-	}
-	if rcap2.resp.Error != nil {
-		t.Fatalf("restart (no-preserve) error: %+v", rcap2.resp.Error)
-	}
-	if len(runner.specs) != specsBefore+1 {
-		t.Fatalf("runner.specs grew by %d, want 1", len(runner.specs)-specsBefore)
-	}
-	if got, ok := runner.specs[specsBefore].Env["SEXTANT_SESSION_ID"]; ok {
-		t.Errorf("preserve-session=false: SEXTANT_SESSION_ID set to %q, want unset", got)
-	}
-}
-
-// TestRestartAgentReattachesClaudeSeedVolume pins the second half of
-// the bug-claude-seed-readonly-breaks-session-persistence fix: when
-// the spawned agent uses a copy-on-spawn claude_seed and a restart
-// re-spawns the container, the new container's spec must include the
-// same per-agent named-volume mount so the SDK's session journal under
-// /home/agent/.claude/projects survives the restart. Without this
-// re-attach the --preserve-session restart wires SEXTANT_SESSION_ID
-// into the new container but its `~/.claude` is fresh, so the SDK can't
-// find the journal and the resume 404s. Same root cause as the original
-// bug, different surface (restart vs first spawn).
-func TestRestartAgentReattachesClaudeSeedVolume(t *testing.T) {
-	deps, defs, incs, runner, _ := buildDeps(t)
-	vols := newFakeVolumeManager()
-	deps.Volumes = vols
-
-	// Re-seed the templates KV with a claude_seed template. The
-	// existing default template doesn't carry a seed.
-	seedDir := t.TempDir()
-	tplJSON, err := json.Marshal(map[string]any{
-		"name":        "seeded",
-		"image":       "sextant-sidecar:latest",
-		"permissions": []string{"read.agents", "control.prompt"},
-		"mounts":      []string{"worktree"},
-		"model":       "claude-opus-4-7[1m]",
-		"claude_seed": seedDir,
-	})
-	if err != nil {
-		t.Fatalf("marshal template: %v", err)
-	}
-	tplKV := &fakeTemplatesKV{}
-	if _, err := tplKV.Put(context.Background(), "seeded", tplJSON); err != nil {
-		t.Fatalf("seed template: %v", err)
-	}
-	deps.Templates = tplKV
-
-	spawnH := handlers.NewSpawnAgent(deps)
-	cap := &captureEmit{}
-	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "alpha", Template: "seeded",
-	}), cap.emit()); err != nil {
-		t.Fatalf("spawn: %v", err)
-	}
-	if cap.resp.Error != nil {
-		t.Fatalf("spawn error: %+v", cap.resp.Error)
-	}
-	var spawnResp sextantproto.SpawnAgentResponse
-	if err := json.Unmarshal(cap.resp.Result, &spawnResp); err != nil {
-		t.Fatalf("decode spawn: %v", err)
-	}
-	wantVol := handlers.ClaudeSeedVolumeName(spawnResp.AgentID)
-
-	restartH := handlers.NewRestartAgent(handlers.RestartDeps{
-		Definitions:   defs,
-		Incarnations:  incs,
-		Containers:    runner,
-		Volumes:       vols,
-		Templates:     tplKV,
-		CA:            deps.CA,
-		WorkspaceRoot: deps.WorkspaceRoot,
-		HostID:        deps.HostID,
-		NATSURL:       deps.NATSURL,
-		NATSUser:      deps.NATSUser,
-		NATSPassword:  deps.NATSPassword,
-		MCPURL:        deps.MCPURL,
-		Issuer:        deps.Issuer,
-	})
-	rcap := &captureEmit{}
-	if err := restartH(context.Background(), makeReq(t, sextantproto.RestartAgentRequest{
-		AgentID:         spawnResp.AgentID,
-		PreserveSession: true,
-	}), rcap.emit()); err != nil {
-		t.Fatalf("restart: %v", err)
-	}
-	if rcap.resp.Error != nil {
-		t.Fatalf("restart error: %+v", rcap.resp.Error)
-	}
-
-	// Restart should issue exactly ONE container Run after the spawn's
-	// own Run — we want to inspect the restart spec, not the spawn spec.
-	if len(runner.specs) < 2 {
-		t.Fatalf("expected at least 2 container specs (spawn + restart); got %d", len(runner.specs))
-	}
-	restartSpec := runner.specs[len(runner.specs)-1]
-
-	// The restart spec must include the same /home/agent/.claude mount
-	// pointing at the agent's named volume — that's the mechanism by
-	// which the SDK's session journal survives. Without it the
-	// preserved SEXTANT_SESSION_ID points at a journal the new
-	// container can't see.
-	var found bool
-	for _, m := range restartSpec.Mounts {
-		if m.ContainerPath == "/home/agent/.claude" && m.VolumeName == wantVol {
-			found = true
-			if m.ReadOnly {
-				t.Error("restart re-attached seed volume must be rw, not ro")
-			}
-			break
-		}
-	}
-	if !found {
-		var summary []string
-		for _, m := range restartSpec.Mounts {
-			summary = append(summary, m.HostPath+m.VolumeName+"->"+m.ContainerPath)
-		}
-		t.Errorf("restart spec missing /home/agent/.claude volume mount for %s; mounts = %v", wantVol, summary)
-	}
-
-	// EnsureVolume was called twice (spawn + restart) on the same name,
-	// but Populate must have run only once (idempotent on second call).
-	vols.mu.Lock()
-	popCount := len(vols.populate)
-	vols.mu.Unlock()
-	if popCount != 1 {
-		t.Errorf("populate count = %d, want 1 (restart must reattach, not repopulate)", popCount)
-	}
-}
-
-// TestRestartAgentReappliesProjectsBindMount pins the `agents context`
-// dir-absent bug: restart MUST re-apply the per-agent claude-projects
-// host bind-mount that spawn adds (gated on AgentsDataRoot). Without it
-// the restarted incarnation's SDK session journal writes inside the
-// container and `sextant agents context` can never find it — the dir on
-// the host stays empty. Regression guard for the real cause behind
-// "sextant agents context assistant looks broken".
-func TestRestartAgentReappliesProjectsBindMount(t *testing.T) {
-	deps, defs, incs, runner, _ := buildDeps(t)
-	root := t.TempDir()
-	deps.AgentsDataRoot = root
-
-	spawnH := handlers.NewSpawnAgent(deps)
-	scap := &captureEmit{}
-	if err := spawnH(context.Background(), makeReq(t, sextantproto.SpawnAgentRequest{
-		Name: "alpha", Template: "default",
-	}), scap.emit()); err != nil {
-		t.Fatalf("spawn: %v", err)
-	}
-	if scap.resp.Error != nil {
-		t.Fatalf("spawn error: %+v", scap.resp.Error)
-	}
-	var spawnResp sextantproto.SpawnAgentResponse
-	if err := json.Unmarshal(scap.resp.Result, &spawnResp); err != nil {
-		t.Fatalf("decode spawn: %v", err)
-	}
-
-	restartH := handlers.NewRestartAgent(handlers.RestartDeps{
-		Definitions:    defs,
-		Incarnations:   incs,
-		Containers:     runner,
-		AgentsDataRoot: root,
-		CA:             deps.CA,
-		WorkspaceRoot:  deps.WorkspaceRoot,
-		HostID:         deps.HostID,
-		NATSURL:        deps.NATSURL,
-		NATSUser:       deps.NATSUser,
-		NATSPassword:   deps.NATSPassword,
-		MCPURL:         deps.MCPURL,
-		Issuer:         deps.Issuer,
-	})
-	rcap := &captureEmit{}
-	if err := restartH(context.Background(), makeReq(t, sextantproto.RestartAgentRequest{
-		AgentID: spawnResp.AgentID,
-	}), rcap.emit()); err != nil {
-		t.Fatalf("restart: %v", err)
-	}
-	if rcap.resp.Error != nil {
-		t.Fatalf("restart error: %+v", rcap.resp.Error)
-	}
-	if len(runner.specs) < 2 {
-		t.Fatalf("expected spawn + restart specs; got %d", len(runner.specs))
-	}
-	restartSpec := runner.specs[len(runner.specs)-1]
-
-	var found bool
-	for _, m := range restartSpec.Mounts {
-		if m.ContainerPath == "/home/agent/.claude/projects" {
-			found = true
-			if !strings.HasPrefix(m.HostPath, root) {
-				t.Errorf("projects mount HostPath = %q, want under %q", m.HostPath, root)
-			}
-		}
-	}
-	if !found {
-		var summary []string
-		for _, m := range restartSpec.Mounts {
-			summary = append(summary, m.HostPath+m.VolumeName+"->"+m.ContainerPath)
-		}
-		t.Errorf("restart spec missing /home/agent/.claude/projects bind-mount; mounts = %v", summary)
-	}
-}
-
-// TestRestartAgentUnknownAgentReturnsNotFound proves the handler's
-// 404 path: an agent_not_found error when the definition isn't in KV.
-func TestRestartAgentUnknownAgentReturnsNotFound(t *testing.T) {
-	deps, defs, incs, runner, _ := buildDeps(t)
 	h := handlers.NewRestartAgent(handlers.RestartDeps{
-		Definitions:   defs,
-		Incarnations:  incs,
-		Containers:    runner,
-		CA:            deps.CA,
-		WorkspaceRoot: deps.WorkspaceRoot,
-		HostID:        deps.HostID,
-		NATSURL:       deps.NATSURL,
-		NATSUser:      deps.NATSUser,
-		NATSPassword:  deps.NATSPassword,
-		MCPURL:        deps.MCPURL,
-		Issuer:        deps.Issuer,
+		Definitions:  defs,
+		Incarnations: incs,
+		Containers:   runner,
+		Enqueue:      enq,
 	})
 	cap := &captureEmit{}
-	if err := h(context.Background(), makeReq(t, sextantproto.RestartAgentRequest{
-		AgentID: uuid.New(),
-	}), cap.emit()); err != nil {
+	if err := h(context.Background(), makeReq(t, sextantproto.RestartAgentRequest{AgentID: id}), cap.emit()); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if cap.resp.Error != nil {
+		t.Fatalf("restart error: %+v", cap.resp.Error)
+	}
+	var resp sextantproto.RestartAgentResponse
+	if err := json.Unmarshal(cap.resp.Result, &resp); err != nil {
+		t.Fatalf("decode resp: %v", err)
+	}
+	if !resp.OK || resp.AgentID != id {
+		t.Errorf("RestartAgentResponse = %+v, want OK with id %s", resp, id)
+	}
+
+	def := readDef(t, defs, id)
+	if def.Spec.ReactuationNonce != 1 {
+		t.Errorf("ReactuationNonce = %d, want 1 (the restart bump)", def.Spec.ReactuationNonce)
+	}
+	if def.Spec.Desired != sextantproto.DesiredRun {
+		t.Errorf("Desired = %s, want run", def.Spec.Desired)
+	}
+
+	if got := enq.calls(); len(got) != 1 || got[0] != id {
+		t.Errorf("enqueue calls = %v, want exactly [%s]", got, id)
+	}
+
+	// The handler is not an actuator: no container Run/Stop happened.
+	runner.mu.Lock()
+	specs, stopped := len(runner.specs), len(runner.stopped)
+	runner.mu.Unlock()
+	if specs != 0 || stopped != 0 {
+		t.Errorf("restart touched the runtime: Run=%d Stop=%d, want 0/0 (the reconciler actuates)", specs, stopped)
+	}
+}
+
+// TestRestartReassertsRunOnPausedAgent: restarting a paused agent means
+// "make it run again" — desired flips back to run and the nonce bumps so
+// the reconciler builds a fresh incarnation.
+func TestRestartReassertsRunOnPausedAgent(t *testing.T) {
+	_, defs, incs, runner, _ := buildDeps(t)
+	enq := &captureEnqueuer{}
+	id := seedDef(t, defs, "beta", sextantproto.DesiredPaused, "", nil)
+
+	h := handlers.NewRestartAgent(handlers.RestartDeps{
+		Definitions: defs, Incarnations: incs, Containers: runner, Enqueue: enq,
+	})
+	cap := &captureEmit{}
+	if err := h(context.Background(), makeReq(t, sextantproto.RestartAgentRequest{AgentID: id}), cap.emit()); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if cap.resp.Error != nil {
+		t.Fatalf("restart error: %+v", cap.resp.Error)
+	}
+	def := readDef(t, defs, id)
+	if def.Spec.Desired != sextantproto.DesiredRun {
+		t.Errorf("Desired = %s, want run (restart re-asserts run on a paused agent)", def.Spec.Desired)
+	}
+	if def.Spec.ReactuationNonce != 1 {
+		t.Errorf("ReactuationNonce = %d, want 1", def.Spec.ReactuationNonce)
+	}
+}
+
+// TestRestartOnArchivedRefused: restart must refuse an archived agent —
+// archived is terminal intent; the operator must spawn a new agent. The
+// nonce must not move.
+func TestRestartOnArchivedRefused(t *testing.T) {
+	_, defs, incs, runner, _ := buildDeps(t)
+	enq := &captureEnqueuer{}
+	id := seedDef(t, defs, "gamma", sextantproto.DesiredArchived, "", nil)
+
+	h := handlers.NewRestartAgent(handlers.RestartDeps{
+		Definitions: defs, Incarnations: incs, Containers: runner, Enqueue: enq,
+	})
+	cap := &captureEmit{}
+	if err := h(context.Background(), makeReq(t, sextantproto.RestartAgentRequest{AgentID: id}), cap.emit()); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if cap.resp.Error == nil || cap.resp.Error.Code != sextantproto.ErrCodeBadRequest {
+		t.Fatalf("Error = %+v, want bad_request (archived is terminal)", cap.resp.Error)
+	}
+	def := readDef(t, defs, id)
+	if def.Spec.ReactuationNonce != 0 {
+		t.Errorf("ReactuationNonce = %d, want 0 (refused restart must not bump)", def.Spec.ReactuationNonce)
+	}
+	if def.Spec.Desired != sextantproto.DesiredArchived {
+		t.Errorf("Desired = %s, want archived (unchanged)", def.Spec.Desired)
+	}
+	if got := enq.calls(); len(got) != 0 {
+		t.Errorf("enqueue calls = %v, want none on a refused restart", got)
+	}
+}
+
+// TestRestartSessionPreserveContract re-homes bug-restart-preserve-session-noop
+// at the spec layer: --preserve-session=true keeps the recorded session id
+// on the spec (the actuator/builder then injects SEXTANT_SESSION_ID — see
+// container_spec_test.go); --preserve-session=false clears it so the fresh
+// incarnation starts clean.
+func TestRestartSessionPreserveContract(t *testing.T) {
+	sid := "sess_01HXYZRESTARTPRESERVES"
+
+	t.Run("preserve keeps the session", func(t *testing.T) {
+		_, defs, incs, runner, _ := buildDeps(t)
+		s := sid
+		id := seedDef(t, defs, "alpha", sextantproto.DesiredRun, sextantproto.ObservedRunning, &s)
+		h := handlers.NewRestartAgent(handlers.RestartDeps{
+			Definitions: defs, Incarnations: incs, Containers: runner, Enqueue: &captureEnqueuer{},
+		})
+		cap := &captureEmit{}
+		if err := h(context.Background(), makeReq(t, sextantproto.RestartAgentRequest{AgentID: id, PreserveSession: true}), cap.emit()); err != nil {
+			t.Fatalf("restart: %v", err)
+		}
+		if cap.resp.Error != nil {
+			t.Fatalf("restart error: %+v", cap.resp.Error)
+		}
+		def := readDef(t, defs, id)
+		if def.Spec.Runtime.SessionID == nil || *def.Spec.Runtime.SessionID != sid {
+			t.Errorf("SessionID = %v, want preserved %q", def.Spec.Runtime.SessionID, sid)
+		}
+	})
+
+	t.Run("no-preserve clears the session", func(t *testing.T) {
+		_, defs, incs, runner, _ := buildDeps(t)
+		s := sid
+		id := seedDef(t, defs, "beta", sextantproto.DesiredRun, sextantproto.ObservedRunning, &s)
+		h := handlers.NewRestartAgent(handlers.RestartDeps{
+			Definitions: defs, Incarnations: incs, Containers: runner, Enqueue: &captureEnqueuer{},
+		})
+		cap := &captureEmit{}
+		if err := h(context.Background(), makeReq(t, sextantproto.RestartAgentRequest{AgentID: id, PreserveSession: false}), cap.emit()); err != nil {
+			t.Fatalf("restart: %v", err)
+		}
+		if cap.resp.Error != nil {
+			t.Fatalf("restart error: %+v", cap.resp.Error)
+		}
+		def := readDef(t, defs, id)
+		if def.Spec.Runtime.SessionID != nil {
+			t.Errorf("SessionID = %q, want nil (no-preserve starts clean)", *def.Spec.Runtime.SessionID)
+		}
+	})
+}
+
+// TestRestartAgentUnknownAgentReturnsNotFound proves the 404 path.
+func TestRestartAgentUnknownAgentReturnsNotFound(t *testing.T) {
+	_, defs, incs, runner, _ := buildDeps(t)
+	h := handlers.NewRestartAgent(handlers.RestartDeps{
+		Definitions: defs, Incarnations: incs, Containers: runner, Enqueue: &captureEnqueuer{},
+	})
+	cap := &captureEmit{}
+	if err := h(context.Background(), makeReq(t, sextantproto.RestartAgentRequest{AgentID: uuid.New()}), cap.emit()); err != nil {
 		t.Fatalf("handler: %v", err)
 	}
 	if cap.resp.Error == nil || cap.resp.Error.Code != sextantproto.ErrCodeAgentNotFound {

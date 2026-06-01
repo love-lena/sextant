@@ -116,9 +116,9 @@ func NewPromptAgent(deps PromptDeps) rpc.Handler {
 			return emitErr(emit, sextantproto.ErrCodeInternal,
 				fmt.Sprintf("decode definition: %v", err))
 		}
-		if def.Lifecycle != sextantproto.LifecycleRunning {
+		if def.Lifecycle() != sextantproto.LifecycleRunning {
 			return emitErr(emit, sextantproto.ErrCodeAgentNotReachable,
-				promptUnreachableMessage(args.AgentID, def.Lifecycle))
+				promptUnreachableMessage(args.AgentID, def.Lifecycle()))
 		}
 
 		// Heartbeat staleness guard (L1). Only runs when the cache is wired.

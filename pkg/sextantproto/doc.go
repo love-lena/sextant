@@ -37,7 +37,16 @@ const ProtoVersion = "0.5.0"
 // Bump this by exactly one when (and only when) a breaking wire change
 // lands. Additive changes (new optional field, new enum value, new
 // message) do NOT bump it.
-const WireEpoch = 1
+//
+// Epoch 2 (control-plane P0, feat-ctl-p0-reconcile-spine): the
+// AgentDefinition record was split into spec/status (RFC §5.2,
+// Appendix C). The top-level `lifecycle`, `runtime`, `sandbox`, `tools`,
+// `host_pin`, and `current_incarnation_id` fields were removed/relocated
+// under the new `spec` / `status` objects — a breaking wire change a
+// peer on the epoch-1 schema would misread, so the epoch advances. The
+// converge-by-restart model (RFC §3) expects exactly this on a breaking
+// agent-record change.
+const WireEpoch = 2
 
 // Regenerate the wire contract. The first directive walks the Go structs
 // into schemas/*.json + schemas/wire.json (the source for proto_version /

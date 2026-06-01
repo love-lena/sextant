@@ -204,6 +204,37 @@ func (r *spawnRuntime) asSpawnDeps(chConn driver.Conn) handlers.SpawnDeps {
 	}
 }
 
+// asActuatorDeps adapts the spawn runtime into handlers.ActuatorDeps —
+// the runtime-bearing dependency bundle the reconciler's Actuator uses.
+// This is the ONLY place the container runtime is handed to an actuation
+// path (RFC §5: the reconciler is the sole actuator).
+func (r *spawnRuntime) asActuatorDeps(ca *authjwt.CA, chConn driver.Conn) handlers.ActuatorDeps {
+	var hist handlers.HistoryWriter
+	if chConn != nil {
+		hist = chHistoryWriter{conn: chConn}
+	}
+	return handlers.ActuatorDeps{
+		Definitions:    kvMutableAdapter{kv: r.defsKV},
+		Incarnations:   kvMutableAdapter{kv: r.incsKV},
+		Templates:      r.templatesKV,
+		Containers:     r.containers,
+		Volumes:        r.containers,
+		CA:             ca,
+		History:        hist,
+		WorkspaceRoot:  r.workspaceDir,
+		AgentsDataRoot: r.agentsDataRoot,
+		Worktree:       r.worktree,
+		RepoRoot:       r.repoRoot,
+		HostID:         r.hostID,
+		NATSURL:        r.natsURL,
+		NATSUser:       r.natsUser,
+		NATSPassword:   r.natsPassword,
+		MCPURL:         r.mcpURL,
+		Issuer:         r.issuer,
+		TestRunLabel:   r.testRunLabel,
+	}
+}
+
 // asMCPDeps adapts the spawn runtime into the mcpserver.SpawnDeps
 // shape. The MCP server takes a pointer so the daemon can install it
 // after MCP has bound its HTTP listener.

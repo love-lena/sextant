@@ -72,7 +72,7 @@ func NewListAgents(kv AgentKV) rpc.Handler {
 				return emitErr(emit, sextantproto.ErrCodeInternal,
 					fmt.Sprintf("decode agent_definitions/%s: %v", key, err))
 			}
-			if args.Filter != nil && args.Filter.Lifecycle != "" && string(def.Lifecycle) != args.Filter.Lifecycle {
+			if args.Filter != nil && args.Filter.Lifecycle != "" && string(def.Lifecycle()) != args.Filter.Lifecycle {
 				continue
 			}
 			summaries = append(summaries, sextantproto.AgentSummary{
@@ -80,7 +80,7 @@ func NewListAgents(kv AgentKV) rpc.Handler {
 				Name:      def.Name,
 				Type:      def.Type,
 				Template:  def.Template,
-				Lifecycle: string(def.Lifecycle),
+				Lifecycle: string(def.Lifecycle()),
 				Version:   def.Version,
 				UpdatedAt: def.UpdatedAt.Time,
 			})
@@ -152,7 +152,7 @@ func NewGetAgentStatusWithDeps(deps GetAgentStatusDeps) rpc.Handler {
 		status := sextantproto.AgentStatus{
 			UUID:      def.UUID,
 			Name:      def.Name,
-			Lifecycle: string(def.Lifecycle),
+			Lifecycle: string(def.Lifecycle()),
 			Version:   def.Version,
 			UpdatedAt: def.UpdatedAt.Time,
 		}
@@ -163,8 +163,8 @@ func NewGetAgentStatusWithDeps(deps GetAgentStatusDeps) rpc.Handler {
 			info := &sextantproto.SessionLogInfo{
 				ProjectsDir: AgentProjectsDir(deps.AgentsDataRoot, def.UUID),
 			}
-			if def.Runtime.SessionID != nil {
-				info.SessionID = *def.Runtime.SessionID
+			if def.Spec.Runtime.SessionID != nil {
+				info.SessionID = *def.Spec.Runtime.SessionID
 			}
 			status.SessionLog = info
 		}

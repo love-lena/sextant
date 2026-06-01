@@ -255,14 +255,18 @@ func registerPhase(srv *rpc.Server, p rpc.Phase, factories map[string]func() rpc
 // factories and delegates iteration + ordering to registerPhase, which
 // reads the verb set from rpc.VerbSpecs (PhaseLifecycle). The CA is the
 // daemon's signing CA (rpc handler embeds it in every issued JWT).
-func (r *rpcRuntime) registerLifecycleVerbs(ca *authjwt.CA, spawnRT *spawnRuntime) error {
+//
+// enqueue is the reconcile hint sink (the daemon's Reconciler). The
+// desired-state verbs (spawn/kill/archive/restart) write the record and
+// then enqueue a reconcile so the sole-actuator loop converges the agent
+// promptly; a nil enqueue is acceptable (the periodic sweep is the
+// backstop).
+func (r *rpcRuntime) registerLifecycleVerbs(ca *authjwt.CA, spawnRT *spawnRuntime, enqueue handlers.ReconcileEnqueuer) error {
 	spawnDeps := spawnRT.asSpawnDeps(r.chConn)
 	spawnDeps.CA = ca
+	spawnDeps.Enqueue = enqueue
 	// Guardrail: prompt_agent's heartbeat-staleness guard (L1 of agent
 	// lifecycle truth) is captured by value in NewPromptAgent's closure.
-	// If r.heartbeats is nil here the guard is permanently disabled. The
-	// daemon's startup sequence must install the HeartbeatCache before
-	// calling this method — see cmd/sextantd/daemon.go step 11b.
 	if r.heartbeats == nil {
 		log.Printf("sextantd: registerLifecycleVerbs: WARNING heartbeats cache is nil; prompt_agent L1 staleness guard will not fire (see daemon.go ordering)")
 	}
@@ -272,12 +276,15 @@ func (r *rpcRuntime) registerLifecycleVerbs(ca *authjwt.CA, spawnRT *spawnRuntim
 		Containers:   spawnRT.containers,
 	}
 	factories := map[string]func() rpc.Handler{
+		// Desired-state writers — they never touch the container runtime;
+		// the reconciler (sole actuator) does. They enqueue a hint.
 		rpc.VerbSpawnAgent: func() rpc.Handler { return handlers.NewSpawnAgent(spawnDeps) },
 		rpc.VerbKillAgent: func() rpc.Handler {
 			return handlers.NewKillAgent(handlers.KillDeps{
 				Definitions:  spawnDeps.Definitions,
 				Incarnations: spawnDeps.Incarnations,
 				Containers:   spawnDeps.Containers,
+				Enqueue:      enqueue,
 			})
 		},
 		rpc.VerbArchiveAgent: func() rpc.Handler {
@@ -286,6 +293,7 @@ func (r *rpcRuntime) registerLifecycleVerbs(ca *authjwt.CA, spawnRT *spawnRuntim
 				Incarnations: spawnDeps.Incarnations,
 				Containers:   spawnDeps.Containers,
 				Volumes:      spawnDeps.Volumes,
+				Enqueue:      enqueue,
 			})
 		},
 		rpc.VerbPromptAgent: func() rpc.Handler {
@@ -303,26 +311,10 @@ func (r *rpcRuntime) registerLifecycleVerbs(ca *authjwt.CA, spawnRT *spawnRuntim
 		},
 		rpc.VerbRestartAgent: func() rpc.Handler {
 			return handlers.NewRestartAgent(handlers.RestartDeps{
-				Definitions:    spawnDeps.Definitions,
-				Incarnations:   spawnDeps.Incarnations,
-				Containers:     spawnRT.containers,
-				Volumes:        spawnRT.containers,
-				Templates:      spawnDeps.Templates,
-				AgentsDataRoot: spawnDeps.AgentsDataRoot,
-				// Worktree + RepoRoot let restart reproduce the worktree
-				// /workspace + <RepoRoot>/.git mounts spawn adds — the lossless
-				// restart projection (RFC §5.4). Same handles spawn uses.
-				Worktree:      spawnDeps.Worktree,
-				RepoRoot:      spawnDeps.RepoRoot,
-				CA:            ca,
-				WorkspaceRoot: spawnDeps.WorkspaceRoot,
-				HostID:        spawnDeps.HostID,
-				NATSURL:       spawnDeps.NATSURL,
-				NATSUser:      spawnDeps.NATSUser,
-				NATSPassword:  spawnDeps.NATSPassword,
-				MCPURL:        spawnDeps.MCPURL,
-				Issuer:        spawnDeps.Issuer,
-				TestRunLabel:  spawnDeps.TestRunLabel,
+				Definitions:  spawnDeps.Definitions,
+				Incarnations: spawnDeps.Incarnations,
+				Containers:   spawnRT.containers,
+				Enqueue:      enqueue,
 			})
 		},
 		rpc.VerbReadFile:        func() rpc.Handler { return handlers.NewReadFile(filesDeps) },
