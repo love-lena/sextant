@@ -17,14 +17,24 @@ import (
 // most recent (re)start. Used by tests to drive restart-on-failure
 // behavior and by operators who want to inspect a specific subprocess.
 type RuntimeInfo struct {
-	PID            int       `json:"pid"`
-	StartedAt      time.Time `json:"started_at"`
-	NATSAddr       string    `json:"nats_addr"`
-	NATSPID        int       `json:"nats_pid,omitempty"`
-	ClickHouseTCP  string    `json:"clickhouse_tcp"`
-	ClickHouseHTTP string    `json:"clickhouse_http"`
-	ClickHousePID  int       `json:"clickhouse_pid,omitempty"`
-	ControlSocket  string    `json:"control_socket"`
+	PID       int       `json:"pid"`
+	StartedAt time.Time `json:"started_at"`
+	NATSAddr  string    `json:"nats_addr"`
+	NATSPID   int       `json:"nats_pid,omitempty"`
+	// NATSDaemonUser / NATSDaemonPassword carry the privileged daemon NATS
+	// principal (feat-ctl-f0) for daemon-side subprocesses the daemon
+	// supervises — currently the shipper, which consumes every telemetry /
+	// audit / agent stream via JetStream and so needs the unrestricted
+	// principal rather than the broker-scoped operator creds. The secret is
+	// boot-generated and never written to operator.creds; runtime.json is
+	// already mode-0600. Empty in older runtime files; consumers fall back
+	// to operator.creds for backward compatibility.
+	NATSDaemonUser     string `json:"nats_daemon_user,omitempty"`
+	NATSDaemonPassword string `json:"nats_daemon_password,omitempty"`
+	ClickHouseTCP      string `json:"clickhouse_tcp"`
+	ClickHouseHTTP     string `json:"clickhouse_http"`
+	ClickHousePID      int    `json:"clickhouse_pid,omitempty"`
+	ControlSocket      string `json:"control_socket"`
 	// MCPHTTPAddr is the bound host:port of the agent-facing Streamable
 	// HTTP MCP listener. Captured at daemon start so callers (sidecars,
 	// tests) can discover the auto-picked port when http_port=0.

@@ -103,19 +103,28 @@ func New(ctx context.Context, cfg Config) (*Shipper, error) {
 		return nil, err
 	}
 
-	// Load operator creds for NATS.
-	creds, err := sextantd.ReadOperatorCreds(resolved.NATS.OperatorCreds)
-	if err != nil {
-		return nil, fmt.Errorf("shipper: %w", err)
+	// NATS credential: prefer the privileged daemon principal threaded
+	// through runtime.json (feat-ctl-f0) — the shipper consumes every
+	// stream via JetStream and the broker-scoped operator principal can no
+	// longer reach them. Fall back to operator.creds when the daemon
+	// principal is absent (standalone shipper / older runtime file).
+	natsUser, natsPassword := resolved.NATS.DaemonUser, resolved.NATS.DaemonPassword
+	if natsUser == "" {
+		creds, err := sextantd.ReadOperatorCreds(resolved.NATS.OperatorCreds)
+		if err != nil {
+			return nil, fmt.Errorf("shipper: %w", err)
+		}
+		natsUser, natsPassword = creds.User, creds.Password
 	}
 	password, err := sextantd.ReadPasswordFile(resolved.ClickHouse.PasswordFile)
 	if err != nil {
 		return nil, fmt.Errorf("shipper: %w", err)
 	}
 
-	nc, err := nats.Connect(resolved.NATS.URL,
+	nc, err := nats.Connect(
+		resolved.NATS.URL,
 		nats.Name("sextant-shipper"),
-		nats.UserInfo(creds.User, creds.Password),
+		nats.UserInfo(natsUser, natsPassword),
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(500*time.Millisecond),
 		nats.ReconnectJitter(100*time.Millisecond, 500*time.Millisecond),
@@ -782,13 +791,16 @@ func ConfigFromFile(path, runtimePath string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	if cfg.NATS.URL == "" || cfg.ClickHouse.Addr == "" {
-		merged, err := cfg.MergeRuntime(runtimePath)
-		if err != nil {
-			return Config{}, err
-		}
-		cfg = merged
+	// Always merge runtime.json: besides the NATS/ClickHouse addresses it
+	// carries the privileged daemon NATS credential (feat-ctl-f0) the
+	// shipper needs even when the addresses are configured explicitly.
+	// MergeRuntime tolerates a missing runtime file when the addresses are
+	// already present (auth then falls back to operator.creds).
+	merged, err := cfg.MergeRuntime(runtimePath)
+	if err != nil {
+		return Config{}, err
 	}
+	cfg = merged
 	return cfg, nil
 }
 

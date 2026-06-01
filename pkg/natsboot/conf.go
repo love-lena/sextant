@@ -35,13 +35,129 @@ func renderConfig(w io.Writer, cfg Config) error {
 	if err := write("jetstream {\n  store_dir: %s\n}\n", quoteString(cfg.DataDir)); err != nil {
 		return err
 	}
-	if err := write("authorization {\n  users = [\n    { user: %s, password: %s, permissions: { publish: \">\", subscribe: \">\" } }\n  ]\n}\n",
-		quoteString(cfg.OperatorUser),
-		quoteString(cfg.OperatorPassword),
-	); err != nil {
+	if err := renderAuthorization(w, cfg); err != nil {
 		return err
 	}
 	return nil
+}
+
+// renderAuthorization writes the role-scoped `authorization { users = [...] }`
+// block (control-plane RFC §5.7, feat-ctl-f0). The single unrestricted
+// account is gone: the daemon is now the BROKER-ENFORCED sole publisher to
+// agent inboxes.
+//
+//   - daemon   — publish ">"  / subscribe ">". The daemon's in-process
+//     connection (RPC + MCP + reconciler + shipper) is the only principal
+//     the broker permits to publish to agents.*.inbox.
+//   - operator — publish sextant.rpc.* (RPC requests) and _INBOX.> (NATS
+//     request/reply reply subjects) ONLY; subscribe agents.*.frames,
+//     agents.*.lifecycle, the RPC reply inboxes, and the KV/JS API the
+//     read-path TUIs use. CANNOT publish to agents.*.inbox — the side
+//     door is closed structurally, not by convention.
+//   - sidecar  — publish agents.*.{frames,heartbeat,lifecycle} and
+//     _INBOX.>; subscribe agents.*.inbox + _INBOX.>. Per-uuid narrowing
+//     is the future per-incarnation NATS-JWT work (RFC §5.7); F0 scopes
+//     the sidecar off the inbox-publish and rpc surfaces at the broker.
+//
+// The JetStream/KV management API ($JS.API.>) is allowed for operator and
+// sidecar so existing read-path TUIs (KV-backed) keep working off the
+// gauntlet (RFC §5.7: "reads stay off the gauntlet").
+func renderAuthorization(w io.Writer, cfg Config) error {
+	write := func(format string, args ...any) error {
+		_, err := fmt.Fprintf(w, format, args...)
+		return err
+	}
+	if err := write("authorization {\n  users = [\n"); err != nil {
+		return err
+	}
+	// daemon — sole publisher; full subscribe.
+	if err := write(
+		"    { user: %s, password: %s, permissions: { publish: { allow: [\">\"] }, subscribe: { allow: [\">\"] } } }\n",
+		quoteString(cfg.DaemonUser),
+		quoteString(cfg.DaemonPassword),
+	); err != nil {
+		return err
+	}
+	// operator — RPC requests + reply inboxes only on publish; NOT inboxes.
+	if err := write(
+		"    { user: %s, password: %s, permissions: { publish: { allow: [%s] }, subscribe: { allow: [%s] } } }\n",
+		quoteString(cfg.OperatorUser),
+		quoteString(cfg.OperatorPassword),
+		joinQuoted(operatorPublishAllow),
+		joinQuoted(operatorSubscribeAllow),
+	); err != nil {
+		return err
+	}
+	// sidecar — per-agent frames/heartbeat/lifecycle publish; inbox subscribe.
+	if err := write(
+		"    { user: %s, password: %s, permissions: { publish: { allow: [%s] }, subscribe: { allow: [%s] } } }\n",
+		quoteString(cfg.SidecarUser),
+		quoteString(cfg.SidecarPassword),
+		joinQuoted(sidecarPublishAllow),
+		joinQuoted(sidecarSubscribeAllow),
+	); err != nil {
+		return err
+	}
+	if err := write("  ]\n}\n"); err != nil {
+		return err
+	}
+	return nil
+}
+
+// The role-scoped subject allow-lists. These are the broker-enforced
+// front door (RFC §5.7). Keep them in sync with the principals table in
+// renderAuthorization's doc comment and conventions/operator-experience.md.
+var (
+	// operatorPublishAllow: RPC requests + the ephemeral NATS reply
+	// subjects request/reply provisions (pkg/client uses nats.NewInbox,
+	// which mints _INBOX.<token>). Deliberately omits agents.*.inbox.
+	operatorPublishAllow = []string{
+		"sextant.rpc.*",
+		"_INBOX.>",
+	}
+	// operatorSubscribeAllow: the diagnostic/read streams the CLI + TUIs
+	// consume, the RPC reply inboxes, and the JetStream/KV management API
+	// the KV-backed read TUIs use (reads stay off the gauntlet).
+	operatorSubscribeAllow = []string{
+		"agents.*.frames",
+		"agents.*.lifecycle",
+		"_INBOX.>",
+		"$JS.API.>",
+		"$KV.>",
+	}
+	// sidecarPublishAllow: the per-agent streams the sidecar emits onto,
+	// plus reply inboxes for any request/reply it issues. Omits
+	// sextant.rpc.* (control is the operator/daemon lane) and inboxes.
+	sidecarPublishAllow = []string{
+		"agents.*.frames",
+		"agents.*.heartbeat",
+		"agents.*.lifecycle",
+		"_INBOX.>",
+		"$JS.API.>",
+		"$KV.>",
+	}
+	// sidecarSubscribeAllow: its own inbox (where the daemon delivers
+	// prompts) + reply inboxes + the JS/KV API used for session snapshot
+	// writes.
+	sidecarSubscribeAllow = []string{
+		"agents.*.inbox",
+		"_INBOX.>",
+		"$JS.API.>",
+		"$KV.>",
+	}
+)
+
+// joinQuoted renders a subject allow-list as a comma-separated sequence of
+// quoted strings suitable for a NATS `allow: [...]` array body.
+func joinQuoted(subjects []string) string {
+	out := make([]byte, 0, len(subjects)*16)
+	for i, s := range subjects {
+		if i > 0 {
+			out = append(out, ',', ' ')
+		}
+		out = append(out, quoteString(s)...)
+	}
+	return string(out)
 }
 
 // quoteString returns s wrapped in double-quotes with embedded quotes and

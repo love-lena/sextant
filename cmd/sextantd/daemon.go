@@ -175,6 +175,23 @@ func (d *daemon) Start(ctx context.Context) error {
 	d.natsBaseCfg.JWTCAPubPath = d.cfg.CA.PubPath
 	d.natsBaseCfg.OperatorUser = creds.User
 	d.natsBaseCfg.OperatorPassword = creds.Password
+	// Pin the privileged daemon + scoped sidecar secrets once (feat-ctl-f0).
+	// These are NOT persisted to a creds file — they live only in the
+	// daemon's process and the rendered nats-server.conf. Pinning them here
+	// (rather than letting validateAndFill regenerate on each boot) keeps
+	// them STABLE across a supervisor-driven NATS restart, so already-running
+	// sidecars reconnect with the same credential (operator-experience.md
+	// "daemon restart while agents are running").
+	daemonPass, err := sextantd.GenerateOperatorPassword()
+	if err != nil {
+		return fmt.Errorf("generate daemon nats password: %w", err)
+	}
+	sidecarPass, err := sextantd.GenerateOperatorPassword()
+	if err != nil {
+		return fmt.Errorf("generate sidecar nats password: %w", err)
+	}
+	d.natsBaseCfg.DaemonPassword = daemonPass
+	d.natsBaseCfg.SidecarPassword = sidecarPass
 
 	natsSrv, err := d.startNATSOnce(ctx)
 	if err != nil {
@@ -813,7 +830,7 @@ func (d *daemon) applyMigrations(ctx context.Context, chSrv *clickhouseboot.Serv
 func (d *daemon) bootstrapNATS(ctx context.Context, srv *natsboot.Server) error {
 	nc, err := srv.Connect()
 	if err != nil {
-		return fmt.Errorf("operator connect: %w", err)
+		return fmt.Errorf("daemon connect: %w", err)
 	}
 	defer nc.Close()
 	bootCtx, bootCancel := context.WithTimeout(ctx, 30*time.Second)
@@ -1035,16 +1052,18 @@ func (d *daemon) drainEvents(name string, ch <-chan supervisor.Event) {
 // Called on first boot and after each supervised restart.
 func (d *daemon) writeRuntimeInfo(natsSrv *natsboot.Server, chSrv *clickhouseboot.Server) error {
 	rt := sextantd.RuntimeInfo{
-		PID:            os.Getpid(),
-		StartedAt:      d.startedAt,
-		NATSAddr:       natsSrv.Address(),
-		NATSPID:        natsSrv.PID(),
-		ClickHouseTCP:  chSrv.TCPAddress(),
-		ClickHouseHTTP: chSrv.HTTPAddress(),
-		ClickHousePID:  chSrv.PID(),
-		ControlSocket:  d.cfg.Daemon.ControlSocket,
-		LogFile:        d.cfg.Log.File,
-		Version:        version.Version,
+		PID:                os.Getpid(),
+		StartedAt:          d.startedAt,
+		NATSAddr:           natsSrv.Address(),
+		NATSPID:            natsSrv.PID(),
+		NATSDaemonUser:     natsSrv.DaemonUser(),
+		NATSDaemonPassword: natsSrv.DaemonPassword(),
+		ClickHouseTCP:      chSrv.TCPAddress(),
+		ClickHouseHTTP:     chSrv.HTTPAddress(),
+		ClickHousePID:      chSrv.PID(),
+		ControlSocket:      d.cfg.Daemon.ControlSocket,
+		LogFile:            d.cfg.Log.File,
+		Version:            version.Version,
 	}
 	d.mu.Lock()
 	if d.mcpRT != nil && d.mcpRT.server != nil {
