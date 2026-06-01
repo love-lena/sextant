@@ -99,25 +99,34 @@ type AgentStatus struct {
 }
 
 // SessionLogInfo describes how to reach the agent's Claude Code SDK
-// session JSONL on the host filesystem. The daemon bind-mounts a
-// per-agent host directory at /home/agent/.claude/projects/ inside
-// the container, so the SDK's session writer ends up writing to a
-// path the host can read directly.
+// session JSONL. As of S0 (RFC §5.10) the persistent claude-projects
+// bind-mount is GONE: the JSONL stays in-container ground-truth and is
+// read on demand (read_file) rather than off a host path. The fields are
+// reinterpreted accordingly:
 //
-//   - ProjectsDir is the host dir corresponding to the container's
-//     /home/agent/.claude/projects/. The SDK writes session JSONL
-//     files under <ProjectsDir>/<encoded-cwd>/<sessionId>.jsonl.
-//   - SessionID is the latest SDK-issued session id persisted to the
-//     agent definition by the sidecar. Empty until the agent has
-//     completed its first turn.
+//   - ProjectsDir is the IN-CONTAINER projects base
+//     (/home/agent/.claude/projects). It is no longer a host path; the
+//     CLI uses it as the read_file root when fetching the authoritative
+//     JSONL on demand (`agents context --raw`/`--backup`).
+//   - ContainerJSONLPath is the deterministic in-container path of the
+//     session JSONL (<ProjectsDir>/<encoded-cwd>/<sessionId>.jsonl). Empty
+//     until the agent records its first session id.
+//   - SnapshotPath is the host path of the durable snapshot the reconciler
+//     writes when the agent leaves running. `--backup` falls back to it
+//     once the (AutoRemove) container is gone. Empty when no snapshot has
+//     been taken or the daemon has no data root.
+//   - SessionID is the latest SDK-issued session id persisted to the agent
+//     definition by the sidecar. Empty until the agent has completed its
+//     first turn.
 //
-// The CLI `agents context` verb resolves the actual JSONL path by
-// walking ProjectsDir for a file matching <SessionID>.jsonl — the
-// `<encoded-cwd>` segment is the SDK's URL-encoded representation of
-// the in-container cwd, which the daemon doesn't need to mirror.
+// The primary `agents context` view no longer reads this at all — it
+// subscribes to the NATS frame stream (agents.<uuid>.frames). SessionLog
+// is the on-demand authoritative-backup path.
 type SessionLogInfo struct {
-	ProjectsDir string `json:"projects_dir,omitempty"`
-	SessionID   string `json:"session_id,omitempty"`
+	ProjectsDir        string `json:"projects_dir,omitempty"`
+	ContainerJSONLPath string `json:"container_jsonl_path,omitempty"`
+	SnapshotPath       string `json:"snapshot_path,omitempty"`
+	SessionID          string `json:"session_id,omitempty"`
 }
 
 // HeartbeatSnapshot is the freshness shape attached to AgentStatus when

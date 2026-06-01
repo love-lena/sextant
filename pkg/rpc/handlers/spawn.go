@@ -131,6 +131,18 @@ type ContainerRunner interface {
 	Stop(ctx context.Context, id string, grace time.Duration) error
 }
 
+// ContainerFileCopier is the narrow copy-from-container surface the
+// snapshot-on-stop path uses (S0, RFC §5.10). It is satisfied by
+// *containermgr.Manager and crucially works on an EXITED container: when
+// the reconciler observes an agent leave running it copies the
+// authoritative session JSONL out of the (already-stopped) container into
+// the agent data dir. Kept separate from ContainerRunner so it is
+// optional (nil disables snapshotting) and the existing run/stop fakes
+// don't have to grow.
+type ContainerFileCopier interface {
+	CopyFileFromContainer(ctx context.Context, id, srcPath string) ([]byte, error)
+}
+
 // VolumeManager is the subset of containermgr.Manager the actuator uses
 // to manage per-agent named volumes (the claude_seed copy-on-spawn
 // volume).
@@ -307,37 +319,6 @@ func cloneStringMap(in map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
-}
-
-// ensureAgentProjectsDir creates <root>/<uuid>/claude-projects/ with
-// mode 0o700. Returns the host path + a rollback closure that removes
-// the dir tree.
-func ensureAgentProjectsDir(root string, agentUUID uuid.UUID) (string, func(), error) {
-	if root == "" {
-		return "", nil, fmt.Errorf("agents data root is empty")
-	}
-	agentDir := filepath.Join(root, agentUUID.String())
-	if err := os.MkdirAll(agentDir, 0o750); err != nil {
-		return "", nil, fmt.Errorf("mkdir %s: %w", agentDir, err)
-	}
-	projects := filepath.Join(agentDir, "claude-projects")
-	if err := os.MkdirAll(projects, 0o700); err != nil {
-		return "", nil, fmt.Errorf("mkdir %s: %w", projects, err)
-	}
-	cleanup := func() {
-		_ = os.RemoveAll(projects)
-	}
-	return projects, cleanup, nil
-}
-
-// AgentProjectsDir returns the host path of the per-agent
-// claude-projects directory. get_agent_status uses it to surface the
-// path back to the operator without re-implementing the layout rule.
-func AgentProjectsDir(root string, agentUUID uuid.UUID) string {
-	if root == "" {
-		return ""
-	}
-	return filepath.Join(root, agentUUID.String(), "claude-projects")
 }
 
 // ensureWorkspaceDir creates the stop-gap workspace dir under root.
