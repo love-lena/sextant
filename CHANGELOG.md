@@ -228,6 +228,22 @@ and the path-based scope (when an entry is required vs. when a PR is exempt).
   `WireEpoch` bump). RFC §5.8.
 
 ### Fixed
+- **Operator and sidecar JetStream consumers can now acknowledge —
+  `$JS.ACK.>` was missing from the front-door publish allow-lists.** The
+  role-scoped principals (RFC §5.7) granted the JetStream *management* API
+  (`$JS.API.>`) but not the JetStream *ack* subject space (`$JS.ACK.>`),
+  which is where a consumer publishes its acks, flow-control replies, and
+  `Term`s. The two are distinct subject trees, so every non-daemon consumer
+  hit a `Permissions Violation for Publish to "$JS.ACK.…"` the moment it
+  acked: the operator read path (`agents context`, the frame/lifecycle read
+  TUIs, `pkg/client.Subscribe`'s OrderedConsumer) and the **sidecar's inbox
+  prompt loop** (an `AckPolicy.Explicit` consumer that acks every delivered
+  prompt) both wedged — in production, not just the docker e2e suite.
+  `$JS.ACK.>` is now in both the operator and sidecar publish allow-lists
+  (the daemon already publishes `>`); a new `pkg/natsboot` authz test stands
+  up a real `nats-server` and asserts an operator-principal `AckExplicit`
+  JetStream consumer can `DoubleAck` without a permissions violation — the
+  regression guard the original F0 authz test lacked.
 - **Archive no longer leaks the per-agent volume on a cleanup failure.**
   Archive used to flip the record terminal and *then* best-effort remove
   the per-agent `claude_seed` volume, logging any failure to stderr — so a
