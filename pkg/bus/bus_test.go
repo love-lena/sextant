@@ -66,6 +66,19 @@ func TestStartBootstrapsBuckets(t *testing.T) {
 	}
 }
 
+// TestNoOperatorOnlyBucket guards the v1 decision (ADR-0012): there is no
+// operator-only bucket — system state will get its own NATS account rather than
+// a same-account bucket guarded by deny-lists, so there is nothing for a client
+// to reach via the JetStream stream API.
+func TestNoOperatorOnlyBucket(t *testing.T) {
+	b := startTestBus(t)
+	nc := connectClient(t, b, "agent-1")
+	js, _ := jetstream.New(nc)
+	if _, err := js.KeyValue(testCtx(t), "sx_system"); err == nil {
+		t.Error("sx_system should not exist in v1 (operator-only state is deferred to a separate account)")
+	}
+}
+
 // TestPerClientIdentity is the point of JWT auth: distinct clients get distinct,
 // verified identities, so ops are attributable.
 func TestPerClientIdentity(t *testing.T) {
@@ -134,20 +147,6 @@ func TestClientCanWriteConventionBuckets(t *testing.T) {
 		if _, err := kv.Put(ctx, "agent-1", []byte(`{"ok":true}`)); err != nil {
 			t.Errorf("client denied write to convention bucket %s: %v", name, err)
 		}
-	}
-}
-
-func TestClientCannotWriteSystemBucket(t *testing.T) {
-	b := startTestBus(t)
-	nc := connectClient(t, b, "agent-1")
-	js, _ := jetstream.New(nc)
-	ctx := testCtx(t)
-	kv, err := js.KeyValue(ctx, sx.BucketSystem)
-	if err != nil {
-		return // denied at the handle level is an acceptable stronger outcome
-	}
-	if _, err := kv.Put(ctx, "k", []byte(`{}`)); err == nil {
-		t.Error("client was allowed to write sx_system")
 	}
 }
 

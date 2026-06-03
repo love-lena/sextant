@@ -1,7 +1,9 @@
 package bus
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -29,11 +31,11 @@ type identity struct {
 func keysDir(storeDir string) string { return filepath.Join(storeDir, "keys") }
 
 // loadOrCreateIdentity loads the persisted operator/account/system seeds from
-// the store, creating and persisting them on first run.
+// the store, creating and persisting them on first run. Used by the bus.
 func loadOrCreateIdentity(storeDir string) (*identity, error) {
-	dir := keysDir(storeDir)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("bus: keys dir: %w", err)
+	dir, err := ensureKeysDir(storeDir)
+	if err != nil {
+		return nil, err
 	}
 	op, err := loadOrCreateSeed(filepath.Join(dir, "operator.nk"), nkeys.CreateOperator)
 	if err != nil {
@@ -50,15 +52,84 @@ func loadOrCreateIdentity(storeDir string) (*identity, error) {
 	return &identity{op: op, acc: acc, sys: sys}, nil
 }
 
+// loadIdentity loads an existing identity, returning an error (never creating)
+// when the store has no key material. Used by `sextant token`, so a wrong or
+// empty --store fails clearly instead of minting a mismatched identity.
+func loadIdentity(storeDir string) (*identity, error) {
+	dir := keysDir(storeDir)
+	op, err := loadSeed(filepath.Join(dir, "operator.nk"))
+	if err != nil {
+		return nil, identityErr(storeDir, err)
+	}
+	acc, err := loadSeed(filepath.Join(dir, "account.nk"))
+	if err != nil {
+		return nil, identityErr(storeDir, err)
+	}
+	sys, err := loadSeed(filepath.Join(dir, "system.nk"))
+	if err != nil {
+		return nil, identityErr(storeDir, err)
+	}
+	return &identity{op: op, acc: acc, sys: sys}, nil
+}
+
+func identityErr(storeDir string, err error) error {
+	if errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("bus: no bus identity under %s — run `sextant up` there first", storeDir)
+	}
+	return err
+}
+
+// ensureKeysDir creates the keys dir (0700) and verifies it isn't accessible to
+// other users.
+func ensureKeysDir(storeDir string) (string, error) {
+	dir := keysDir(storeDir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("bus: keys dir: %w", err)
+	}
+	if fi, err := os.Lstat(dir); err != nil {
+		return "", err
+	} else if fi.Mode().Perm()&0o077 != 0 {
+		return "", fmt.Errorf("bus: keys dir %s has insecure mode %o (want 0700)", dir, fi.Mode().Perm())
+	}
+	return dir, nil
+}
+
+// loadSeed reads and parses a seed file after verifying it is a non-symlinked,
+// owner-only regular file. A missing file surfaces fs.ErrNotExist.
+func loadSeed(path string) (nkeys.KeyPair, error) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("bus: refusing to load symlinked seed %s", path)
+	}
+	if fi.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf("bus: seed %s has insecure mode %o (want 0600)", path, fi.Mode().Perm())
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	kp, err := nkeys.FromSeed(b)
+	if err != nil {
+		return nil, fmt.Errorf("bus: parse seed %s: %w", path, err)
+	}
+	return kp, nil
+}
+
+// loadOrCreateSeed loads an existing seed (verifying perms) or atomically
+// creates one. The atomic create — write a temp file, then hard-link it into
+// place — tolerates a concurrent first run: the loser reuses the winner's seed.
 func loadOrCreateSeed(path string, create func() (nkeys.KeyPair, error)) (nkeys.KeyPair, error) {
-	if b, err := os.ReadFile(path); err == nil {
-		kp, err := nkeys.FromSeed(b)
-		if err != nil {
-			return nil, fmt.Errorf("bus: parse seed %s: %w", path, err)
-		}
+	kp, err := loadSeed(path)
+	if err == nil {
 		return kp, nil
 	}
-	kp, err := create()
+	if !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	kp, err = create()
 	if err != nil {
 		return nil, fmt.Errorf("bus: create key: %w", err)
 	}
@@ -66,10 +137,44 @@ func loadOrCreateSeed(path string, create func() (nkeys.KeyPair, error)) (nkeys.
 	if err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(path, seed, 0o600); err != nil {
-		return nil, fmt.Errorf("bus: persist seed %s: %w", path, err)
+	raced, err := writeNewSeed(path, seed)
+	if err != nil {
+		return nil, err
+	}
+	if raced {
+		return loadSeed(path) // another process won the race; use its seed
 	}
 	return kp, nil
+}
+
+// writeNewSeed writes seed to path atomically, only if path does not already
+// exist. It reports raced=true (and no error) when another writer got there
+// first.
+func writeNewSeed(path string, seed []byte) (raced bool, err error) {
+	f, err := os.CreateTemp(filepath.Dir(path), ".seed-*")
+	if err != nil {
+		return false, fmt.Errorf("bus: temp seed: %w", err)
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return false, err
+	}
+	if _, err := f.Write(seed); err != nil {
+		f.Close()
+		return false, err
+	}
+	if err := f.Close(); err != nil {
+		return false, err
+	}
+	if err := os.Link(tmp, path); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return true, nil
+		}
+		return false, fmt.Errorf("bus: persist seed %s: %w", path, err)
+	}
+	return false, nil
 }
 
 func pub(kp nkeys.KeyPair) string {
@@ -144,17 +249,16 @@ func operatorPermissions() jwt.Permissions { return jwt.Permissions{} }
 func clientPermissions() jwt.Permissions {
 	var p jwt.Permissions
 	p.Pub.Deny = []string{
-		sx.ControlPrefix + ">",          // operator-only control
-		"$KV." + sx.BucketSystem + ".>", // no system writes
-		// No stream/bucket lifecycle (the operator provisions buckets).
+		sx.ControlPrefix + ">", // operator-only control subjects
+		// No stream/bucket lifecycle: the operator provisions buckets, so
+		// clients can't create/alter/delete or squat any stream.
 		"$JS.API.STREAM.CREATE.>",
 		"$JS.API.STREAM.UPDATE.>",
 		"$JS.API.STREAM.DELETE.>",
 		"$JS.API.STREAM.PURGE.>",
 	}
-	p.Sub.Deny = []string{
-		"$KV." + sx.BucketSystem + ".>", // no system reads via consumer
-	}
+	// No subscribe denials: with no operator-only bucket in v1, there is no
+	// in-account state to hide from clients.
 	return p
 }
 
@@ -168,9 +272,11 @@ func credsFile(userJWT, seed string) (string, error) {
 }
 
 // MintClientToken mints a client-tier credentials file for id, loading the
-// account signing key from the store. This is what `sextant token` calls.
+// account signing key from the store. This is what `sextant token` calls; it
+// requires an existing identity (it never creates one) so a wrong --store
+// fails clearly rather than minting a mismatched credential.
 func MintClientToken(storeDir, id string) (string, error) {
-	ident, err := loadOrCreateIdentity(storeDir)
+	ident, err := loadIdentity(storeDir)
 	if err != nil {
 		return "", err
 	}

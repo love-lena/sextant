@@ -3,7 +3,7 @@
 // Sextant's; everything else is yours.
 //
 // Two prefixes, because NATS forbids dots in KV bucket names: subjects are
-// dotted (sx.control.*), buckets are underscored (sx_system).
+// dotted (sx.control.*), buckets are underscored (sx_clients).
 package sx
 
 // Reserved KV buckets.
@@ -12,9 +12,12 @@ const (
 	BucketClients = "sx_clients"
 	// BucketWorkflows holds workflow state envelopes, keyed by workflow id.
 	BucketWorkflows = "sx_workflows"
-	// BucketSystem holds operator-only system state.
-	BucketSystem = "sx_system"
 )
+
+// Operator-only system state is deferred: v1 has no operator-only bucket (the
+// only system datum, the protocol epoch, is public). When real operator-only
+// state exists it goes in a separate NATS account — a hard, enumerate-nothing
+// split — not a same-account bucket guarded by deny-lists (ADR-0012).
 
 // Reserved subjects.
 const (
@@ -38,7 +41,6 @@ func Buckets() []BucketSpec {
 	return []BucketSpec{
 		{Name: BucketClients, History: 1},    // registry: latest record per client
 		{Name: BucketWorkflows, History: 10}, // workflow state: a little version history
-		{Name: BucketSystem, History: 1},     // operator-only
 	}
 }
 

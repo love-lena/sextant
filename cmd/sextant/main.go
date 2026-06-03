@@ -56,7 +56,7 @@ func cmdUp(args []string) {
 	port := fs.Int("port", 0, "listen port (0 = random)")
 	_ = fs.Parse(args)
 
-	if err := os.MkdirAll(*store, 0o755); err != nil {
+	if err := os.MkdirAll(*store, 0o700); err != nil { // holds key material + JS data
 		fatal("create store dir: %v", err)
 	}
 
