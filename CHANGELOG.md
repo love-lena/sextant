@@ -13,3 +13,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   record}`), the protocol `Epoch`, ULID-timestamp skew validation (`CheckSkew`,
   enforced sender- and receiver-side), and the per-message epoch check
   (`CheckEpoch`). See ADR-0006 and ADR-0010.
+- `sextant up`: runs the embedded bus.
+- `pkg/bus`: an embedded NATS server (JetStream) that bootstraps the reserved
+  `sx` buckets and applies the operator/client credential tiers carrying the
+  ADR-0012 guardrail; `Drain` broadcasts the cooperative-drain control message.
+- `pkg/sx`: the reserved-namespace names (`sx_` buckets, `sx.` subjects).
+- `pkg/conninfo`: the connection-info file (`bus.json`) a client reads to reach
+  the bus.

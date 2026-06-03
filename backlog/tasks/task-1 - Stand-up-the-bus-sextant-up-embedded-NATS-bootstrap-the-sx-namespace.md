@@ -1,9 +1,10 @@
 ---
 id: TASK-1
 title: 'Stand up the bus: sextant up (embedded NATS) + bootstrap the sx namespace'
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-03 01:12'
+updated_date: '2026-06-03 03:22'
 labels: []
 milestone: 'M1: Core protocol + SDK'
 dependencies: []
