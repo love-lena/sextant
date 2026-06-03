@@ -22,6 +22,10 @@ node_modules/
 # mdbook build output (the rendered site; src/ is canon)
 /docs/book/book/
 
+# Embedded-bus store: JetStream data + operator/account/user key material
+# (default `sextant up --store` location). Never commit keys.
+/.sextant/
+
 # Ephemeral plane (ADR-0002): the agent workspace — specs, work-plans,
 # breakdowns. Never committed; committed ⇔ signed-off.
 /.work/
