@@ -60,7 +60,10 @@ func cmdUp(args []string) {
 		fatal("create store dir: %v", err)
 	}
 
-	b, err := bus.Start(context.Background(), bus.Config{StoreDir: *store, Port: *port})
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	b, err := bus.Start(ctx, bus.Config{StoreDir: *store, Port: *port})
 	if err != nil {
 		fatal("%v", err)
 	}
@@ -76,9 +79,8 @@ func cmdUp(args []string) {
 		"Ctrl-C to drain and stop.\n",
 		b.ClientURL(), infoPath, *store)
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-	<-sig
+	<-ctx.Done()
+	stop() // restore default signal handling; a second signal force-quits
 
 	fmt.Println("\ndraining…")
 	if err := b.Drain(); err != nil {
@@ -125,7 +127,12 @@ func cmdToken(args []string) {
 	fmt.Printf("minted credentials for %q:\n  %s\n", id, path)
 }
 
+// defaultStore is a stable, CWD-independent location so `up` and `token` run
+// from different directories still share the same key material.
 func defaultStore() string {
+	if dir, err := os.UserConfigDir(); err == nil {
+		return filepath.Join(dir, "sextant", "jetstream")
+	}
 	return filepath.Join(".sextant", "jetstream")
 }
 

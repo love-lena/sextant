@@ -73,7 +73,13 @@ func loadOrCreateSeed(path string, create func() (nkeys.KeyPair, error)) (nkeys.
 }
 
 func pub(kp nkeys.KeyPair) string {
-	p, _ := kp.PublicKey()
+	p, err := kp.PublicKey()
+	if err != nil {
+		// A constructed/loaded keypair always has a public key; a failure here
+		// is an unrecoverable invariant violation on the JWT trust path —
+		// fail loud rather than emit an empty subject into security claims.
+		panic(fmt.Errorf("bus: keypair has no public key: %w", err))
+	}
 	return p
 }
 

@@ -16,7 +16,7 @@ import (
 
 func startTestBus(t *testing.T) *Bus {
 	t.Helper()
-	b, err := Start(context.Background(), Config{StoreDir: t.TempDir()})
+	b, err := Start(t.Context(), Config{StoreDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -26,7 +26,7 @@ func startTestBus(t *testing.T) *Bus {
 
 func testCtx(t *testing.T) context.Context {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	t.Cleanup(cancel)
 	return ctx
 }

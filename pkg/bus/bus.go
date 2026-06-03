@@ -74,9 +74,9 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 		return nil, fmt.Errorf("bus: new server: %w", err)
 	}
 	ns.Start()
-	if !ns.ReadyForConnections(10 * time.Second) {
+	if err := waitReady(ctx, ns, 10*time.Second); err != nil {
 		ns.Shutdown()
-		return nil, errors.New("bus: server not ready for connections")
+		return nil, err
 	}
 
 	b := &Bus{ns: ns, url: ns.ClientURL(), store: cfg.StoreDir}
@@ -86,6 +86,10 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 	if err != nil {
 		ns.Shutdown()
 		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		ns.Shutdown()
+		return nil, fmt.Errorf("bus: %w", err)
 	}
 	opConn, err := nats.Connect(b.url, nats.UserJWTAndSeed(opJWT, opSeed), nats.Name("sextant-operator"))
 	if err != nil {
@@ -118,6 +122,22 @@ func (b *Bus) bootstrap(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// waitReady polls for server readiness, honoring ctx and a hard upper bound.
+func waitReady(ctx context.Context, ns *natsserver.Server, max time.Duration) error {
+	deadline := time.Now().Add(max)
+	for {
+		if ns.ReadyForConnections(50 * time.Millisecond) {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("bus: waiting for server: %w", err)
+		}
+		if time.Now().After(deadline) {
+			return errors.New("bus: server not ready within timeout")
+		}
+	}
 }
 
 // Drain broadcasts the cooperative-drain control message (ADR-0010).
