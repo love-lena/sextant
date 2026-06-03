@@ -1,10 +1,10 @@
 ---
 id: TASK-2
 title: 'Wire atom in the SDK: JSON envelope + epoch + ULID skew validation'
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-06-03 01:12'
-updated_date: '2026-06-03 02:45'
+updated_date: '2026-06-03 21:50'
 labels: []
 milestone: 'M1: Core protocol + SDK'
 dependencies: []
