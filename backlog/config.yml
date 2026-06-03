@@ -10,6 +10,8 @@ remote_operations: false
 auto_commit: false
 filesystem_only: false
 bypass_git_hooks: false
-check_active_branches: true
+# false: the rebuild shares its .git with the old build's branches; cross-branch
+# scanning would pull their tickets into this board. Only this branch's tasks.
+check_active_branches: false
 active_branch_days: 30
 task_prefix: "task"
