@@ -74,7 +74,10 @@ type Client struct {
 	drained   chan struct{}
 }
 
-// Connect dials the bus and runs the connect handshake.
+// Connect dials the bus and runs the connect handshake. ctx governs the
+// post-dial handshake (epoch read, registry write, drain-subscription flush);
+// the dial itself uses the NATS client's own connect timeout, as nats.Connect
+// has no context-aware form.
 func Connect(ctx context.Context, opts Options) (*Client, error) {
 	if opts.CredsPath == "" {
 		return nil, errors.New("sextant: no credentials (set Options.CredsPath; mint one with `sextant token <id>`)")
@@ -146,7 +149,7 @@ func Connect(ctx context.Context, opts Options) (*Client, error) {
 		nc.Close()
 		return nil, err
 	}
-	if err := c.watchDrain(); err != nil {
+	if err := c.watchDrain(ctx); err != nil {
 		nc.Close()
 		return nil, err
 	}
@@ -231,20 +234,30 @@ func (c *Client) register(ctx context.Context, tol time.Duration) error {
 	// The registry write is bus-stamped; compare to the local clock and announce
 	// (soft, not a gate) if the skew is large (ADR-0010).
 	if entry, err := clients.Get(ctx, c.id); err == nil {
-		if skew := clockSkew(time.Now(), entry.Created()); abs(skew) > tol {
+		if skew := clockSkew(time.Now(), entry.Created()); skew.Abs() > tol {
 			c.logf("sextant: clock skew %s vs the bus exceeds %s; messages may be rejected — sync NTP", skew, tol)
 		}
 	}
 	return nil
 }
 
-func (c *Client) watchDrain() error {
-	_, err := c.nc.Subscribe(sx.SubjectDrain, func(*nats.Msg) {
+func (c *Client) watchDrain(ctx context.Context) error {
+	if _, err := c.nc.Subscribe(sx.SubjectDrain, func(*nats.Msg) {
 		c.logf("sextant: drain received; winding down")
 		c.drainOnce.Do(func() { close(c.drained) })
-	})
-	if err != nil {
+	}); err != nil {
 		return fmt.Errorf("sextant: subscribe drain: %w", err)
+	}
+	// Flush so the subscription is registered server-side before Connect returns:
+	// otherwise a drain broadcast published immediately after connect can race
+	// ahead of our still-buffered SUB and be missed. Honor the caller's deadline
+	// when it set one; otherwise fall back to the connection's own flush timeout.
+	flush := c.nc.Flush
+	if _, ok := ctx.Deadline(); ok {
+		flush = func() error { return c.nc.FlushWithContext(ctx) }
+	}
+	if err := flush(); err != nil {
+		return fmt.Errorf("sextant: flush drain subscription: %w", err)
 	}
 	return nil
 }
@@ -268,10 +281,3 @@ func (c *Client) Close() error {
 }
 
 func clockSkew(local, bus time.Time) time.Duration { return local.Sub(bus) }
-
-func abs(d time.Duration) time.Duration {
-	if d < 0 {
-		return -d
-	}
-	return d
-}

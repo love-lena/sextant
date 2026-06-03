@@ -34,3 +34,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is exactly the identity the bus authenticated. See ADR-0008, ADR-0010, ADR-0012.
 - `pkg/bus`: publishes the protocol epoch to the client-readable `sx_meta`
   bucket at bootstrap, so clients read and hard-gate on it at connect (ADR-0015).
+- `pkg/bus`: the client TCP listener opens only **after** bootstrap completes,
+  so a client can never connect into a half-ready bus and fail its epoch read;
+  the bus's own operator connection is in-process.
+- `pkg/bus`: `sextant token` / `MintClient` reject a duplicate or malformed
+  client id — each client gets exactly one verified identity, so two clients can
+  never silently share a registry key (issued ids are recorded under
+  `<store>/issued`).

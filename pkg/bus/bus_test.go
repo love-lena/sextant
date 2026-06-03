@@ -31,17 +31,24 @@ func testCtx(t *testing.T) context.Context {
 	return ctx
 }
 
-// connectClient mints a fresh per-client credential for id and connects with it.
-func connectClient(t *testing.T, b *Bus, id string, opts ...nats.Option) *nats.Conn {
+// mintCredsFile mints a fresh per-client credential for id and writes it to a
+// temp file, returning the creds text and the file path.
+func mintCredsFile(t *testing.T, b *Bus, id string) (creds, path string) {
 	t.Helper()
 	creds, err := b.MintClient(id)
 	if err != nil {
 		t.Fatalf("MintClient(%s): %v", id, err)
 	}
-	path := filepath.Join(t.TempDir(), id+".creds")
+	path = filepath.Join(t.TempDir(), id+".creds")
 	if err := os.WriteFile(path, []byte(creds), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	return creds, path
+}
+
+// connectWithCreds connects as id using an existing credentials file (no mint).
+func connectWithCreds(t *testing.T, b *Bus, id, path string, opts ...nats.Option) *nats.Conn {
+	t.Helper()
 	all := append([]nats.Option{nats.UserCredentials(path), nats.Name(id)}, opts...)
 	nc, err := nats.Connect(b.ClientURL(), all...)
 	if err != nil {
@@ -49,6 +56,13 @@ func connectClient(t *testing.T, b *Bus, id string, opts ...nats.Option) *nats.C
 	}
 	t.Cleanup(nc.Close)
 	return nc
+}
+
+// connectClient mints a fresh per-client credential for id and connects with it.
+func connectClient(t *testing.T, b *Bus, id string, opts ...nats.Option) *nats.Conn {
+	t.Helper()
+	_, path := mintCredsFile(t, b, id)
+	return connectWithCreds(t, b, id, path, opts...)
 }
 
 func TestStartBootstrapsBuckets(t *testing.T) {
@@ -83,14 +97,8 @@ func TestNoOperatorOnlyBucket(t *testing.T) {
 // verified identities, so ops are attributable.
 func TestPerClientIdentity(t *testing.T) {
 	b := startTestBus(t)
-	alice, err := b.MintClient("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	bob, err := b.MintClient("bob")
-	if err != nil {
-		t.Fatal(err)
-	}
+	alice, alicePath := mintCredsFile(t, b, "alice")
+	bob, bobPath := mintCredsFile(t, b, "bob")
 	ac, err := jwt.DecodeUserClaims(parseJWT(t, alice))
 	if err != nil {
 		t.Fatal(err)
@@ -106,8 +114,30 @@ func TestPerClientIdentity(t *testing.T) {
 		t.Errorf("identity names = %q, %q; want alice, bob", ac.Name, bc.Name)
 	}
 	// Both must actually connect with their own credential.
-	_ = connectClient(t, b, "alice")
-	_ = connectClient(t, b, "bob")
+	_ = connectWithCreds(t, b, "alice", alicePath)
+	_ = connectWithCreds(t, b, "bob", bobPath)
+}
+
+// TestMintRejectsDuplicateName guards the silent-collision footgun: a second
+// credential for an existing id would share its registry key, so minting must
+// fail loud rather than hand out a colliding identity.
+func TestMintRejectsDuplicateName(t *testing.T) {
+	b := startTestBus(t)
+	if _, err := b.MintClient("dup"); err != nil {
+		t.Fatalf("first mint: %v", err)
+	}
+	if _, err := b.MintClient("dup"); err == nil {
+		t.Fatal("second mint of the same id must fail, not silently collide")
+	}
+}
+
+func TestMintRejectsInvalidName(t *testing.T) {
+	b := startTestBus(t)
+	for _, bad := range []string{"", "../escape", "has/slash", "has space", ".lead", "trail-", "a/b"} {
+		if _, err := b.MintClient(bad); err == nil {
+			t.Errorf("MintClient(%q) should be rejected", bad)
+		}
+	}
 }
 
 func parseJWT(t *testing.T, creds string) string {

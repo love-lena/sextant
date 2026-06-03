@@ -66,6 +66,13 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 		JetStream:  true,
 		StoreDir:   cfg.StoreDir,
 		NoSigs:     true, // the CLI owns signal handling
+		// Start with the client TCP listener closed. No external client can
+		// connect until bootstrap has provisioned the buckets and written the
+		// epoch; we open the listener explicitly once that's done (below). This
+		// makes "the bus is reachable" and "the epoch is present" atomic from a
+		// client's point of view — a client can never connect into a half-ready
+		// bus and fail its epoch read.
+		DontListen: true,
 	}
 	if err := ident.serverAuthOptions(opts); err != nil {
 		return nil, err
@@ -81,10 +88,13 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 		return nil, err
 	}
 
-	b := &Bus{ns: ns, url: ns.ClientURL(), store: cfg.StoreDir}
+	b := &Bus{ns: ns, store: cfg.StoreDir}
 
-	// The bus's own operator-tier connection (bootstrap + control broadcasts).
-	opJWT, opSeed, err := ident.mintUser("sextant-operator", operatorPermissions())
+	// The bus's own operator-tier connection is in-process: it needs no TCP
+	// listener, so bootstrap runs while the client port is still closed and
+	// races nothing. The same connection carries control broadcasts (Drain) for
+	// the bus's lifetime.
+	opJWT, opSeed, _, err := ident.mintUser("sextant-operator", operatorPermissions())
 	if err != nil {
 		ns.Shutdown()
 		return nil, err
@@ -93,7 +103,8 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 		ns.Shutdown()
 		return nil, fmt.Errorf("bus: %w", err)
 	}
-	opConn, err := nats.Connect(b.url, nats.UserJWTAndSeed(opJWT, opSeed), nats.Name("sextant-operator"))
+	opConn, err := nats.Connect("", nats.InProcessServer(ns),
+		nats.UserJWTAndSeed(opJWT, opSeed), nats.Name("sextant-operator"))
 	if err != nil {
 		ns.Shutdown()
 		return nil, fmt.Errorf("bus: operator connect: %w", err)
@@ -105,6 +116,17 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 		ns.Shutdown()
 		return nil, err
 	}
+
+	// Bootstrap is done: open the client TCP listener. AcceptLoop binds the port
+	// and spawns the accept goroutine, then returns — so only now can a client
+	// connect, and the epoch it reads at connect is already present.
+	ns.AcceptLoop(make(chan struct{}))
+	if ns.Addr() == nil {
+		opConn.Close()
+		ns.Shutdown()
+		return nil, errors.New("bus: client listener failed to start")
+	}
+	b.url = ns.ClientURL()
 	return b, nil
 }
 

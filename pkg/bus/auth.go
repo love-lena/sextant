@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"github.com/love-lena/sextant/pkg/sx"
 	"github.com/nats-io/jwt/v2"
@@ -221,25 +222,73 @@ func (id *identity) systemJWT() (string, error) {
 }
 
 // mintUser signs a user JWT in the SEXTANT account with the given name and
-// permissions, returning the JWT and the user's seed.
-func (id *identity) mintUser(name string, perms jwt.Permissions) (userJWT, seed string, err error) {
+// permissions, returning the JWT, the user's seed, and the user's subject (its
+// public key — the principal the bus actually authenticates).
+func (id *identity) mintUser(name string, perms jwt.Permissions) (userJWT, seed, subject string, err error) {
 	ukp, err := nkeys.CreateUser()
 	if err != nil {
-		return "", "", fmt.Errorf("bus: create user key: %w", err)
+		return "", "", "", fmt.Errorf("bus: create user key: %w", err)
 	}
-	uc := jwt.NewUserClaims(pub(ukp))
+	subject = pub(ukp)
+	uc := jwt.NewUserClaims(subject)
 	uc.Name = name
 	uc.IssuerAccount = pub(id.acc)
 	uc.Permissions = perms
 	j, err := uc.Encode(id.acc)
 	if err != nil {
-		return "", "", fmt.Errorf("bus: encode user jwt: %w", err)
+		return "", "", "", fmt.Errorf("bus: encode user jwt: %w", err)
 	}
 	sb, err := ukp.Seed()
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	return j, string(sb), nil
+	return j, string(sb), subject, nil
+}
+
+// clientIDRe constrains a client id to a safe charset: alphanumerics plus
+// internal '.', '-', '_', with no leading/trailing punctuation. The id has to
+// be a valid KV key, a NATS user name, a safe single-component filename (the
+// issued-names ledger), and an envelope sender — this charset satisfies all
+// four and forecloses path traversal.
+var clientIDRe = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9_.-]*[a-zA-Z0-9])?$`)
+
+// validateClientID rejects ids that aren't safe as an identity / registry key.
+func validateClientID(id string) error {
+	if id == "" {
+		return errors.New("bus: client id is empty")
+	}
+	if len(id) > 128 {
+		return fmt.Errorf("bus: client id %q is too long (max 128)", id)
+	}
+	if !clientIDRe.MatchString(id) {
+		return fmt.Errorf("bus: client id %q must be alphanumerics with internal '.', '-', or '_' (no leading/trailing punctuation, spaces, or slashes)", id)
+	}
+	return nil
+}
+
+// reserveName atomically claims id in the issued-names ledger under the store,
+// recording the authenticated subject for audit. It fails loud if id was
+// already issued — a name collision must surface rather than silently mint a
+// second identity that shares a registry key (the "ghost client" footgun). The
+// O_EXCL create is the atomic guard, safe under concurrent minting.
+func reserveName(storeDir, id, subject string) error {
+	dir := filepath.Join(storeDir, "issued")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("bus: issued-names dir: %w", err)
+	}
+	path := filepath.Join(dir, id)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return fmt.Errorf("bus: client id %q already has credentials (delete %s to reissue)", id, path)
+		}
+		return fmt.Errorf("bus: reserve client id %q: %w", id, err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(subject + "\n"); err != nil {
+		return fmt.Errorf("bus: record issued id %q: %w", id, err)
+	}
+	return nil
 }
 
 // operatorPermissions is full access — the bus's own connection and tooling.
@@ -276,12 +325,20 @@ func credsFile(userJWT, seed string) (string, error) {
 // requires an existing identity (it never creates one) so a wrong --store
 // fails clearly rather than minting a mismatched credential.
 func MintClientToken(storeDir, id string) (string, error) {
+	if err := validateClientID(id); err != nil {
+		return "", err
+	}
 	ident, err := loadIdentity(storeDir)
 	if err != nil {
 		return "", err
 	}
-	j, seed, err := ident.mintUser(id, clientPermissions())
+	j, seed, subject, err := ident.mintUser(id, clientPermissions())
 	if err != nil {
+		return "", err
+	}
+	// Claim the name before returning creds, so a duplicate fails loud rather
+	// than handing out a second identity that collides on the registry key.
+	if err := reserveName(storeDir, id, subject); err != nil {
 		return "", err
 	}
 	return credsFile(j, seed)

@@ -18,7 +18,7 @@ import (
 
 func startBus(t *testing.T) *bus.Bus {
 	t.Helper()
-	b, err := bus.Start(context.Background(), bus.Config{StoreDir: t.TempDir()})
+	b, err := bus.Start(t.Context(), bus.Config{StoreDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("bus.Start: %v", err)
 	}
@@ -43,7 +43,7 @@ func credsPath(t *testing.T, b *bus.Bus, id string) string {
 
 func dialClient(t *testing.T, b *bus.Bus, id string) *Client {
 	t.Helper()
-	c, err := Connect(context.Background(), Options{
+	c, err := Connect(t.Context(), Options{
 		URL:       b.ClientURL(),
 		CredsPath: credsPath(t, b, id),
 		Logf:      func(string, ...any) {}, // quiet in tests
@@ -72,6 +72,13 @@ func inspectJS(t *testing.T, b *bus.Bus) jetstream.JetStream {
 	return js
 }
 
+func readCtx(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
+
 // TestConnectRegisters also pins the identity contract: the client's id is the
 // credential's name, and that id is its registry key.
 func TestConnectRegisters(t *testing.T) {
@@ -80,20 +87,18 @@ func TestConnectRegisters(t *testing.T) {
 	if c.ID() != "agent-reg" {
 		t.Fatalf("ID() = %q; want the credential's name agent-reg", c.ID())
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	clients, err := inspectJS(t, b).KeyValue(ctx, sx.BucketClients)
+	clients, err := inspectJS(t, b).KeyValue(readCtx(t), sx.BucketClients)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := clients.Get(ctx, c.ID()); err != nil {
+	if _, err := clients.Get(readCtx(t), c.ID()); err != nil {
 		t.Errorf("client not found in registry: %v", err)
 	}
 }
 
 func TestConnectRequiresCreds(t *testing.T) {
 	b := startBus(t)
-	_, err := Connect(context.Background(), Options{URL: b.ClientURL(), Logf: func(string, ...any) {}})
+	_, err := Connect(t.Context(), Options{URL: b.ClientURL(), Logf: func(string, ...any) {}})
 	if err == nil {
 		t.Fatal("expected connect to fail without credentials")
 	}
@@ -105,7 +110,7 @@ func TestConnectViaConnInfoFile(t *testing.T) {
 	if err := conninfo.Write(path, conninfo.Info{URL: b.ClientURL()}); err != nil {
 		t.Fatal(err)
 	}
-	c, err := Connect(context.Background(), Options{
+	c, err := Connect(t.Context(), Options{
 		ConnInfoPath: path,
 		CredsPath:    credsPath(t, b, "via-conninfo"),
 		Logf:         func(string, ...any) {},
@@ -118,19 +123,17 @@ func TestConnectViaConnInfoFile(t *testing.T) {
 
 func TestEpochMismatchFailsLoud(t *testing.T) {
 	b := startBus(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	// Rewrite the bus epoch to something the client won't match. (A client can
 	// write sx_meta today — per-row write-precision is the deferred refinement,
 	// ADR-0012; here it's just the simplest way to force a mismatch.)
-	meta, err := inspectJS(t, b).KeyValue(ctx, sx.BucketMeta)
+	meta, err := inspectJS(t, b).KeyValue(readCtx(t), sx.BucketMeta)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := meta.Put(ctx, sx.MetaKeyEpoch, []byte("999")); err != nil {
+	if _, err := meta.Put(readCtx(t), sx.MetaKeyEpoch, []byte("999")); err != nil {
 		t.Fatal(err)
 	}
-	_, err = Connect(context.Background(), Options{
+	_, err = Connect(t.Context(), Options{
 		URL:       b.ClientURL(),
 		CredsPath: credsPath(t, b, "agent-epoch"),
 		Logf:      func(string, ...any) {},
@@ -138,8 +141,8 @@ func TestEpochMismatchFailsLoud(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected connect to fail loud on epoch mismatch")
 	}
-	var ee *wire.EpochError
-	if !errors.As(err, &ee) {
+	ee, ok := errors.AsType[*wire.EpochError](err)
+	if !ok {
 		t.Fatalf("expected a *wire.EpochError, got: %v", err)
 	}
 	if ee.Got != wire.Epoch || ee.Want != 999 {
@@ -162,7 +165,7 @@ func TestDrainClosesDrained(t *testing.T) {
 
 func TestCloseLeavesRegistry(t *testing.T) {
 	b := startBus(t)
-	c, err := Connect(context.Background(), Options{
+	c, err := Connect(t.Context(), Options{
 		URL:       b.ClientURL(),
 		CredsPath: credsPath(t, b, "agent-leave"),
 		Logf:      func(string, ...any) {},
@@ -174,13 +177,11 @@ func TestCloseLeavesRegistry(t *testing.T) {
 	if err := c.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	clients, err := inspectJS(t, b).KeyValue(ctx, sx.BucketClients)
+	clients, err := inspectJS(t, b).KeyValue(readCtx(t), sx.BucketClients)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := clients.Get(ctx, id); !errors.Is(err, jetstream.ErrKeyNotFound) {
+	if _, err := clients.Get(readCtx(t), id); !errors.Is(err, jetstream.ErrKeyNotFound) {
 		t.Errorf("registry record should be gone after Close; got err=%v", err)
 	}
 }
@@ -190,7 +191,7 @@ func TestClockSkewHelper(t *testing.T) {
 	if got := clockSkew(base.Add(2*time.Second), base); got != 2*time.Second {
 		t.Errorf("clockSkew = %v, want 2s", got)
 	}
-	if got := abs(-3 * time.Second); got != 3*time.Second {
-		t.Errorf("abs = %v, want 3s", got)
+	if got := clockSkew(base, base.Add(3*time.Second)); got.Abs() != 3*time.Second {
+		t.Errorf("clockSkew abs = %v, want 3s", got.Abs())
 	}
 }
