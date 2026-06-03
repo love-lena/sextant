@@ -20,8 +20,10 @@ human has signed off — see
 | [0011](0011-workflows.md) | Workflows | accepted |
 | [0012](0012-reserved-namespace-and-authn.md) | The reserved `sx` namespace, and authn | accepted |
 | [0013](0013-multi-backend.md) | Multi-backend posture | accepted |
+| [0014](0014-the-tui-is-a-client.md) | The TUI is a client | accepted |
 
 ## Review batches
 - **Batch 1 — substrate:** 0004–0007 — *accepted*
 - **Batch 2 — clients & lifecycle:** 0008–0010 — *accepted*
 - **Batch 3 — conventions & cross-cutting:** 0011–0013 — *accepted*
+- **0014 — the TUI is a client** — *accepted* (grilled + signed off in-session, 2026-06-02)
