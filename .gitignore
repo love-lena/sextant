@@ -1,45 +1,34 @@
-# Go
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-*.test
-*.out
-*.prof
+# OS
+.DS_Store
+Thumbs.db
 
-# Build
-/bin/
-/dist/
-/build/
-vendor/
-
-# IDE
+# Editors
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
 
-# OS
-.DS_Store
-Thumbs.db
+# Go
+*.test
+*.out
+/bin/
+/dist/
 
-# Sextant
-/var/sextant/
-*.log
-
-# Local data (in case anyone runs locally from repo root)
-nats-data/
-clickhouse-data/
-shipper-buffer/
-
-# Node / TypeScript (clients/typescript/, etc.)
+# Node / TypeScript
 node_modules/
 *.tsbuildinfo
 
-# mdbook build output
+# mdbook build output (the rendered site; src/ is canon)
 /docs/book/book/
 
-# Claude harness state
-.claude/
+# Ephemeral plane (ADR-0002): the agent workspace — specs, work-plans,
+# breakdowns. Never committed; committed ⇔ signed-off.
+/.work/
+
+# Installed skill files, materialized from skills-lock.json by the
+# mattpocock-skills installer. The lock is the committed manifest; the
+# fetched skill bodies are install artifacts.
+/.claude/skills/
+/.agents/
+/.superpowers/
