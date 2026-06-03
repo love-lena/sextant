@@ -26,9 +26,10 @@ node_modules/
 # breakdowns. Never committed; committed ⇔ signed-off.
 /.work/
 
-# Installed skill files, materialized from skills-lock.json by the
-# mattpocock-skills installer. The lock is the committed manifest; the
-# fetched skill bodies are install artifacts.
-/.claude/skills/
+# Agent skills: the engineering skill bodies are COMMITTED under .claude/skills/
+# so a fresh clone has them with no install step. Ignore everything else under
+# .claude/, the other agents' skill copies, and the superpowers cache.
+/.claude/*
+!/.claude/skills/
 /.agents/
 /.superpowers/
