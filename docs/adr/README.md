@@ -21,9 +21,11 @@ human has signed off — see
 | [0012](0012-reserved-namespace-and-authn.md) | The reserved `sx` namespace, and authn | accepted |
 | [0013](0013-multi-backend.md) | Multi-backend posture | accepted |
 | [0014](0014-the-tui-is-a-client.md) | The TUI is a client | accepted |
+| [0015](0015-operator-only-account.md) | Operator-only state lives in its own account | proposed |
 
 ## Review batches
 - **Batch 1 — substrate:** 0004–0007 — *accepted*
 - **Batch 2 — clients & lifecycle:** 0008–0010 — *accepted*
 - **Batch 3 — conventions & cross-cutting:** 0011–0013 — *accepted*
 - **0014 — the TUI is a client** — *accepted* (grilled + signed off in-session, 2026-06-02)
+- **0015 — operator-only state in its own account** — *proposed* (refines 0012; from the #71 review)

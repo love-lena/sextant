@@ -6,6 +6,10 @@ date: 2026-06-02
 
 # The reserved `sx` namespace, and authn
 
+> **Partially superseded by [ADR-0015](0015-operator-only-account.md):** the
+> operator-only `sx_system` bucket described below is out of date — operator-only
+> state lives in a separate NATS account, and v1 provisions no such bucket.
+
 **Authn yes; dynamic authz deferred.** Every read and write is attributable to an
 **authenticated identity** — that is the P0 guarantee. Among authenticated
 clients access is otherwise open, with one exception: a **static guardrail around
