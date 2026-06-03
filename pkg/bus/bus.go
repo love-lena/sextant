@@ -18,9 +18,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/love-lena/sextant/pkg/sx"
+	"github.com/love-lena/sextant/pkg/wire"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -106,7 +108,10 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 	return b, nil
 }
 
-// bootstrap creates the reserved buckets idempotently, as the operator.
+// bootstrap creates the reserved buckets idempotently and publishes the
+// protocol epoch, as the operator. The bus is authoritative for its epoch, so
+// the write is unconditional — it self-heals if a prior run wrote a different
+// value (clients hard-gate on it at connect; see ADR-0010).
 func (b *Bus) bootstrap(ctx context.Context) error {
 	js, err := jetstream.New(b.opConn)
 	if err != nil {
@@ -120,6 +125,13 @@ func (b *Bus) bootstrap(ctx context.Context) error {
 		}); err != nil {
 			return fmt.Errorf("bus: bootstrap bucket %s: %w", spec.Name, err)
 		}
+	}
+	meta, err := js.KeyValue(ctx, sx.BucketMeta)
+	if err != nil {
+		return fmt.Errorf("bus: open %s: %w", sx.BucketMeta, err)
+	}
+	if _, err := meta.Put(ctx, sx.MetaKeyEpoch, []byte(strconv.Itoa(wire.Epoch))); err != nil {
+		return fmt.Errorf("bus: write protocol epoch: %w", err)
 	}
 	return nil
 }

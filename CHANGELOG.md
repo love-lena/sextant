@@ -25,3 +25,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `pkg/sx`: the reserved-namespace names (`sx_` buckets, `sx.` subjects).
 - `pkg/conninfo`: the `bus.json` discovery file (URL only; credentials are
   per-client creds files).
+- `pkg/sextant`: the Go SDK. `Connect` runs the connect handshake —
+  authenticate with the client's own credentials file (`Options.CredsPath`,
+  minted by `sextant token`), the protocol-epoch hard gate, a clients-registry
+  write, a soft clock-skew announcement, a cooperative-drain handler, and
+  auto-reconnect; with `Client.Drained`, `Close`, and `ID`. The client id
+  (registry key and envelope sender) is read from the credential itself, so it
+  is exactly the identity the bus authenticated. See ADR-0008, ADR-0010, ADR-0012.
+- `pkg/bus`: publishes the protocol epoch to the client-readable `sx_meta`
+  bucket at bootstrap, so clients read and hard-gate on it at connect (ADR-0015).
