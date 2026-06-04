@@ -20,7 +20,8 @@ import (
 // liveness and stale-entry reaping land (TASK-20). There is no heartbeat in M1.
 type ClientInfo struct {
 	// ID is the client's verified identity — its credential's name, which is
-	// both its registry key and its envelope sender.
+	// both its registry key and its envelope sender. ListClients sources it from
+	// the registry key (the authoritative locator), not the record body.
 	ID string
 	// Kind is what the client is (e.g. "harness", "coordinator"), self-declared
 	// at connect via Options.Kind.
@@ -47,15 +48,21 @@ type registryRecord struct {
 	ConnectedAt string `json:"connected_at"`
 }
 
-// info parses a stored record into its public view, failing loud if the
-// bus-stored timestamp isn't the RFC3339 the SDK writes (a corrupt or foreign
-// entry, surfaced rather than silently coerced).
-func (r registryRecord) info() (ClientInfo, error) {
+// info parses a stored record into its public view. The registry key is the
+// authoritative identity (it is what register writes under, and the name the
+// bus authenticated the connection as — ADR-0012), so the key wins: ID is taken
+// from the key, and a record whose self-reported id disagrees with it is treated
+// as corrupt and surfaced, never silently trusted. A connected_at that isn't the
+// RFC3339 the SDK writes fails the same way, rather than being coerced.
+func (r registryRecord) info(key string) (ClientInfo, error) {
+	if r.ID != key {
+		return ClientInfo{}, fmt.Errorf("record id %q does not match its registry key %q", r.ID, key)
+	}
 	t, err := time.Parse(time.RFC3339, r.ConnectedAt)
 	if err != nil {
 		return ClientInfo{}, fmt.Errorf("bad connected_at %q: %w", r.ConnectedAt, err)
 	}
-	return ClientInfo{ID: r.ID, Kind: r.Kind, Epoch: r.Epoch, SDK: r.SDK, ConnectedAt: t}, nil
+	return ClientInfo{ID: key, Kind: r.Kind, Epoch: r.Epoch, SDK: r.SDK, ConnectedAt: t}, nil
 }
 
 // ListClients returns the registry directory: every client connected right now,
@@ -87,7 +94,7 @@ func (c *Client) ListClients(ctx context.Context) ([]ClientInfo, error) {
 		if err := json.Unmarshal(e.Value(), &rec); err != nil {
 			return nil, fmt.Errorf("sextant: decode client %q: %w", k, err)
 		}
-		info, err := rec.info()
+		info, err := rec.info(k)
 		if err != nil {
 			return nil, fmt.Errorf("sextant: decode client %q: %w", k, err)
 		}

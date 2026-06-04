@@ -111,3 +111,37 @@ func TestListClientsEmptyDirectory(t *testing.T) {
 		t.Fatalf("empty directory returned %d clients: %+v", len(got), got)
 	}
 }
+
+// TestListClientsFailsLoudOnCorruptRecord pins the fail-loud contract: a record
+// that isn't the schema the SDK writes — invalid JSON, a non-RFC3339
+// connected_at, or a self-reported id that disagrees with its registry key —
+// makes the whole call error rather than being silently skipped or coerced. The
+// id/key check is the identity guard: the key is authoritative, so a body
+// claiming a different id is corruption, not a rename.
+func TestListClientsFailsLoudOnCorruptRecord(t *testing.T) {
+	b := startBus(t)
+	c := dialClient(t, b, "c-real")
+	kv, err := inspectJS(t, b).KeyValue(readCtx(t), sx.BucketClients)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name, key, value string
+	}{
+		{"invalid json", "c-badjson", "not json at all"},
+		{"bad connected_at", "c-badtime", `{"id":"c-badtime","kind":"x","epoch":1,"sdk":"y","connected_at":"not-a-time"}`},
+		{"id disagrees with key", "c-badid", `{"id":"c-impostor","kind":"x","epoch":1,"sdk":"y","connected_at":"2026-06-03T00:00:00Z"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := kv.Put(readCtx(t), tc.key, []byte(tc.value)); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = kv.Delete(readCtx(t), tc.key) })
+			if _, err := c.ListClients(t.Context()); err == nil {
+				t.Errorf("expected ListClients to fail loud on a %s record", tc.name)
+			}
+		})
+	}
+}
