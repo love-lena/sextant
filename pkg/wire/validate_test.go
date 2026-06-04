@@ -47,8 +47,7 @@ func TestCheckSkew(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			err := CheckSkew(ulidAt(bus.Add(c.offset)), bus, tol)
 			if c.wantErr {
-				var se *SkewError
-				if !errors.As(err, &se) {
+				if _, ok := errors.AsType[*SkewError](err); !ok {
 					t.Fatalf("want *SkewError, got %v", err)
 				}
 				return
@@ -65,8 +64,7 @@ func TestCheckSkewMalformedULID(t *testing.T) {
 	if err == nil {
 		t.Fatal("want error for malformed ULID")
 	}
-	var se *SkewError
-	if errors.As(err, &se) {
+	if _, ok := errors.AsType[*SkewError](err); ok {
 		t.Fatal("malformed ULID should be a parse error, not *SkewError")
 	}
 }
@@ -76,8 +74,8 @@ func TestCheckEpoch(t *testing.T) {
 		t.Fatalf("equal epochs should pass: %v", err)
 	}
 	err := CheckEpoch(Epoch, Epoch+1)
-	var ee *EpochError
-	if !errors.As(err, &ee) {
+	ee, ok := errors.AsType[*EpochError](err)
+	if !ok {
 		t.Fatalf("want *EpochError, got %v", err)
 	}
 	if ee.Got != Epoch || ee.Want != Epoch+1 {

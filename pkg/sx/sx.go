@@ -12,12 +12,23 @@ const (
 	BucketClients = "sx_clients"
 	// BucketWorkflows holds workflow state envelopes, keyed by workflow id.
 	BucketWorkflows = "sx_workflows"
+	// BucketMeta holds public protocol metadata that clients read at connect —
+	// currently just the protocol epoch. It is client-readable by design: the
+	// only system datum so far is public, so it lives in a client-readable
+	// bucket, not an operator-only one (ADR-0015).
+	BucketMeta = "sx_meta"
 )
 
+// MetaKeyEpoch is the key in BucketMeta holding the bus's protocol epoch, as a
+// decimal string. The bus writes it at bootstrap; clients read and hard-gate on
+// it at connect (ADR-0010).
+const MetaKeyEpoch = "epoch"
+
 // Operator-only system state is deferred: v1 has no operator-only bucket (the
-// only system datum, the protocol epoch, is public). When real operator-only
-// state exists it goes in a separate NATS account — a hard, enumerate-nothing
-// split — not a same-account bucket guarded by deny-lists (ADR-0012).
+// only system datum, the protocol epoch, is public — it lives in BucketMeta).
+// When real operator-only state exists it goes in a separate NATS account — a
+// hard, enumerate-nothing split — not a same-account bucket guarded by
+// deny-lists (ADR-0012, ADR-0015).
 
 // Reserved subjects.
 const (
@@ -41,6 +52,7 @@ func Buckets() []BucketSpec {
 	return []BucketSpec{
 		{Name: BucketClients, History: 1},    // registry: latest record per client
 		{Name: BucketWorkflows, History: 10}, // workflow state: a little version history
+		{Name: BucketMeta, History: 1},       // public protocol metadata (epoch)
 	}
 }
 
