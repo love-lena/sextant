@@ -22,6 +22,7 @@ human has signed off — see
 | [0013](0013-multi-backend.md) | Multi-backend posture | accepted |
 | [0014](0014-the-tui-is-a-client.md) | The TUI is a client | accepted |
 | [0015](0015-operator-only-account.md) | Operator-only state lives in its own account | accepted |
+| [0016](0016-artifacts-are-lexicon-records.md) | Artifacts are Lexicon records | accepted |
 
 ## Review batches
 - **Batch 1 — substrate:** 0004–0007 — *accepted*
@@ -29,3 +30,4 @@ human has signed off — see
 - **Batch 3 — conventions & cross-cutting:** 0011–0013 — *accepted*
 - **0014 — the TUI is a client** — *accepted* (grilled + signed off in-session, 2026-06-02)
 - **0015 — operator-only state in its own account** — *accepted* (refines 0012; from the #71 review)
+- **0016 — artifacts are Lexicon records** — *accepted* (the #70 JSON-vs-CBOR decision; signed off in-session 2026-06-03)

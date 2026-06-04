@@ -54,6 +54,12 @@ const (
 	StreamMessages = "MESSAGES"
 	// MessagePrefix is the root of the messages subject space (msg.>).
 	MessagePrefix = "msg."
+	// BucketArtifacts is the KV bucket holding artifacts (keyed by name). It is
+	// operator-provisioned (clients can't create buckets) and client-writable.
+	BucketArtifacts = "ARTIFACTS"
+	// ArtifactHistory is how many revisions each artifact keeps — 64, the NATS
+	// KV maximum, so the version trail is as deep as the backend allows.
+	ArtifactHistory = 64
 )
 
 // ChannelSubject is the subject for a named channel: msg.chan.<name>.

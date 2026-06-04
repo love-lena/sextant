@@ -42,8 +42,10 @@ type Envelope struct {
 	// Epoch is the protocol epoch this message was written under, checked
 	// per-message because durable streams outlive epochs.
 	Epoch int `json:"epoch"`
-	// Record is the typed content: an AT-Protocol lexicon record, opaque to
-	// the bus and always JSON. Binary lives in an artifact, referenced here.
+	// Record is the typed content: an AT-Protocol lexicon record, opaque to the
+	// bus and always JSON on this wire. Binary is a first-class bytes/blob value
+	// within it — inline as {"$bytes": base64} now, native under a later
+	// DAG-CBOR encoding, or a blob reference when large (ADR-0016).
 	Record Lexicon `json:"record"`
 }
 
