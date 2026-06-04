@@ -1,8 +1,6 @@
 ---
 id: TASK-6
-title: >-
-  Clients registry convention: self-register record + heartbeat; read-time
-  liveness
+title: 'Clients registry convention: self-register directory + ListClients read helper'
 status: To Do
 assignee: []
 created_date: '2026-06-03 01:12'
@@ -21,10 +19,13 @@ ordinal: 6000
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-Each client self-registers a record (identity, kind, epoch, SDK version, subscriptions) + heartbeat; presence is read-time liveness. Governed by ADR-0004, ADR-0008.
+A presence-only, self-maintained directory: each client self-registers a record (id, kind, epoch, SDK version) on connect and deregisters on Close — the write half already shipped in #68. The SDK adds a `ListClients(ctx) ([]ClientInfo, error)` read helper plus a public `ClientInfo` type. "Listed = registered and hasn't cleanly left"; a client that crashes without Close leaves a stale entry (accepted in M1). Subscriptions are deferred; heartbeat + read-time liveness + stale-entry reaping are deferred to TASK-20. Governed by ADR-0004 (conventions optional), ADR-0008 (clients are processes).
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Settle registry-record schema, heartbeat cadence, and read-time liveness threshold (open design questions)
+- [ ] #1 Record schema is {id, kind, epoch, sdk, connected_at}; subscriptions deferred
+- [ ] #2 Self-register on connect + deregister on Close (the directory convention; write half already in #68)
+- [ ] #3 SDK ships `ListClients(ctx) ([]ClientInfo, error)` + a public `ClientInfo` type exposing the record
+- [ ] #4 Heartbeat / read-time liveness / stale-entry reaping are out of M1 scope (TASK-20)
 <!-- AC:END -->
