@@ -46,6 +46,22 @@ func WorkflowControl(id string) string { return WorkflowPrefix + id + ".control"
 // WorkflowEvents is the event-stream subject for a given workflow id.
 func WorkflowEvents(id string) string { return WorkflowPrefix + id + ".events" }
 
+// The Messages convention. These subjects are user space (not reserved), but
+// the durable stream that captures them is Sextant-managed infrastructure,
+// provisioned by the operator at bootstrap.
+const (
+	// StreamMessages is the durable JetStream stream capturing MessagePrefix.
+	StreamMessages = "MESSAGES"
+	// MessagePrefix is the root of the messages subject space (msg.>).
+	MessagePrefix = "msg."
+)
+
+// ChannelSubject is the subject for a named channel: msg.chan.<name>.
+func ChannelSubject(name string) string { return MessagePrefix + "chan." + name }
+
+// AgentSubject is the direct subject for a client: msg.agent.<id>.
+func AgentSubject(id string) string { return MessagePrefix + "agent." + id }
+
 // Buckets returns the reserved buckets created at bootstrap, with the history
 // depth each keeps.
 func Buckets() []BucketSpec {
