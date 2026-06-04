@@ -64,11 +64,12 @@ type Options struct {
 
 // Client is a connected Sextant client.
 type Client struct {
-	nc   *nats.Conn
-	js   jetstream.JetStream
-	id   string
-	kind string
-	logf func(string, ...any)
+	nc      *nats.Conn
+	js      jetstream.JetStream
+	id      string
+	kind    string
+	skewTol time.Duration
+	logf    func(string, ...any)
 
 	drainOnce sync.Once
 	drained   chan struct{}
@@ -113,7 +114,7 @@ func Connect(ctx context.Context, opts Options) (*Client, error) {
 		logf = log.Printf
 	}
 
-	c := &Client{id: id, kind: kind, logf: logf, drained: make(chan struct{})}
+	c := &Client{id: id, kind: kind, skewTol: tol, logf: logf, drained: make(chan struct{})}
 
 	nc, err := nats.Connect(
 		url,

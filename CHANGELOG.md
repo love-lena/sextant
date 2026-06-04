@@ -41,3 +41,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   client id — each client gets exactly one verified identity, so two clients can
   never silently share a registry key (issued ids are recorded under
   `<store>/issued`).
+- `pkg/sextant`: the Messages primitive. `Client.Publish` wraps a record in a
+  wire envelope and publishes it to the `msg.*` space (waiting for the stream
+  ack); `Client.Subscribe` delivers matching messages via an ephemeral ordered
+  consumer with client-controlled replay (`DeliverAll`), checking each against
+  the bus-stamped clock and quarantining skew violations. `pkg/bus` provisions
+  the durable `MESSAGES` stream at bootstrap; `pkg/sx` adds the `msg.*` subject
+  helpers (`ChannelSubject`, `AgentSubject`). See ADR-0005, ADR-0006.

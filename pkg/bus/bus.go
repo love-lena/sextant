@@ -155,6 +155,18 @@ func (b *Bus) bootstrap(ctx context.Context) error {
 	if _, err := meta.Put(ctx, sx.MetaKeyEpoch, []byte(strconv.Itoa(wire.Epoch))); err != nil {
 		return fmt.Errorf("bus: write protocol epoch: %w", err)
 	}
+
+	// The durable Messages stream. Clients can't create streams (guardrail), so
+	// the operator provisions it. Retention is a lean 7 days (an open item).
+	if _, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+		Name:      sx.StreamMessages,
+		Subjects:  []string{sx.MessagePrefix + ">"},
+		Retention: jetstream.LimitsPolicy,
+		MaxAge:    7 * 24 * time.Hour,
+		Storage:   jetstream.FileStorage,
+	}); err != nil {
+		return fmt.Errorf("bus: bootstrap messages stream: %w", err)
+	}
 	return nil
 }
 
