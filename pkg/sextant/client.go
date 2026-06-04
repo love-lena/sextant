@@ -202,17 +202,9 @@ func (c *Client) checkEpoch(ctx context.Context) error {
 	return nil
 }
 
-// registryRecord is this client's entry in the clients registry. (The full
-// schema — subscriptions, heartbeat cadence, liveness threshold — is an open
-// question; this is the minimal connect-time record.)
-type registryRecord struct {
-	ID          string `json:"id"`
-	Kind        string `json:"kind"`
-	Epoch       int    `json:"epoch"`
-	SDK         string `json:"sdk"`
-	ConnectedAt string `json:"connected_at"`
-}
-
+// register writes this client's entry into the clients registry — the write
+// half of the presence-only directory (registryRecord and the ListClients read
+// half live in clients.go). The entry is removed again by Close.
 func (c *Client) register(ctx context.Context, tol time.Duration) error {
 	clients, err := c.js.KeyValue(ctx, sx.BucketClients)
 	if err != nil {

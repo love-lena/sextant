@@ -57,3 +57,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unless the record is a non-empty valid lexicon.
   `pkg/bus` provisions the `ARTIFACTS` KV bucket at bootstrap, keeping **64
   revisions** (the NATS KV maximum). See ADR-0005, ADR-0016.
+- `pkg/sextant`: `Client.ListClients` and the public `ClientInfo` type — the
+  read half of the clients registry, a presence-only self-maintained directory.
+  Every client already self-registers on `Connect` and leaves on `Close` (the
+  write half); `ListClients` returns everyone connected right now (sorted by
+  id), where "listed" means "registered and hasn't cleanly left." The record is
+  `{id, kind, epoch, sdk, connected_at}`; heartbeat, read-time liveness, and
+  stale-entry reaping are deferred (TASK-20). See ADR-0004, ADR-0008.
