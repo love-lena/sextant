@@ -4,6 +4,7 @@ title: 'Cross-machine connectivity: reach the bus from another host (SSH)'
 status: To Do
 assignee: []
 created_date: '2026-06-04 17:56'
+updated_date: '2026-06-04 18:04'
 labels: []
 milestone: 'M3: Cross-machine connectivity'
 dependencies: []
@@ -30,4 +31,5 @@ Today the bus is reached via a localhost URL in bus.json; clients run on the sam
 - [ ] #5 DRAFT: Creds + conn-info distribution to another machine has a documented, safe path (secrets 0600, nothing leaked)
 - [ ] #6 DRAFT: A cross-machine quickstart is documented (bus on host A, harness on host B over SSH)
 - [ ] #7 DRAFT: Multi-host NATS topology (leaf node / cluster) is supported or explicitly deferred with rationale
+- [ ] #8 DRAFT: Bare-minimum smoke spike FIRST — tunnel-only host-to-host comms with ZERO bind change (sextant up --port on host A; ssh -L from host B; scp the creds; a client on B reaches the bus through the tunnel), run early to surface rough spots (port stability, cross-host clock skew + message quarantine, NATS server advertise) before committing the full milestone
 <!-- AC:END -->

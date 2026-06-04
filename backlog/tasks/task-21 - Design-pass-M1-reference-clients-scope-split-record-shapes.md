@@ -4,7 +4,7 @@ title: 'Design pass: M1 reference clients (scope, split, record shapes)'
 status: To Do
 assignee: []
 created_date: '2026-06-04 05:43'
-updated_date: '2026-06-04 17:56'
+updated_date: '2026-06-04 18:04'
 labels: []
 milestone: 'M2: MVP'
 dependencies:
@@ -44,4 +44,6 @@ Prototype input (proto/dash-tui branch, throwaway): a runnable dash-TUI mockup i
 - Role tokens (one hue per role) + status-by-shape glyphs read well; light + dark palettes both viable (prototype shipped both).
 
 Design-pass TODO: turn these into the per-client split (the human-UI/dash likely its own ticket), the pane/widget library boundary (widgets ⊂ surfaces ⊂ dash, per ADR-0014), the layout-customization mechanism, and the minimal record shapes (workflow Layer-0 envelope per ADR-0011; spawn-request per ADR-0009).
+
+Split DECIDED by Lena (2026-06-04): dash → M2 (TASK-7); Dispatcher → M4 (TASK-25); Workflow coordinator → M4 (TASK-26). MVP is manual-comms only (no spawn, no formal workflows). Remaining M2 scope of this design pass: the dash design (widget→surface→dash boundary per ADR-0014; the layout-customization mechanism; the pane variants as options) and the MVP record shapes (see TASK-12: a chat message kind + the artifact shape; spawn/workflow shapes defer to M4).
 <!-- SECTION:NOTES:END -->
