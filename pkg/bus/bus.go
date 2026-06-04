@@ -167,6 +167,15 @@ func (b *Bus) bootstrap(ctx context.Context) error {
 	}); err != nil {
 		return fmt.Errorf("bus: bootstrap messages stream: %w", err)
 	}
+
+	// The artifacts bucket (operator-provisioned; clients can't create buckets).
+	if _, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket:  sx.BucketArtifacts,
+		History: sx.ArtifactHistory,
+		Storage: jetstream.FileStorage,
+	}); err != nil {
+		return fmt.Errorf("bus: bootstrap artifacts bucket: %w", err)
+	}
 	return nil
 }
 

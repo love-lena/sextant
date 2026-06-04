@@ -48,3 +48,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the bus-stamped clock and quarantining skew violations. `pkg/bus` provisions
   the durable `MESSAGES` stream at bootstrap; `pkg/sx` adds the `msg.*` subject
   helpers (`ChannelSubject`, `AgentSubject`). See ADR-0005, ADR-0006.
+- `pkg/sextant`: the Artifacts primitive — named, versioned units of durable
+  shared work whose `Record` is a **Lexicon** (typed JSON), the same content
+  model as a message's `Record` (ADR-0016). `CreateArtifact`, `UpdateArtifact`
+  (compare-and-set on revision — the single-author-at-a-time discipline),
+  `GetArtifact`, `DeleteArtifact`, and `WatchArtifact` (current value then live
+  changes, deletes included via `ArtifactChange.Deleted`); a write is rejected
+  unless the record is a non-empty valid lexicon.
+  `pkg/bus` provisions the `ARTIFACTS` KV bucket at bootstrap, keeping **64
+  revisions** (the NATS KV maximum). See ADR-0005, ADR-0016.
