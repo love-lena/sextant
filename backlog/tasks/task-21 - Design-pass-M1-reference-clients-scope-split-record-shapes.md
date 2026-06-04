@@ -4,9 +4,9 @@ title: 'Design pass: M1 reference clients (scope, split, record shapes)'
 status: To Do
 assignee: []
 created_date: '2026-06-04 05:43'
-updated_date: '2026-06-04 17:44'
+updated_date: '2026-06-04 17:56'
 labels: []
-milestone: 'M1: Core protocol + SDK'
+milestone: 'M2: MVP'
 dependencies:
   - TASK-3
   - TASK-6

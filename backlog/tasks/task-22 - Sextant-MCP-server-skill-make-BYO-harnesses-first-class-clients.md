@@ -4,7 +4,9 @@ title: 'Sextant MCP server + skill: make BYO harnesses first-class clients'
 status: To Do
 assignee: []
 created_date: '2026-06-04 17:52'
+updated_date: '2026-06-04 17:56'
 labels: []
+milestone: 'M2: MVP'
 dependencies: []
 references:
   - docs/adr/0003-high-level-architecture.md

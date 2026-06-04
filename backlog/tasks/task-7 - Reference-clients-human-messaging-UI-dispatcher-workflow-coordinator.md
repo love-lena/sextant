@@ -4,9 +4,9 @@ title: 'Reference clients: human-messaging UI, dispatcher, workflow coordinator'
 status: To Do
 assignee: []
 created_date: '2026-06-03 01:12'
-updated_date: '2026-06-04 05:44'
+updated_date: '2026-06-04 17:56'
 labels: []
-milestone: 'M1: Core protocol + SDK'
+milestone: 'M2: MVP'
 dependencies:
   - TASK-3
   - TASK-6
