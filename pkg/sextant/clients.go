@@ -48,15 +48,27 @@ type registryRecord struct {
 	ConnectedAt string `json:"connected_at"`
 }
 
-// info parses a stored record into its public view. The registry key is the
-// authoritative identity (it is what register writes under, and the name the
-// bus authenticated the connection as — ADR-0012), so the key wins: ID is taken
-// from the key, and a record whose self-reported id disagrees with it is treated
-// as corrupt and surfaced, never silently trusted. A connected_at that isn't the
-// RFC3339 the SDK writes fails the same way, rather than being coerced.
+// checkRecordKey enforces the registry's identity invariant: a record's
+// self-reported id must equal the key it is filed under. The key is the
+// authoritative identity (what register writes under, and the name the bus
+// authenticated the connection as — ADR-0012); the body id duplicates it. We
+// keep that duplicate field in the schema, but never trust it to diverge: a
+// mismatch is corruption, rejected on write (so the SDK never files one) and on
+// read (so a foreign or corrupt one never surfaces).
+func checkRecordKey(recordID, key string) error {
+	if recordID != key {
+		return fmt.Errorf("registry record id %q does not match its key %q", recordID, key)
+	}
+	return nil
+}
+
+// info parses a stored record into its public view. ID is taken from the key
+// (the authoritative locator), the body id is only checked against it, and a
+// connected_at that isn't the RFC3339 the SDK writes fails loud rather than
+// being coerced.
 func (r registryRecord) info(key string) (ClientInfo, error) {
-	if r.ID != key {
-		return ClientInfo{}, fmt.Errorf("record id %q does not match its registry key %q", r.ID, key)
+	if err := checkRecordKey(r.ID, key); err != nil {
+		return ClientInfo{}, err
 	}
 	t, err := time.Parse(time.RFC3339, r.ConnectedAt)
 	if err != nil {

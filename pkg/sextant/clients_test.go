@@ -112,6 +112,19 @@ func TestListClientsEmptyDirectory(t *testing.T) {
 	}
 }
 
+// TestCheckRecordKey covers the registry identity invariant both paths share:
+// the body id must equal the key. register enforces it on write and info on
+// read, so testing the helper directly is the deterministic coverage (a
+// divergent write can't be produced through the public API).
+func TestCheckRecordKey(t *testing.T) {
+	if err := checkRecordKey("c-alpha", "c-alpha"); err != nil {
+		t.Errorf("matching id/key should pass, got %v", err)
+	}
+	if err := checkRecordKey("c-impostor", "c-alpha"); err == nil {
+		t.Error("a body id that diverges from its key must be rejected")
+	}
+}
+
 // TestListClientsFailsLoudOnCorruptRecord pins the fail-loud contract: a record
 // that isn't the schema the SDK writes — invalid JSON, a non-RFC3339
 // connected_at, or a self-reported id that disagrees with its registry key —

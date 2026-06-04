@@ -217,6 +217,12 @@ func (c *Client) register(ctx context.Context, tol time.Duration) error {
 		SDK:         sdkVersion,
 		ConnectedAt: time.Now().UTC().Format(time.RFC3339),
 	}
+	// The body id and the key are both c.id by construction; assert the invariant
+	// here too, so a future refactor that sources them separately can't silently
+	// file a record whose id diverges from its key (the read half rejects those).
+	if err := checkRecordKey(rec.ID, c.id); err != nil {
+		return fmt.Errorf("sextant: %w", err)
+	}
 	b, err := json.Marshal(rec)
 	if err != nil {
 		return fmt.Errorf("sextant: marshal registry record: %w", err)
