@@ -30,6 +30,13 @@ _Avoid_: broker, server, queue
 A typed record published on a subject, for events and conversation.
 _Avoid_: event (when you mean the envelope), packet
 
+**Topic**:
+A named room on the bus that many clients publish to and subscribe to. A naming
+convention over the messages space, not a bus construct — it has no registry,
+membership, or access control.
+_Avoid_: channel (reserved for the Claude Code harness push mechanism), room,
+group
+
 **Artifact**:
 A named, versioned unit of durable shared work, owned by one author at a time
 (a plan, a review, a result).
@@ -88,3 +95,6 @@ _Avoid_: kill (reserve that for forcing a process from the outside)
   **client**.
 - "client library" vs the process — resolved: the library is the **SDK**; the
   process is a **client**.
+- "channel" named both a bus room and the Claude Code harness push mechanism —
+  resolved: the bus concept is a **topic**; "channel" is reserved for the
+  harness mechanism (ADR-0017).

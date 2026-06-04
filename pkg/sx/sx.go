@@ -62,8 +62,11 @@ const (
 	ArtifactHistory = 64
 )
 
-// ChannelSubject is the subject for a named channel: msg.chan.<name>.
-func ChannelSubject(name string) string { return MessagePrefix + "chan." + name }
+// TopicSubject is the subject for a named topic: msg.topic.<name>. A topic is a
+// shared room many clients publish to and subscribe to — a naming convention
+// over the messages space, not a bus construct (no registry, membership, or
+// access control). "Channel" is reserved for the Claude Code harness mechanism.
+func TopicSubject(name string) string { return MessagePrefix + "topic." + name }
 
 // AgentSubject is the direct subject for a client: msg.agent.<id>.
 func AgentSubject(id string) string { return MessagePrefix + "agent." + id }
