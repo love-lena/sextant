@@ -1,10 +1,10 @@
 ---
 id: TASK-24
-title: 'Cross-machine connectivity: reach the bus from another host (SSH)'
+title: 'Cross-machine connectivity: smoke spike (expands later)'
 status: To Do
 assignee: []
 created_date: '2026-06-04 17:56'
-updated_date: '2026-06-04 18:04'
+updated_date: '2026-06-04 18:11'
 labels: []
 milestone: 'M3: Cross-machine connectivity'
 dependencies: []
@@ -19,7 +19,7 @@ ordinal: 23000
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-Today the bus is reached via a localhost URL in bus.json; clients run on the same host. For Lena's real use, agents run on different machines and connect over SSH. This milestone makes a client on host B reach the bus on host A: the bus binds a routable address, conn-info + per-client creds distribute safely to the remote host, per-client JWT identity holds across the wire, and it works through an SSH tunnel. ACs below are DRAFT — pending Lena's review.
+M3 STARTS AS A SPIKE and expands into the items below when we tackle it. The bare-minimum smoke test needs ZERO code change (the bus binds 127.0.0.1; sextant up --port already exists): on host A run `sextant up --port 4222` and mint+scp a creds file; on host B open `ssh -N -L 4222:127.0.0.1:4222 userA@hostA` and run a client at nats://127.0.0.1:4222 with the copied creds — it reaches A's bus through the tunnel. Then a client on A and one on B exchange a message + share an artifact. Run early to surface rough spots: cross-host CLOCK SKEW (CheckSkew quarantines messages past SkewTolerance — the big one), port stability, and NATS advertise on reconnect. EXPANSION (the ACs below, for when we get to it): routable bind host, TLS, safe creds/conn-info distribution, a cross-machine quickstart, and multi-host topology (leaf node / cluster).
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

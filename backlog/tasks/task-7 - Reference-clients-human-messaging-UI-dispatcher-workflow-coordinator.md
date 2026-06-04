@@ -4,9 +4,9 @@ title: 'Reference client: the human-messaging dash'
 status: To Do
 assignee: []
 created_date: '2026-06-03 01:12'
-updated_date: '2026-06-04 18:04'
+updated_date: '2026-06-04 18:11'
 labels: []
-milestone: 'M2: MVP'
+milestone: 'M4: The dash (human UI)'
 dependencies:
   - TASK-3
   - TASK-6

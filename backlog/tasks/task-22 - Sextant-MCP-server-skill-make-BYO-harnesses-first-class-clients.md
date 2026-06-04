@@ -4,7 +4,7 @@ title: 'Sextant MCP server + skill: make BYO harnesses first-class clients'
 status: To Do
 assignee: []
 created_date: '2026-06-04 17:52'
-updated_date: '2026-06-04 17:56'
+updated_date: '2026-06-04 18:11'
 labels: []
 milestone: 'M2: MVP'
 dependencies: []
@@ -29,3 +29,9 @@ The 'reference harness' gap (ADR-0003: the harness is bring-your-own) is best cl
 - [ ] #3 A BYO harness (e.g. Claude Code) can join the bus, exchange messages, and share artifacts with no bespoke harness code
 - [ ] #4 Skill (if included) documents the conventions + verb-selection guidance
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Coupled to TASK-28 (test CLI): the MCP tools and the CLI expose the SAME domain-verb surface (publish, tail/subscribe, clients, artifact CRUD+watch). Define the verbs once; surface as CLI subcommands + MCP tools + skill docs.
+<!-- SECTION:NOTES:END -->

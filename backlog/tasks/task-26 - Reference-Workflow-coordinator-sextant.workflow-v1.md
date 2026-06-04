@@ -4,8 +4,9 @@ title: 'Reference Workflow coordinator: sextant.workflow/v1'
 status: To Do
 assignee: []
 created_date: '2026-06-04 18:05'
+updated_date: '2026-06-04 18:11'
 labels: []
-milestone: 'M4: Orchestration (spawn + workflows)'
+milestone: 'M5: Orchestration (spawn + workflows)'
 dependencies: []
 references:
   - docs/adr/0011-workflows.md
