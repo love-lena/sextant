@@ -4,9 +4,9 @@ title: 'TypeScript SDK peer: the same domain-verb surface'
 status: To Do
 assignee: []
 created_date: '2026-06-03 01:12'
-updated_date: '2026-06-03 22:09'
+updated_date: '2026-06-04 04:10'
 labels: []
-milestone: 'M1: Core protocol + SDK'
+milestone: Future
 dependencies:
   - TASK-4
 references:
