@@ -1,10 +1,10 @@
 ---
 id: TASK-4
 title: 'Go SDK: connect handshake + domain verbs + cooperative drain'
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-06-03 01:12'
-updated_date: '2026-06-04 00:24'
+updated_date: '2026-06-04 04:00'
 labels: []
 milestone: 'M1: Core protocol + SDK'
 dependencies: []

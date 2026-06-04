@@ -1,10 +1,10 @@
 ---
 id: TASK-3
 title: 'The two primitives over NATS: Messages and Artifacts'
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-06-03 01:12'
-updated_date: '2026-06-04 01:35'
+updated_date: '2026-06-04 04:00'
 labels: []
 milestone: 'M1: Core protocol + SDK'
 dependencies:
