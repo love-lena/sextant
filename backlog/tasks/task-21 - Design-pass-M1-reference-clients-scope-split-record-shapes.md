@@ -4,6 +4,7 @@ title: 'Design pass: M1 reference clients (scope, split, record shapes)'
 status: To Do
 assignee: []
 created_date: '2026-06-04 05:43'
+updated_date: '2026-06-04 17:44'
 labels: []
 milestone: 'M1: Core protocol + SDK'
 dependencies:
@@ -30,3 +31,17 @@ Design the M1 reference clients before building them, and decide how TASK-7 spli
 - [ ] #3 Minimal record shapes specified: spawn-request (with lineage) and workflow Layer-0 state envelope
 - [ ] #4 Run/layout decision: where reference clients live and how they are launched in M1
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Prototype input (proto/dash-tui branch, throwaway): a runnable dash-TUI mockup iterated with Lena. Verdict that feeds this design:
+
+- The dash is a COMPOSABLE PANE LIBRARY (ADR-0014): ship sensible defaults but make swapping/arranging panes first-class (btop-style customization). Don't pick one layout — the prototyped variants become built-in, forkable options.
+- Cockpit is the default assembled layout (quadrant of pane-surfaces). Detail-on-demand: the detail pane is hidden by default and toggled, not always-on.
+- Workflow pane: Checklist / Timeline / Pipeline are all keepers — selectable renderers of one workflow surface, each drillable into a step (owner, timing, produced artifact, events, control verbs).
+- Artifact review card is a wanted pane: glamour-rendered markdown (the glow library); a Review variant adds inline comment markers anchored in the text + a comments panel. CAS/rev shown in the header.
+- Role tokens (one hue per role) + status-by-shape glyphs read well; light + dark palettes both viable (prototype shipped both).
+
+Design-pass TODO: turn these into the per-client split (the human-UI/dash likely its own ticket), the pane/widget library boundary (widgets ⊂ surfaces ⊂ dash, per ADR-0014), the layout-customization mechanism, and the minimal record shapes (workflow Layer-0 envelope per ADR-0011; spawn-request per ADR-0009).
+<!-- SECTION:NOTES:END -->
