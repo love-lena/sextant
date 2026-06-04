@@ -1,0 +1,24 @@
+{
+  "lexicon": 1,
+  "id": "chat.message",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "A line of dialogue: a typed message published on a topic (msg.topic.<name>) or addressed to a client (msg.agent.<id>). The author is the envelope's authenticated sender, so it is NOT duplicated here.",
+      "record": {
+        "type": "object",
+        "required": ["text"],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The message body."
+          },
+          "replyTo": {
+            "type": "string",
+            "description": "Optional. The envelope id of the message this one replies to (lightweight threading)."
+          }
+        }
+      }
+    }
+  }
+}

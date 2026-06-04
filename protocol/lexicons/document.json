@@ -1,0 +1,24 @@
+{
+  "lexicon": 1,
+  "id": "document",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "A document artifact: titled Markdown shared as durable, versioned work (a plan, a review, a result). An example artifact record shape for M2 — artifacts may carry any lexicon; this is the one the getting-started walkthrough uses.",
+      "record": {
+        "type": "object",
+        "required": ["title", "body"],
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Short human title."
+          },
+          "body": {
+            "type": "string",
+            "description": "Markdown body."
+          }
+        }
+      }
+    }
+  }
+}

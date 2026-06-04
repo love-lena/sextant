@@ -1,0 +1,34 @@
+{
+  "lexicon": 1,
+  "id": "envelope",
+  "defs": {
+    "main": {
+      "type": "object",
+      "description": "The wire atom: a JSON wrapper around a typed lexicon record. The wrapper core (id, sender, kind, epoch) is frozen and epoch-protected; record is the free-evolution zone. Messages travel enveloped; artifacts and registry records are stored bare. See ADR-0006, ADR-0010.",
+      "required": ["id", "sender", "kind", "epoch", "record"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "A ULID set by the sender; also the dedup key. Its embedded timestamp is sender-set, so it is not a trusted clock (the bus stamp is)."
+        },
+        "sender": {
+          "type": "string",
+          "description": "The authenticated identity that published the message — the credential's JWT name. Set from auth, never an input; cannot be forged."
+        },
+        "kind": {
+          "type": "string",
+          "description": "The frame type. 'message' is the only frame today; other frames may appear in a later epoch.",
+          "knownValues": ["message"]
+        },
+        "epoch": {
+          "type": "integer",
+          "description": "The protocol epoch this envelope was written under. Checked per-message, because durable streams outlive epochs."
+        },
+        "record": {
+          "type": "unknown",
+          "description": "The typed lexicon record (a $type-tagged object). Opaque to the bus; always JSON on this wire. Binary is inline base64 today, native under a later DAG-CBOR encoding, or a blob reference when large (ADR-0016)."
+        }
+      }
+    }
+  }
+}

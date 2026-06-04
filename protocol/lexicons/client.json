@@ -1,0 +1,34 @@
+{
+  "lexicon": 1,
+  "id": "client",
+  "defs": {
+    "main": {
+      "type": "object",
+      "description": "A clients-registry entry: the presence record for one connected client, stored bare in the sx_clients bucket keyed by id (the authoritative identity). It carries no $type tag — it predates the convention and its type is implied by the bucket. Presence-only: an entry means 'registered and has not cleanly left' (no heartbeat in M1; see TASK-20). See ADR-0008, ADR-0012.",
+      "required": ["id", "kind", "epoch", "sdk", "connected_at"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The client's verified identity (credential JWT name); equals the registry key."
+        },
+        "kind": {
+          "type": "string",
+          "description": "What the client is, self-declared at connect (e.g. client, coordinator, harness)."
+        },
+        "epoch": {
+          "type": "integer",
+          "description": "The protocol epoch the client connected under."
+        },
+        "sdk": {
+          "type": "string",
+          "description": "The SDK version that wrote the entry."
+        },
+        "connected_at": {
+          "type": "string",
+          "format": "datetime",
+          "description": "RFC3339 connect time by the client's own UTC clock (the lean M1 field; bus-authoritative aging is TASK-20)."
+        }
+      }
+    }
+  }
+}
