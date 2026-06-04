@@ -16,7 +16,7 @@ func TestPublishSubscribeRoundTrip(t *testing.T) {
 	c := dialClient(t, b, "pub-sub")
 	ctx := t.Context()
 
-	subj := sx.ChannelSubject("plan")
+	subj := sx.TopicSubject("plan")
 	if err := c.Publish(ctx, subj, json.RawMessage(`{"hello":"world"}`)); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestReplayDeliverAll(t *testing.T) {
 	b := startBus(t)
 	c := dialClient(t, b, "replay")
 	ctx := t.Context()
-	subj := sx.ChannelSubject("log")
+	subj := sx.TopicSubject("log")
 	for i := 0; i < 3; i++ {
 		if err := c.Publish(ctx, subj, json.RawMessage(`{"n":1}`)); err != nil {
 			t.Fatalf("Publish: %v", err)
@@ -91,7 +91,7 @@ func TestSkewQuarantine(t *testing.T) {
 	b := startBus(t)
 	c := dialClient(t, b, "skew-rx")
 	ctx := t.Context()
-	subj := sx.ChannelSubject("skew")
+	subj := sx.TopicSubject("skew")
 
 	injector := inspectJS(t, b)
 
@@ -135,7 +135,7 @@ func TestQuarantinesInvalidEnvelopes(t *testing.T) {
 	b := startBus(t)
 	c := dialClient(t, b, "quar-rx")
 	ctx := t.Context()
-	subj := sx.ChannelSubject("quar")
+	subj := sx.TopicSubject("quar")
 	injector := inspectJS(t, b)
 
 	// Wrong epoch (otherwise well-formed).
@@ -185,7 +185,7 @@ func TestQuarantinesInvalidEnvelopes(t *testing.T) {
 func TestSubscribeStopsOnContextCancel(t *testing.T) {
 	b := startBus(t)
 	c := dialClient(t, b, "ctx-cancel")
-	subj := sx.ChannelSubject("cancel")
+	subj := sx.TopicSubject("cancel")
 
 	subCtx, cancel := context.WithCancel(t.Context())
 	got := make(chan Message, 4)

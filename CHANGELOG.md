@@ -64,3 +64,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   id), where "listed" means "registered and hasn't cleanly left." The record is
   `{id, kind, epoch, sdk, connected_at}`; heartbeat, read-time liveness, and
   stale-entry reaping are deferred (TASK-20). See ADR-0004, ADR-0008.
+
+### Changed
+
+- `pkg/sx`: renamed the bus "channel" convention to **topic** — `ChannelSubject`
+  → `TopicSubject` and the subject namespace `msg.chan.<name>` →
+  `msg.topic.<name>`. A topic is a named room (a naming convention over the
+  messages space, not a bus construct); "channel" is reserved for the Claude
+  Code harness push mechanism, to avoid the two colliding. See ADR-0017.

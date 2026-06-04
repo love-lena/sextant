@@ -63,7 +63,7 @@ func (c *Client) Publish(ctx context.Context, subject string, record json.RawMes
 }
 
 // Subscribe delivers messages matching subject (an exact subject or a wildcard,
-// e.g. sx.ChannelSubject("plan") or "msg.>") to h. Replay is client-controlled
+// e.g. sx.TopicSubject("plan") or "msg.>") to h. Replay is client-controlled
 // (see DeliverAll), and the consumer is ephemeral, so the bus keeps no
 // per-subscriber state. Each message is re-checked against the wire contract
 // (structure, epoch) and the bus clock, and quarantined (skipped + logged) on a
