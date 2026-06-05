@@ -315,6 +315,7 @@ func (b *Bus) opClientsList(ctx context.Context) (json.RawMessage, error) {
 		if err := json.Unmarshal(val, &e); err != nil {
 			continue // skip a corrupt entry rather than fail the listing
 		}
+		e.ID = k // the registry key is the authoritative id, not the record body
 		out.Clients = append(out.Clients, e)
 	}
 	sort.Slice(out.Clients, func(i, j int) bool { return out.Clients[i].ID < out.Clients[j].ID })

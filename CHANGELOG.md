@@ -13,8 +13,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the frame and appends it) instead of publishing to the stream directly, and the
   new `Client.FetchMessages` pulls a batch via `message.read` (cursor + resume —
   the pull complement to `Subscribe`, and the SDK half of the test CLI's `read`).
-  `Subscribe`, the artifact methods, and `ListClients` still use the direct path;
-  they cut over (with the credential allow-list flip) in the following slices.
+  `Client.ListClients` now goes through the `clients.list` operation too. Since
+  the bus reads the whole registry on every client's behalf, a single corrupt
+  record now **skips quietly** rather than failing the listing for everyone (the
+  bus also sources each id from its authoritative registry key). `Subscribe` and
+  the artifact methods still use the direct path; they cut over (with the
+  credential allow-list flip) in the following slice — coupled because the bus
+  stores artifacts as frames, so all artifact ops (incl. watch) move together.
 - `pkg/bus`: the bus now **serves the protocol's operations** as calls over the
   Wire API (ADR-0018, ADR-0019). A client makes a NATS request to
   `sx.api.<clientID>.<operation>`; the bus serves it against the backend interface
