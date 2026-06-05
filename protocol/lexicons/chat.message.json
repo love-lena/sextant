@@ -4,18 +4,18 @@
   "defs": {
     "main": {
       "type": "record",
-      "description": "A line of dialogue: a typed message published on a topic (msg.topic.<name>) or addressed to a client (msg.agent.<id>). The author is the envelope's authenticated sender, so it is NOT duplicated here.",
+      "description": "A line of dialogue on a topic or direct address. The author is the frame author.",
       "record": {
         "type": "object",
         "required": ["text"],
         "properties": {
           "text": {
             "type": "string",
-            "description": "The message body."
+            "description": "Message text."
           },
           "replyTo": {
             "type": "string",
-            "description": "Optional. The envelope id of the message this one replies to (lightweight threading)."
+            "description": "Optional frame id this message replies to."
           }
         }
       }

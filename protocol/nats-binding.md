@@ -1,77 +1,88 @@
-# NATS binding
+# NATS module notes
 
-How the NATS backend realises Sextant's verbs and contract. This is the
-substrate-specific layer (ADR-0013): replacing NATS rewrites *this file* and the
-SDK's realisation, leaving `lexicons/`, `methods.json`, and
-`semantic-contract.md` untouched. `pkg/wire` + `pkg/sx` are the Go expression of
-what's written here; a non-Go NATS client implements against this doc.
+Internal development notes for the NATS backend module. This page describes how the
+NATS module implements the backend interface (`semantic-contract.md`) so the bus
+can serve its operations. It is not user-facing: clients never speak NATS — they
+call the bus over the Wire API, and the bus runs on this module. NATS is named
+freely here because this is the NATS module's own document.
 
-NATS provides three subsystems we use: **JetStream stream** (the durable message
-log), **JetStream KV** (artifacts + registry + meta), and **core pub/sub** (the
-drain broadcast only).
+NATS provides three facilities the module uses:
 
-## Namespace + topology (provisioned by the operator at bootstrap)
+- JetStream streams for the durable message log;
+- JetStream KV buckets for artifacts, metadata, and reference conventions;
+- core pub/sub for cooperative drain broadcast.
 
-- **Stream `MESSAGES`** captures subjects under `msg.>` (the user messages
-  space). Named topics are `msg.topic.<name>`; direct addressing is
-  `msg.agent.<id>` — conventions, not constructs.
-- **KV buckets**: `ARTIFACTS` (client-writable, 64 revisions), `sx_clients`
-  (registry), `sx_meta` (public protocol metadata; key `epoch`), `sx_workflows`
-  (reserved).
-- **Reserved subjects**: `sx.control.*` (operator-only; the bus denies client
-  writes), `sx.workflow.*` (workflow convention). `sx.control.drain` is the
-  cooperative-drain broadcast.
-- **Guardrail**: clients may not write `sx.control.*` or perform stream/bucket
-  lifecycle ops. Everything under `msg.>` and writes to `ARTIFACTS`/`sx_clients`
-  are open (conventions enforce the rest).
+## Topology
 
-## Auth + identity
+The module provisions this topology before the bus serves clients.
 
-Decentralized JWT: one operator key, one `SEXTANT` account, **one user JWT per
-client** (minted by `sextant token <id>`). A client connects with its
-credentials file (`nats.UserCredentials`); the **identity is the user-name
-claim** in that JWT — unforgeable (editing the name breaks the signature), so
-`sender` and the registry key are exactly what the bus authenticated. (ADR-0012,
-ADR-0015.)
+| Name | Kind | Purpose |
+|---|---|---|
+| `MESSAGES` | JetStream stream | Captures `msg.>` subjects. |
+| `ARTIFACTS` | KV bucket | Stores artifact records. |
+| `sx_meta` | KV bucket | Stores public protocol metadata such as `epoch`. |
+| `sx_clients` | KV bucket | Stores the clients registry convention. |
+| `sx_workflows` | KV bucket | Reserved for workflow conventions. |
+
+Reserved subjects:
+
+| Subject | Purpose |
+|---|---|
+| `sx.control.*` | Operator-only control subjects. Clients may not publish here. |
+| `sx.control.drain` | Cooperative drain broadcast. |
+| `sx.workflow.*` | Workflow convention subjects. |
+
+Messages use the `msg.>` subject space. The reference naming conventions are
+`msg.topic.<name>` and `msg.agent.<id>`.
+
+## Auth and identity
+
+The module uses decentralized NATS JWT auth: one account and one user JWT per
+client. The client id is the user-name claim in the credentials JWT. The bus takes
+that authenticated name as the frame's `author`, the registry key, and the identity
+behind SDK-facing APIs. The client does not assert it.
 
 ## Connect handshake
 
-1. Resolve the bus URL (explicit, or the `url` field of the `bus.json` discovery
-   file).
-2. Read the client id = the user-name claim of the credentials JWT.
-3. `nats.Connect(url, UserCredentials(creds), Name(id), MaxReconnects(-1))` — a
-   dropped connection reconnects forever; only an explicit drain ends a client.
-4. **Epoch gate**: KV `sx_meta` → `Get("epoch")` → integer; refuse to proceed
-   unless it exactly equals the client's protocol epoch.
-5. **Register**: KV `sx_clients` → `Put(id, <client record JSON>)` (the bare
-   `client` lexicon: `{id, kind, epoch, sdk, connected_at}`).
-6. **Drain watch**: core `Subscribe("sx.control.drain", …)`, then flush so the
-   subscription is server-side registered before connect returns.
+When a client connects, the bus drives this module as follows:
 
-**Close**: KV `sx_clients` → `Delete(id)` (best-effort registry leave), then
-close the connection.
+1. Resolve the NATS URL.
+2. Read the client id from the credentials JWT user-name claim.
+3. Connect with the credentials and client name.
+4. Read `sx_meta/epoch` and refuse to proceed unless it exactly matches the
+   protocol epoch.
+5. Write the client's registry entry to `sx_clients/<id>`.
+6. Subscribe to `sx.control.drain` and flush before reporting the connection ready.
 
-## Per-verb binding
+On clean close, the module deletes the `sx_clients/<id>` entry best-effort, then
+closes the connection.
 
-| Verb | NATS operation |
+## Operation binding
+
+| Operation | NATS realization |
 |---|---|
-| `message.publish` | `js.Publish(subject, encode(envelope))` where `subject` is under `msg.`; the bytes are the `envelope` lexicon wrapping the record. Returns the stream `PubAck` (sequence). |
-| `message.read` | An **ephemeral** consumer on `MESSAGES`, `FilterSubjects=[subject]`, start at `since` (`OptStartSeq`; `0` → `DeliverAll`), `Fetch(limit)`. `next_cursor` = last delivered stream sequence + 1. |
-| `message.subscribe` | An **ordered** consumer on `MESSAGES`, `FilterSubjects=[subject]`, `DeliverPolicy` = New (default) or All (`deliver: all`). For each message: decode + `Validate` envelope, `CheckEpoch`, `CheckSkew` against the bus-stamped time; **quarantine** (skip + log) on any failure, else deliver. Ephemeral — no per-subscriber state on the bus. |
-| `clients.list` | KV `sx_clients` → `Keys()` (ignore deletes; empty bucket → empty list, not an error) → per-key `Get` → decode the `client` lexicon. The **key is the authoritative id**; reject a record whose body id disagrees with its key. |
-| `artifact.create` | KV `ARTIFACTS` → `Create(name, record)` (the **bare** lexicon, no envelope); fails if the name exists. Returns the revision. |
-| `artifact.update` | KV `ARTIFACTS` → `Update(name, record, expected_rev)` — compare-and-set; fails if the current revision moved. Returns the new revision. |
-| `artifact.get` | KV `ARTIFACTS` → `Get(name)` → value (bare lexicon), revision, created time. |
-| `artifact.delete` | KV `ARTIFACTS` → `Delete(name)`. |
-| `artifact.watch` | KV `ARTIFACTS` → `Watch(name)` → current value first, then each change. `Operation != Put` → a delete. A `nil` entry marks the end of the initial replay. |
+| `message.publish` | Stamp the frame and publish it to a subject under `msg.>` on the `MESSAGES` stream. Return the stream sequence. |
+| `message.read` | Create an ephemeral consumer on `MESSAGES` filtered to the subject. Cursor `0` means `DeliverAll`; any other cursor is the next stream sequence to read. Fetch up to `limit`; return `next_cursor = last_sequence + 1`. |
+| `message.subscribe` | Create an ordered consumer on `MESSAGES` filtered to the subject. Use deliver-new by default, or deliver-all when requested. Decode and validate each frame before delivery; skip invalid messages. |
+| `artifact.create` | `ARTIFACTS.Create(name, record)`. The value is the bare lexicon record. Fails if the key exists. |
+| `artifact.update` | `ARTIFACTS.Update(name, record, expected_rev)`. Fails if the current revision differs. |
+| `artifact.get` | `ARTIFACTS.Get(name)`. Return the bare record, revision, and timestamps. |
+| `artifact.delete` | `ARTIFACTS.Delete(name)`. Delete is unconditional in the reference surface. |
+| `artifact.watch` | `ARTIFACTS.Watch(name)`. Deliver the current value first, then later writes and deletes. |
+| `clients.list` | List keys in `sx_clients`; read each value; decode the `client` lexicon; reject records whose body id differs from the key. |
 
-## What's enveloped vs bare
+## Framed versus bare
 
-- **Enveloped** (the `envelope` lexicon wraps the record): `message.publish`,
-  `message.read`, `message.subscribe`.
-- **Bare** (the lexicon stored/returned directly, no envelope): all `artifact.*`
-  and the `clients.list` record.
+Messages are framed. Artifacts and registry entries are stored bare; the bus
+assembles the artifact frame (revision, timestamps) from the record plus KV
+metadata on read.
 
-A client that gets this wrong — wrapping artifacts, or publishing a bare record
-to `msg.>` — is not rejected by the bus; its messages are simply quarantined by
-every receiver. Getting it right is the binding's job.
+| Data | Stored value |
+|---|---|
+| Message on `msg.>` | `frame` lexicon wrapping a record. |
+| Artifact in `ARTIFACTS` | Lexicon record directly. |
+| Client entry in `sx_clients` | `client` record directly. |
+
+Data published to `msg.>` outside the bus may be accepted by NATS, but compliant
+receivers skip it during validation. Artifact and registry operations fail or
+surface as corrupt according to their read/write rules.

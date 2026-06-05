@@ -4,7 +4,7 @@
   "defs": {
     "main": {
       "type": "record",
-      "description": "A document artifact: titled Markdown shared as durable, versioned work (a plan, a review, a result). An example artifact record shape for M2 — artifacts may carry any lexicon; this is the one the getting-started walkthrough uses.",
+      "description": "A titled Markdown document artifact.",
       "record": {
         "type": "object",
         "required": ["title", "body"],

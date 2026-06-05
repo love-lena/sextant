@@ -1,33 +1,39 @@
-# `protocol/` — Sextant's source of truth
+# `protocol/`
 
-This directory **is the protocol** — the language-neutral, transport-neutral
-definition that the Go SDK, the CLI, the MCP server, and any bring-your-own
-client conform to. The SDK is the reference client, not the definition
-(**ADR-0017**).
+Sextant's language-neutral protocol surface — the source of truth for what the bus
+implements. Sextant **is the bus**: it implements the protocol's operations over a
+pluggable backend, and the protocol is invariant across backend swaps (ADR-0018).
+The SDKs are conveniences over the Wire API; they conform to these files and do not
+define the protocol by themselves.
 
-## Layout
+## Files
 
-| File | What it is |
+| File | Role |
 |---|---|
-| `lexicons/*.json` | The wire envelope + the record shapes, in AT-Protocol lexicon format (a minimal subset). The data layer. |
-| `methods.json` | The verb index — one entry per domain verb, **transport-neutral** (no backend operations). The API. |
-| `semantic-contract.md` | One page: the behaviour any backend must honour (durability, ordering, CAS, replay, identity). |
-| `nats-binding.md` | How the NATS backend realises each verb. `pkg/wire` + `pkg/sx` are its Go expression. |
+| `lexicons/*.json` | The record shapes and the **frame** — the bus-stamped wire wrapper around a record. |
+| `methods.json` | The **operations** index — the calls a client makes to the bus. |
+| `semantic-contract.md` | **The backend interface** — what any backend module must provide so the bus can implement the operations. |
+| `nats-binding.md` | The **NATS module** notes — how the NATS backend satisfies the interface. Internal. |
 
 ## How to read it
 
-- A **non-Go client author** reads `lexicons/` (what the bytes look like),
-  `methods.json` (what the verbs are), and `nats-binding.md` (how to drive NATS
-  to perform them). `semantic-contract.md` tells them what "correct" means.
-- A **second-backend author** reads `methods.json` + `semantic-contract.md` and
-  writes a new binding doc alongside `nats-binding.md`. Layers above stay put
-  (ADR-0013): no backend type leaks `methods.json`.
+A client makes a **call** over the Wire API; the bus serves it, stamps the frame,
+and enforces identity. The record is user space (the client supplies it); the frame
+is bus space (the bus produces it).
 
-## Two things to know
+- To understand the surface a client calls: `methods.json` for the operations,
+  `lexicons/` for the records and the frame.
+- To understand the guarantees the bus relies on: `semantic-contract.md` — the
+  backend interface.
+- To add a second backend: implement `semantic-contract.md` as a new backend module
+  and write its own module notes (as `nats-binding.md` does for NATS).
 
-- **NSID is deferred** (ADR-0017). Lexicon ids here are the *name* of the
-  eventual NSID, minus its reverse-DNS *authority* — `chat.message`, not
-  `dev.example.chat.message`. Records carry `$type` from day one; only the
-  authority gets prepended later (a MAJOR version bump, not an epoch bump).
-- **"Topic" not "channel"** for the bus's named rooms (`msg.topic.<name>`).
-  "Channel" is reserved for the Claude Code harness mechanism.
+## Rules
+
+- **NATS is internal.** It never appears in client-facing docs — only in
+  `nats-binding.md`, the NATS module's own notes. Clients call the bus; the backend
+  is opaque to them.
+- Lexicon ids currently omit a reverse-DNS authority. Records still carry `$type`;
+  adding a public authority later is a public API version change.
+- Use **topic** for bus rooms such as `msg.topic.<name>`. **Channel** is reserved
+  for harness-specific push mechanisms.

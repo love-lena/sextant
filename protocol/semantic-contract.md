@@ -1,60 +1,81 @@
-# Semantic contract
+# The backend interface
 
-The behaviour any backend must honour to host Sextant (ADR-0013 rule 2). It is
-the substrate-independent meaning of the verbs in `methods.json`; the NATS
-realisation is in `nats-binding.md`. Written so a second-backend author knows
-what "correct" means beyond the method signatures.
+The bus implements the protocol's operations once, against one internal interface;
+each backend module satisfies that interface (ADR-0018). This page defines that
+interface: the behaviour any backend module must provide so the bus can implement
+the operations. It is the contract, not an implementation — it says what the bus
+relies on, not how a particular backend delivers it.
 
-## Identity (enforced core)
+The NATS module's implementation notes are in `nats-binding.md`.
 
-- Every client connects as its own **verified identity**. The `sender` on a
-  message is that authenticated identity and **cannot be forged or set by the
-  caller** — it is the credential's name, not a field the client supplies.
-- A client publishes and registers under exactly the identity it authenticated
-  as; what it claims and what the backend authenticated cannot diverge.
+Every method below is shaped to the protocol, not to one backend: each is checked
+against "how would Redis satisfy this?" before it is fixed, so the seam stays
+backend-portable.
 
-## Messages — a durable, ordered, replayable log
+## Identity
 
-- **Durable**: a published message survives until retention expires; it is not
-  lost if no one is currently subscribed.
-- **Ordered**: messages carry a monotonic **sequence** (the read cursor). A
-  reader fetching "since cursor C" sees every message after C, in order.
-- **Client-controlled replay**: a consumer chooses where to start — from the
-  beginning of retained history (`deliver: all` / `since: 0`) or from now
-  (`deliver: new`). The backend keeps **no per-subscriber state**: replay is the
-  client's choice, expressed per call.
-- **Enveloped**: a message is the `envelope` lexicon wrapping the record. A
-  receiver re-validates every consumed message against the envelope schema, the
-  protocol epoch, and the bus clock (skew), and **quarantines** (skips) a
-  violation rather than delivering it — because the transport permits raw writes
-  into the messages space (conventions are optional, ADR-0004).
-- **Subjects**: messages are addressed by subject within the messages space.
-  Named topics (`msg.topic.<name>`) and direct addressing (`msg.agent.<id>`) are
-  conventions over that space, not backend constructs.
+The bus authenticates each client connection and resolves a verified identity. The
+backend must let the bus bind that identity to writes so the bus can stamp the
+frame's `author` from the authenticated request. `author` is never supplied by the
+client and cannot be forged by editing the record — identity is bus-enforced.
 
-## Artifacts — named, versioned, single-author state
+## Durable, ordered, replayable log
 
-- **Named + versioned**: an artifact is a value under a name, with a monotonic
-  **revision** that advances on every write.
-- **Compare-and-set**: an update succeeds only if the caller's `expected_rev`
-  equals the current revision; otherwise it fails. This is the single-author
-  discipline — a writer must hold the current revision to change it. Create
-  fails if the name already exists.
-- **Bare**: an artifact value is the lexicon record itself, **not** enveloped.
-- **Watchable**: a watcher receives the current value first, then each change,
-  with deletes distinguishable from writes.
+Messages are backed by a durable, ordered, replayable log.
 
-## Registry — presence-only directory
+- **Durable**: a published message survives until retention expires, even if no
+  client is currently subscribed.
+- **Ordered**: each message has a monotonic sequence.
+- **Replayable**: a read can start from retained history or from new messages only.
+- **No per-subscriber state**: the backend keeps no per-reader replay position. The
+  bus chooses the start position on each read or subscription, on the client's
+  behalf.
 
-- A client writes its own entry on connect and removes it on clean close, keyed
-  by its identity. "Listed" means "registered and has not cleanly left." The key
-  is the authoritative identity; a record whose body id disagrees with its key
-  is corruption, rejected on read and write.
-- Liveness beyond "registered" (heartbeat, stale reaping, same-identity
-  live-duplicate detection) is deferred (TASK-20).
+### Cursors
+
+A cursor names the next message sequence to read. Cursor `0` means the beginning of
+retained history. A read returns `next_cursor`; passing it unchanged to the next
+read must produce no gaps and no duplicates.
+
+## Compare-and-set on version
+
+Artifacts are named, versioned records.
+
+- **Named**: each artifact has a stable name (a key).
+- **Versioned**: each write advances a monotonic revision.
+- **Compare-and-set**: an update succeeds only if the expected revision the bus
+  passes equals the current revision; otherwise it fails.
+
+Delete is unconditional in the reference operation surface. Conventions that need
+conflict-protected deletion model it as a revisioned tombstone update or define
+stricter behaviour.
+
+## Get
+
+The backend returns an artifact's current value together with its revision and the
+bus-stamped creation and update times, by name.
+
+## Watch
+
+A watch on an artifact delivers the current value first, then later writes and
+deletes.
+
+## Key enumeration
+
+The backend enumerates the keys in a namespace so the bus can implement the
+clients registry (list the registered client entries) and similar conventions.
 
 ## Epoch
 
-- The backend publishes the current protocol epoch where clients can read it at
-  connect. A client hard-gates on an exact match and refuses to proceed on
-  mismatch. Per-message epoch checks quarantine messages from a prior epoch.
+The backend exposes the current protocol epoch where the bus can read it at
+connect. The bus refuses to proceed unless the backend epoch exactly matches its
+own, and re-checks the epoch on each frame, because retained streams can outlive a
+protocol epoch.
+
+## Reference convention: clients registry
+
+The clients registry is built on key enumeration. The bus writes a client's entry
+on connect and removes it on clean close. Listed means registered and not cleanly
+removed; it is not a perfect liveness guarantee (presence is the read-time liveness
+view over the registry). The registry key is the authoritative client id; a record
+whose body id disagrees with its key is corrupt.

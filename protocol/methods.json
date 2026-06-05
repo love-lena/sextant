@@ -1,68 +1,68 @@
 {
-  "$comment": "The verb index — the transport-neutral source of truth for Sextant's domain verbs (ADR-0017). No backend operations appear here (ADR-0013 rule 1); the NATS realization lives in nats-binding.md. 'delivery' is the property that drives which faces expose a verb and the CLI<->MCP conformance test (TASK-28): one-shot and pull-batch verbs appear on every face; push-stream verbs are CLI/SDK-only (on Claude Code they reach an agent via the channel push, not as an MCP tool). Input/output keys name the parameters; types are informal hints, with 'lexicon' referencing lexicons/.",
-  "verbs": [
+  "$comment": "Index of the operations the bus implements. An operation is a call a client makes to the bus over the Wire API: the client invokes it and receives its result. The bus serves the call, stamps the frame around the record, and enforces identity (author) from the authenticated request — the client never sets id, author, revision, or timestamps. The backend the bus runs on is opaque: no backend operations appear here. Delivery shapes the call's result: one-shot returns once; pull-batch returns a batch plus a cursor to continue; push-stream delivers frames until stopped. Types are informal hints; 'lexicon' references protocol/lexicons/.",
+  "operations": [
     {
       "name": "message.publish",
-      "summary": "Publish a typed message on a subject.",
+      "summary": "Publish a typed message on a subject. The bus stamps the frame (id, author, epoch) around the record.",
       "delivery": "one-shot",
       "input": { "subject": "string (must be under msg.)", "record": "lexicon" },
       "output": { "id": "ulid", "seq": "uint64" }
     },
     {
       "name": "message.read",
-      "summary": "Fetch a batch of messages on a subject since a cursor (the pull/catch-up path; the cursor is the stream sequence).",
+      "summary": "Fetch a batch of retained messages from a cursor. Cursor 0 means the beginning; next_cursor can be passed unchanged to continue.",
       "delivery": "pull-batch",
-      "input": { "subject": "string (exact or wildcard)", "since": "cursor (0 = from start)", "limit": "int" },
-      "output": { "messages": "Message[]", "next_cursor": "cursor" }
+      "input": { "subject": "string (exact or wildcard)", "since": "uint64 (next sequence to read; 0 = from start)", "limit": "int" },
+      "output": { "messages": "frame[]", "next_cursor": "uint64" }
     },
     {
       "name": "message.subscribe",
-      "summary": "Stream messages matching a subject until stopped (the live tail).",
+      "summary": "Stream messages matching a subject until stopped.",
       "delivery": "push-stream",
       "input": { "subject": "string (exact or wildcard)", "deliver": "new | all" },
-      "output": { "stream": "Message" }
-    },
-    {
-      "name": "clients.list",
-      "summary": "List the clients registered right now (presence-only).",
-      "delivery": "one-shot",
-      "input": {},
-      "output": { "clients": "client[]" }
+      "output": { "stream": "frame" }
     },
     {
       "name": "artifact.create",
-      "summary": "Create a new artifact from a lexicon record (fails if the name exists).",
+      "summary": "Create a new artifact from a lexicon record. Fails if the name exists. The bus stamps revision and timestamps.",
       "delivery": "one-shot",
       "input": { "name": "string", "record": "lexicon" },
       "output": { "name": "string", "revision": "uint64" }
     },
     {
       "name": "artifact.update",
-      "summary": "Compare-and-set update of an artifact (the single-author discipline).",
+      "summary": "Compare-and-set update of an artifact. The bus advances the revision and stamps updatedAt.",
       "delivery": "one-shot",
       "input": { "name": "string", "record": "lexicon", "expected_rev": "uint64" },
       "output": { "name": "string", "revision": "uint64" }
     },
     {
       "name": "artifact.get",
-      "summary": "Read an artifact's current value and revision.",
+      "summary": "Read an artifact's current value and bus-stamped metadata.",
       "delivery": "one-shot",
       "input": { "name": "string" },
-      "output": { "name": "string", "record": "lexicon", "revision": "uint64", "created": "datetime" }
+      "output": { "name": "string", "record": "lexicon", "revision": "uint64", "createdAt": "datetime", "updatedAt": "datetime" }
     },
     {
       "name": "artifact.delete",
-      "summary": "Remove an artifact.",
+      "summary": "Remove an artifact. Delete is unconditional in the reference surface.",
       "delivery": "one-shot",
       "input": { "name": "string" },
       "output": {}
     },
     {
       "name": "artifact.watch",
-      "summary": "Stream changes to an artifact — initial value, updates, and deletes — until stopped.",
+      "summary": "Stream changes to an artifact: initial value, updates, and deletes.",
       "delivery": "push-stream",
       "input": { "name": "string" },
       "output": { "stream": "ArtifactChange" }
+    },
+    {
+      "name": "clients.list",
+      "summary": "List entries in the clients registry.",
+      "delivery": "one-shot",
+      "input": {},
+      "output": { "clients": "client[]" }
     }
   ]
 }
