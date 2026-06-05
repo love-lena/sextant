@@ -75,3 +75,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `pkg/sx`: renamed direct addressing `msg.agent.<id>` → `msg.client.<id>`
   (`AgentSubject` → `ClientSubject`). "Client" is the universal term; "agent" is
   not a Sextant concept. See ADR-0018 / CONTEXT.md.
+- `pkg/wire`: renamed the wire atom `Envelope` → **`Frame`** and its `sender`
+  field → **`author`**, and unified messages and artifacts under one frame —
+  added the `artifact` kind and the bus-stamped artifact fields (`revision`,
+  `createdAt`, `updatedAt`). The frame is the bus-stamped wrapper around a record
+  (record = user space, frame = bus space); `author` is the authenticated
+  identity the bus stamps, not a client-set field. `pkg/sextant`'s
+  `Message.Envelope` is now `Message.Frame`. First step of implementing
+  ADR-0018 / ADR-0019.
