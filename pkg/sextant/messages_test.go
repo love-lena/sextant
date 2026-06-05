@@ -84,6 +84,37 @@ func TestPublishRejectsNonMessageSubject(t *testing.T) {
 	}
 }
 
+// TestFetchMessages exercises the pull path (message.read): publish a few, fetch
+// from the start, and resume at the returned cursor with no gaps or duplicates.
+func TestFetchMessages(t *testing.T) {
+	b := startBus(t)
+	c := dialClient(t, b, "fetcher")
+	ctx := t.Context()
+	subj := sx.TopicSubject("pull")
+	for i := 0; i < 3; i++ {
+		if err := c.Publish(ctx, subj, json.RawMessage(`{"n":1}`)); err != nil {
+			t.Fatalf("Publish: %v", err)
+		}
+	}
+	frames, next, err := c.FetchMessages(ctx, subj, 0, 10)
+	if err != nil {
+		t.Fatalf("FetchMessages: %v", err)
+	}
+	if len(frames) != 3 {
+		t.Fatalf("fetch from 0 got %d frames, want 3", len(frames))
+	}
+	if frames[0].Author != c.ID() {
+		t.Errorf("frame author = %q, want %q", frames[0].Author, c.ID())
+	}
+	frames2, _, err := c.FetchMessages(ctx, subj, next, 10)
+	if err != nil {
+		t.Fatalf("FetchMessages resume: %v", err)
+	}
+	if len(frames2) != 0 {
+		t.Fatalf("resume at cursor got %d frames, want 0", len(frames2))
+	}
+}
+
 // TestSkewQuarantine injects an envelope whose ULID time is far in the past
 // (bypassing Publish, via a second client's raw JetStream publish) and verifies
 // the receiver quarantines it while still delivering a well-formed message.

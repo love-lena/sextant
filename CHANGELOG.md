@@ -8,6 +8,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `pkg/sextant`: **the SDK begins speaking the Wire API** (ADR-0019 cutover).
+  `Client.Publish` now sends a `message.publish` **call** to the bus (which stamps
+  the frame and appends it) instead of publishing to the stream directly, and the
+  new `Client.FetchMessages` pulls a batch via `message.read` (cursor + resume —
+  the pull complement to `Subscribe`, and the SDK half of the test CLI's `read`).
+  `Subscribe`, the artifact methods, and `ListClients` still use the direct path;
+  they cut over (with the credential allow-list flip) in the following slices.
 - `pkg/bus`: the bus now **serves the protocol's operations** as calls over the
   Wire API (ADR-0018, ADR-0019). A client makes a NATS request to
   `sx.api.<clientID>.<operation>`; the bus serves it against the backend interface

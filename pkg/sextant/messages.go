@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/love-lena/sextant/internal/wireapi"
 	"github.com/love-lena/sextant/pkg/sx"
 	"github.com/love-lena/sextant/pkg/wire"
 	"github.com/nats-io/nats.go/jetstream"
@@ -42,24 +43,28 @@ func DeliverAll() SubOption {
 	return func(c *subConfig) { c.deliverAll = true }
 }
 
-// Publish wraps record in a wire envelope and publishes it to subject, which
-// must be in the messages space (msg.*). It waits for the stream ack.
+// Publish sends record to subject, which must be in the messages space (msg.*),
+// as a message.publish call: the bus stamps the frame (id, author, epoch) and
+// appends it to the durable log, replying once the log has it (ADR-0019). The
+// client supplies only the subject and record.
 func (c *Client) Publish(ctx context.Context, subject string, record json.RawMessage) error {
 	if !strings.HasPrefix(subject, sx.MessagePrefix) {
 		return fmt.Errorf("sextant: publish subject %q is not in the messages space (%s*)", subject, sx.MessagePrefix)
 	}
-	frame := wire.New(c.id, record)
-	if err := frame.Validate(); err != nil {
-		return fmt.Errorf("sextant: publish: %w", err)
+	return c.call(ctx, wireapi.OpMessagePublish, wireapi.PublishInput{Subject: subject, Record: record}, nil)
+}
+
+// FetchMessages pulls a batch of retained messages on subject (an exact subject
+// or a wildcard) from the cursor since (0 = the start of retained history) as a
+// message.read call. It returns the bus-stamped frames and the cursor to resume
+// from; passing next unchanged to the following call yields no gaps and no
+// duplicates. It is the pull complement to Subscribe.
+func (c *Client) FetchMessages(ctx context.Context, subject string, since uint64, limit int) (frames []wire.Frame, next uint64, err error) {
+	var out wireapi.ReadOutput
+	if err := c.call(ctx, wireapi.OpMessageRead, wireapi.ReadInput{Subject: subject, Since: since, Limit: limit}, &out); err != nil {
+		return nil, since, err
 	}
-	b, err := wire.Encode(frame)
-	if err != nil {
-		return fmt.Errorf("sextant: encode: %w", err)
-	}
-	if _, err := c.js.Publish(ctx, subject, b); err != nil {
-		return fmt.Errorf("sextant: publish %s: %w", subject, err)
-	}
-	return nil
+	return out.Messages, out.NextCursor, nil
 }
 
 // Subscribe delivers messages matching subject (an exact subject or a wildcard,
