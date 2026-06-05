@@ -41,7 +41,10 @@ This is the live tracker for the autonomous M2 build. Design = ADR-0018/0019 +
 - [x] **PR4 `feat/m2-identity`** — client identity = bus-minted ULID + display_name
       (TASK-30 client half). **PR #79 (open)**. Artifact-ULID-addressing + artifact.list
       (the §3 artifact half) split to a later PR (entangled w/ SDK artifact methods).
-- [~] **PR5 `feat/m2-sdk-client`** — THE CUTOVER, sliced:
+- [x] **PR5 `feat/m2-sdk-client`** — THE CUTOVER, sliced (5a–5d-ii all landed;
+      **the cutover is complete — nothing reaches the backend except through the
+      bus, and the stamped author is unforgeable**). 5.5 below is a follow-on
+      feature, not part of the cutover:
   - [x] 5a Publish→call + FetchMessages (message ops). **PR #80**.
   - [x] 5b ListClients→clients.list call (+ bus skips corrupt, key-authoritative id). **PR #81**.
   - [x] 5c data-plane cutover. **PR #83** (`feat/m2-cutover`, off #81). artifacts
@@ -59,21 +62,23 @@ This is the live tracker for the autonomous M2 build. Design = ADR-0018/0019 +
         `connected` set; "drain" subID reserved). SDK Client drops its JetStream
         handle; dead registryRecord/checkRecordKey removed. Deny-only perms KEPT →
         all green. TestDrainDelivers rewritten; new TestRegisterEpochGate.
-  - [ ] 5d-ii THE ALLOW-LIST FLIP (NEXT — the security keystone; stack off
-        `feat/m2-connect-cutover`). clientPermissions(clientID) deny→allow:
-        `Pub.Allow:[sx.api.<id>.>]`, `Sub.Allow:[sx.deliver.<id>.>, _INBOX.>]`,
-        `Resp:&jwt.ResponsePermission{MaxMsgs:jwt.NoLimit}`. **⚠ `_INBOX.>` is
-        MANDATORY** (allow_responses only covers the bus→client reply direction;
-        the client's own nc.Request needs to SUB _INBOX.> or every call fails).
-        After this NOTHING is direct → author unforgeable. Then rework the tests the
-        flip breaks via NEW operator-conn test helpers (`b.InjectRawMessage`,
-        `b.SetEpoch`/`b.DeleteClientRecord`/`b.SeedClientRecord` on `b.opConn`):
-        DELETE TestClientCanWriteConventionBuckets (+ replace w/ positive
-        register-via-call); rewrite TestStartBootstrapsBuckets (operator conn),
-        client_test TestConnectRegisters/TestCloseLeavesRegistry (→ ListClients),
-        TestEpochMismatchFailsLoud (→ SetEpoch), clients_test empty/corrupt (→
-        helpers), messages_test skew/quarantine (inspectJS→InjectRawMessage, KEEP in
-        pkg/sextant). KEEP TestNoOperatorOnlyBucket + TestClientCannotPublishControl.
+  - [x] 5d-ii THE ALLOW-LIST FLIP — the security keystone. **PR #85**
+        (`feat/m2-allowlist`, off #84). clientPermissions(clientID) deny→allow:
+        `Pub.Allow:[sx.api.<id>.>]`, `Sub.Allow:[sx.deliver.<id>.>, _INBOX.>]`.
+        `Resp` (allow_responses) NOT needed and OMITTED — the client is a requester,
+        never a responder; the full SDK suite is green with `_INBOX.>` alone
+        (minimal surface, confirmed empirically). With this NOTHING is direct →
+        author unforgeable. Operator-side write seams added on `*Bus` (real methods,
+        not on opConn): `SetEpoch`/`SeedClientRecord`/`DeleteClientRecord`/
+        `InjectMessage` — the writes only the bus can do now clients have no backend
+        access. Test rework: DELETED TestClientCanWriteConventionBuckets (premise now
+        false) + added TestClientRegistersViaCall; TestStartBootstrapsBuckets +
+        TestNoOperatorOnlyBucket → operator conn (`b.opConn`); client_test
+        TestConnectRegisters/TestCloseLeavesRegistry → ListClients; epoch/empty/
+        corrupt/skew/quarantine → the new seams. **bus tests now thread the minted
+        ULID as the call subject** (the deny-only suite used arbitrary tokens; the
+        allow-list rejects them — this was the non-obvious breakage). KEPT
+        TestNoOperatorOnlyBucket + TestClientCannotPublishControl (stronger now).
   - [ ] 5.5 artifact-ULID-addressing + artifact.list (§3 artifact half; methods.json name→id).
 - [x] **PR6 `feat/m2-cli`** — TASK-28: CLI (op-name parity) + conformance test. **PR #82**.
       Smoke-verified the M2 loop end-to-end (2 clients exchange msg + CAS artifact via bus).
@@ -87,19 +92,24 @@ Acceptance spine: the conformance test (PR6) + the M2 DoD e2e (PR8).
 Parked: TASK-23 (request/reply), TASK-20 robust liveness (only --reclaim stopgap).
 
 ## Resumability
-Current: open PRs #76–84 (all green, stacked, unmerged). DAG: #81 ← #82 (CLI);
-#81 ← #83 (data-plane cutover) ← #84 (connect-handshake cutover, 5d-i) ← 5d-ii
-(next). Remaining: **5d-ii the allow-list flip** (the security keystone — see 5d-ii
-above; the only thing between "everything through the bus" and "author
-unforgeable"; ⚠ `_INBOX.>` must be in the Sub allow-list or all calls fail; reworks
-the raw-KV/inspectJS tests via new operator-conn helpers), **PR5.5**
-artifact-ULID-addressing, **PR7 MCP** (TASK-22),
-**PR8 ergonomics + getting-started + M2 DoD walkthrough** (TASK-27). PR6 already
-proved the DoD loop works via CLI (+ recorded VHS demo on #82); PR8 documents it +
-adds `sextant run`/`up --with-dir`/`--reclaim`. Resume from this tracker; keep each
-commit green. PR5d needs care (it breaks the connect handshake + several tests) —
-do with fresh context; consider splitting 5d-i/5d-ii. NOTE: remaining stack may
-grow beyond 8 PRs — identity / SDK-cutover / artifact-ULID are entangled in the SDK,
-so split into smaller green PRs as needed. Each
-completed PR: check the box, record the PR number, update the handoff buffer
+**THE CUTOVER IS COMPLETE.** Open PRs **#76–#85** (all green, stacked, unmerged).
+DAG: #81 ← #82 (CLI); #81 ← #83 (data-plane) ← #84 (connect-handshake, 5d-i) ←
+**#85 (allow-list flip, 5d-ii)**. After #85 nothing reaches the backend except
+through the bus and the stamped author is unforgeable — the M2 SDK↔bus cutover is
+done.
+
+Current goal (Stop hook, 2026-06-05): *cutover complete + all PRs self-reviewed +
+change stories sent to Lena's Manta for review.* Cutover ✓. Remaining standing-goal
+work: **(1) self-review the #76–#85 stack**, **(2) write per-PR change stories and
+send them to the Manta** (manta skill → `editorial.sh --to-manta`; change stories
+are review narratives, not the protocol book).
+
+Remaining BUILD work (beyond the current review goal): **PR5.5**
+artifact-ULID-addressing + artifact.list (§3 artifact half; methods.json name→id),
+**PR7 MCP** (TASK-22: server + channel + skill), **PR8 ergonomics** (TASK-27:
+run / up --with-dir / per-client creds / --reclaim + getting-started + M2 DoD e2e).
+PR6 already proved the DoD loop via CLI (+ VHS demo on #82); PR8 documents it.
+
+Keep each commit green; metadata→rebuild, shipping→PR+CHANGELOG. Each completed PR:
+check the box, record the PR number, update the handoff buffer
 (`~/dev/sextant/.remember/remember.md`).
