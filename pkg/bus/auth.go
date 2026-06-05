@@ -10,7 +10,6 @@ import (
 	"unicode"
 
 	"github.com/love-lena/sextant/internal/wireapi"
-	"github.com/love-lena/sextant/pkg/sx"
 	"github.com/nats-io/jwt/v2"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nkeys"
@@ -21,8 +20,9 @@ import (
 // operator, one SEXTANT account (where all clients live and the sx_ infra is
 // provisioned), a system account, and one user JWT per client — so every
 // connection is a distinct, verified identity and every op is attributable.
-// The same client-tier permission template applies to all clients for now;
-// per-client (write-precision) permissions are the deferred refinement.
+// Each client's credential carries a per-client allow-list (ADR-0019): it may
+// publish only under its own call prefix and subscribe only to its own delivery
+// space, which is what makes the bus-stamped author unforgeable.
 
 // identity is the bus's signing material: the operator and account key pairs,
 // persisted in the store so `sextant token` can mint user JWTs out-of-band.
@@ -297,20 +297,32 @@ func reserveName(storeDir, id, subject string) error {
 // operatorPermissions is full access — the bus's own connection and tooling.
 func operatorPermissions() jwt.Permissions { return jwt.Permissions{} }
 
-// clientPermissions is the ADR-0012 client-tier guardrail, as JWT permissions.
-func clientPermissions() jwt.Permissions {
+// clientPermissions is the ADR-0019 client-tier guardrail: a per-client JWT
+// allow-list, scoped to clientID (the bus-minted ULID that is this credential's
+// authenticated identity). It is the keystone of the unforgeable author — a
+// client may publish ONLY under its own call prefix, so the subject token the
+// bus reads the author from is exactly the identity NATS authenticated, and no
+// client can issue a call (and thus stamp a frame) under another id.
+//
+// Allow-list, not deny-list: everything is denied unless named. A client
+// reaches the messages stream, the KV buckets, and the control space only by
+// asking the bus over a call — never directly — so there is no stream or bucket
+// lifecycle to squat and no operator state to read.
+func clientPermissions(clientID string) jwt.Permissions {
 	var p jwt.Permissions
-	p.Pub.Deny = []string{
-		sx.ControlPrefix + ">", // operator-only control subjects
-		// No stream/bucket lifecycle: the operator provisions buckets, so
-		// clients can't create/alter/delete or squat any stream.
-		"$JS.API.STREAM.CREATE.>",
-		"$JS.API.STREAM.UPDATE.>",
-		"$JS.API.STREAM.DELETE.>",
-		"$JS.API.STREAM.PURGE.>",
+	// Publish: only this client's own Wire API call space (sx.api.<id>.>). The
+	// <id> in the subject is the authenticated identity, so the author the bus
+	// stamps from it cannot be forged.
+	p.Pub.Allow = []string{wireapi.APIPrefix + clientID + ".>"}
+	// Subscribe: this client's own push-delivery space (subscribe/watch/drain
+	// deliveries: sx.deliver.<id>.>) and the request/reply inbox. _INBOX.> is
+	// mandatory — a client's own nc.Request receives the bus's reply there, so
+	// without it every call would time out. (allow_responses governs only a
+	// responder replying outward; it does not let a requester receive a reply.)
+	p.Sub.Allow = []string{
+		wireapi.DeliverPrefix + clientID + ".>",
+		"_INBOX.>",
 	}
-	// No subscribe denials: with no operator-only bucket in v1, there is no
-	// in-account state to hide from clients.
 	return p
 }
 
@@ -339,7 +351,7 @@ func MintClientToken(storeDir, displayName string) (creds, id string, err error)
 		return "", "", err
 	}
 	id = ulid.Make().String()
-	j, seed, subject, err := ident.mintUser(id, clientPermissions(), wireapi.EncodeDisplayNameTag(displayName))
+	j, seed, subject, err := ident.mintUser(id, clientPermissions(id), wireapi.EncodeDisplayNameTag(displayName))
 	if err != nil {
 		return "", "", err
 	}

@@ -43,22 +43,26 @@ func testCtx(t *testing.T) context.Context {
 	return ctx
 }
 
-// mintCredsFile mints a fresh per-client credential for id and writes it to a
-// temp file, returning the creds text and the file path.
-func mintCredsFile(t *testing.T, b *Bus, id string) (creds, path string) {
+// mintCredsFile mints a fresh per-client credential whose display_name is name
+// and writes it to a temp file, returning the creds text, the file path, and the
+// bus-minted ULID id that is the credential's authenticated identity — the
+// subject a client must use for its calls and delivery subscriptions under the
+// per-client allow-list.
+func mintCredsFile(t *testing.T, b *Bus, name string) (creds, path, id string) {
 	t.Helper()
-	creds, _, err := b.MintClient(id)
+	creds, id, err := b.MintClient(name)
 	if err != nil {
-		t.Fatalf("MintClient(%s): %v", id, err)
+		t.Fatalf("MintClient(%s): %v", name, err)
 	}
 	path = filepath.Join(t.TempDir(), id+".creds")
 	if err := os.WriteFile(path, []byte(creds), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return creds, path
+	return creds, path, id
 }
 
-// connectWithCreds connects as id using an existing credentials file (no mint).
+// connectWithCreds connects using an existing credentials file (no mint). id is
+// the authenticated identity (used as the connection name and in errors).
 func connectWithCreds(t *testing.T, b *Bus, id, path string, opts ...nats.Option) *nats.Conn {
 	t.Helper()
 	all := append([]nats.Option{nats.UserCredentials(path), nats.Name(id)}, opts...)
@@ -70,17 +74,21 @@ func connectWithCreds(t *testing.T, b *Bus, id, path string, opts ...nats.Option
 	return nc
 }
 
-// connectClient mints a fresh per-client credential for id and connects with it.
-func connectClient(t *testing.T, b *Bus, id string, opts ...nats.Option) *nats.Conn {
+// connectClient mints a fresh per-client credential (display_name name) and
+// connects with it, returning the connection and the bus-minted ULID id that is
+// its authenticated identity — the subject the client must use for its calls.
+func connectClient(t *testing.T, b *Bus, name string, opts ...nats.Option) (*nats.Conn, string) {
 	t.Helper()
-	_, path := mintCredsFile(t, b, id)
-	return connectWithCreds(t, b, id, path, opts...)
+	_, path, id := mintCredsFile(t, b, name)
+	return connectWithCreds(t, b, id, path, opts...), id
 }
 
 func TestStartBootstrapsBuckets(t *testing.T) {
 	b := startTestBus(t)
-	nc := connectClient(t, b, "agent-boot")
-	js, err := jetstream.New(nc)
+	// Check via the bus's own operator connection: under the per-client allow-list
+	// clients have no direct JetStream access, so bootstrap is an operator-side
+	// fact, not something a client can observe.
+	js, err := jetstream.New(b.opConn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,12 +102,15 @@ func TestStartBootstrapsBuckets(t *testing.T) {
 
 // TestNoOperatorOnlyBucket guards the v1 decision (ADR-0012): there is no
 // operator-only bucket — system state will get its own NATS account rather than
-// a same-account bucket guarded by deny-lists, so there is nothing for a client
-// to reach via the JetStream stream API.
+// a same-account bucket guarded by deny-lists. Looking from the operator
+// connection (which can see every bucket in the account) proves sx_system
+// genuinely does not exist, not merely that a client is denied a peek.
 func TestNoOperatorOnlyBucket(t *testing.T) {
 	b := startTestBus(t)
-	nc := connectClient(t, b, "agent-1")
-	js, _ := jetstream.New(nc)
+	js, err := jetstream.New(b.opConn)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := js.KeyValue(testCtx(t), "sx_system"); err == nil {
 		t.Error("sx_system should not exist in v1 (operator-only state is deferred to a separate account)")
 	}
@@ -109,8 +120,8 @@ func TestNoOperatorOnlyBucket(t *testing.T) {
 // verified identities, so ops are attributable.
 func TestPerClientIdentity(t *testing.T) {
 	b := startTestBus(t)
-	alice, alicePath := mintCredsFile(t, b, "alice")
-	bob, bobPath := mintCredsFile(t, b, "bob")
+	alice, alicePath, _ := mintCredsFile(t, b, "alice")
+	bob, bobPath, _ := mintCredsFile(t, b, "bob")
 	ac, err := jwt.DecodeUserClaims(parseJWT(t, alice))
 	if err != nil {
 		t.Fatal(err)
@@ -184,7 +195,7 @@ func parseJWT(t *testing.T, creds string) string {
 
 func TestClientCannotCreateBuckets(t *testing.T) {
 	b := startTestBus(t)
-	nc := connectClient(t, b, "agent-1")
+	nc, _ := connectClient(t, b, "agent-1")
 	js, err := jetstream.New(nc)
 	if err != nil {
 		t.Fatal(err)
@@ -197,26 +208,30 @@ func TestClientCannotCreateBuckets(t *testing.T) {
 	}
 }
 
-func TestClientCanWriteConventionBuckets(t *testing.T) {
+// TestClientRegistersViaCall is the positive shape of the allow-list: a client
+// reaches the registry only by asking the bus over a call, never by writing KV
+// directly (it has no JetStream access at all). It registers via clients.register
+// and then sees itself in the directory.
+func TestClientRegistersViaCall(t *testing.T) {
 	b := startTestBus(t)
-	nc := connectClient(t, b, "agent-1")
-	js, _ := jetstream.New(nc)
-	ctx := testCtx(t)
-	for _, name := range []string{sx.BucketClients, sx.BucketWorkflows} {
-		kv, err := js.KeyValue(ctx, name)
-		if err != nil {
-			t.Fatalf("client open %s: %v", name, err)
-		}
-		if _, err := kv.Put(ctx, "agent-1", []byte(`{"ok":true}`)); err != nil {
-			t.Errorf("client denied write to convention bucket %s: %v", name, err)
+	nc, id := connectClient(t, b, "agent-reg")
+	if resp := call(t, nc, id, wireapi.OpClientsRegister, wireapi.RegisterInput{Epoch: wire.Epoch, Kind: "harness"}); resp.Error != "" {
+		t.Fatalf("register: %s", resp.Error)
+	}
+	var list wireapi.ClientsListOutput
+	mustJSON(t, call(t, nc, id, wireapi.OpClientsList, struct{}{}).Result, &list)
+	for _, e := range list.Clients {
+		if e.ID == id {
+			return // registered and visible — the call path works
 		}
 	}
+	t.Fatalf("registered client %q absent from directory: %+v", id, list.Clients)
 }
 
 func TestClientCannotPublishControl(t *testing.T) {
 	b := startTestBus(t)
 	errCh := make(chan error, 4)
-	nc := connectClient(t, b, "agent-1",
+	nc, _ := connectClient(t, b, "agent-1",
 		nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, err error) {
 			select {
 			case errCh <- err:
@@ -239,8 +254,7 @@ func TestClientCannotPublishControl(t *testing.T) {
 
 func TestDrainDelivers(t *testing.T) {
 	b := startTestBus(t)
-	const id = "agent-1"
-	nc := connectClient(t, b, id)
+	nc, id := connectClient(t, b, "agent-1")
 	// Drain is delivered over the client's own push space; subscribe it first.
 	sub, err := nc.SubscribeSync(wireapi.DeliverSubject(id, wireapi.DrainSubID))
 	if err != nil {
@@ -265,8 +279,7 @@ func TestDrainDelivers(t *testing.T) {
 // client — a mismatched one never enters the directory.
 func TestRegisterEpochGate(t *testing.T) {
 	b := startTestBus(t)
-	const id = "epoch-x"
-	nc := connectClient(t, b, id)
+	nc, id := connectClient(t, b, "epoch-x")
 
 	var out wireapi.RegisterOutput
 	resp := call(t, nc, id, wireapi.OpClientsRegister, wireapi.RegisterInput{Epoch: wire.Epoch + 1})

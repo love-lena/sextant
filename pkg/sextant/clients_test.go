@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/love-lena/sextant/pkg/bus"
-	"github.com/love-lena/sextant/pkg/sx"
 	"github.com/love-lena/sextant/pkg/wire"
 )
 
@@ -107,11 +106,9 @@ func TestListClientsEmptyDirectory(t *testing.T) {
 	b := startBus(t)
 	c := dialClient(t, b, "c-solo")
 
-	kv, err := inspectJS(t, b).KeyValue(readCtx(t), sx.BucketClients)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := kv.Delete(readCtx(t), c.ID()); err != nil {
+	// Delete the sole entry out from under the live client via the operator seam
+	// (a client cannot touch the registry directly), forcing the empty-bucket path.
+	if err := b.DeleteClientRecord(readCtx(t), c.ID()); err != nil {
 		t.Fatalf("delete sole entry: %v", err)
 	}
 	got, err := c.ListClients(t.Context())
@@ -131,19 +128,17 @@ func TestListClientsEmptyDirectory(t *testing.T) {
 func TestListClientsSkipsCorruptRecords(t *testing.T) {
 	b := startBus(t)
 	c := dialClient(t, b, "c-real")
-	kv, err := inspectJS(t, b).KeyValue(readCtx(t), sx.BucketClients)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Seed corrupt registry records via the operator seam — a client can't write
+	// the registry directly, so this stands in for a record some other writer (or
+	// an older schema) left behind.
 	corrupt := map[string]string{
 		"c-badjson": "not json at all",
 		"c-badtime": `{"id":"c-badtime","kind":"x","epoch":1,"sdk":"y","connected_at":"not-a-time"}`,
 	}
 	for key, value := range corrupt {
-		if _, err := kv.Put(readCtx(t), key, []byte(value)); err != nil {
+		if err := b.SeedClientRecord(readCtx(t), key, []byte(value)); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { _ = kv.Delete(readCtx(t), key) })
 	}
 
 	got, err := c.ListClients(t.Context())

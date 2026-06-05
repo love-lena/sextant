@@ -10,10 +10,7 @@ import (
 
 	"github.com/love-lena/sextant/pkg/bus"
 	"github.com/love-lena/sextant/pkg/conninfo"
-	"github.com/love-lena/sextant/pkg/sx"
 	"github.com/love-lena/sextant/pkg/wire"
-	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
 )
 
 func startBus(t *testing.T) *bus.Bus {
@@ -55,23 +52,6 @@ func dialClient(t *testing.T, b *bus.Bus, id string) *Client {
 	return c
 }
 
-// inspectJS connects a throwaway client (a raw connection that does not
-// register) and returns its JetStream handle, for reading the registry —
-// clients may read sx_clients.
-func inspectJS(t *testing.T, b *bus.Bus) jetstream.JetStream {
-	t.Helper()
-	nc, err := nats.Connect(b.ClientURL(), nats.UserCredentials(credsPath(t, b, "inspector")))
-	if err != nil {
-		t.Fatalf("inspector connect: %v", err)
-	}
-	t.Cleanup(nc.Close)
-	js, err := jetstream.New(nc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return js
-}
-
 func readCtx(t *testing.T) context.Context {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -91,12 +71,21 @@ func TestConnectRegisters(t *testing.T) {
 	if c.DisplayName() != "agent-reg" {
 		t.Fatalf("DisplayName() = %q; want agent-reg", c.DisplayName())
 	}
-	clients, err := inspectJS(t, b).KeyValue(readCtx(t), sx.BucketClients)
+	// Confirm the registry write through the SDK's own read path — under the
+	// allow-list a client has no direct registry access, so clients.list is how
+	// it learns it is registered.
+	got, err := c.ListClients(readCtx(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := clients.Get(readCtx(t), c.ID()); err != nil {
-		t.Errorf("client not found in registry: %v", err)
+	found := false
+	for _, ci := range got {
+		if ci.ID == c.ID() {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("client %q not found in registry: %+v", c.ID(), got)
 	}
 }
 
@@ -127,17 +116,13 @@ func TestConnectViaConnInfoFile(t *testing.T) {
 
 func TestEpochMismatchFailsLoud(t *testing.T) {
 	b := startBus(t)
-	// Rewrite the bus epoch to something the client won't match. (A client can
-	// write sx_meta today — per-row write-precision is the deferred refinement,
-	// ADR-0012; here it's just the simplest way to force a mismatch.)
-	meta, err := inspectJS(t, b).KeyValue(readCtx(t), sx.BucketMeta)
-	if err != nil {
+	// Move the bus epoch to something the client won't match. Under the allow-list
+	// a client cannot write sx_meta — only the bus can — so this is an operator
+	// write seam, which is also the honest shape of an epoch bump in production.
+	if err := b.SetEpoch(readCtx(t), 999); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := meta.Put(readCtx(t), sx.MetaKeyEpoch, []byte("999")); err != nil {
-		t.Fatal(err)
-	}
-	_, err = Connect(t.Context(), Options{
+	_, err := Connect(t.Context(), Options{
 		URL:       b.ClientURL(),
 		CredsPath: credsPath(t, b, "agent-epoch"),
 		Logf:      func(string, ...any) {},
@@ -169,7 +154,10 @@ func TestDrainClosesDrained(t *testing.T) {
 
 func TestCloseLeavesRegistry(t *testing.T) {
 	b := startBus(t)
-	c, err := Connect(t.Context(), Options{
+	// An observer stays connected to read the directory after the leaver closes:
+	// the leaver's own connection is gone, so it can no longer list itself.
+	observer := dialClient(t, b, "observer")
+	leaver, err := Connect(t.Context(), Options{
 		URL:       b.ClientURL(),
 		CredsPath: credsPath(t, b, "agent-leave"),
 		Logf:      func(string, ...any) {},
@@ -177,16 +165,18 @@ func TestCloseLeavesRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := c.ID()
-	if err := c.Close(); err != nil {
+	id := leaver.ID()
+	if err := leaver.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	clients, err := inspectJS(t, b).KeyValue(readCtx(t), sx.BucketClients)
+	got, err := observer.ListClients(readCtx(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := clients.Get(readCtx(t), id); !errors.Is(err, jetstream.ErrKeyNotFound) {
-		t.Errorf("registry record should be gone after Close; got err=%v", err)
+	for _, ci := range got {
+		if ci.ID == id {
+			t.Errorf("registry record should be gone after Close, still listed: %+v", ci)
+		}
 	}
 }
 

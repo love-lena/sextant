@@ -26,8 +26,8 @@ func (b *Bus) relayCount(clientID string) int {
 // best-effort Stop would otherwise let leak silently.
 func TestSubscribeRelayLifecycle(t *testing.T) {
 	b := startTestBus(t)
-	nc := connectClient(t, b, "sub-life")
-	const id, subID = "sub-life", "01TESTSUB0000000000000001"
+	nc, id := connectClient(t, b, "sub-life")
+	const subID = "01TESTSUB0000000000000001"
 	subj := sx.TopicSubject("life")
 
 	// Owner-subscribe the delivery subject before starting the relay.

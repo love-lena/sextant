@@ -32,10 +32,10 @@ func call(t *testing.T, nc *nats.Conn, id, op string, input any) wireapi.Respons
 
 func TestServePublishThenRead(t *testing.T) {
 	b := startTestBus(t)
-	nc := connectClient(t, b, "client-a")
+	nc, id := connectClient(t, b, "client-a")
 	subj := sx.TopicSubject("plan")
 
-	resp := call(t, nc, "client-a", wireapi.OpMessagePublish, wireapi.PublishInput{
+	resp := call(t, nc, id, wireapi.OpMessagePublish, wireapi.PublishInput{
 		Subject: subj, Record: json.RawMessage(`{"hello":"world"}`),
 	})
 	if resp.Error != "" {
@@ -47,7 +47,7 @@ func TestServePublishThenRead(t *testing.T) {
 		t.Fatalf("bad publish output: %+v", pub)
 	}
 
-	rresp := call(t, nc, "client-a", wireapi.OpMessageRead, wireapi.ReadInput{Subject: subj, Since: 0, Limit: 10})
+	rresp := call(t, nc, id, wireapi.OpMessageRead, wireapi.ReadInput{Subject: subj, Since: 0, Limit: 10})
 	if rresp.Error != "" {
 		t.Fatalf("read: %s", rresp.Error)
 	}
@@ -58,8 +58,8 @@ func TestServePublishThenRead(t *testing.T) {
 	}
 	f := rd.Messages[0]
 	// The bus stamped the frame: author from the call's subject token, message kind.
-	if f.Author != "client-a" {
-		t.Errorf("stamped author = %q, want client-a", f.Author)
+	if f.Author != id {
+		t.Errorf("stamped author = %q, want %q", f.Author, id)
 	}
 	if f.Kind != wire.KindMessage {
 		t.Errorf("kind = %q, want message", f.Kind)
@@ -74,21 +74,21 @@ func TestServePublishThenRead(t *testing.T) {
 
 func TestServeReadCursorResumes(t *testing.T) {
 	b := startTestBus(t)
-	nc := connectClient(t, b, "reader")
+	nc, id := connectClient(t, b, "reader")
 	subj := sx.TopicSubject("log")
 	for i := 0; i < 3; i++ {
-		resp := call(t, nc, "reader", wireapi.OpMessagePublish, wireapi.PublishInput{Subject: subj, Record: json.RawMessage(`{"n":1}`)})
+		resp := call(t, nc, id, wireapi.OpMessagePublish, wireapi.PublishInput{Subject: subj, Record: json.RawMessage(`{"n":1}`)})
 		if resp.Error != "" {
 			t.Fatalf("publish: %s", resp.Error)
 		}
 	}
 	var rd wireapi.ReadOutput
-	mustJSON(t, call(t, nc, "reader", wireapi.OpMessageRead, wireapi.ReadInput{Subject: subj, Since: 0, Limit: 10}).Result, &rd)
+	mustJSON(t, call(t, nc, id, wireapi.OpMessageRead, wireapi.ReadInput{Subject: subj, Since: 0, Limit: 10}).Result, &rd)
 	if len(rd.Messages) != 3 {
 		t.Fatalf("first read got %d, want 3", len(rd.Messages))
 	}
 	var rd2 wireapi.ReadOutput
-	mustJSON(t, call(t, nc, "reader", wireapi.OpMessageRead, wireapi.ReadInput{Subject: subj, Since: rd.NextCursor, Limit: 10}).Result, &rd2)
+	mustJSON(t, call(t, nc, id, wireapi.OpMessageRead, wireapi.ReadInput{Subject: subj, Since: rd.NextCursor, Limit: 10}).Result, &rd2)
 	if len(rd2.Messages) != 0 {
 		t.Fatalf("resume read got %d, want 0", len(rd2.Messages))
 	}
@@ -96,11 +96,11 @@ func TestServeReadCursorResumes(t *testing.T) {
 
 func TestServeArtifactLifecycle(t *testing.T) {
 	b := startTestBus(t)
-	nc := connectClient(t, b, "author-1")
+	nc, id := connectClient(t, b, "author-1")
 
 	// create
 	var w wireapi.ArtifactWriteOutput
-	resp := call(t, nc, "author-1", wireapi.OpArtifactCreate, wireapi.ArtifactCreateInput{Name: "the-plan", Record: json.RawMessage(`{"title":"v1"}`)})
+	resp := call(t, nc, id, wireapi.OpArtifactCreate, wireapi.ArtifactCreateInput{Name: "the-plan", Record: json.RawMessage(`{"title":"v1"}`)})
 	if resp.Error != "" {
 		t.Fatalf("create: %s", resp.Error)
 	}
@@ -111,7 +111,7 @@ func TestServeArtifactLifecycle(t *testing.T) {
 
 	// get
 	var g wireapi.ArtifactGetOutput
-	mustJSON(t, call(t, nc, "author-1", wireapi.OpArtifactGet, wireapi.ArtifactGetInput{Name: "the-plan"}).Result, &g)
+	mustJSON(t, call(t, nc, id, wireapi.OpArtifactGet, wireapi.ArtifactGetInput{Name: "the-plan"}).Result, &g)
 	if string(g.Record) != `{"title":"v1"}` || g.Revision != 1 {
 		t.Fatalf("get = %+v", g)
 	}
@@ -121,7 +121,7 @@ func TestServeArtifactLifecycle(t *testing.T) {
 
 	// update at rev 1 -> rev 2
 	var w2 wireapi.ArtifactWriteOutput
-	uresp := call(t, nc, "author-1", wireapi.OpArtifactUpdate, wireapi.ArtifactUpdateInput{Name: "the-plan", Record: json.RawMessage(`{"title":"v2"}`), ExpectedRev: 1})
+	uresp := call(t, nc, id, wireapi.OpArtifactUpdate, wireapi.ArtifactUpdateInput{Name: "the-plan", Record: json.RawMessage(`{"title":"v2"}`), ExpectedRev: 1})
 	if uresp.Error != "" {
 		t.Fatalf("update: %s", uresp.Error)
 	}
@@ -131,23 +131,23 @@ func TestServeArtifactLifecycle(t *testing.T) {
 	}
 
 	// stale update at rev 1 -> rejected (compare-and-set)
-	stale := call(t, nc, "author-1", wireapi.OpArtifactUpdate, wireapi.ArtifactUpdateInput{Name: "the-plan", Record: json.RawMessage(`{"title":"v3"}`), ExpectedRev: 1})
+	stale := call(t, nc, id, wireapi.OpArtifactUpdate, wireapi.ArtifactUpdateInput{Name: "the-plan", Record: json.RawMessage(`{"title":"v3"}`), ExpectedRev: 1})
 	if stale.Error == "" {
 		t.Error("stale update should have been rejected (revision mismatch)")
 	}
 
 	// delete -> get errors
-	if del := call(t, nc, "author-1", wireapi.OpArtifactDelete, wireapi.ArtifactDeleteInput{Name: "the-plan"}); del.Error != "" {
+	if del := call(t, nc, id, wireapi.OpArtifactDelete, wireapi.ArtifactDeleteInput{Name: "the-plan"}); del.Error != "" {
 		t.Fatalf("delete: %s", del.Error)
 	}
-	if g2 := call(t, nc, "author-1", wireapi.OpArtifactGet, wireapi.ArtifactGetInput{Name: "the-plan"}); g2.Error == "" {
+	if g2 := call(t, nc, id, wireapi.OpArtifactGet, wireapi.ArtifactGetInput{Name: "the-plan"}); g2.Error == "" {
 		t.Error("get after delete should error")
 	}
 }
 
 func TestServeClientsList(t *testing.T) {
 	b := startTestBus(t)
-	nc := connectClient(t, b, "lister")
+	nc, id := connectClient(t, b, "lister")
 	// Inject a registry record via the backend (the SDK writes these on Connect;
 	// here we exercise the listing operation directly).
 	rec, _ := json.Marshal(wireapi.ClientEntry{
@@ -158,7 +158,7 @@ func TestServeClientsList(t *testing.T) {
 		t.Fatalf("seed registry: %v", err)
 	}
 	var out wireapi.ClientsListOutput
-	mustJSON(t, call(t, nc, "lister", wireapi.OpClientsList, struct{}{}).Result, &out)
+	mustJSON(t, call(t, nc, id, wireapi.OpClientsList, struct{}{}).Result, &out)
 	found := false
 	for _, c := range out.Clients {
 		if c.ID == "ghost" && c.Kind == "harness" {

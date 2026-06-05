@@ -6,10 +6,10 @@
 // per-operation request/response shapes shared by the bus and the SDK.
 //
 // It is internal plumbing: the SDK wraps it, so a client program never imports
-// these types. The subject token <clientID> is the call's claimed author; once
-// the per-client allow-list credential is in place it is also the authenticated
-// identity (the client may publish only under its own sx.api.<id> prefix), which
-// is what makes the bus-stamped author unforgeable.
+// these types. The subject token <clientID> is the call's author: the per-client
+// allow-list credential (ADR-0019) lets a client publish only under its own
+// sx.api.<id> prefix, so the token is also its authenticated identity — which is
+// what makes the bus-stamped author unforgeable.
 package wireapi
 
 import (

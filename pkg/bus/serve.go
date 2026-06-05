@@ -28,11 +28,10 @@ import (
 // artifact.watch) over sx.deliver land with the SDK cutover.
 //
 // Author handling: the bus takes the author from the call's subject token
-// (<clientID>). Until the per-client allow-list credential is in place (the SDK
-// cutover), a client could publish under another id; afterwards NATS enforces
-// that a client may publish only under its own prefix, so the stamped author is
-// unforgeable. The serving logic here is identical either way — it always trusts
-// the subject token, which the credential makes trustworthy.
+// (<clientID>). The per-client allow-list credential (ADR-0019) lets a client
+// publish only under its own sx.api.<id> prefix, so the subject token is the
+// authenticated identity and the stamped author is unforgeable — the serving
+// logic always trusts the subject token, which the credential makes trustworthy.
 
 const (
 	apiMaxConcurrent = 64
