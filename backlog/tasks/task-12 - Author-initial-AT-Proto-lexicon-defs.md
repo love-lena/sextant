@@ -3,10 +3,10 @@ id: TASK-12
 title: >-
   Author the protocol source-of-truth: lexicons + methods + semantic contract +
   NATS binding
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-03 01:12'
-updated_date: '2026-06-04 21:38'
+updated_date: '2026-06-05 04:33'
 labels: []
 milestone: 'M2: MVP'
 dependencies: []
