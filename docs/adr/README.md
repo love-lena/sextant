@@ -23,6 +23,9 @@ human has signed off — see
 | [0014](0014-the-tui-is-a-client.md) | The TUI is a client | accepted |
 | [0015](0015-operator-only-account.md) | Operator-only state lives in its own account | accepted |
 | [0016](0016-artifacts-are-lexicon-records.md) | Artifacts are Lexicon records | accepted |
+| [0017](0017-the-verb-surface-is-the-protocol.md) | The verb surface is the protocol | accepted |
+| [0018](0018-the-bus-implements-the-protocol.md) | The bus implements the protocol over a pluggable stream backend | accepted |
+| [0019](0019-implementing-the-bus.md) | Implementing the bus: call transport, frame stamping, and identity | proposed |
 
 ## Review batches
 - **Batch 1 — substrate:** 0004–0007 — *accepted*
