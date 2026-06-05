@@ -38,13 +38,18 @@ This is the live tracker for the autonomous M2 build. Design = ADR-0018/0019 +
 - [x] **PR3 `feat/m2-bus-serves`** — bus serves request/reply ops over `sx.api.*`;
       frame stamping; author from subject token; backend-served. **PR #78 (open)**.
       Push-stream (subscribe/watch) + artifact-ULID-addressing deferred to the cutover.
-- [ ] **PR4 `feat/m2-identity`** — TASK-30: ULID addressing uniform + display_name
-      attribute; registry keyed by ULID; methods.json artifact name→id.
-- [ ] **PR5 `feat/m2-sdk-client`** — Go SDK as bus client (Publish/Subscribe/
-      artifacts/ListClients → `sx.api.*` calls) + FetchMessages; **+ the per-client
-      allow-list JWT flip** (deny direct `msg.*`/KV; permit `sx.api.<id>.>` +
-      `sx.deliver.<id>.>` + `_INBOX.>`; `allow_responses`) — closes author
-      forgeability when the SDK switches to calls, keeping every PR green.
+- [x] **PR4 `feat/m2-identity`** — client identity = bus-minted ULID + display_name
+      (TASK-30 client half). **PR #79 (open)**. Artifact-ULID-addressing + artifact.list
+      (the §3 artifact half) split to a later PR (entangled w/ SDK artifact methods).
+- [ ] **PR5 `feat/m2-sdk-client`** — THE CUTOVER (big): (a) bus serves push-stream
+      message.subscribe + artifact.watch over `sx.deliver.<id>.*`; (b) Go SDK's
+      Publish/Subscribe/FetchMessages/artifact*/ListClients call `sx.api.*` instead of
+      direct NATS; (c) per-client ALLOW-list JWT flip (deny direct msg.*/KV; permit
+      sx.api.<id>.> + sx.deliver.<id>.> + _INBOX.>; allow_responses) — makes author
+      unforgeable. Update SDK tests. May split into 5a (push serving) / 5b (SDK+flip).
+- [ ] **PR5.5 artifact-ULID** — artifact.create returns a ULID id; get/update/delete/
+      watch address by id; display_name attribute + `artifact.list` resolution
+      (symmetric w/ clients.list). The §3 artifact half. methods.json name→id.
 - [ ] **PR6 `feat/m2-cli`** — TASK-28: CLI (op-name parity) + conformance test.
 - [ ] **PR7 `feat/m2-mcp`** — TASK-22: MCP server + channel + skill (CC plugin).
 - [ ] **PR8 `feat/m2-ergonomics`** — TASK-27: run/up --with-dir/per-client creds/
@@ -54,8 +59,9 @@ Acceptance spine: the conformance test (PR6) + the M2 DoD e2e (PR8).
 Parked: TASK-23 (request/reply), TASK-20 robust liveness (only --reclaim stopgap).
 
 ## Resumability
-Current: **PR4 next** (PR1 #76, PR2 #77, PR3 #78 open). Stack PR4's branch
-`feat/m2-identity` off `feat/m2-bus-serves` (not rebuild). NOTE: remaining stack may
+Current: **PR5 next — the cutover** (PR1 #76, PR2 #77, PR3 #78, PR4 #79 open). Stack
+`feat/m2-sdk-client` off `feat/m2-identity`. This is the largest PR; keep commits
+compiling; may span a compaction (resume from this tracker). NOTE: remaining stack may
 grow beyond 8 PRs — identity / SDK-cutover / artifact-ULID are entangled in the SDK,
 so split into smaller green PRs as needed. Each
 completed PR: check the box, record the PR number, update the handoff buffer
