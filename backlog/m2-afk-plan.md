@@ -30,9 +30,9 @@ This is the live tracker for the autonomous M2 build. Design = ADR-0018/0019 +
   **Deep modules** (narrow interfaces, substantial impls).
 
 ## PR stack (stacked; bottom→top; status)
-- [ ] **PR1 `feat/m2-frame`** — `pkg/wire` Envelope→Frame (sender→author, ULID ids,
+- [x] **PR1 `feat/m2-frame`** — `pkg/wire` Envelope→Frame (sender→author, ULID ids,
       kind message|artifact, artifact frame fields revision/createdAt/updatedAt).
-      No ADR (frame.json specs it). *(in progress)*
+      **PR #76 (open, base rebuild)** — build/vet/wire+sdk tests green.
 - [ ] **PR2 `feat/m2-backend-iface`** — `internal/backend` interface + NATS module
       + conformance suite. Redis-checked.
 - [ ] **PR3 `feat/m2-bus-serves`** — bus serves the 9 ops as calls; frame stamping;
@@ -50,5 +50,7 @@ Acceptance spine: the conformance test (PR6) + the M2 DoD e2e (PR8).
 Parked: TASK-23 (request/reply), TASK-20 robust liveness (only --reclaim stopgap).
 
 ## Resumability
-Current: **PR1 in progress** (gate just cleared). Each completed PR: check the box,
-record the PR number, update the handoff buffer (`~/dev/sextant/.remember/remember.md`).
+Current: **PR2 next** (PR1 = #76 open, awaiting Lena's review). Stack PR2's branch
+`feat/m2-backend-iface` off `feat/m2-frame` (not rebuild). Each completed PR: check
+the box, record the PR number, update the handoff buffer
+(`~/dev/sextant/.remember/remember.md`).
