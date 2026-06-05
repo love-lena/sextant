@@ -226,19 +226,19 @@ written to earn.
    path with a fail-loud guard for any future non-ULID id. (Full review +
    resolution are on the PR.)
 
-2. **Operator-side write seams.** Because clients now have *no* direct
-   backend access, the only writes that can set up a different epoch, a
-   hand-seeded or corrupt registry record, or a raw frame that bypasses
-   stamping are the bus's own. Four narrow methods on `*Bus` —
-   `SetEpoch`, `SeedClientRecord`, `DeleteClientRecord`, `InjectMessage`
-   — provide exactly those, used by the tests that exercise the fail-loud
-   and quarantine paths (a client genuinely can no longer create those
-   conditions, which is the security win, not a test gap). **Open
-   question for you:** these are exported methods used only by tests
-   today. I chose four named writes over leaking the `internal/backend`
-   type through a single `Backend()` accessor (keeps the public signature
-   free of internal types). Happy to move them behind a build tag or a
-   separate accessor if you'd rather they not sit on the production type.
+2. **Operator-side write seams (resolved in review — no production
+   surface).** Because clients now have *no* direct backend access, the only
+   writes that can set up a different epoch, a hand-seeded or corrupt
+   registry record, or a raw frame that bypasses stamping are the bus's own
+   — so the fail-loud and quarantine tests need a seam to those. The first
+   cut put four methods on the production `*Bus`; review (rightly) wanted
+   them off it. They now live in `pkg/bus/export_test.go` (package bus, but a
+   `_test.go` file — reaches the unexported backend, **absent from every
+   production build**), and the five tests that use them moved to
+   `package bus_test`, which can both see `export_test.go` and import
+   `pkg/sextant` to drive the real SDK (external test packages may import
+   their importers). No build tag, so a bare `go test ./...` still compiles.
+   The general rule is captured in `docs/conventions/test-features.md`.
 
 **Test rework that the flip forced.** The deny-only suite got away with
 publishing calls under arbitrary subject tokens; the allow-list rejects
@@ -266,8 +266,9 @@ replaced with `TestClientRegistersViaCall` (the positive shape).
 
 1. **Crash-driven teardown** of relays and registry entries → TASK-20
    liveness (one subsystem, not a per-feature lease).
-2. **Operator write-seams on `*Bus`** — test-only today; placement is a
-   review call (see #85).
+2. ~~Operator write-seams placement~~ — **resolved in review**: moved off the
+   production type into `export_test.go` + `package bus_test`, no build tag
+   (see #85 and `docs/conventions/test-features.md`).
 3. **`clients.list` corrupt-record robustness** is now skip-quietly, not
    fail-loud — a deliberate serverside shift (see #81).
 4. **Drain semantics** — the SDK signals `Drained()` and best-effort

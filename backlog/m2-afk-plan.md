@@ -113,10 +113,26 @@ change stories sent to Lena's Manta for review.* **ALL THREE DONE:**
   editorial PDF and uploaded to the Manta `/INBOX/m2-cutover-change-stories.pdf`
   (device pulls on next sync).
 
-**Blocked on human review** — the standing AFK goal is met. When Lena returns: she
-reviews + merges the #76–#85 stack bottom-up (never `--admin`); annotations come
-back via the Manta `/EXPORT` (pull with `flatten.sh`). Open review flags to expect:
-operator write-seams placement (#85), `clients.list` skip-quietly shift (#81), the
+**Review round 1 — DONE (2026-06-05).** Lena annotated the change-stories doc on
+the Manta: **"Overall LGTM"** + 2 discussion Qs + a steer (*pre-1.0: don't care
+about intermediate working state, only that it works in 1.0*). Pull annotated
+exports via `supernote cloud download /EXPORT/<name>.pdf` — the device's EXPORT is
+a flattened PDF with ink correctly placed; `flatten.sh`'s `.pdf.mark` composite
+misplaced the ink (maps Nth inked sheet → PDF page N), so prefer the EXPORT pdf.
+Both Qs resolved:
+- **Q1** (is accreting `clients.<ops>` ok?) → register/deregister stay as
+  client-called, bus-validated control ops; reframed the "plumbing" doc comment.
+  Commit `a74f0a6` on **#84**.
+- **Q2** ("cleanest option even if more work" for the operator seams) → moved off
+  the production `*Bus` into `pkg/bus/export_test.go` + `package bus_test` (drives
+  the SDK via the external-test-package-imports-its-importer rule); **no build
+  tag**. New `docs/conventions/test-features.md` captures the ladder (rung 3 =
+  export_test.go; build tags reserved for rung 4 = instrumenting a built binary
+  for out-of-process e2e, not needed yet). Commit `7c12f25` on **#85** (with #84
+  merged forward). Lena: *"that's the last thing for my approval."*
+
+**Stack APPROVED — ready for Lena to merge #76–#85 bottom-up** (never `--admin`).
+Remaining open flags (not blockers): `clients.list` skip-quietly shift (#81),
 deferred crash-teardown → TASK-20 (#83), drain-as-signal vs os.Exit (ADR-0010).
 
 Next BUILD work (not part of the review goal): **PR5.5** artifact-ULID-addressing +
