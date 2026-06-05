@@ -28,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/love-lena/sextant/internal/wireapi"
 	"github.com/love-lena/sextant/pkg/conninfo"
 	"github.com/love-lena/sextant/pkg/sx"
 	"github.com/love-lena/sextant/pkg/wire"
@@ -64,12 +65,13 @@ type Options struct {
 
 // Client is a connected Sextant client.
 type Client struct {
-	nc      *nats.Conn
-	js      jetstream.JetStream
-	id      string
-	kind    string
-	skewTol time.Duration
-	logf    func(string, ...any)
+	nc          *nats.Conn
+	js          jetstream.JetStream
+	id          string
+	displayName string
+	kind        string
+	skewTol     time.Duration
+	logf        func(string, ...any)
 
 	drainOnce sync.Once
 	drained   chan struct{}
@@ -95,9 +97,10 @@ func Connect(ctx context.Context, opts Options) (*Client, error) {
 		return nil, errors.New("sextant: no bus URL (set Options.URL or Options.ConnInfoPath)")
 	}
 
-	// Identity comes from the credential, not the caller — the id is whatever
-	// the bus will authenticate this connection as.
-	id, err := identityFromCreds(opts.CredsPath)
+	// Identity comes from the credential, not the caller — the id (a bus-minted
+	// ULID) and the human display_name are both read from the JWT the bus
+	// authenticates, so neither can diverge from what was minted.
+	id, displayName, err := identityFromCreds(opts.CredsPath)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +117,7 @@ func Connect(ctx context.Context, opts Options) (*Client, error) {
 		logf = log.Printf
 	}
 
-	c := &Client{id: id, kind: kind, skewTol: tol, logf: logf, drained: make(chan struct{})}
+	c := &Client{id: id, displayName: displayName, kind: kind, skewTol: tol, logf: logf, drained: make(chan struct{})}
 
 	nc, err := nats.Connect(
 		url,
@@ -157,28 +160,35 @@ func Connect(ctx context.Context, opts Options) (*Client, error) {
 	return c, nil
 }
 
-// identityFromCreds reads the client id from its credentials file: the name of
-// the user JWT minted by `sextant token <id>`. It is the same JWT the bus
-// verifies on connect, so the id read here is exactly the identity the bus
-// authenticates — a client cannot register or send under a name it did not
-// authenticate as (editing the name would break the JWT signature).
-func identityFromCreds(path string) (string, error) {
+// identityFromCreds reads the client id and display_name from its credentials
+// file. The id is the user JWT's name — a bus-minted ULID; the display_name is a
+// JWT tag. It is the same JWT the bus verifies on connect, so what is read here
+// is exactly what the bus authenticates — a client cannot register or send under
+// an identity it did not authenticate as (editing either would break the JWT
+// signature).
+func identityFromCreds(path string) (id, displayName string, err error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("sextant: read credentials %s: %w", path, err)
+		return "", "", fmt.Errorf("sextant: read credentials %s: %w", path, err)
 	}
 	tok, err := jwt.ParseDecoratedJWT(b)
 	if err != nil {
-		return "", fmt.Errorf("sextant: parse credentials %s: %w", path, err)
+		return "", "", fmt.Errorf("sextant: parse credentials %s: %w", path, err)
 	}
 	uc, err := jwt.DecodeUserClaims(tok)
 	if err != nil {
-		return "", fmt.Errorf("sextant: decode credentials %s: %w", path, err)
+		return "", "", fmt.Errorf("sextant: decode credentials %s: %w", path, err)
 	}
 	if uc.Name == "" {
-		return "", fmt.Errorf("sextant: credentials %s carry no client id (user name)", path)
+		return "", "", fmt.Errorf("sextant: credentials %s carry no client id (user name)", path)
 	}
-	return uc.Name, nil
+	for _, tag := range uc.Tags {
+		if name, ok := wireapi.DecodeDisplayNameTag(tag); ok {
+			displayName = name
+			break
+		}
+	}
+	return uc.Name, displayName, nil
 }
 
 // checkEpoch reads the bus's protocol epoch from the public meta bucket and
@@ -212,6 +222,7 @@ func (c *Client) register(ctx context.Context, tol time.Duration) error {
 	}
 	rec := registryRecord{
 		ID:          c.id,
+		DisplayName: c.displayName,
 		Kind:        c.kind,
 		Epoch:       wire.Epoch,
 		SDK:         sdkVersion,
@@ -265,8 +276,13 @@ func (c *Client) watchDrain(ctx context.Context) error {
 // client pattern blocks on it and then returns (calling Close).
 func (c *Client) Drained() <-chan struct{} { return c.drained }
 
-// ID is this client's identity (registry key and envelope sender).
+// ID is this client's identity: the bus-minted ULID (its registry key and frame
+// author).
 func (c *Client) ID() string { return c.id }
+
+// DisplayName is this client's human-readable label, minted with its credential.
+// It may be empty for a credential minted without one.
+func (c *Client) DisplayName() string { return c.displayName }
 
 // Close leaves the clients registry (best-effort) and closes the connection.
 func (c *Client) Close() error {

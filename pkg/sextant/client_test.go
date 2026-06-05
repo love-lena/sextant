@@ -30,7 +30,7 @@ func startBus(t *testing.T) *bus.Bus {
 // file, returning the path. Each client gets its own verified identity.
 func credsPath(t *testing.T, b *bus.Bus, id string) string {
 	t.Helper()
-	creds, err := b.MintClient(id)
+	creds, _, err := b.MintClient(id)
 	if err != nil {
 		t.Fatalf("MintClient(%s): %v", id, err)
 	}
@@ -80,12 +80,16 @@ func readCtx(t *testing.T) context.Context {
 }
 
 // TestConnectRegisters also pins the identity contract: the client's id is the
-// credential's name, and that id is its registry key.
+// bus-minted ULID in its credential (its registry key), and its display_name is
+// the human label minted with it.
 func TestConnectRegisters(t *testing.T) {
 	b := startBus(t)
 	c := dialClient(t, b, "agent-reg")
-	if c.ID() != "agent-reg" {
-		t.Fatalf("ID() = %q; want the credential's name agent-reg", c.ID())
+	if c.ID() == "" {
+		t.Fatal("ID() is empty; want the credential's bus-minted ULID")
+	}
+	if c.DisplayName() != "agent-reg" {
+		t.Fatalf("DisplayName() = %q; want agent-reg", c.DisplayName())
 	}
 	clients, err := inspectJS(t, b).KeyValue(readCtx(t), sx.BucketClients)
 	if err != nil {

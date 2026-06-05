@@ -19,10 +19,14 @@ import (
 // client that crashes without Close leaves a stale entry until read-time
 // liveness and stale-entry reaping land (TASK-20). There is no heartbeat in M1.
 type ClientInfo struct {
-	// ID is the client's verified identity — its credential's name, which is
-	// both its registry key and its envelope sender. ListClients sources it from
-	// the registry key (the authoritative locator), not the record body.
+	// ID is the client's verified identity — the bus-minted ULID in its
+	// credential, which is both its registry key and its frame author.
+	// ListClients sources it from the registry key (the authoritative locator),
+	// not the record body.
 	ID string
+	// DisplayName is the human-readable label minted with the credential
+	// (`sextant token <display-name>`). Unique by convention, not by the bus.
+	DisplayName string
 	// Kind is what the client is (e.g. "harness", "coordinator"), self-declared
 	// at connect via Options.Kind.
 	Kind string
@@ -42,6 +46,7 @@ type ClientInfo struct {
 // public, parsed view.
 type registryRecord struct {
 	ID          string `json:"id"`
+	DisplayName string `json:"display_name"`
 	Kind        string `json:"kind"`
 	Epoch       int    `json:"epoch"`
 	SDK         string `json:"sdk"`
@@ -74,7 +79,7 @@ func (r registryRecord) info(key string) (ClientInfo, error) {
 	if err != nil {
 		return ClientInfo{}, fmt.Errorf("bad connected_at %q: %w", r.ConnectedAt, err)
 	}
-	return ClientInfo{ID: key, Kind: r.Kind, Epoch: r.Epoch, SDK: r.SDK, ConnectedAt: t}, nil
+	return ClientInfo{ID: key, DisplayName: r.DisplayName, Kind: r.Kind, Epoch: r.Epoch, SDK: r.SDK, ConnectedAt: t}, nil
 }
 
 // ListClients returns the registry directory: every client connected right now,

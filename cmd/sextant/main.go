@@ -92,19 +92,21 @@ func cmdUp(args []string) {
 }
 
 func cmdToken(args []string) {
-	// The client id is the first positional; flags follow it (Go's flag package
-	// stops at the first non-flag, so the id can't come after the flags).
+	// The display_name is the first positional; flags follow it (Go's flag package
+	// stops at the first non-flag, so the name can't come after the flags).
 	if len(args) < 1 || strings.HasPrefix(args[0], "-") {
-		fatal("usage: sextant token <client-id> [--store DIR] [--out FILE]")
+		fatal("usage: sextant token <display-name> [--store DIR] [--out FILE]")
 	}
-	id := args[0]
+	displayName := args[0]
 
 	fs := flag.NewFlagSet("token", flag.ExitOnError)
 	store := fs.String("store", defaultStore(), "JetStream + key-material directory")
 	out := fs.String("out", "", "write the creds file here (default: <store>/tokens/<id>.creds; '-' for stdout)")
 	_ = fs.Parse(args[1:])
 
-	creds, err := bus.MintClientToken(*store, id)
+	// The bus mints the client's primary id (a ULID); display_name is the
+	// human label carried in the credential.
+	creds, id, err := bus.MintClientToken(*store, displayName)
 	if err != nil {
 		fatal("%v", err)
 	}
@@ -124,7 +126,7 @@ func cmdToken(args []string) {
 	if err := os.WriteFile(path, []byte(creds), 0o600); err != nil {
 		fatal("write creds: %v", err)
 	}
-	fmt.Printf("minted credentials for %q:\n  %s\n", id, path)
+	fmt.Printf("minted credentials for %q (id %s):\n  %s\n", displayName, id, path)
 }
 
 // defaultStore is a stable, CWD-independent location so `up` and `token` run

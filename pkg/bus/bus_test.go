@@ -8,11 +8,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/love-lena/sextant/internal/wireapi"
 	"github.com/love-lena/sextant/pkg/sx"
 	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
+
+// displayNameOf extracts a credential's human display_name from its JWT tags.
+func displayNameOf(uc *jwt.UserClaims) string {
+	for _, tag := range uc.Tags {
+		if n, ok := wireapi.DecodeDisplayNameTag(tag); ok {
+			return n
+		}
+	}
+	return ""
+}
 
 func startTestBus(t *testing.T) *Bus {
 	t.Helper()
@@ -35,7 +46,7 @@ func testCtx(t *testing.T) context.Context {
 // temp file, returning the creds text and the file path.
 func mintCredsFile(t *testing.T, b *Bus, id string) (creds, path string) {
 	t.Helper()
-	creds, err := b.MintClient(id)
+	creds, _, err := b.MintClient(id)
 	if err != nil {
 		t.Fatalf("MintClient(%s): %v", id, err)
 	}
@@ -110,32 +121,53 @@ func TestPerClientIdentity(t *testing.T) {
 	if ac.Subject == bc.Subject {
 		t.Error("two clients were issued the same identity")
 	}
-	if ac.Name != "alice" || bc.Name != "bob" {
-		t.Errorf("identity names = %q, %q; want alice, bob", ac.Name, bc.Name)
+	// The primary id is a bus-minted ULID (distinct per client); the human
+	// display_name rides in the JWT tags.
+	if ac.Name == bc.Name {
+		t.Errorf("two clients got the same id %q", ac.Name)
+	}
+	if dn := displayNameOf(ac); dn != "alice" {
+		t.Errorf("alice display_name = %q, want alice", dn)
+	}
+	if dn := displayNameOf(bc); dn != "bob" {
+		t.Errorf("bob display_name = %q, want bob", dn)
 	}
 	// Both must actually connect with their own credential.
 	_ = connectWithCreds(t, b, "alice", alicePath)
 	_ = connectWithCreds(t, b, "bob", bobPath)
 }
 
-// TestMintRejectsDuplicateName guards the silent-collision footgun: a second
-// credential for an existing id would share its registry key, so minting must
-// fail loud rather than hand out a colliding identity.
-func TestMintRejectsDuplicateName(t *testing.T) {
+// TestMintGivesDistinctIDs: the bus mints each client a fresh ULID id, so even
+// two clients sharing a display_name get distinct, non-colliding identities
+// (the old silent-collision footgun is gone — ids are no longer the human name).
+func TestMintGivesDistinctIDs(t *testing.T) {
 	b := startTestBus(t)
-	if _, err := b.MintClient("dup"); err != nil {
+	_, id1, err := b.MintClient("dup")
+	if err != nil {
 		t.Fatalf("first mint: %v", err)
 	}
-	if _, err := b.MintClient("dup"); err == nil {
-		t.Fatal("second mint of the same id must fail, not silently collide")
+	_, id2, err := b.MintClient("dup")
+	if err != nil {
+		t.Fatalf("second mint: %v", err)
+	}
+	if id1 == "" || id1 == id2 {
+		t.Fatalf("ids should be distinct and non-empty: %q, %q", id1, id2)
 	}
 }
 
-func TestMintRejectsInvalidName(t *testing.T) {
+// TestMintValidatesDisplayName: a display_name is a human label, not a key, so
+// validation is permissive (spaces/slashes/case allowed) but still rejects empty
+// or control-character names that would corrupt the JWT tag or registry JSON.
+func TestMintValidatesDisplayName(t *testing.T) {
 	b := startTestBus(t)
-	for _, bad := range []string{"", "../escape", "has/slash", "has space", ".lead", "trail-", "a/b"} {
-		if _, err := b.MintClient(bad); err == nil {
+	for _, bad := range []string{"", "   ", "with\nnewline", "ctrl\x00here"} {
+		if _, _, err := b.MintClient(bad); err == nil {
 			t.Errorf("MintClient(%q) should be rejected", bad)
+		}
+	}
+	for _, ok := range []string{"has space", "a/b", "Capitalized", "trail-", ".lead"} {
+		if _, _, err := b.MintClient(ok); err != nil {
+			t.Errorf("MintClient(%q) should be accepted: %v", ok, err)
 		}
 	}
 }

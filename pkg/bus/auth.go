@@ -6,12 +6,15 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
+	"strings"
+	"unicode"
 
+	"github.com/love-lena/sextant/internal/wireapi"
 	"github.com/love-lena/sextant/pkg/sx"
 	"github.com/nats-io/jwt/v2"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nkeys"
+	"github.com/oklog/ulid/v2"
 )
 
 // The bus authenticates with NATS decentralized JWT auth (ADR-0012): a single
@@ -221,10 +224,10 @@ func (id *identity) systemJWT() (string, error) {
 	return sc.Encode(id.op)
 }
 
-// mintUser signs a user JWT in the SEXTANT account with the given name and
-// permissions, returning the JWT, the user's seed, and the user's subject (its
-// public key — the principal the bus actually authenticates).
-func (id *identity) mintUser(name string, perms jwt.Permissions) (userJWT, seed, subject string, err error) {
+// mintUser signs a user JWT in the SEXTANT account with the given name,
+// permissions, and tags, returning the JWT, the user's seed, and the user's
+// subject (its public key — the principal the bus actually authenticates).
+func (id *identity) mintUser(name string, perms jwt.Permissions, tags ...string) (userJWT, seed, subject string, err error) {
 	ukp, err := nkeys.CreateUser()
 	if err != nil {
 		return "", "", "", fmt.Errorf("bus: create user key: %w", err)
@@ -234,6 +237,7 @@ func (id *identity) mintUser(name string, perms jwt.Permissions) (userJWT, seed,
 	uc.Name = name
 	uc.IssuerAccount = pub(id.acc)
 	uc.Permissions = perms
+	uc.Tags.Add(tags...)
 	j, err := uc.Encode(id.acc)
 	if err != nil {
 		return "", "", "", fmt.Errorf("bus: encode user jwt: %w", err)
@@ -245,23 +249,22 @@ func (id *identity) mintUser(name string, perms jwt.Permissions) (userJWT, seed,
 	return j, string(sb), subject, nil
 }
 
-// clientIDRe constrains a client id to a safe charset: alphanumerics plus
-// internal '.', '-', '_', with no leading/trailing punctuation. The id has to
-// be a valid KV key, a NATS user name, a safe single-component filename (the
-// issued-names ledger), and an envelope sender — this charset satisfies all
-// four and forecloses path traversal.
-var clientIDRe = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9_.-]*[a-zA-Z0-9])?$`)
-
-// validateClientID rejects ids that aren't safe as an identity / registry key.
-func validateClientID(id string) error {
-	if id == "" {
-		return errors.New("bus: client id is empty")
+// validateDisplayName rejects a human display_name that isn't safe to carry in a
+// JWT tag and a registry record. Since a client's primary id is now a bus-minted
+// ULID (not the display_name), the display_name need not be a key or filename —
+// it is just a readable label — so this is permissive: non-empty, bounded, and
+// free of control characters (which would corrupt the tag/JSON).
+func validateDisplayName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return errors.New("bus: display name is empty")
 	}
-	if len(id) > 128 {
-		return fmt.Errorf("bus: client id %q is too long (max 128)", id)
+	if len(name) > 128 {
+		return fmt.Errorf("bus: display name %q is too long (max 128)", name)
 	}
-	if !clientIDRe.MatchString(id) {
-		return fmt.Errorf("bus: client id %q must be alphanumerics with internal '.', '-', or '_' (no leading/trailing punctuation, spaces, or slashes)", id)
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("bus: display name %q contains a control character", name)
+		}
 	}
 	return nil
 }
@@ -320,28 +323,36 @@ func credsFile(userJWT, seed string) (string, error) {
 	return string(b), nil
 }
 
-// MintClientToken mints a client-tier credentials file for id, loading the
-// account signing key from the store. This is what `sextant token` calls; it
-// requires an existing identity (it never creates one) so a wrong --store
-// fails clearly rather than minting a mismatched credential.
-func MintClientToken(storeDir, id string) (string, error) {
-	if err := validateClientID(id); err != nil {
-		return "", err
+// MintClientToken mints a client-tier credentials file for a client whose
+// human display_name is given, loading the account signing key from the store.
+// The bus mints the client's primary id — a ULID — so every client identity is
+// bus-owned and unforgeable (ADR-0019); the display_name is carried as a JWT tag.
+// It returns the creds file and the minted ULID id. This is what `sextant token`
+// calls; it requires an existing identity (it never creates one) so a wrong
+// --store fails clearly rather than minting a mismatched credential.
+func MintClientToken(storeDir, displayName string) (creds, id string, err error) {
+	if err := validateDisplayName(displayName); err != nil {
+		return "", "", err
 	}
 	ident, err := loadIdentity(storeDir)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	j, seed, subject, err := ident.mintUser(id, clientPermissions())
+	id = ulid.Make().String()
+	j, seed, subject, err := ident.mintUser(id, clientPermissions(), wireapi.EncodeDisplayNameTag(displayName))
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	// Claim the name before returning creds, so a duplicate fails loud rather
-	// than handing out a second identity that collides on the registry key.
+	// Record the issued id (and the authenticated subject) for audit. The id is a
+	// fresh ULID, so this never collides; the ledger is a durable issuance trail.
 	if err := reserveName(storeDir, id, subject); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return credsFile(j, seed)
+	c, err := credsFile(j, seed)
+	if err != nil {
+		return "", "", err
+	}
+	return c, id, nil
 }
 
 // serverAuthOptions sets the JWT auth fields on opts and returns the in-memory

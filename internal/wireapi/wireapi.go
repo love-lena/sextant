@@ -13,6 +13,7 @@
 package wireapi
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 
@@ -28,6 +29,31 @@ const WildcardSubject = APIPrefix + "*.>"
 // DeliverPrefix is the root of the bus→client push space (subscribe/watch
 // delivery): sx.deliver.<clientID>.<stream>. Owner-subscribe only.
 const DeliverPrefix = "sx.deliver."
+
+// DisplayNameTag is the JWT tag prefix carrying a client's human display_name,
+// minted into the credential by the bus so the SDK reads it from the same
+// credential the bus authenticated (it cannot diverge from the identity). The
+// value is hex-encoded because NATS lowercases raw JWT tags, which would mangle a
+// mixed-case or spaced display_name; lowercase hex survives that round-trip.
+const DisplayNameTag = "display_name:"
+
+// EncodeDisplayNameTag builds the JWT tag carrying name.
+func EncodeDisplayNameTag(name string) string {
+	return DisplayNameTag + hex.EncodeToString([]byte(name))
+}
+
+// DecodeDisplayNameTag returns the display_name carried by tag, if it is one.
+func DecodeDisplayNameTag(tag string) (name string, ok bool) {
+	v, found := strings.CutPrefix(tag, DisplayNameTag)
+	if !found {
+		return "", false
+	}
+	b, err := hex.DecodeString(v)
+	if err != nil {
+		return "", false
+	}
+	return string(b), true
+}
 
 // Operation names — the protocol's operations (protocol/methods.json).
 const (
@@ -145,9 +171,11 @@ type ClientsListOutput struct {
 	Clients []ClientEntry `json:"clients"`
 }
 
-// ClientEntry is one registry record (matches the sx_clients record shape).
+// ClientEntry is one registry record (matches the sx_clients record shape). ID
+// is the bus-minted ULID; DisplayName is the human label.
 type ClientEntry struct {
 	ID          string `json:"id"`
+	DisplayName string `json:"display_name"`
 	Kind        string `json:"kind"`
 	Epoch       int    `json:"epoch"`
 	SDK         string `json:"sdk"`

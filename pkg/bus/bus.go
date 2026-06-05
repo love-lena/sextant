@@ -232,8 +232,9 @@ func (b *Bus) Shutdown() {
 // ClientURL is the address clients connect to.
 func (b *Bus) ClientURL() string { return b.url }
 
-// MintClient mints a client-tier credentials file for id — its own verified
-// identity, with the shared client-tier guardrail.
-func (b *Bus) MintClient(id string) (string, error) {
-	return MintClientToken(b.store, id)
+// MintClient mints a client-tier credentials file for a client with the given
+// human display_name — the bus mints its primary id (a ULID), with the shared
+// client-tier guardrail. It returns the creds file and the minted id.
+func (b *Bus) MintClient(displayName string) (creds, id string, err error) {
+	return MintClientToken(b.store, displayName)
 }

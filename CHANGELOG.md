@@ -89,6 +89,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Client identity is now a bus-minted ULID + a `display_name`** (ADR-0019, the
+  §3 review decision). `sextant token <display-name>` (was `<client-id>`) now
+  mints a fresh ULID as the client's primary id — bus-owned, unforgeable — and
+  carries the human `display_name` in the credential (a JWT tag). `Client.ID()`
+  returns the ULID; the new `Client.DisplayName()` returns the label. The clients
+  registry is keyed by the ULID, and `ClientInfo` / `clients.list` carry both id
+  and `display_name`. Display names are unique by convention, not enforced by the
+  bus (so duplicate-id minting no longer errors — each mint is a distinct ULID).
 - `pkg/sx`: renamed the bus "channel" convention to **topic** — `ChannelSubject`
   → `TopicSubject` and the subject namespace `msg.chan.<name>` →
   `msg.topic.<name>`. A topic is a named room (a naming convention over the

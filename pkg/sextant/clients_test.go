@@ -39,18 +39,25 @@ func TestListClients(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("ListClients returned %d clients, want 2: %+v", len(got), got)
 	}
-	// Results are sorted by id for stable output.
-	if got[0].ID != "c-alpha" || got[1].ID != "c-beta" {
-		t.Fatalf("not sorted by id: %q, %q", got[0].ID, got[1].ID)
+	// The primary id is a bus-minted ULID; look clients up by display_name.
+	byName := make(map[string]ClientInfo, len(got))
+	for _, ci := range got {
+		byName[ci.DisplayName] = ci
 	}
-
+	alphaInfo, ok := byName["c-alpha"]
+	if !ok {
+		t.Fatalf("c-alpha not in directory: %+v", got)
+	}
 	// The directory includes the caller itself (alpha), with the default kind.
-	if got[0].Kind != "client" {
-		t.Errorf("alpha kind = %q, want default %q", got[0].Kind, "client")
+	if alphaInfo.Kind != "client" {
+		t.Errorf("alpha kind = %q, want default %q", alphaInfo.Kind, "client")
 	}
 
 	// beta's record carries the fields it registered with.
-	bt := got[1]
+	bt, ok := byName["c-beta"]
+	if !ok {
+		t.Fatalf("c-beta not in directory: %+v", got)
+	}
 	if bt.Kind != "coordinator" {
 		t.Errorf("beta kind = %q, want coordinator", bt.Kind)
 	}
@@ -62,6 +69,10 @@ func TestListClients(t *testing.T) {
 	}
 	if bt.ConnectedAt.IsZero() || time.Since(bt.ConnectedAt) > time.Minute {
 		t.Errorf("beta connected_at = %v, want a recent non-zero time", bt.ConnectedAt)
+	}
+	// IDs are bus-minted ULIDs: non-empty and distinct.
+	if alphaInfo.ID == "" || alphaInfo.ID == bt.ID {
+		t.Errorf("ids should be distinct ULIDs: %q, %q", alphaInfo.ID, bt.ID)
 	}
 }
 
@@ -83,7 +94,7 @@ func TestListClientsReflectsDeregister(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListClients after leave: %v", err)
 	}
-	if len(got) != 1 || got[0].ID != "c-alpha" {
+	if len(got) != 1 || got[0].DisplayName != "c-alpha" {
 		t.Fatalf("after beta left: %+v, want only c-alpha", got)
 	}
 }

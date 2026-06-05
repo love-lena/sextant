@@ -4,12 +4,16 @@
   "defs": {
     "main": {
       "type": "object",
-      "description": "A clients registry entry stored under the client's verified id. Note: moving client identity to a ULID primary id plus a display_name is a forthcoming ADR-0018 follow-on; the fields below are the current shape.",
+      "description": "A clients registry entry stored under the client's verified id. Identity is a bus-minted ULID (the primary id and registry key); display_name is the human label, unique by convention (ADR-0019).",
       "required": ["id", "kind", "epoch", "sdk", "connected_at"],
       "properties": {
         "id": {
           "type": "string",
-          "description": "Client's verified identity; must equal the registry key."
+          "description": "Client's verified identity: a bus-minted ULID; must equal the registry key."
+        },
+        "display_name": {
+          "type": "string",
+          "description": "Human-readable label minted with the credential; unique by convention, not by the bus."
         },
         "kind": {
           "type": "string",
