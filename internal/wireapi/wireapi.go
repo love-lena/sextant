@@ -16,6 +16,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/love-lena/sextant/pkg/wire"
 )
@@ -68,8 +69,25 @@ const (
 	OpClientsList      = "clients.list"
 )
 
+// OpSubscriptionStop is the internal control op that ends a push-stream
+// subscription (message.subscribe / artifact.watch). It is bus plumbing, not one
+// of the protocol's operations (it is not in methods.json and has no CLI/MCP
+// surface): the SDK calls it from Subscription.Stop / Watch.Stop to tear down the
+// server-side relay it started.
+const OpSubscriptionStop = "subscription.stop"
+
 // CallSubject builds the request subject for clientID invoking op.
 func CallSubject(clientID, op string) string { return APIPrefix + clientID + "." + op }
+
+// DeliverSubject builds the push-delivery subject for one subscription:
+// sx.deliver.<clientID>.<subID>. The SDK subscribes to it before making the
+// subscribe/watch call (so no delivery races the subscription), and the bus
+// publishes each delivery to it. subID is a client-generated ULID, unique per
+// subscription, which keeps deliveries from two local subscriptions on one
+// connection from cross-wiring.
+func DeliverSubject(clientID, subID string) string {
+	return DeliverPrefix + clientID + "." + subID
+}
 
 // ParseCallSubject splits sx.api.<clientID>.<op> into its parts. The operation
 // may itself contain dots (e.g. "message.publish").
@@ -180,4 +198,67 @@ type ClientEntry struct {
 	Epoch       int    `json:"epoch"`
 	SDK         string `json:"sdk"`
 	ConnectedAt string `json:"connected_at"`
+}
+
+// --- message.subscribe (push-stream over sx.deliver.<id>.<sub_id>) ---
+
+// SubscribeInput starts a push-stream subscription. SubID is the
+// client-generated ULID naming the delivery subject; DeliverAll replays retained
+// history before live messages.
+type SubscribeInput struct {
+	Subject    string `json:"subject"`
+	SubID      string `json:"sub_id"`
+	DeliverAll bool   `json:"deliver_all"`
+}
+
+// SubscribeOutput confirms the subscription and echoes the delivery subject the
+// bus will publish to (the SDK already knows it; this is a defensive check).
+type SubscribeOutput struct {
+	DeliverSubject string `json:"deliver_subject"`
+}
+
+// MessageDelivery is one pushed message frame, published to the subscription's
+// delivery subject. It carries the bus-trusted position and clock alongside the
+// stamped frame so the SDK delivers the same Message it would from a pull.
+type MessageDelivery struct {
+	SubID   string     `json:"sub_id"`
+	Subject string     `json:"subject"`
+	Seq     uint64     `json:"seq"`
+	BusTime time.Time  `json:"bus_time"`
+	Frame   wire.Frame `json:"frame"`
+}
+
+// --- artifact.watch (push-stream over sx.deliver.<id>.<sub_id>) ---
+
+// WatchInput starts a push-stream watch on one artifact. SubID is the
+// client-generated ULID naming the delivery subject.
+type WatchInput struct {
+	Name  string `json:"name"`
+	SubID string `json:"sub_id"`
+}
+
+// WatchOutput confirms the watch and echoes the delivery subject.
+type WatchOutput struct {
+	DeliverSubject string `json:"deliver_subject"`
+}
+
+// ArtifactDelivery is one pushed artifact change: the current value first, then
+// each later write and delete. On a delete, Deleted is true and Record/timestamps
+// are empty.
+type ArtifactDelivery struct {
+	SubID     string          `json:"sub_id"`
+	Name      string          `json:"name"`
+	Record    json.RawMessage `json:"record,omitempty"`
+	Revision  uint64          `json:"revision"`
+	CreatedAt string          `json:"createdAt,omitempty"`
+	UpdatedAt string          `json:"updatedAt,omitempty"`
+	Deleted   bool            `json:"deleted"`
+}
+
+// --- subscription.stop ---
+
+// SubscriptionStopInput ends the subscription named by SubID (idempotent: a
+// SubID the bus no longer tracks is a success, not an error).
+type SubscriptionStopInput struct {
+	SubID string `json:"sub_id"`
 }

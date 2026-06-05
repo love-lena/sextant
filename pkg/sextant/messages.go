@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/love-lena/sextant/internal/wireapi"
 	"github.com/love-lena/sextant/pkg/sx"
 	"github.com/love-lena/sextant/pkg/wire"
-	"github.com/nats-io/nats.go/jetstream"
+	"github.com/nats-io/nats.go"
+	"github.com/oklog/ulid/v2"
 )
 
 // Message is a received message: the decoded frame plus the bus-stamped
@@ -68,91 +70,102 @@ func (c *Client) FetchMessages(ctx context.Context, subject string, since uint64
 }
 
 // Subscribe delivers messages matching subject (an exact subject or a wildcard,
-// e.g. sx.TopicSubject("plan") or "msg.>") to h. Replay is client-controlled
-// (see DeliverAll), and the consumer is ephemeral, so the bus keeps no
-// per-subscriber state. Each message is re-checked against the wire contract
-// (structure, epoch) and the bus clock, and quarantined (skipped + logged) on a
-// violation (ADR-0006, ADR-0010). The subscription runs until Stop is called or
-// ctx is cancelled, whichever comes first.
+// e.g. sx.TopicSubject("plan") or "msg.>") to h as a message.subscribe call: the
+// bus relays matching frames to this client's private delivery subject
+// (sx.deliver.<id>.<sub>), and the SDK fans them out to h (ADR-0019). Replay is
+// client-controlled (see DeliverAll); the bus owns the cursor, so it keeps no
+// per-subscriber state beyond the live relay. Each delivered frame is re-checked
+// against the wire contract (structure, epoch) and the bus clock, and quarantined
+// (skipped + logged) on a violation (ADR-0006, ADR-0010). The subscription runs
+// until Stop is called or ctx is cancelled, whichever comes first.
 func (c *Client) Subscribe(ctx context.Context, subject string, h Handler, opts ...SubOption) (Subscription, error) {
 	var cfg subConfig
 	for _, o := range opts {
 		o(&cfg)
 	}
-	stream, err := c.js.Stream(ctx, sx.StreamMessages)
-	if err != nil {
-		return nil, fmt.Errorf("sextant: open messages stream: %w", err)
-	}
-	deliver := jetstream.DeliverNewPolicy
-	if cfg.deliverAll {
-		deliver = jetstream.DeliverAllPolicy
-	}
-	oc, err := stream.OrderedConsumer(ctx, jetstream.OrderedConsumerConfig{
-		FilterSubjects: []string{subject},
-		DeliverPolicy:  deliver,
+	subID := ulid.Make().String()
+	deliver := wireapi.DeliverSubject(c.id, subID)
+	// Subscribe to the delivery subject BEFORE making the call, so a frame the bus
+	// relays the instant it replies can't outrun our subscription.
+	natsSub, err := c.nc.Subscribe(deliver, func(m *nats.Msg) {
+		var d wireapi.MessageDelivery
+		if err := json.Unmarshal(m.Data, &d); err != nil {
+			c.logf("sextant: undecodable delivery on %s, skipping: %v", subject, err)
+			return
+		}
+		c.deliver(d, h)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("sextant: consumer: %w", err)
+		return nil, fmt.Errorf("sextant: subscribe delivery: %w", err)
+	}
+	if err := c.call(ctx, wireapi.OpMessageSubscribe, wireapi.SubscribeInput{
+		Subject:    subject,
+		SubID:      subID,
+		DeliverAll: cfg.deliverAll,
+	}, nil); err != nil {
+		_ = natsSub.Unsubscribe()
+		return nil, err
 	}
 	subCtx, cancel := context.WithCancel(ctx)
-	cc, err := oc.Consume(func(msg jetstream.Msg) { c.dispatch(msg, h) })
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("sextant: consume: %w", err)
-	}
-	// Bridge ctx cancellation to the consumer: the subscription tears down on
-	// Stop (which cancels subCtx) or on the caller's ctx being cancelled,
-	// whichever fires first — so a cancelled ctx can't leave it running.
+	s := &subscription{c: c, subID: subID, natsSub: natsSub, cancel: cancel}
+	// Bridge ctx cancellation to teardown: a cancelled ctx ends the subscription
+	// (unsubscribe + bus-side relay stop), same as an explicit Stop. The bridge
+	// also unblocks on Stop (which cancels subCtx), so it never leaks.
 	go func() {
 		<-subCtx.Done()
-		cc.Stop()
+		s.teardown()
 	}()
-	return &subscription{cancel: cancel}, nil
+	return s, nil
 }
 
-func (c *Client) dispatch(msg jetstream.Msg, h Handler) {
-	md, err := msg.Metadata()
-	if err != nil {
-		c.logf("sextant: message without metadata on %s, skipping: %v", msg.Subject(), err)
-		return
-	}
-	frame, err := wire.Decode(msg.Data())
-	if err != nil {
-		c.logf("sextant: undecodable frame on %s, skipping: %v", msg.Subject(), err)
-		return
-	}
-	// Receiver-side quarantine: a client can raw-publish to msg.> (the guardrail
-	// only denies sx.control + stream lifecycle), so the SDK re-checks every
-	// consumed message against the wire contract before delivering it, rather
-	// than trusting that it came through Client.Publish.
+// deliver applies the receiver-side quarantine to one pushed delivery and, if it
+// passes, hands it to the handler. The check mirrors the pull path: a replayed
+// frame (DeliverAll) can carry a prior epoch, and — until the per-client
+// allow-list lands — a client can still raw-publish to msg.>, so the SDK never
+// trusts that a delivered frame is well-formed.
+func (c *Client) deliver(d wireapi.MessageDelivery, h Handler) {
+	frame := d.Frame
 	if err := frame.Validate(); err != nil {
-		c.logf("sextant: quarantined malformed frame on %s: %v", msg.Subject(), err)
+		c.logf("sextant: quarantined malformed frame on %s: %v", d.Subject, err)
 		return
 	}
-	// Epoch is checked per-message, not just at connect, because durable streams
-	// outlive epochs (ADR-0010): a replayed message from a prior epoch must not
-	// be delivered as if it were current.
 	if err := wire.CheckEpoch(frame.Epoch, wire.Epoch); err != nil {
-		c.logf("sextant: quarantined %s on %s: %v", frame.ID, msg.Subject(), err)
+		c.logf("sextant: quarantined %s on %s: %v", frame.ID, d.Subject, err)
 		return
 	}
-	// Skew check against the trusted bus timestamp (ADR-0006).
-	if err := wire.CheckSkew(frame.ID, md.Timestamp, c.skewTol); err != nil {
-		c.logf("sextant: quarantined %s on %s: %v", frame.ID, msg.Subject(), err)
+	if err := wire.CheckSkew(frame.ID, d.BusTime, c.skewTol); err != nil {
+		c.logf("sextant: quarantined %s on %s: %v", frame.ID, d.Subject, err)
 		return
 	}
 	h(Message{
 		Frame:    frame,
-		Subject:  msg.Subject(),
-		BusTime:  md.Timestamp,
-		Sequence: md.Sequence.Stream,
+		Subject:  d.Subject,
+		BusTime:  d.BusTime,
+		Sequence: d.Seq,
 	})
 }
 
 type subscription struct {
-	cancel context.CancelFunc
+	c       *Client
+	subID   string
+	natsSub *nats.Subscription
+	cancel  context.CancelFunc
+	once    sync.Once
 }
 
-// Stop ends the subscription. It cancels the internal context, which the bridge
-// goroutine observes to stop the underlying consumer; safe to call more than once.
+// Stop ends the subscription (safe to call more than once). It cancels the
+// internal context, which the bridge goroutine observes to run teardown.
 func (s *subscription) Stop() { s.cancel() }
+
+// teardown unsubscribes the delivery subject and asks the bus to stop the relay.
+// It runs exactly once, whether reached via Stop or a cancelled ctx.
+func (s *subscription) teardown() {
+	s.once.Do(func() {
+		if s.natsSub != nil {
+			_ = s.natsSub.Unsubscribe()
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = s.c.call(ctx, wireapi.OpSubscriptionStop, wireapi.SubscriptionStopInput{SubID: s.subID}, nil)
+	})
+}

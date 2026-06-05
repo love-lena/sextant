@@ -48,6 +48,8 @@ func (b *Bus) startServing() error {
 	}
 	b.backend = natsbackend.New(js, sx.StreamMessages)
 	b.apiSem = make(chan struct{}, apiMaxConcurrent)
+	b.relayCtx, b.relayCancel = context.WithCancel(context.Background())
+	b.relays = make(map[string]map[string]*relay)
 	sub, err := b.opConn.Subscribe(wireapi.WildcardSubject, func(msg *nats.Msg) {
 		// Spawn immediately so the NATS dispatcher never blocks (no head-of-line
 		// blocking), then bound concurrency by waiting for a worker slot.
@@ -64,10 +66,15 @@ func (b *Bus) startServing() error {
 	return nil
 }
 
-// stopServing tears the API subscription down (called on Shutdown).
+// stopServing tears the API subscription down and cancels every running relay
+// (called on Shutdown). Cancelling relayCtx cascades to all per-subscription
+// relay contexts, so their backend streams close and their goroutines exit.
 func (b *Bus) stopServing() {
 	if b.apiSub != nil {
 		_ = b.apiSub.Unsubscribe()
+	}
+	if b.relayCancel != nil {
+		b.relayCancel()
 	}
 }
 
@@ -115,6 +122,12 @@ func (b *Bus) dispatch(ctx context.Context, clientID, op string, data []byte) (j
 		return b.opArtifactDelete(ctx, data)
 	case wireapi.OpClientsList:
 		return b.opClientsList(ctx)
+	case wireapi.OpMessageSubscribe:
+		return b.opSubscribe(clientID, data)
+	case wireapi.OpArtifactWatch:
+		return b.opArtifactWatch(clientID, data)
+	case wireapi.OpSubscriptionStop:
+		return b.opSubscriptionStop(clientID, data)
 	default:
 		return nil, fmt.Errorf("bus: unknown operation %q", op)
 	}

@@ -8,6 +8,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `pkg/bus` + `pkg/sextant`: **the push-stream operations and the artifact
+  cutover** (ADR-0019). The bus now serves `message.subscribe` and
+  `artifact.watch` as server-side relays into a client's private delivery space
+  (`sx.deliver.<clientID>.<subID>`), each ended by a `subscription.stop` control
+  op (or by bus shutdown, which cancels them all). The SDK's `Subscribe` /
+  `WatchArtifact` and **all** artifact methods (`CreateArtifact`,
+  `UpdateArtifact`, `GetArtifact`, `DeleteArtifact`) now go through Wire API
+  **calls** instead of the backend directly — the artifact ops moved as one unit
+  because the bus stores artifacts as frames at rest. With this slice the whole
+  data plane (messages + artifacts) flows through the bus; what remains is the
+  per-client credential **allow-list flip** (which makes the stamped author
+  unforgeable and routes the connect handshake itself through calls), in the
+  next slice. Crash-driven relay teardown — a client that never stops — is
+  deferred to the liveness work (TASK-20), the same gap the clients registry has.
 - `pkg/sextant`: **the SDK begins speaking the Wire API** (ADR-0019 cutover).
   `Client.Publish` now sends a `message.publish` **call** to the bus (which stamps
   the frame and appends it) instead of publishing to the stream directly, and the
@@ -16,10 +30,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Client.ListClients` now goes through the `clients.list` operation too. Since
   the bus reads the whole registry on every client's behalf, a single corrupt
   record now **skips quietly** rather than failing the listing for everyone (the
-  bus also sources each id from its authoritative registry key). `Subscribe` and
-  the artifact methods still use the direct path; they cut over (with the
-  credential allow-list flip) in the following slice — coupled because the bus
-  stores artifacts as frames, so all artifact ops (incl. watch) move together.
+  bus also sources each id from its authoritative registry key). (`Subscribe` and
+  the artifact methods complete the cutover in the push-stream entry above; only
+  the credential allow-list flip then remains.)
 - `pkg/bus`: the bus now **serves the protocol's operations** as calls over the
   Wire API (ADR-0018, ADR-0019). A client makes a NATS request to
   `sx.api.<clientID>.<operation>`; the bus serves it against the backend interface
