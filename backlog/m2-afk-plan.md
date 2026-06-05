@@ -33,14 +33,20 @@ This is the live tracker for the autonomous M2 build. Design = ADR-0018/0019 +
 - [x] **PR1 `feat/m2-frame`** — `pkg/wire` Envelope→Frame (sender→author, ULID ids,
       kind message|artifact, artifact frame fields revision/createdAt/updatedAt).
       **PR #76 (open, base rebuild)** — build/vet/wire+sdk tests green.
-- [ ] **PR2 `feat/m2-backend-iface`** — `internal/backend` interface + NATS module
-      + conformance suite. Redis-checked.
-- [ ] **PR3 `feat/m2-bus-serves`** — bus serves the 9 ops as calls; frame stamping;
-      per-client allow-list JWT + author enforcement; `sx.api.*`/`sx.deliver.*`;
-      `msg.*`+KV bus-internal.
+- [x] **PR2 `feat/m2-backend-iface`** — `internal/backend` interface + NATS module
+      + conformance suite. Redis-checked. **PR #77 (open, base m2-frame)** — green.
+- [ ] **PR3 `feat/m2-bus-serves`** — bus serves the 9 ops as calls over `sx.api.*`;
+      frame stamping (id/author/kind/epoch + artifact rev/ts); author from the
+      request subject token; served against the backend interface. **Additive**
+      (direct path still works; auth NOT yet flipped — see PR5). Self-tested with a
+      direct test client.
 - [ ] **PR4 `feat/m2-identity`** — TASK-30: ULID addressing uniform + display_name
       attribute; registry keyed by ULID; methods.json artifact name→id.
-- [ ] **PR5 `feat/m2-sdk-client`** — Go SDK as bus client + FetchMessages.
+- [ ] **PR5 `feat/m2-sdk-client`** — Go SDK as bus client (Publish/Subscribe/
+      artifacts/ListClients → `sx.api.*` calls) + FetchMessages; **+ the per-client
+      allow-list JWT flip** (deny direct `msg.*`/KV; permit `sx.api.<id>.>` +
+      `sx.deliver.<id>.>` + `_INBOX.>`; `allow_responses`) — closes author
+      forgeability when the SDK switches to calls, keeping every PR green.
 - [ ] **PR6 `feat/m2-cli`** — TASK-28: CLI (op-name parity) + conformance test.
 - [ ] **PR7 `feat/m2-mcp`** — TASK-22: MCP server + channel + skill (CC plugin).
 - [ ] **PR8 `feat/m2-ergonomics`** — TASK-27: run/up --with-dir/per-client creds/
@@ -50,7 +56,7 @@ Acceptance spine: the conformance test (PR6) + the M2 DoD e2e (PR8).
 Parked: TASK-23 (request/reply), TASK-20 robust liveness (only --reclaim stopgap).
 
 ## Resumability
-Current: **PR2 next** (PR1 = #76 open, awaiting Lena's review). Stack PR2's branch
-`feat/m2-backend-iface` off `feat/m2-frame` (not rebuild). Each completed PR: check
-the box, record the PR number, update the handoff buffer
+Current: **PR3 next** (PR1 #76, PR2 #77 open — awaiting Lena's review). Stack PR3's
+branch `feat/m2-bus-serves` off `feat/m2-backend-iface` (not rebuild). Each
+completed PR: check the box, record the PR number, update the handoff buffer
 (`~/dev/sextant/.remember/remember.md`).
