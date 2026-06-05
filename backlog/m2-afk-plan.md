@@ -52,7 +52,8 @@ This is the live tracker for the autonomous M2 build. Design = ADR-0018/0019 +
         stores raw records — so create/update/get/delete/watch move as one unit. After
         the flip, NOTHING uses direct → author is unforgeable.
   - [ ] 5.5 artifact-ULID-addressing + artifact.list (§3 artifact half; methods.json name→id).
-- [ ] **PR6 `feat/m2-cli`** — TASK-28: CLI (op-name parity) + conformance test.
+- [x] **PR6 `feat/m2-cli`** — TASK-28: CLI (op-name parity) + conformance test. **PR #82**.
+      Smoke-verified the M2 loop end-to-end (2 clients exchange msg + CAS artifact via bus).
 - [ ] **PR7 `feat/m2-mcp`** — TASK-22: MCP server + channel + skill (CC plugin).
 - [ ] **PR8 `feat/m2-ergonomics`** — TASK-27: run/up --with-dir/per-client creds/
       --reclaim + getting-started + M2 DoD e2e.
@@ -61,10 +62,12 @@ Acceptance spine: the conformance test (PR6) + the M2 DoD e2e (PR8).
 Parked: TASK-23 (request/reply), TASK-20 robust liveness (only --reclaim stopgap).
 
 ## Resumability
-Current: **PR5c next — the coupled cutover** (open PRs #76–81). Branch off
-`feat/m2-clients-call`. This is the largest remaining slice. After it: PR6 CLI
-(TASK-28) — buildable on the SDK as-is. PR7 MCP (TASK-22). PR8 ergonomics + M2 DoD
-(TASK-27). Resume from this tracker; keep each commit green. NOTE: remaining stack may
+Current: open PRs #76–82. Remaining: **PR5c coupled cutover** (artifacts→calls +
+subscribe/watch push over sx.deliver + auth allow-list flip — the hardest slice;
+stack off `feat/m2-cli`), **PR7 MCP** (TASK-22), **PR8 ergonomics + getting-started +
+M2 DoD walkthrough** (TASK-27). PR6 already proved the DoD loop works via CLI;
+PR8 documents it + adds `sextant run`/`up --with-dir`/`--reclaim`. Resume from this
+tracker; keep each commit green. PR5c needs care — do with fresh context. NOTE: remaining stack may
 grow beyond 8 PRs — identity / SDK-cutover / artifact-ULID are entangled in the SDK,
 so split into smaller green PRs as needed. Each
 completed PR: check the box, record the PR number, update the handoff buffer
