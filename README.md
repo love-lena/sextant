@@ -12,12 +12,12 @@ a client you build.
 ## Where things are
 
 - **Why we decided things** — [`docs/adr/`](docs/adr/) (the
-  [index](docs/adr/README.md) lists all thirteen).
+  [index](docs/adr/README.md) lists the accepted decisions).
 - **The shared language** — [`CONTEXT.md`](CONTEXT.md).
 - **How to work here** — [`AGENTS.md`](AGENTS.md) (`CLAUDE.md` symlinks to it).
-- **Human reference + API** — [`docs/book/`](docs/book/) (mdbook; the golden
-  source of truth for the API, filled as the SDK lands). Browse it with
-  `mdbook serve docs/book`.
+- **Human reference + API** — an mdbook under `docs/book/`, *forthcoming* (to be
+  rewritten against the ADR-0018 architecture; the protocol source of truth lives
+  in [`protocol/`](protocol/) and the [ADRs](docs/adr/) until then).
 - **What's next** — tickets in [`backlog/`](backlog/) (Backlog.md).
 
 ## Agent skills
