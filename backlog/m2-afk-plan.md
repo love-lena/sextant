@@ -35,11 +35,9 @@ This is the live tracker for the autonomous M2 build. Design = ADR-0018/0019 +
       **PR #76 (open, base rebuild)** — build/vet/wire+sdk tests green.
 - [x] **PR2 `feat/m2-backend-iface`** — `internal/backend` interface + NATS module
       + conformance suite. Redis-checked. **PR #77 (open, base m2-frame)** — green.
-- [ ] **PR3 `feat/m2-bus-serves`** — bus serves the 9 ops as calls over `sx.api.*`;
-      frame stamping (id/author/kind/epoch + artifact rev/ts); author from the
-      request subject token; served against the backend interface. **Additive**
-      (direct path still works; auth NOT yet flipped — see PR5). Self-tested with a
-      direct test client.
+- [x] **PR3 `feat/m2-bus-serves`** — bus serves request/reply ops over `sx.api.*`;
+      frame stamping; author from subject token; backend-served. **PR #78 (open)**.
+      Push-stream (subscribe/watch) + artifact-ULID-addressing deferred to the cutover.
 - [ ] **PR4 `feat/m2-identity`** — TASK-30: ULID addressing uniform + display_name
       attribute; registry keyed by ULID; methods.json artifact name→id.
 - [ ] **PR5 `feat/m2-sdk-client`** — Go SDK as bus client (Publish/Subscribe/
@@ -56,7 +54,9 @@ Acceptance spine: the conformance test (PR6) + the M2 DoD e2e (PR8).
 Parked: TASK-23 (request/reply), TASK-20 robust liveness (only --reclaim stopgap).
 
 ## Resumability
-Current: **PR3 next** (PR1 #76, PR2 #77 open — awaiting Lena's review). Stack PR3's
-branch `feat/m2-bus-serves` off `feat/m2-backend-iface` (not rebuild). Each
+Current: **PR4 next** (PR1 #76, PR2 #77, PR3 #78 open). Stack PR4's branch
+`feat/m2-identity` off `feat/m2-bus-serves` (not rebuild). NOTE: remaining stack may
+grow beyond 8 PRs — identity / SDK-cutover / artifact-ULID are entangled in the SDK,
+so split into smaller green PRs as needed. Each
 completed PR: check the box, record the PR number, update the handoff buffer
 (`~/dev/sextant/.remember/remember.md`).
