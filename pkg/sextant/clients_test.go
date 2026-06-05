@@ -123,19 +123,6 @@ func TestListClientsEmptyDirectory(t *testing.T) {
 	}
 }
 
-// TestCheckRecordKey covers the registry identity invariant both paths share:
-// the body id must equal the key. register enforces it on write and info on
-// read, so testing the helper directly is the deterministic coverage (a
-// divergent write can't be produced through the public API).
-func TestCheckRecordKey(t *testing.T) {
-	if err := checkRecordKey("c-alpha", "c-alpha"); err != nil {
-		t.Errorf("matching id/key should pass, got %v", err)
-	}
-	if err := checkRecordKey("c-impostor", "c-alpha"); err == nil {
-		t.Error("a body id that diverges from its key must be rejected")
-	}
-}
-
 // TestListClientsSkipsCorruptRecords: clients.list is now served by the bus,
 // which reads the whole registry on every client's behalf, so a single corrupt
 // record skips quietly rather than failing the listing for everyone (a

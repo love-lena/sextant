@@ -19,22 +19,18 @@ package sextant
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"os"
-	"strconv"
 	"sync"
 	"time"
 
 	"github.com/love-lena/sextant/internal/wireapi"
 	"github.com/love-lena/sextant/pkg/conninfo"
-	"github.com/love-lena/sextant/pkg/sx"
 	"github.com/love-lena/sextant/pkg/wire"
 	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
 )
 
 // sdkVersion is recorded in the registry record. (A real version surface comes
@@ -66,7 +62,6 @@ type Options struct {
 // Client is a connected Sextant client.
 type Client struct {
 	nc          *nats.Conn
-	js          jetstream.JetStream
 	id          string
 	displayName string
 	kind        string
@@ -138,17 +133,9 @@ func Connect(ctx context.Context, opts Options) (*Client, error) {
 	}
 	c.nc = nc
 
-	js, err := jetstream.New(nc)
-	if err != nil {
-		nc.Close()
-		return nil, fmt.Errorf("sextant: jetstream: %w", err)
-	}
-	c.js = js
-
-	if err := c.checkEpoch(ctx); err != nil {
-		nc.Close()
-		return nil, err
-	}
+	// The connect handshake runs entirely through Wire API calls: register folds
+	// the protocol-epoch hard-gate, and watchDrain sets up the drain subscription.
+	// The SDK never touches the backend directly (ADR-0019).
 	if err := c.register(ctx, tol); err != nil {
 		nc.Close()
 		return nil, err
@@ -191,60 +178,27 @@ func identityFromCreds(path string) (id, displayName string, err error) {
 	return uc.Name, displayName, nil
 }
 
-// checkEpoch reads the bus's protocol epoch from the public meta bucket and
-// exact-matches it; mismatch fails loud (ADR-0010).
-func (c *Client) checkEpoch(ctx context.Context) error {
-	meta, err := c.js.KeyValue(ctx, sx.BucketMeta)
-	if err != nil {
-		return fmt.Errorf("sextant: open %s: %w", sx.BucketMeta, err)
-	}
-	entry, err := meta.Get(ctx, sx.MetaKeyEpoch)
-	if err != nil {
-		return fmt.Errorf("sextant: read bus epoch: %w", err)
-	}
-	busEpoch, err := strconv.Atoi(string(entry.Value()))
-	if err != nil {
-		return fmt.Errorf("sextant: bad bus epoch %q: %w", entry.Value(), err)
-	}
-	if err := wire.CheckEpoch(wire.Epoch, busEpoch); err != nil {
-		return fmt.Errorf("%w (rebuild the client against the bus's protocol)", err)
-	}
-	return nil
-}
-
-// register writes this client's entry into the clients registry — the write
-// half of the presence-only directory (registryRecord and the ListClients read
-// half live in clients.go). The entry is removed again by Close.
+// register is the write half of the clients directory: a clients.register call
+// that has the bus file this client's entry — keyed by its authenticated id and
+// stamped with the bus clock. The call folds the protocol-epoch hard-gate: it
+// returns the bus epoch, which the SDK exact-matches (mismatch fails loud,
+// ADR-0010), and the bus-stamped connected_at, which the SDK clock-skew-checks
+// (a soft announce, not a gate). The entry is removed again by Close.
 func (c *Client) register(ctx context.Context, tol time.Duration) error {
-	clients, err := c.js.KeyValue(ctx, sx.BucketClients)
-	if err != nil {
-		return fmt.Errorf("sextant: open %s: %w", sx.BucketClients, err)
-	}
-	rec := registryRecord{
-		ID:          c.id,
+	var out wireapi.RegisterOutput
+	if err := c.call(ctx, wireapi.OpClientsRegister, wireapi.RegisterInput{
 		DisplayName: c.displayName,
 		Kind:        c.kind,
 		Epoch:       wire.Epoch,
 		SDK:         sdkVersion,
-		ConnectedAt: time.Now().UTC().Format(time.RFC3339),
+	}, &out); err != nil {
+		return err
 	}
-	// The body id and the key are both c.id by construction; assert the invariant
-	// here too, so a future refactor that sources them separately can't silently
-	// file a record whose id diverges from its key (the read half rejects those).
-	if err := checkRecordKey(rec.ID, c.id); err != nil {
-		return fmt.Errorf("sextant: %w", err)
+	if err := wire.CheckEpoch(wire.Epoch, out.BusEpoch); err != nil {
+		return fmt.Errorf("%w (rebuild the client against the bus's protocol)", err)
 	}
-	b, err := json.Marshal(rec)
-	if err != nil {
-		return fmt.Errorf("sextant: marshal registry record: %w", err)
-	}
-	if _, err := clients.Put(ctx, c.id, b); err != nil {
-		return fmt.Errorf("sextant: register: %w", err)
-	}
-	// The registry write is bus-stamped; compare to the local clock and announce
-	// (soft, not a gate) if the skew is large (ADR-0010).
-	if entry, err := clients.Get(ctx, c.id); err == nil {
-		if skew := clockSkew(time.Now(), entry.Created()); skew.Abs() > tol {
+	if t, perr := time.Parse(time.RFC3339, out.ConnectedAt); perr == nil {
+		if skew := clockSkew(time.Now(), t); skew.Abs() > tol {
 			c.logf("sextant: clock skew %s vs the bus exceeds %s; messages may be rejected — sync NTP", skew, tol)
 		}
 	}
@@ -252,7 +206,7 @@ func (c *Client) register(ctx context.Context, tol time.Duration) error {
 }
 
 func (c *Client) watchDrain(ctx context.Context) error {
-	if _, err := c.nc.Subscribe(sx.SubjectDrain, func(*nats.Msg) {
+	if _, err := c.nc.Subscribe(wireapi.DeliverSubject(c.id, wireapi.DrainSubID), func(*nats.Msg) {
 		c.logf("sextant: drain received; winding down")
 		c.drainOnce.Do(func() { close(c.drained) })
 	}); err != nil {
@@ -284,13 +238,12 @@ func (c *Client) ID() string { return c.id }
 // It may be empty for a credential minted without one.
 func (c *Client) DisplayName() string { return c.displayName }
 
-// Close leaves the clients registry (best-effort) and closes the connection.
+// Close leaves the clients directory (a best-effort clients.deregister call) and
+// closes the connection.
 func (c *Client) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if clients, err := c.js.KeyValue(ctx, sx.BucketClients); err == nil {
-		_ = clients.Delete(ctx, c.id) // best-effort registry leave
-	}
+	_ = c.call(ctx, wireapi.OpClientsDeregister, wireapi.DeregisterInput{}, nil) // best-effort leave
 	c.nc.Close()
 	return nil
 }

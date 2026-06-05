@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,6 +51,7 @@ func (b *Bus) startServing() error {
 	b.apiSem = make(chan struct{}, apiMaxConcurrent)
 	b.relayCtx, b.relayCancel = context.WithCancel(context.Background())
 	b.relays = make(map[string]map[string]*relay)
+	b.connected = make(map[string]struct{})
 	sub, err := b.opConn.Subscribe(wireapi.WildcardSubject, func(msg *nats.Msg) {
 		// Spawn immediately so the NATS dispatcher never blocks (no head-of-line
 		// blocking), then bound concurrency by waiting for a worker slot.
@@ -122,6 +124,10 @@ func (b *Bus) dispatch(ctx context.Context, clientID, op string, data []byte) (j
 		return b.opArtifactDelete(ctx, data)
 	case wireapi.OpClientsList:
 		return b.opClientsList(ctx)
+	case wireapi.OpClientsRegister:
+		return b.opClientsRegister(ctx, clientID, data)
+	case wireapi.OpClientsDeregister:
+		return b.opClientsDeregister(ctx, clientID)
 	case wireapi.OpMessageSubscribe:
 		return b.opSubscribe(clientID, data)
 	case wireapi.OpArtifactWatch:
@@ -333,6 +339,77 @@ func (b *Bus) opClientsList(ctx context.Context) (json.RawMessage, error) {
 	}
 	sort.Slice(out.Clients, func(i, j int) bool { return out.Clients[i].ID < out.Clients[j].ID })
 	return json.Marshal(out)
+}
+
+// opClientsRegister is the write half of the directory (the connect handshake).
+// The bus owns the record: it keys it under the call's subject token (the
+// authoritative id) and stamps connected_at with its own clock. It registers the
+// client only if its epoch matches the bus's; an incompatible client still gets
+// the bus epoch back so the SDK fails loud without ever entering the directory.
+func (b *Bus) opClientsRegister(ctx context.Context, clientID string, data []byte) (json.RawMessage, error) {
+	var in wireapi.RegisterInput
+	if err := json.Unmarshal(data, &in); err != nil {
+		return nil, fmt.Errorf("bus: clients.register: bad input: %w", err)
+	}
+	busEpoch, err := b.readEpoch(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("bus: clients.register: %w", err)
+	}
+	connectedAt := nowRFC3339()
+	if in.Epoch == busEpoch {
+		rec, err := json.Marshal(wireapi.ClientEntry{
+			ID:          clientID,
+			DisplayName: in.DisplayName,
+			Kind:        in.Kind,
+			Epoch:       in.Epoch,
+			SDK:         in.SDK,
+			ConnectedAt: connectedAt,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("bus: clients.register: encode record: %w", err)
+		}
+		if _, err := b.backend.Put(ctx, sx.BucketClients, clientID, rec); err != nil {
+			return nil, fmt.Errorf("bus: clients.register: %w", err)
+		}
+		b.addConnected(clientID)
+	}
+	return json.Marshal(wireapi.RegisterOutput{BusEpoch: busEpoch, ConnectedAt: connectedAt})
+}
+
+// opClientsDeregister is the leave half (Close). Keyed under the caller's own
+// subject token, so a client can only remove its own entry.
+func (b *Bus) opClientsDeregister(ctx context.Context, clientID string) (json.RawMessage, error) {
+	b.removeConnected(clientID)
+	if err := b.backend.Delete(ctx, sx.BucketClients, clientID); err != nil {
+		return nil, fmt.Errorf("bus: clients.deregister: %w", err)
+	}
+	return json.Marshal(struct{}{})
+}
+
+// readEpoch reads the bus's protocol epoch from the public meta bucket (the value
+// bootstrap wrote). register returns it so the SDK hard-gates against it.
+func (b *Bus) readEpoch(ctx context.Context) (int, error) {
+	val, _, err := b.backend.Get(ctx, sx.BucketMeta, sx.MetaKeyEpoch)
+	if err != nil {
+		return 0, fmt.Errorf("read epoch: %w", err)
+	}
+	n, err := strconv.Atoi(string(val))
+	if err != nil {
+		return 0, fmt.Errorf("bad epoch %q: %w", val, err)
+	}
+	return n, nil
+}
+
+func (b *Bus) addConnected(id string) {
+	b.connectedMu.Lock()
+	b.connected[id] = struct{}{}
+	b.connectedMu.Unlock()
+}
+
+func (b *Bus) removeConnected(id string) {
+	b.connectedMu.Lock()
+	delete(b.connected, id)
+	b.connectedMu.Unlock()
 }
 
 func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339) }

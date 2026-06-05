@@ -76,6 +76,23 @@ const (
 // server-side relay it started.
 const OpSubscriptionStop = "subscription.stop"
 
+// OpClientsRegister and OpClientsDeregister are the internal connect-handshake
+// ops — the write half of the clients directory (clients.list is the read half).
+// The SDK registers on Connect and leaves on Close. Like subscription.stop they
+// are bus plumbing, not protocol operations (not in methods.json, no CLI/MCP
+// surface). Folding the epoch hard-gate into register keeps the handshake one
+// round-trip: register returns the bus's epoch (the SDK gates on it) and the
+// bus-stamped connected_at (the SDK clock-skew-checks against it).
+const (
+	OpClientsRegister   = "clients.register"
+	OpClientsDeregister = "clients.deregister"
+)
+
+// DrainSubID is the reserved sub-id for the cooperative-drain delivery on a
+// client's push space (sx.deliver.<id>.drain). It is not a real relay, so a
+// client may not use it as a message/artifact subscription id.
+const DrainSubID = "drain"
+
 // CallSubject builds the request subject for clientID invoking op.
 func CallSubject(clientID, op string) string { return APIPrefix + clientID + "." + op }
 
@@ -262,3 +279,27 @@ type ArtifactDelivery struct {
 type SubscriptionStopInput struct {
 	SubID string `json:"sub_id"`
 }
+
+// --- clients.register / clients.deregister (connect handshake) ---
+
+// RegisterInput carries the client's self-declared directory fields. The id is
+// the call's subject token (the bus stamps it as the record key), not the body,
+// so a client cannot register under an identity it did not authenticate as.
+type RegisterInput struct {
+	DisplayName string `json:"display_name"`
+	Kind        string `json:"kind"`
+	Epoch       int    `json:"epoch"`
+	SDK         string `json:"sdk"`
+}
+
+// RegisterOutput returns the bus's protocol epoch (the SDK hard-gates on it) and
+// the bus-stamped connected_at (the SDK clock-skew-checks against it). The bus
+// registers the client only if its epoch matches; an incompatible client still
+// gets the epoch back so the SDK can fail loud without ever entering the directory.
+type RegisterOutput struct {
+	BusEpoch    int    `json:"bus_epoch"`
+	ConnectedAt string `json:"connected_at"`
+}
+
+// DeregisterInput leaves the directory; the id is the call's subject token.
+type DeregisterInput struct{}

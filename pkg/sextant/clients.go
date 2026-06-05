@@ -2,7 +2,6 @@ package sextant
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/love-lena/sextant/internal/wireapi"
@@ -35,31 +34,11 @@ type ClientInfo struct {
 	ConnectedAt time.Time
 }
 
-// registryRecord is a client's on-the-wire entry in the registry (the JSON
-// stored under its id in sx_clients). It is written by register (the connect
-// handshake, see client.go); ClientInfo is its public, parsed view.
-type registryRecord struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"display_name"`
-	Kind        string `json:"kind"`
-	Epoch       int    `json:"epoch"`
-	SDK         string `json:"sdk"`
-	ConnectedAt string `json:"connected_at"`
-}
-
-// checkRecordKey enforces the registry's identity invariant: a record's
-// self-reported id must equal the key it is filed under. The key is the
-// authoritative identity (what register writes under, and the identity the bus
-// authenticated the connection as — ADR-0012); the body id duplicates it. We
-// keep that duplicate field in the schema, but never trust it to diverge: a
-// mismatch is corruption, rejected on write so the SDK never files one (the bus
-// likewise sources the id from the key when it lists).
-func checkRecordKey(recordID, key string) error {
-	if recordID != key {
-		return fmt.Errorf("registry record id %q does not match its key %q", recordID, key)
-	}
-	return nil
-}
+// The registry record shape (the JSON stored under each id in sx_clients) is now
+// bus-owned: the bus writes it on clients.register and the SDK reads it back via
+// clients.list as a wireapi.ClientEntry. The id↔key identity invariant the SDK
+// used to guard is now structural — the bus keys every record under the call's
+// authenticated subject token, so the body id cannot diverge from the key.
 
 // ListClients returns the registry directory: every client connected right now,
 // sorted by id, via the clients.list operation (the bus reads the registry and

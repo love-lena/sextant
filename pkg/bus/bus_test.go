@@ -10,6 +10,7 @@ import (
 
 	"github.com/love-lena/sextant/internal/wireapi"
 	"github.com/love-lena/sextant/pkg/sx"
+	"github.com/love-lena/sextant/pkg/wire"
 	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -238,16 +239,50 @@ func TestClientCannotPublishControl(t *testing.T) {
 
 func TestDrainDelivers(t *testing.T) {
 	b := startTestBus(t)
-	nc := connectClient(t, b, "agent-1")
-	sub, err := nc.SubscribeSync(sx.SubjectDrain)
+	const id = "agent-1"
+	nc := connectClient(t, b, id)
+	// Drain is delivered over the client's own push space; subscribe it first.
+	sub, err := nc.SubscribeSync(wireapi.DeliverSubject(id, wireapi.DrainSubID))
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = nc.Flush()
+	// The client must be registered for Drain to target it (Drain iterates the
+	// connected set, which clients.register populates).
+	if resp := call(t, nc, id, wireapi.OpClientsRegister, wireapi.RegisterInput{Epoch: wire.Epoch}); resp.Error != "" {
+		t.Fatalf("register: %s", resp.Error)
+	}
 	if err := b.Drain(); err != nil {
 		t.Fatalf("Drain: %v", err)
 	}
 	if _, err := sub.NextMsg(2 * time.Second); err != nil {
-		t.Errorf("client did not receive the drain broadcast: %v", err)
+		t.Errorf("client did not receive the drain delivery: %v", err)
+	}
+}
+
+// TestRegisterEpochGate pins the connect-handshake gate: clients.register returns
+// the bus epoch (so the SDK can hard-gate) but registers only an epoch-compatible
+// client — a mismatched one never enters the directory.
+func TestRegisterEpochGate(t *testing.T) {
+	b := startTestBus(t)
+	const id = "epoch-x"
+	nc := connectClient(t, b, id)
+
+	var out wireapi.RegisterOutput
+	resp := call(t, nc, id, wireapi.OpClientsRegister, wireapi.RegisterInput{Epoch: wire.Epoch + 1})
+	if resp.Error != "" {
+		t.Fatalf("register: %s", resp.Error)
+	}
+	mustJSON(t, resp.Result, &out)
+	if out.BusEpoch != wire.Epoch {
+		t.Errorf("BusEpoch = %d, want %d", out.BusEpoch, wire.Epoch)
+	}
+
+	var list wireapi.ClientsListOutput
+	mustJSON(t, call(t, nc, id, wireapi.OpClientsList, struct{}{}).Result, &list)
+	for _, e := range list.Clients {
+		if e.ID == id {
+			t.Errorf("a mismatched-epoch client must not be in the directory: %+v", list.Clients)
+		}
 	}
 }

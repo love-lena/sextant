@@ -78,6 +78,9 @@ func validSubID(subID string) error {
 	if subID == "" {
 		return errors.New("subscription id is empty")
 	}
+	if subID == wireapi.DrainSubID {
+		return fmt.Errorf("subscription id %q is reserved", subID)
+	}
 	if len(subID) > 64 {
 		return fmt.Errorf("subscription id %q is too long (max 64)", subID)
 	}

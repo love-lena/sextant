@@ -8,6 +8,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `pkg/bus` + `pkg/sextant`: **the connect handshake moves through the bus**
+  (ADR-0019). The SDK no longer touches the backend directly at connect: it
+  registers with a `clients.register` call (the bus writes the directory record,
+  keyed by the client's authenticated id and stamped with the bus clock), leaves
+  with `clients.deregister` on `Close`, and the **protocol-epoch hard-gate is
+  folded into register** — the call returns the bus epoch, which the SDK
+  exact-matches, plus the bus-stamped `connected_at` for the clock-skew announce.
+  Cooperative **drain now delivers over each client's own push space**
+  (`sx.deliver.<id>.drain`) instead of a broadcast on `sx.control.*`, so a client
+  needs no permission beyond its delivery subscription to receive it; the bus
+  targets an in-memory connected set (authoritative, not the eventually-consistent
+  registry). This completes the "nothing direct" cutover for the whole data plane
+  **and** the connect handshake; only the per-client credential allow-list flip
+  (which makes the deny-only guardrail precise, and the stamped author
+  unforgeable) remains. The SDK's `Client` no longer holds a JetStream handle.
 - `pkg/bus` + `pkg/sextant`: **the push-stream operations and the artifact
   cutover** (ADR-0019). The bus now serves `message.subscribe` and
   `artifact.watch` as server-side relays into a client's private delivery space

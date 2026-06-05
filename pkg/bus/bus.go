@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/love-lena/sextant/internal/backend"
+	"github.com/love-lena/sextant/internal/wireapi"
 	"github.com/love-lena/sextant/pkg/sx"
 	"github.com/love-lena/sextant/pkg/wire"
 	natsserver "github.com/nats-io/nats-server/v2/server"
@@ -62,6 +63,12 @@ type Bus struct {
 	relayCancel context.CancelFunc
 	relaysMu    sync.Mutex
 	relays      map[string]map[string]*relay
+
+	// connected is the bus's live view of registered clients (clients.register
+	// adds, clients.deregister removes). Drain targets it directly — authoritative
+	// and zero-latency — rather than reading the eventually-consistent registry.
+	connectedMu sync.RWMutex
+	connected   map[string]struct{}
 }
 
 // Start launches the embedded bus under JWT auth and bootstraps the reserved
@@ -223,10 +230,22 @@ func waitReady(ctx context.Context, ns *natsserver.Server, max time.Duration) er
 	}
 }
 
-// Drain broadcasts the cooperative-drain control message (ADR-0010).
+// Drain delivers the cooperative-drain signal to every connected client over its
+// own push space (sx.deliver.<id>.drain), so a client needs no extra permission
+// beyond its delivery subscription to receive it (ADR-0010, ADR-0019). It targets
+// the in-memory connected set — the bus's authoritative live view — rather than
+// the eventually-consistent registry.
 func (b *Bus) Drain() error {
-	if err := b.opConn.Publish(sx.SubjectDrain, nil); err != nil {
-		return fmt.Errorf("bus: publish drain: %w", err)
+	b.connectedMu.RLock()
+	ids := make([]string, 0, len(b.connected))
+	for id := range b.connected {
+		ids = append(ids, id)
+	}
+	b.connectedMu.RUnlock()
+	for _, id := range ids {
+		if err := b.opConn.Publish(wireapi.DeliverSubject(id, wireapi.DrainSubID), nil); err != nil {
+			return fmt.Errorf("bus: publish drain to %s: %w", id, err)
+		}
 	}
 	return b.opConn.Flush()
 }
