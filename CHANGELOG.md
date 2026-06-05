@@ -8,6 +8,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `pkg/bus`: the bus now **serves the protocol's operations** as calls over the
+  Wire API (ADR-0018, ADR-0019). A client makes a NATS request to
+  `sx.api.<clientID>.<operation>`; the bus serves it against the backend interface
+  (`internal/backend`), **stamps the frame** (id ULID, author from the call's
+  subject token, kind, epoch; artifacts also revision + createdAt/updatedAt), and
+  replies. Request/reply operations land here — `message.publish`, `message.read`
+  (cursor-pull), `artifact.create/update/get/delete`, `clients.list` — with
+  bounded concurrent responders (no head-of-line blocking) and reply-after-ack.
+  The push-stream operations (`message.subscribe`, `artifact.watch`) and the SDK
+  cutover follow. `internal/wireapi` defines the call subject scheme + the
+  per-operation request/response shapes shared by the bus and SDK.
 - `internal/backend`: the backend interface — the semantic contract
   (`protocol/semantic-contract.md`) as one internal Go interface the bus
   implements the operations against: a durable, ordered, replayable log

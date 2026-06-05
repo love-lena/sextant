@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/love-lena/sextant/internal/backend"
 	"github.com/love-lena/sextant/pkg/sx"
 	"github.com/love-lena/sextant/pkg/wire"
 	natsserver "github.com/nats-io/nats-server/v2/server"
@@ -36,12 +37,19 @@ type Config struct {
 	Port int
 }
 
-// Bus is a running embedded NATS server with the sx namespace bootstrapped.
+// Bus is a running embedded NATS server with the sx namespace bootstrapped. It
+// also serves the protocol's operations as calls over the Wire API (serve.go).
 type Bus struct {
 	ns     *natsserver.Server
 	opConn *nats.Conn
 	url    string
 	store  string
+
+	// Operation serving (ADR-0018/0019): the backend the operations run against,
+	// the Wire API subscription, and the bounded worker semaphore.
+	backend backend.Backend
+	apiSub  *nats.Subscription
+	apiSem  chan struct{}
 }
 
 // Start launches the embedded bus under JWT auth and bootstraps the reserved
@@ -112,6 +120,14 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 	b.opConn = opConn
 
 	if err := b.bootstrap(ctx); err != nil {
+		opConn.Close()
+		ns.Shutdown()
+		return nil, err
+	}
+
+	// Start serving the protocol's operations before any client can connect, so a
+	// client that connects the instant the listener opens can immediately call.
+	if err := b.startServing(); err != nil {
 		opConn.Close()
 		ns.Shutdown()
 		return nil, err
@@ -205,6 +221,7 @@ func (b *Bus) Drain() error {
 
 // Shutdown stops the embedded server and closes the operator connection.
 func (b *Bus) Shutdown() {
+	b.stopServing()
 	if b.opConn != nil {
 		b.opConn.Close()
 	}
