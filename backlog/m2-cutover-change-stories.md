@@ -195,8 +195,8 @@ even that.
 to a per-client **allow-list** scoped to its bus-minted ULID:
 
 ```
-Pub.Allow = [ sx.api.<id>.>            ]   # only its own calls
-Sub.Allow = [ sx.deliver.<id>.> , _INBOX.> ]   # own deliveries + reply inbox
+Pub.Allow = [ sx.api.<id>.>                      ]  # only its own calls
+Sub.Allow = [ sx.deliver.<id>.> , _INBOX.<id>.>  ]  # own deliveries + own inbox
 ```
 
 **Why this is the keystone.** The subject token a client publishes a call
@@ -210,13 +210,21 @@ written to earn.
 
 **Two decisions worth your eye:**
 
-1. **`_INBOX.>` is mandatory; `Resp` is omitted.** A client's own request
-   receives the bus's reply on its inbox, so `_INBOX.>` must be
-   subscribable or every call times out. `allow_responses` (`Resp`) is
-   *not* needed — the client is a requester, never a responder — and is
-   deliberately left out to keep the surface minimal. Confirmed
-   empirically: the full SDK suite is green with `_INBOX.>` alone. (An
-   independent adversarial review of this property was run; see the PR.)
+1. **A per-client inbox (not the shared `_INBOX.>`); `Resp` omitted.** A
+   client's own request receives the bus's reply on its inbox, so the inbox
+   must be subscribable or every call times out. The first cut allowed the
+   shared `_INBOX.>` — and an **independent adversarial review caught a
+   [High] gap**: with the wildcard, any client could subscribe `_INBOX.>`
+   and passively receive *every other* client's call replies. Forgery was
+   never possible (a client can't publish to an inbox to spoof a reply), but
+   reply *confidentiality* wasn't held. Fixed in the follow-up commit with a
+   **per-client inbox**: the credential allows only `_INBOX.<id>.>`, the SDK
+   sets a matching `nats.CustomInboxPrefix`, and a regression test pins that
+   a client cannot subscribe the shared/foreign inbox. `allow_responses`
+   (`Resp`) is *not* needed — the client is a requester, never a responder —
+   and is deliberately left out. The review also hardened the id→permission
+   path with a fail-loud guard for any future non-ULID id. (Full review +
+   resolution are on the PR.)
 
 2. **Operator-side write seams.** Because clients now have *no* direct
    backend access, the only writes that can set up a different epoch, a
