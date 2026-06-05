@@ -3,6 +3,7 @@ id: doc-1
 title: Roadmap
 type: other
 created_date: '2026-06-04 18:18'
+updated_date: '2026-06-04 22:01'
 ---
 
 Thin map of the rebuild's milestones — order, goal, definition-of-done, and the
@@ -12,20 +13,48 @@ Numbers are *sequence, not hard gates* (e.g. M3 can be probed early).
 
 ## M1 · Core protocol + SDK — ✅ Done
 The minimal thing Sextant *is*: the bus (embedded NATS, JWT auth, `sx` namespace),
-the wire atom (envelope · epoch · skew), the two primitives (Messages · Artifacts),
-the Go SDK (connect · domain verbs · drain), and the clients registry.
+the wire atom (the frame · epoch · skew validation), the two primitives
+(Messages · Artifacts), the Go SDK (connect · operations · drain), and the
+clients registry.
 
 ## M2 · MVP — clients communicate, manually started
-**Goal:** agents talk over the bus, and you can drive + observe them — no dash,
+**Goal:** clients talk over the bus, and you can drive + observe them — no dash,
 dispatcher, or coordinator.
-**Done when:** a BYO harness joins via the MCP/skill under its own identity and
-exchanges messages + shares artifacts; a test CLI (`tail · publish · clients ·
-artifact get/put/watch`) can drive and observe it; both expose the *same*
-domain-verb surface; the reference clients agree on record shapes; one documented
-path brings up the bus + a manual client fleet on a host; and an e2e walkthrough
-shows ≥2 manually-started clients exchanging messages + artifacts.
-**Tickets:** TASK-22 (MCP server + skill) · TASK-28 (test CLI) · TASK-12 (lexicon
-subset: chat + artifact shapes) · TASK-27 (run ergonomics + getting-started).
+
+**Built on ADR-0018 (the keystone re-arch, mid-design):** **Sextant *is* the
+bus** — one process that *implements* the operations over a pluggable backend
+(behind one internal interface), stamps the **frame**, and enforces identity.
+This did **not** change the M2 *endpoint* below — it changed how we reach it (the
+SDK is now a client of the bus, not a NATS library). The whole implementation
+design is consolidated in **ADR-0019** (call transport · frame stamping ·
+bus-minted ULID identity · the backend interface · namespace enforcement ·
+SDK-as-bus-client) — the single design review that unlocks the build.
+
+**Done when:** a BYO harness joins via the MCP/skill under its own **bus-minted
+identity** and exchanges messages + shares artifacts; a test CLI (`subscribe ·
+publish · read · clients · artifact create/update/get/delete/watch` — exact
+operation-name parity, no aliases) can drive and observe it; both expose the
+**same operation surface** (a conformance test pins the parity mechanically); the
+reference clients agree on record shapes; one documented path brings up the bus +
+a manual client fleet on a host; and an e2e walkthrough shows ≥2 manually-started
+clients exchanging messages + artifacts.
+
+**Tickets (build order):**
+- **TASK-29** — implement ADR-0018: the bus implements the operations over the
+  backend interface. The foundation; splits into frame · backend interface ·
+  bus-serves-operations · SDK-as-client.
+- **TASK-30** — client identity: bus-minted ULID primary id + display_name
+  (settled before the faces bake in addressing).
+- **TASK-28** — test/operator CLI + the **conformance test** (the load-bearing
+  "one surface, many faces" guarantee).
+- **TASK-22** — MCP server + `claude/channel` + skill: BYO harnesses as
+  first-class clients, packaged as a Claude Code plugin.
+- **TASK-27** — run ergonomics + getting-started: the documented bring-up + the
+  e2e DoD walkthrough.
+- TASK-12 — lexicon subset (chat + artifact record shapes) — ✅ Done.
+
+M2 ships **Go only** — the Go SDK, the Go CLI, and the Go MCP server. (The
+TypeScript SDK is **Future**, TASK-5.)
 
 ## M3 · Cross-machine connectivity — spike, expands later
 **Goal:** reach the bus from another host (the real case: over SSH).
@@ -52,8 +81,9 @@ end-to-end (state→Artifact, control/events→Messages).
 **Tickets:** TASK-25 (Dispatcher / spawn) · TASK-26 (Workflow coordinator).
 
 ## Off the line
-- **Open design questions** — unresolved decisions gating later work (identity
-  mechanics, write-precision, retention, salvage inventory, creds reissue,
-  request/reply TBD).
+- **Open design questions** — unresolved decisions gating later work. Several are
+  folded into **ADR-0019** for M2 (identity mechanics TASK-8, the backend-contract
+  TASK-11, write-precision TASK-9); the rest stay parked (retention TASK-13,
+  salvage inventory TASK-14, creds reissue TASK-16, request/reply TBD TASK-23).
 - **Future** — deferred-but-wanted (TypeScript SDK, client liveness/heartbeat,
   DAG-CBOR, blob tier, multi-backend, Mastra, golangci-lint).

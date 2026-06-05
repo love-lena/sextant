@@ -37,7 +37,10 @@ They keep Sextant from regrowing what it deliberately is not:
 - Decisions → `docs/adr/` ([index](docs/adr/README.md)).
 - Shared language → [CONTEXT.md](CONTEXT.md).
 - Human reference + API → `docs/book/` (mdbook) — *forthcoming*.
-- What's next → Backlog.md (`backlog` CLI) — *tooling setup forthcoming*.
+- What's next → the **Roadmap** (milestones · goals · definition-of-done:
+  `backlog/docs/doc-1 - Roadmap.md`, or `backlog doc view doc-1`) and the
+  tickets that carry each milestone (`backlog` CLI). Tickets are the source of
+  truth; the roadmap is the narrative.
 
 ## Agent skills
 Per-repo config for the [mattpocock/skills](https://github.com/mattpocock/skills)
