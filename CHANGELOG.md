@@ -72,3 +72,6 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `msg.topic.<name>`. A topic is a named room (a naming convention over the
   messages space, not a bus construct); "channel" is reserved for the Claude
   Code harness push mechanism, to avoid the two colliding. See ADR-0017.
+- `pkg/sx`: renamed direct addressing `msg.agent.<id>` → `msg.client.<id>`
+  (`AgentSubject` → `ClientSubject`). "Client" is the universal term; "agent" is
+  not a Sextant concept. See ADR-0018 / CONTEXT.md.

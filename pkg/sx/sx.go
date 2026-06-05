@@ -68,8 +68,8 @@ const (
 // access control). "Channel" is reserved for the Claude Code harness mechanism.
 func TopicSubject(name string) string { return MessagePrefix + "topic." + name }
 
-// AgentSubject is the direct subject for a client: msg.agent.<id>.
-func AgentSubject(id string) string { return MessagePrefix + "agent." + id }
+// ClientSubject is the direct subject for a client: msg.client.<id>.
+func ClientSubject(id string) string { return MessagePrefix + "client." + id }
 
 // Buckets returns the reserved buckets created at bootstrap, with the history
 // depth each keeps.

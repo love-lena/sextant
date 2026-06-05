@@ -1,0 +1,34 @@
+{
+  "lexicon": 1,
+  "id": "client",
+  "defs": {
+    "main": {
+      "type": "object",
+      "description": "A clients registry entry stored under the client's verified id. Note: moving client identity to a ULID primary id plus a display_name is a forthcoming ADR-0018 follow-on; the fields below are the current shape.",
+      "required": ["id", "kind", "epoch", "sdk", "connected_at"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Client's verified identity; must equal the registry key."
+        },
+        "kind": {
+          "type": "string",
+          "description": "Self-declared client kind."
+        },
+        "epoch": {
+          "type": "integer",
+          "description": "Protocol epoch the client connected under."
+        },
+        "sdk": {
+          "type": "string",
+          "description": "SDK name and version that wrote the entry."
+        },
+        "connected_at": {
+          "type": "string",
+          "format": "datetime",
+          "description": "Client-reported RFC3339 connect time."
+        }
+      }
+    }
+  }
+}

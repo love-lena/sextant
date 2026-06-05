@@ -1,7 +1,7 @@
 ---
 status: accepted
 signed_off_by: lena
-date: 2026-06-02
+date: 2026-06-04
 ---
 
 # Sextant
@@ -23,15 +23,24 @@ The library you build a client with.
 _Avoid_: client library
 
 **Bus**:
-The shared substrate clients connect to in order to reach each other.
-_Avoid_: broker, server, queue
+What clients connect to in order to reach each other and their shared work — the
+sole access point, which implements the protocol's operations. It runs on a
+pluggable **backend**.
+_Avoid_: broker, server, queue, backend (the backend is what the bus runs on)
+
+**Backend**:
+The pluggable stream substrate the bus runs on, behind one internal interface;
+swappable (a different module per substrate) without changing the protocol.
+Opaque to clients.
+_Avoid_: naming a specific backend in client-facing docs; "batteries" as the
+formal term (only the embedded-convenience framing)
 
 **Message**:
 A typed record published on a subject, for events and conversation.
-_Avoid_: event (when you mean the envelope), packet
+_Avoid_: event (when you mean the frame), packet
 
 **Topic**:
-A named room on the bus that many clients publish to and subscribe to. A naming
+A named subject many clients publish to and subscribe to. A naming
 convention over the messages space, not a bus construct — it has no registry,
 membership, or access control.
 _Avoid_: channel (reserved for the Claude Code harness push mechanism), room,
@@ -43,9 +52,32 @@ A named, versioned unit of durable shared work, owned by one author at a time
 _Avoid_: document, file, blob, state
 
 **Record** / **Lexicon**:
-The typed content of a message. Its type is a *lexicon* — the schema, named on
-the record itself.
+The typed content a **frame** carries — user space. Its type is a *lexicon* —
+the schema, named on the record itself.
 _Avoid_: payload, body
+
+**Frame**:
+The bus-stamped wire wrapper around a record — id, kind, epoch, author. The
+**record is user space; the frame is bus space** (the bus produces it, not the
+client). `kind` discriminates a frame: a **message** in flight, an **artifact**
+at rest.
+_Avoid_: envelope (renamed), wrapper, header
+
+**Operation**:
+A domain action the bus implements and a client invokes — publish, read, the
+artifact operations, listing clients. The set of operations is the protocol's
+surface.
+_Avoid_: verb, method, command, RPC
+
+**Call**:
+A client invoking an operation on the bus and receiving its result — the
+client↔bus path.
+_Avoid_: request/reply (that is client↔client)
+
+**Request / reply**:
+A client↔client exchange: one client sends a request to another and gets a reply.
+Distinct from a **call** (client↔bus).
+_Avoid_: using "request/reply" for the client↔bus call
 
 **Clients registry**:
 The self-maintained directory of which clients are present.
@@ -54,7 +86,8 @@ the registry itself), service discovery
 
 **Workflow**:
 A multi-step collaboration, driven by a coordinator client.
-_Avoid_: pipeline, job, DAG (shapes a workflow may take, not the thing itself)
+_Avoid_: pipeline, job, DAG (shapes a workflow may take, not the thing itself);
+using "workflow" loosely for any scenario — that is a *use case*, not a Workflow
 
 **Coordinator**:
 The client that drives a workflow's steps and records its progress.
@@ -86,6 +119,8 @@ _Avoid_: kill (reserve that for forcing a process from the outside)
   **clients**. Both coordinator and dispatcher are just clients.
 - The **clients registry** lists clients; **presence** is its liveness view —
   who is currently alive, judged at read-time from heartbeat freshness.
+- A **client** makes a **call** to invoke an **operation** on the **bus**; the bus
+  stamps a **frame** around the record and stores or relays it via the **backend**.
 
 ## Flagged ambiguities
 
@@ -98,3 +133,12 @@ _Avoid_: kill (reserve that for forcing a process from the outside)
 - "channel" named both a bus room and the Claude Code harness push mechanism —
   resolved: the bus concept is a **topic**; "channel" is reserved for the
   harness mechanism (ADR-0017).
+- "envelope" for the wire wrapper — resolved: it is a **frame** (record = user
+  space, frame = bus space).
+- "verb" for a protocol action — resolved: an **operation**.
+- "face" for the ways to reach the bus (SDK / Wire API) — considered and
+  dropped: no collective noun; they are just how a client speaks the protocol.
+- "agent" for a participant or a direct-address target — resolved: the universal
+  term is **client** (direct addressing names a client, not an "agent").
+- "request/reply" used for the client↔bus path — resolved: request/reply is
+  **client↔client**; the client↔bus path is a **call** (ADR-0018).
