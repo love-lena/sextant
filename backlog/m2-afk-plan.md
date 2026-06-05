@@ -64,10 +64,9 @@ This is the live tracker for the autonomous M2 build. Design = ADR-0018/0019 +
         all green. TestDrainDelivers rewritten; new TestRegisterEpochGate.
   - [x] 5d-ii THE ALLOW-LIST FLIP — the security keystone. **PR #85**
         (`feat/m2-allowlist`, off #84). clientPermissions(clientID) deny→allow:
-        `Pub.Allow:[sx.api.<id>.>]`, `Sub.Allow:[sx.deliver.<id>.>, _INBOX.>]`.
-        `Resp` (allow_responses) NOT needed and OMITTED — the client is a requester,
-        never a responder; the full SDK suite is green with `_INBOX.>` alone
-        (minimal surface, confirmed empirically). With this NOTHING is direct →
+        `Pub.Allow:[sx.api.<id>.>]`, `Sub.Allow:[sx.deliver.<id>.>,
+        _INBOX.<id>.>]`. `Resp` (allow_responses) NOT needed and OMITTED — the
+        client is a requester, never a responder. With this NOTHING is direct →
         author unforgeable. Operator-side write seams added on `*Bus` (real methods,
         not on opConn): `SetEpoch`/`SeedClientRecord`/`DeleteClientRecord`/
         `InjectMessage` — the writes only the bus can do now clients have no backend
@@ -79,6 +78,12 @@ This is the live tracker for the autonomous M2 build. Design = ADR-0018/0019 +
         ULID as the call subject** (the deny-only suite used arbitrary tokens; the
         allow-list rejects them — this was the non-obvious breakage). KEPT
         TestNoOperatorOnlyBucket + TestClientCannotPublishControl (stronger now).
+        **Follow-up `681d620` (review fix):** independent Codex adversarial review
+        found a [High] gap — shared `_INBOX.>` let any client eavesdrop on every
+        other client's call replies. Fixed with a PER-CLIENT inbox: credential
+        allows only `_INBOX.<id>.>`, SDK sets matching `nats.CustomInboxPrefix`
+        (`wireapi.InboxPrefix`), + `TestClientCannotSubscribeForeignInbox`. Also
+        hardened clientPermissions with a fail-loud guard for non-token ids.
   - [ ] 5.5 artifact-ULID-addressing + artifact.list (§3 artifact half; methods.json name→id).
 - [x] **PR6 `feat/m2-cli`** — TASK-28: CLI (op-name parity) + conformance test. **PR #82**.
       Smoke-verified the M2 loop end-to-end (2 clients exchange msg + CAS artifact via bus).
@@ -99,10 +104,23 @@ through the bus and the stamped author is unforgeable — the M2 SDK↔bus cutov
 done.
 
 Current goal (Stop hook, 2026-06-05): *cutover complete + all PRs self-reviewed +
-change stories sent to Lena's Manta for review.* Cutover ✓. Remaining standing-goal
-work: **(1) self-review the #76–#85 stack**, **(2) write per-PR change stories and
-send them to the Manta** (manta skill → `editorial.sh --to-manta`; change stories
-are review narratives, not the protocol book).
+change stories sent to Lena's Manta for review.* **ALL THREE DONE:**
+- **(1) Cutover** ✓ — #85 + the per-client-inbox review fix; full stack green.
+- **(2) Self-review** ✓ — a self-review comment on every PR #76–#85 (a reviewer's
+  guide: what to scrutinize + residual flags), and an independent Codex adversarial
+  review of the keystone (#85) that caught the eavesdrop gap, now fixed + posted.
+- **(3) Change stories** ✓ — `backlog/m2-cutover-change-stories.md` rendered to an
+  editorial PDF and uploaded to the Manta `/INBOX/m2-cutover-change-stories.pdf`
+  (device pulls on next sync).
+
+**Blocked on human review** — the standing AFK goal is met. When Lena returns: she
+reviews + merges the #76–#85 stack bottom-up (never `--admin`); annotations come
+back via the Manta `/EXPORT` (pull with `flatten.sh`). Open review flags to expect:
+operator write-seams placement (#85), `clients.list` skip-quietly shift (#81), the
+deferred crash-teardown → TASK-20 (#83), drain-as-signal vs os.Exit (ADR-0010).
+
+Next BUILD work (not part of the review goal): **PR5.5** artifact-ULID-addressing +
+artifact.list, **PR7** MCP (TASK-22), **PR8** ergonomics + M2 DoD e2e (TASK-27).
 
 Remaining BUILD work (beyond the current review goal): **PR5.5**
 artifact-ULID-addressing + artifact.list (§3 artifact half; methods.json name→id),
