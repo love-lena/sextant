@@ -8,6 +8,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `internal/backend`: the backend interface — the semantic contract
+  (`protocol/semantic-contract.md`) as one internal Go interface the bus
+  implements the operations against: a durable, ordered, replayable log
+  (`Append`/`Read`/`Subscribe`, cursor = a bus-opaque synthesized sequence) and
+  versioned records (`Create`/`Put`/`CompareAndSet`/`Get`/`Delete`/`Watch`/`Keys`,
+  CAS on revision). A deep module behind a narrow interface; frame semantics stay
+  in the bus. `internal/backend/natsbackend` is the first module (JetStream + KV);
+  `internal/backend/conformance` is the executable contract every backend module
+  must pass — so a future Redis module is portable by construction. See ADR-0018,
+  ADR-0019.
+
 - Go module (`github.com/love-lena/sextant`) and the polyglot-monorepo skeleton.
 - `pkg/wire`: the wire atom — the JSON `Envelope` (`{id, sender, kind, epoch,
   record}`), the protocol `Epoch`, ULID-timestamp skew validation (`CheckSkew`,
