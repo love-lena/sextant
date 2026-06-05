@@ -309,19 +309,32 @@ func operatorPermissions() jwt.Permissions { return jwt.Permissions{} }
 // asking the bus over a call — never directly — so there is no stream or bucket
 // lifecycle to squat and no operator state to read.
 func clientPermissions(clientID string) jwt.Permissions {
+	// The id is woven into NATS subject patterns below, so it must be a single
+	// plain subject token. A bus-minted ULID always is; this guards the security
+	// path against a future custom-id path slipping in a `.` (which would misparse
+	// the call subject) or a wildcard (`*`/`>`, which would broaden the allow-list
+	// past the client's own scope). Fail loud — a malformed id here is a
+	// programming error on the trust path, not user input.
+	if strings.ContainsAny(clientID, ".*> \t\r\n") || clientID == "" {
+		panic(fmt.Sprintf("bus: client id %q is not a single subject token (allow-list scoping is unsafe)", clientID))
+	}
 	var p jwt.Permissions
 	// Publish: only this client's own Wire API call space (sx.api.<id>.>). The
 	// <id> in the subject is the authenticated identity, so the author the bus
 	// stamps from it cannot be forged.
 	p.Pub.Allow = []string{wireapi.APIPrefix + clientID + ".>"}
 	// Subscribe: this client's own push-delivery space (subscribe/watch/drain
-	// deliveries: sx.deliver.<id>.>) and the request/reply inbox. _INBOX.> is
-	// mandatory — a client's own nc.Request receives the bus's reply there, so
-	// without it every call would time out. (allow_responses governs only a
-	// responder replying outward; it does not let a requester receive a reply.)
+	// deliveries: sx.deliver.<id>.>) and its OWN request/reply inbox
+	// (_INBOX.<id>.>). The inbox must be subscribable or a client's own nc.Request
+	// never receives the bus's reply and every call times out. It is scoped per
+	// client, not the shared _INBOX.> — otherwise any client could subscribe the
+	// wildcard and eavesdrop on every other client's call replies. The SDK sets a
+	// matching nats.CustomInboxPrefix so its replies land under this prefix.
+	// (allow_responses/Resp is not needed: a client is a requester, never a
+	// responder.)
 	p.Sub.Allow = []string{
 		wireapi.DeliverPrefix + clientID + ".>",
-		"_INBOX.>",
+		wireapi.InboxPrefix(clientID) + ".>",
 	}
 	return p
 }

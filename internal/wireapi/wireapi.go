@@ -31,6 +31,16 @@ const WildcardSubject = APIPrefix + "*.>"
 // delivery): sx.deliver.<clientID>.<stream>. Owner-subscribe only.
 const DeliverPrefix = "sx.deliver."
 
+// InboxPrefix is a client's private request/reply inbox prefix:
+// _INBOX.<clientID>. The SDK sets it as the connection's custom inbox (so its
+// call replies land under it) and the credential allow-lists subscribing only to
+// <prefix>.>. This is per-client on purpose: the default shared _INBOX.> would
+// let any client subscribe the wildcard and eavesdrop on every other client's
+// call replies. The bus replies (on its operator connection) to whatever inbox a
+// request carried, so it needs no knowledge of the prefix. The returned value
+// has no trailing dot — nats.CustomInboxPrefix appends ".<token>" itself.
+func InboxPrefix(clientID string) string { return "_INBOX." + clientID }
+
 // DisplayNameTag is the JWT tag prefix carrying a client's human display_name,
 // minted into the credential by the bus so the SDK reads it from the same
 // credential the bus authenticated (it cannot diverge from the identity). The

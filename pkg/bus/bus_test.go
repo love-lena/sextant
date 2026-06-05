@@ -80,6 +80,10 @@ func connectWithCreds(t *testing.T, b *Bus, id, path string, opts ...nats.Option
 func connectClient(t *testing.T, b *Bus, name string, opts ...nats.Option) (*nats.Conn, string) {
 	t.Helper()
 	_, path, id := mintCredsFile(t, b, name)
+	// Match the SDK: a per-client inbox so call replies land where the credential
+	// allows subscribing (_INBOX.<id>.>). Without it nc.Request uses the shared
+	// _INBOX prefix the allow-list denies and every call times out.
+	opts = append(opts, nats.CustomInboxPrefix(wireapi.InboxPrefix(id)))
 	return connectWithCreds(t, b, id, path, opts...), id
 }
 
@@ -249,6 +253,38 @@ func TestClientCannotPublishControl(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Error("expected a permissions-violation async error for an sx.control publish")
+	}
+}
+
+// TestClientCannotSubscribeForeignInbox pins reply confidentiality: a client may
+// subscribe only its own per-client inbox (_INBOX.<id>.>), never the shared
+// wildcard or another client's inbox — otherwise it could eavesdrop on every
+// other client's call replies (the bus replies on the requester's inbox).
+func TestClientCannotSubscribeForeignInbox(t *testing.T) {
+	b := startTestBus(t)
+	errCh := make(chan error, 8)
+	nc, _ := connectClient(t, b, "snoop",
+		nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, err error) {
+			select {
+			case errCh <- err:
+			default:
+			}
+		}))
+	// The shared wildcard and a foreign client's inbox are both outside this
+	// client's allow-list (_INBOX.<own-id>.>), so each subscribe is a violation.
+	for _, subj := range []string{"_INBOX.>", "_INBOX.someone-else.>"} {
+		if _, err := nc.SubscribeSync(subj); err != nil {
+			t.Fatalf("subscribe returned a sync error for %q: %v", subj, err)
+		}
+	}
+	_ = nc.Flush()
+	select {
+	case err := <-errCh:
+		if !strings.Contains(err.Error(), "Permissions Violation") {
+			t.Errorf("expected a permissions violation, got: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("expected a permissions-violation for subscribing a shared/foreign inbox")
 	}
 }
 

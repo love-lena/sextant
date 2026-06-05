@@ -118,6 +118,12 @@ func Connect(ctx context.Context, opts Options) (*Client, error) {
 		url,
 		nats.UserCredentials(opts.CredsPath),
 		nats.Name(id),
+		// Use a per-client inbox so call replies land under _INBOX.<id>, which is
+		// the only inbox this credential may subscribe to. Without it the client
+		// would use the shared _INBOX prefix the allow-list denies — every call
+		// would time out — and a shared inbox would let other clients eavesdrop on
+		// our replies. Must match wireapi.InboxPrefix / clientPermissions.
+		nats.CustomInboxPrefix(wireapi.InboxPrefix(id)),
 		nats.MaxReconnects(-1), // connection-loss != exit; reconnect forever
 		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
 			if err != nil {

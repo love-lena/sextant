@@ -12,11 +12,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (ADR-0019). Each minted credential now carries a per-client JWT allow-list
   scoped to its bus-minted ULID: it may publish **only** under its own call
   prefix (`sx.api.<id>.>`) and subscribe **only** to its own delivery space
-  (`sx.deliver.<id>.>`) plus the request/reply inbox (`_INBOX.>`). Because the
-  subject token a client publishes a call under is now exactly the identity NATS
-  authenticated, the author the bus stamps from it **cannot be forged** — and
-  with this flip nothing reaches the messages stream, the KV buckets, or the
-  control space except by asking the bus over a call. This is the last slice of
+  (`sx.deliver.<id>.>`) plus its own per-client request/reply inbox
+  (`_INBOX.<id>.>`, with a matching `nats.CustomInboxPrefix` on the SDK
+  connection — a per-client inbox, not the shared `_INBOX.>`, so one client
+  cannot eavesdrop on another's call replies). Because the subject token a client
+  publishes a call under is now exactly the identity NATS authenticated, the
+  author the bus stamps from it **cannot be forged** — and with this flip nothing
+  reaches the messages stream, the KV buckets, or the control space except by
+  asking the bus over a call. This is the last slice of
   the "nothing direct" cutover: the data plane (messages + artifacts) and the
   connect handshake already flowed through the bus; the credential is now precise
   rather than deny-only. The bus also gains operator-side write seams
