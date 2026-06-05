@@ -86,13 +86,17 @@ const (
 // server-side relay it started.
 const OpSubscriptionStop = "subscription.stop"
 
-// OpClientsRegister and OpClientsDeregister are the internal connect-handshake
-// ops — the write half of the clients directory (clients.list is the read half).
-// The SDK registers on Connect and leaves on Close. Like subscription.stop they
-// are bus plumbing, not protocol operations (not in methods.json, no CLI/MCP
-// surface). Folding the epoch hard-gate into register keeps the handshake one
-// round-trip: register returns the bus's epoch (the SDK gates on it) and the
-// bus-stamped connected_at (the SDK clock-skew-checks against it).
+// OpClientsRegister and OpClientsDeregister are the connect-handshake ops — the
+// write half of the clients directory (clients.list is the read half). A client
+// registers itself by calling clients.register, and the bus validates that call
+// like any other: it keys the record by the caller's authenticated id (never the
+// body), so a client can only ever register *as itself*. They are control ops,
+// not user-invoked protocol operations (not in methods.json, no CLI/MCP surface) —
+// the SDK issues them automatically on Connect and Close — but they are
+// first-class, bus-validated requests, not a side channel. Folding the epoch
+// hard-gate into register keeps the handshake one round-trip: register returns
+// the bus's epoch (the SDK gates on it) and the bus-stamped connected_at (the SDK
+// clock-skew-checks against it).
 const (
 	OpClientsRegister   = "clients.register"
 	OpClientsDeregister = "clients.deregister"
