@@ -54,6 +54,8 @@ This is the live tracker for the autonomous M2 build. Design = ADR-0018/0019 +
   - [ ] 5.5 artifact-ULID-addressing + artifact.list (§3 artifact half; methods.json name→id).
 - [x] **PR6 `feat/m2-cli`** — TASK-28: CLI (op-name parity) + conformance test. **PR #82**.
       Smoke-verified the M2 loop end-to-end (2 clients exchange msg + CAS artifact via bus).
+      Recorded the loop as a charm-VHS demo (`docs/demos/m2-collaboration-loop.{tape,gif}`),
+      committed onto #82 (`1651951`).
 - [ ] **PR7 `feat/m2-mcp`** — TASK-22: MCP server + channel + skill (CC plugin).
 - [ ] **PR8 `feat/m2-ergonomics`** — TASK-27: run/up --with-dir/per-client creds/
       --reclaim + getting-started + M2 DoD e2e.
