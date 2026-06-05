@@ -1,6 +1,6 @@
 ---
-status: proposed
-signed_off_by: null
+status: accepted
+signed_off_by: lena
 date: 2026-06-04
 ---
 
@@ -79,29 +79,24 @@ carry it — never honoured.
 ## 3 — Bus-minted ULID is the identity for everything trusted; `display_name` is the human handle
 
 Every serious id is a **bus-minted ULID** — unforgeable, collision-free, owned by
-the bus: the `frame.id` of every message and artifact, and the client id (minted
-by `sextant token`, carried in the credential, so it is exactly the authenticated
-identity). A **`display_name`** is the human-readable handle on top. The two split
-cleanly by who owns the namespace:
+the bus: the `frame.id` of every message and artifact, the client id (minted by
+`sextant token`, carried in the credential, so it is exactly the authenticated
+identity), and the artifact's id. **Identity and addressing are uniform: all three
+entity types — clients, messages, artifacts — are identified *and addressed* by
+their ULID.** A **`display_name`** is a non-keying, human-readable **attribute** on
+clients and artifacts — never their address: `clients.list` returns ULID +
+display_name, and a display_name resolves to a ULID through the registry/index when
+a human wants a handle. So `author` is a ULID; direct addressing is
+`msg.client.<ULID>`; and artifacts are created, fetched, updated, and deleted by
+their ULID `id`.
 
-- **Clients** are keyed by **ULID** — the registry key, the `author`, and
-  `msg.client.<ULID>`. `display_name` is an attribute; `clients.list` returns
-  both, and addressing a client by name resolves through the registry. Clients
-  are bus-managed, so the resolution is cheap and the index *is* the registry.
-- **Artifacts** are keyed by an **immutable `display_name`** — the shared handle
-  collaborators name ("the plan"). The bus enforces uniqueness with an atomic
-  create-if-absent on that single key (no secondary index, no resolution
-  round-trip), and the frame still carries a bus-minted ULID `id` for trust and
-  dedup. The name is the **address**; the ULID is the **trusted identity**. M2
-  has no rename — renaming is create-new + delete-old by convention — so no
-  alias or stale-reference semantics are owed.
-
-This is decisive on the one open question (artifact addressing): **address by
-display_name, identify by ULID.** It is also the call I'd most welcome you
-overriding — the alternative is ULID-keyed artifacts behind a name index, purer
-but forcing a lookup on every op and an opaque CLI. It consolidates TASK-30 +
-TASK-8, un-defers `display_name` (the MVP needs handles), and on acceptance
-changes `methods.json`'s artifact `name` → `display_name`.
+This consolidates TASK-30 (client identity) and TASK-8. **The decision: ULID is
+the address everywhere; `display_name` is an attribute, never a key.** It is the
+uniform, purest model — the bus mints and owns every id, and nothing is addressed
+by a forgeable or renameable human string — at the cost of a `display_name`→ULID
+lookup when a human reaches a thing by name. On acceptance, `methods.json`'s
+artifact operations address by `id` (ULID) and `display_name` becomes an optional
+attribute set at create.
 
 ## 4 — The backend interface is the semantic contract as a small Go interface, shaped to the protocol and checked against Redis
 
@@ -137,6 +132,13 @@ identity from §1 is what makes own-row-only enforceable: the bus knows the call
 so it scopes every write. The client credential still cannot reach `msg.*`/KV
 directly (defense in depth), but correctness now lives in the bus.
 
+This section is **design philosophy more than a hard M2 requirement**: the intent
+is that correctness lives in the bus, and an idiomatic implementation that leans on
+the embedded NATS server's own guarantees is fine — we are building Sextant in a
+very NATS way, and that is okay. The hard, security-critical guarantee is the
+unforgeable `author` (§1); own-row write-precision (TASK-9) is the direction, not a
+gate.
+
 ## 6 — The SDK becomes a thin client of the Wire API; Go only for M2
 
 `pkg/sextant` stops driving NATS for the primitives: `Publish` / `Subscribe` /
@@ -145,11 +147,23 @@ directly (defense in depth), but correctness now lives in the bus.
 skew/epoch checks. The SDK is a convenience over the wire, not the protocol. M2
 ships the **Go** SDK, CLI, and MCP server; the TypeScript SDK is Future (TASK-5).
 
+**Packaging boundary.** Only the SDK is public. Sextant's own implementation — the
+bus, the operation responders, the backend interface and its modules — lives under
+Go `internal/` packages; `pkg/sextant` (the SDK) is the single exported module
+other programs import. And the modules are **deep**: narrow interfaces over
+substantial implementations (the backend interface is the exemplar — one small
+surface, a whole NATS module behind it). A broader refactor will follow; for now,
+design deep.
+
 ## Consequences (applied by TASK-29/30)
 
 - `pkg/wire`: `Envelope`→`Frame`, `sender`→`author`, ULID ids, artifact frame fields.
-- `protocol/methods.json`: artifact `name` → `display_name` (per §3); the
-  call/stamping model documented.
+- `protocol/methods.json`: artifact operations address by `id` (ULID) per §3;
+  `display_name` becomes an optional create-time attribute; the call/stamping
+  model documented.
+- Repo layout: Sextant's implementation moves under `internal/`; `pkg/sextant`
+  (the SDK) is the only exported module (per §6), with deep modules behind narrow
+  interfaces.
 - `protocol/semantic-contract.md`: unchanged in spirit — now *realized* as the Go
   interface.
 - `pkg/bus`: gains the operation responders (concurrent, bounded, reply-after-ack),

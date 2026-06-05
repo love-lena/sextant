@@ -25,7 +25,7 @@ human has signed off — see
 | [0016](0016-artifacts-are-lexicon-records.md) | Artifacts are Lexicon records | accepted |
 | [0017](0017-the-verb-surface-is-the-protocol.md) | The verb surface is the protocol | accepted |
 | [0018](0018-the-bus-implements-the-protocol.md) | The bus implements the protocol over a pluggable stream backend | accepted |
-| [0019](0019-implementing-the-bus.md) | Implementing the bus: call transport, frame stamping, and identity | proposed |
+| [0019](0019-implementing-the-bus.md) | Implementing the bus: call transport, frame stamping, and identity | accepted |
 
 ## Review batches
 - **Batch 1 — substrate:** 0004–0007 — *accepted*
