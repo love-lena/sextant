@@ -98,63 +98,8 @@ func TestListClientsReflectsDeregister(t *testing.T) {
 	}
 }
 
-// TestListClientsEmptyDirectory covers the empty-bucket path: NATS KV returns a
-// no-keys sentinel rather than an empty list, and ListClients must translate
-// that to an empty slice (not an error). We force it by deleting the caller's
-// own entry out from under it via a raw KV handle.
-func TestListClientsEmptyDirectory(t *testing.T) {
-	b := startBus(t)
-	c := dialClient(t, b, "c-solo")
-
-	// Delete the sole entry out from under the live client via the operator seam
-	// (a client cannot touch the registry directly), forcing the empty-bucket path.
-	if err := b.DeleteClientRecord(readCtx(t), c.ID()); err != nil {
-		t.Fatalf("delete sole entry: %v", err)
-	}
-	got, err := c.ListClients(t.Context())
-	if err != nil {
-		t.Fatalf("ListClients on empty directory should not error: %v", err)
-	}
-	if len(got) != 0 {
-		t.Fatalf("empty directory returned %d clients: %+v", len(got), got)
-	}
-}
-
-// TestListClientsSkipsCorruptRecords: clients.list is now served by the bus,
-// which reads the whole registry on every client's behalf, so a single corrupt
-// record skips quietly rather than failing the listing for everyone (a
-// deliberate robustness change from the old SDK-direct fail-loud). The
-// well-formed caller is still returned; the corrupt keys are not.
-func TestListClientsSkipsCorruptRecords(t *testing.T) {
-	b := startBus(t)
-	c := dialClient(t, b, "c-real")
-	// Seed corrupt registry records via the operator seam — a client can't write
-	// the registry directly, so this stands in for a record some other writer (or
-	// an older schema) left behind.
-	corrupt := map[string]string{
-		"c-badjson": "not json at all",
-		"c-badtime": `{"id":"c-badtime","kind":"x","epoch":1,"sdk":"y","connected_at":"not-a-time"}`,
-	}
-	for key, value := range corrupt {
-		if err := b.SeedClientRecord(readCtx(t), key, []byte(value)); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	got, err := c.ListClients(t.Context())
-	if err != nil {
-		t.Fatalf("ListClients should skip corrupt records, not error: %v", err)
-	}
-	sawReal := false
-	for _, ci := range got {
-		if _, bad := corrupt[ci.ID]; bad {
-			t.Errorf("corrupt record %q should have been skipped, got %+v", ci.ID, ci)
-		}
-		if ci.DisplayName == "c-real" {
-			sawReal = true
-		}
-	}
-	if !sawReal {
-		t.Errorf("the well-formed caller c-real should still be listed: %+v", got)
-	}
-}
+// The empty-directory and corrupt-record paths for ListClients are exercised by
+// TestListClientsEmptyDirectory / TestListClientsSkipsCorruptRecords in
+// package bus_test (pkg/bus/sdk_integration_test.go): they need to seed/delete
+// registry records the bus owns, which the operator seams there provide without a
+// production test surface. See docs/conventions/test-features.md.

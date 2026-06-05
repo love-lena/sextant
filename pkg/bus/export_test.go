@@ -8,20 +8,20 @@ import (
 	"github.com/love-lena/sextant/pkg/sx"
 )
 
-// Operator-side write seams: privileged writes the bus performs as the operator,
-// straight against the backend over its own full-access connection. They exist
-// because the per-client allow-list (ADR-0019) denies clients all direct backend
-// access — so the only way to establish bus state that no client could create
-// for itself (a different protocol epoch, a hand-seeded or corrupt registry
-// record, a raw frame that bypasses the bus's stamping) is for the bus to write
-// it. Tests use these to exercise the fail-loud and quarantine paths; they are
-// also the natural home for future operator tooling (epoch bumps, registry
-// surgery). They are not reachable over the wire — only the holder of the *Bus
-// has them, which already implies operator authority.
+// Test-only seams. This file is a _test.go file, so it is compiled only into the
+// bus package's test binary and never ships in any production build — yet because
+// it is package bus it can reach the unexported backend. It re-exports the
+// privileged writes the bus performs as the operator so the external bus_test
+// integration suite can set up state a client cannot create for itself: a
+// different protocol epoch, a hand-seeded or corrupt registry record, a raw frame
+// that bypasses the bus's stamping. That suite drives the real SDK against these,
+// exercising the fail-loud and quarantine paths the per-client allow-list now
+// makes unreachable from a client. See docs/conventions/test-features.md (rung 3): the
+// test lives in the package that owns the internals it pokes, so no build tag and
+// no production surface are needed.
 
-// SetEpoch overwrites the bus's published protocol epoch in the meta bucket. The
-// value clients read at connect changes immediately, so a subsequent connect with
-// a different compiled epoch fails the hard-gate.
+// SetEpoch overwrites the bus's published protocol epoch, so a subsequent connect
+// under a different compiled epoch fails the hard-gate.
 func (b *Bus) SetEpoch(ctx context.Context, epoch int) error {
 	if _, err := b.backend.Put(ctx, sx.BucketMeta, sx.MetaKeyEpoch, []byte(strconv.Itoa(epoch))); err != nil {
 		return fmt.Errorf("bus: set epoch: %w", err)
@@ -29,9 +29,9 @@ func (b *Bus) SetEpoch(ctx context.Context, epoch int) error {
 	return nil
 }
 
-// SeedClientRecord writes a raw registry record under id, bypassing the
-// register handshake. The bytes are stored verbatim (they may be malformed), so
-// the listing path's robustness can be exercised.
+// SeedClientRecord writes a raw registry record under id, bypassing the register
+// handshake. The bytes are stored verbatim (they may be malformed), so the
+// listing path's robustness can be exercised.
 func (b *Bus) SeedClientRecord(ctx context.Context, id string, record []byte) error {
 	if _, err := b.backend.Put(ctx, sx.BucketClients, id, record); err != nil {
 		return fmt.Errorf("bus: seed client record %q: %w", id, err)

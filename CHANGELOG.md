@@ -22,11 +22,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   asking the bus over a call. This is the last slice of
   the "nothing direct" cutover: the data plane (messages + artifacts) and the
   connect handshake already flowed through the bus; the credential is now precise
-  rather than deny-only. The bus also gains operator-side write seams
-  (`SetEpoch`, `SeedClientRecord`, `DeleteClientRecord`, `InjectMessage`) — the
-  privileged writes only the bus can perform now that clients have no direct
-  backend access, used to exercise the fail-loud and quarantine paths and a home
-  for future operator tooling.
+  rather than deny-only.
 - `pkg/bus` + `pkg/sextant`: **the connect handshake moves through the bus**
   (ADR-0019). The SDK no longer touches the backend directly at connect: it
   registers with a `clients.register` call (the bus writes the directory record,

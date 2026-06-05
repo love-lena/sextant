@@ -2,7 +2,6 @@ package sextant
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,7 +9,6 @@ import (
 
 	"github.com/love-lena/sextant/pkg/bus"
 	"github.com/love-lena/sextant/pkg/conninfo"
-	"github.com/love-lena/sextant/pkg/wire"
 )
 
 func startBus(t *testing.T) *bus.Bus {
@@ -112,31 +110,6 @@ func TestConnectViaConnInfoFile(t *testing.T) {
 		t.Fatalf("Connect via conn info: %v", err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
-}
-
-func TestEpochMismatchFailsLoud(t *testing.T) {
-	b := startBus(t)
-	// Move the bus epoch to something the client won't match. Under the allow-list
-	// a client cannot write sx_meta — only the bus can — so this is an operator
-	// write seam, which is also the honest shape of an epoch bump in production.
-	if err := b.SetEpoch(readCtx(t), 999); err != nil {
-		t.Fatal(err)
-	}
-	_, err := Connect(t.Context(), Options{
-		URL:       b.ClientURL(),
-		CredsPath: credsPath(t, b, "agent-epoch"),
-		Logf:      func(string, ...any) {},
-	})
-	if err == nil {
-		t.Fatal("expected connect to fail loud on epoch mismatch")
-	}
-	ee, ok := errors.AsType[*wire.EpochError](err)
-	if !ok {
-		t.Fatalf("expected a *wire.EpochError, got: %v", err)
-	}
-	if ee.Got != wire.Epoch || ee.Want != 999 {
-		t.Errorf("epoch error fields = %+v", ee)
-	}
 }
 
 func TestDrainClosesDrained(t *testing.T) {

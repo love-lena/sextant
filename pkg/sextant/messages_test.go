@@ -7,8 +7,6 @@ import (
 	"time"
 
 	"github.com/love-lena/sextant/pkg/sx"
-	"github.com/love-lena/sextant/pkg/wire"
-	"github.com/oklog/ulid/v2"
 )
 
 func TestPublishSubscribeRoundTrip(t *testing.T) {
@@ -115,102 +113,11 @@ func TestFetchMessages(t *testing.T) {
 	}
 }
 
-// TestSkewQuarantine injects a frame whose ULID time is far in the past
-// (bypassing the bus's stamping, via the operator seam) and verifies the receiver
-// quarantines it while still delivering a well-formed message — the SDK re-checks
-// the clock on consume, so a frame the bus would never stamp (here operator-
-// injected; in the field, replayed pre-skew history) cannot slip through.
-func TestSkewQuarantine(t *testing.T) {
-	b := startBus(t)
-	c := dialClient(t, b, "skew-rx")
-	ctx := t.Context()
-	subj := sx.TopicSubject("skew")
-
-	// A stale frame: ULID timestamp 10 minutes in the past (> 5m tolerance).
-	staleID := ulid.MustNew(ulid.Timestamp(time.Now().Add(-10*time.Minute)), ulid.DefaultEntropy()).String()
-	stale := wire.Frame{ID: staleID, Author: "rogue", Kind: wire.KindMessage, Epoch: wire.Epoch, Record: json.RawMessage(`{"stale":true}`)}
-	staleBytes, _ := wire.Encode(stale)
-	if _, err := b.InjectMessage(ctx, subj, staleBytes); err != nil {
-		t.Fatalf("inject stale: %v", err)
-	}
-	// A good frame, published normally.
-	if err := c.Publish(ctx, subj, json.RawMessage(`{"good":true}`)); err != nil {
-		t.Fatalf("Publish good: %v", err)
-	}
-
-	got := make(chan Message, 4)
-	sub, err := c.Subscribe(ctx, subj, func(m Message) { got <- m }, DeliverAll())
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-	defer sub.Stop()
-
-	select {
-	case m := <-got:
-		if m.Frame.ID == staleID {
-			t.Fatal("stale (skewed) message was delivered; should have been quarantined")
-		}
-		if string(m.Frame.Record) != `{"good":true}` {
-			t.Errorf("unexpected delivered record: %s", m.Frame.Record)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("did not receive the good message")
-	}
-}
-
-// TestQuarantinesInvalidFrames injects (raw, via the operator seam, bypassing the
-// bus's stamping) a wrong-epoch frame and a structurally-malformed one, and
-// verifies the receiver delivers only the well-formed message. Clients can no
-// longer place a non-conforming frame — the allow-list routes every write through
-// the bus — but defense-in-depth still re-checks the wire contract on consume:
-// retained history can predate an epoch bump, and a backend is not infallible.
-func TestQuarantinesInvalidFrames(t *testing.T) {
-	b := startBus(t)
-	c := dialClient(t, b, "quar-rx")
-	ctx := t.Context()
-	subj := sx.TopicSubject("quar")
-
-	// Wrong epoch (otherwise well-formed).
-	wrongEpoch := wire.New("rogue", json.RawMessage(`{"epoch":"wrong"}`))
-	wrongEpoch.Epoch = wire.Epoch + 1
-	weBytes, _ := wire.Encode(wrongEpoch)
-	if _, err := b.InjectMessage(ctx, subj, weBytes); err != nil {
-		t.Fatalf("inject wrong-epoch: %v", err)
-	}
-	// Structurally malformed: empty author (Validate rejects it).
-	bad := wire.New("", json.RawMessage(`{"bad":true}`))
-	badBytes, _ := wire.Encode(bad)
-	if _, err := b.InjectMessage(ctx, subj, badBytes); err != nil {
-		t.Fatalf("inject malformed: %v", err)
-	}
-	// A good message.
-	if err := c.Publish(ctx, subj, json.RawMessage(`{"good":true}`)); err != nil {
-		t.Fatalf("Publish good: %v", err)
-	}
-
-	got := make(chan Message, 8)
-	sub, err := c.Subscribe(ctx, subj, func(m Message) { got <- m }, DeliverAll())
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-	defer sub.Stop()
-
-	select {
-	case m := <-got:
-		if string(m.Frame.Record) != `{"good":true}` {
-			t.Errorf("delivered a quarantined message: record=%s epoch=%d author=%q",
-				m.Frame.Record, m.Frame.Epoch, m.Frame.Author)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("did not receive the good message")
-	}
-	// Nothing else should arrive — both bad frames were quarantined.
-	select {
-	case m := <-got:
-		t.Errorf("unexpected second delivery (should have been quarantined): %+v", m.Frame)
-	case <-time.After(300 * time.Millisecond):
-	}
-}
+// The skew- and invalid-frame quarantine paths are exercised by TestSkewQuarantine
+// / TestQuarantinesInvalidFrames in package bus_test (pkg/bus/sdk_integration_test.go):
+// they need to inject raw frames that bypass the bus's stamping — something a
+// client can no longer do under the allow-list — which the operator seam there
+// provides without a production test surface. See docs/conventions/test-features.md.
 
 // TestSubscribeStopsOnContextCancel verifies the subscription tears down when
 // the caller cancels the context it was created with, not only on Stop.
