@@ -42,11 +42,15 @@ This is the live tracker for the autonomous M2 build. Design = ADR-0018/0019 +
       (TASK-30 client half). **PR #79 (open)**. Artifact-ULID-addressing + artifact.list
       (the §3 artifact half) split to a later PR (entangled w/ SDK artifact methods).
 - [~] **PR5 `feat/m2-sdk-client`** — THE CUTOVER, sliced:
-  - [x] 5a Publish→call + new FetchMessages (message ops). **PR #80 (open)**.
-  - [ ] 5b ListClients + artifacts (create/update/get/delete) → calls.
-  - [ ] 5c push-stream serving (subscribe/watch over sx.deliver) + SDK Subscribe/
-        WatchArtifact cutover + per-client ALLOW-list flip (deny direct msg.*/KV;
-        permit sx.api.<id>.> + sx.deliver.<id>.> + _INBOX.>; allow_responses).
+  - [x] 5a Publish→call + FetchMessages (message ops). **PR #80**.
+  - [x] 5b ListClients→clients.list call (+ bus skips corrupt, key-authoritative id). **PR #81**.
+  - [ ] 5c THE COUPLED CUTOVER (next, largest): artifacts (create/update/get/delete
+        → calls) + push-stream serving for message.subscribe & artifact.watch over
+        sx.deliver.<id>.* + SDK Subscribe/WatchArtifact cutover + per-client ALLOW-list
+        flip (deny direct msg.*/KV; permit sx.api.<id>.> + sx.deliver.<id>.> + _INBOX.>;
+        allow_responses). Artifacts are coupled: bus stores them as FRAMES, direct path
+        stores raw records — so create/update/get/delete/watch move as one unit. After
+        the flip, NOTHING uses direct → author is unforgeable.
   - [ ] 5.5 artifact-ULID-addressing + artifact.list (§3 artifact half; methods.json name→id).
 - [ ] **PR6 `feat/m2-cli`** — TASK-28: CLI (op-name parity) + conformance test.
 - [ ] **PR7 `feat/m2-mcp`** — TASK-22: MCP server + channel + skill (CC plugin).
@@ -57,10 +61,10 @@ Acceptance spine: the conformance test (PR6) + the M2 DoD e2e (PR8).
 Parked: TASK-23 (request/reply), TASK-20 robust liveness (only --reclaim stopgap).
 
 ## Resumability
-Current: **PR5b next** (open PRs #76–80). Branch the next slice off `feat/m2-sdk-client`.
-Note: after the cutover slices, **PR6 CLI (TASK-28)** can build on the SDK as-is
-(Publish/FetchMessages are calls; Subscribe/artifacts/ListClients still work direct).
-Resume from this tracker; keep each commit compiling + green. NOTE: remaining stack may
+Current: **PR5c next — the coupled cutover** (open PRs #76–81). Branch off
+`feat/m2-clients-call`. This is the largest remaining slice. After it: PR6 CLI
+(TASK-28) — buildable on the SDK as-is. PR7 MCP (TASK-22). PR8 ergonomics + M2 DoD
+(TASK-27). Resume from this tracker; keep each commit green. NOTE: remaining stack may
 grow beyond 8 PRs — identity / SDK-cutover / artifact-ULID are entangled in the SDK,
 so split into smaller green PRs as needed. Each
 completed PR: check the box, record the PR number, update the handoff buffer
