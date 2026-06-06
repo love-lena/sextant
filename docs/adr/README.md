@@ -26,6 +26,7 @@ human has signed off — see
 | [0017](0017-the-verb-surface-is-the-protocol.md) | The verb surface is the protocol | accepted |
 | [0018](0018-the-bus-implements-the-protocol.md) | The bus implements the protocol over a pluggable stream backend | accepted |
 | [0019](0019-implementing-the-bus.md) | Implementing the bus: call transport, frame stamping, and identity | accepted |
+| [0021](0021-the-dash-is-a-composable-pane-cockpit.md) | The dash is a composable pane cockpit | accepted |
 
 ## Review batches
 - **Batch 1 — substrate:** 0004–0007 — *accepted*
@@ -34,4 +35,4 @@ human has signed off — see
 - **0014 — the TUI is a client** — *accepted* (grilled + signed off in-session, 2026-06-02)
 - **0015 — operator-only state in its own account** — *accepted* (refines 0012; from the #71 review)
 - **0016 — artifacts are Lexicon records** — *accepted* (the #70 JSON-vs-CBOR decision; signed off in-session 2026-06-03)
-- **0021 — the dash is a composable pane cockpit** — *proposed* (sharpens 0014; grilled in-session 2026-06-05, prototype-grounded; awaiting sign-off)
+- **0021 — the dash is a composable pane cockpit** — *accepted* (sharpens 0014; grilled in-session prototype-grounded, signed off 2026-06-05)
