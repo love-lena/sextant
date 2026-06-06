@@ -34,3 +34,4 @@ human has signed off — see
 - **0014 — the TUI is a client** — *accepted* (grilled + signed off in-session, 2026-06-02)
 - **0015 — operator-only state in its own account** — *accepted* (refines 0012; from the #71 review)
 - **0016 — artifacts are Lexicon records** — *accepted* (the #70 JSON-vs-CBOR decision; signed off in-session 2026-06-03)
+- **0021 — the dash is a composable pane cockpit** — *proposed* (sharpens 0014; grilled in-session 2026-06-05, prototype-grounded; awaiting sign-off)
