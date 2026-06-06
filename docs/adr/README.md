@@ -26,6 +26,8 @@ human has signed off — see
 | [0017](0017-the-verb-surface-is-the-protocol.md) | The verb surface is the protocol | accepted |
 | [0018](0018-the-bus-implements-the-protocol.md) | The bus implements the protocol over a pluggable stream backend | accepted |
 | [0019](0019-implementing-the-bus.md) | Implementing the bus: call transport, frame stamping, and identity | accepted |
+| [0020](0020-clients-are-bus-issued-identities.md) | Clients are bus-issued identities | accepted |
+| [0021](0021-saved-client-contexts.md) | Saved client contexts | accepted |
 
 ## Review batches
 - **Batch 1 — substrate:** 0004–0007 — *accepted*

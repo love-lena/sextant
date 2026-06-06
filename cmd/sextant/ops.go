@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/love-lena/sextant/internal/clictx"
 	"github.com/love-lena/sextant/pkg/bus"
 	"github.com/love-lena/sextant/pkg/conninfo"
 	"github.com/love-lena/sextant/pkg/sextant"
@@ -47,27 +49,62 @@ var cliOperations = map[string]string{
 
 // connFlags are the bus-connection flags shared by every operation command.
 type connFlags struct {
-	creds *string
-	store *string
-	url   *string
+	creds   *string
+	store   *string
+	url     *string
+	context *string
 }
 
 func addConnFlags(fs *flag.FlagSet) connFlags {
 	return connFlags{
-		creds: fs.String("creds", "", "client credentials file (issue with `sextant clients register`)"),
-		store: fs.String("store", defaultStore(), "JetStream + key-material directory (for bus discovery)"),
-		url:   fs.String("url", "", "bus URL (default: discovery file under --store)"),
+		creds:   fs.String("creds", os.Getenv("SEXTANT_CREDS"), "client credentials file (issue with `sextant clients register`; or set $SEXTANT_CREDS)"),
+		store:   fs.String("store", defaultStore(), "JetStream + key-material directory for bus discovery (or set $SEXTANT_STORE)"),
+		url:     fs.String("url", "", "bus URL (default: discovery file under --store)"),
+		context: fs.String("context", os.Getenv("SEXTANT_CONTEXT"), "saved context to connect as (default: the active one; see `sextant context`)"),
 	}
+}
+
+// errNoIdentity is the "you didn't say who to connect as" error. resolve returns
+// it when no creds, no named context, and no active context are available.
+var errNoIdentity = errors.New("no credentials: pass --creds, set $SEXTANT_CREDS, or select a context with `sextant context use <name>` (create one with `sextant context add`)")
+
+// resolve picks the credentials and bus URL for a connection. Precedence:
+// explicit --creds / $SEXTANT_CREDS wins (URL then comes from --url or --store
+// discovery); otherwise a context — named by --context / $SEXTANT_CONTEXT, else
+// the active one — supplies both creds and URL. An explicit --url still
+// overrides a context's URL.
+func (cf connFlags) resolve() (creds, url string, err error) {
+	creds, url = *cf.creds, *cf.url
+	if creds != "" {
+		return creds, url, nil
+	}
+	name := *cf.context
+	if name == "" {
+		name = clictx.Active()
+	}
+	if name == "" {
+		return "", "", errNoIdentity
+	}
+	c, err := clictx.Load(name)
+	if err != nil {
+		return "", "", fmt.Errorf("context %q: %w", name, err)
+	}
+	creds = c.Creds
+	if url == "" {
+		url = c.URL
+	}
+	return creds, url, nil
 }
 
 // connect dials an SDK client from the connection flags. ctx governs the call.
 func (cf connFlags) connect(ctx context.Context) *sextant.Client {
-	if *cf.creds == "" {
-		fatal("--creds is required (issue one with `sextant clients register <name>`)")
+	creds, url, err := cf.resolve()
+	if err != nil {
+		fatal("%v", err)
 	}
 	c, err := sextant.Connect(ctx, sextant.Options{
-		CredsPath:    *cf.creds,
-		URL:          *cf.url,
+		CredsPath:    creds,
+		URL:          url,
 		ConnInfoPath: filepath.Join(*cf.store, conninfo.DefaultFile),
 		Logf:         func(string, ...any) {},
 	})
@@ -206,6 +243,18 @@ func clientsList(args []string) {
 	fmt.Fprintf(os.Stderr, "(%d clients)\n", len(clients))
 }
 
+// safeCredsName picks a filesystem-safe basename for a client's default creds
+// file. A display name may legitimately contain a path separator (the bus allows
+// names like "a/b"), which would make `<store>/<name>.creds` fail on a missing
+// subdir or escape the store ("../x"). In that case fall back to the bus-minted
+// id — always a flat, safe token — so a successful mint never strands its creds.
+func safeCredsName(name, id string) string {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
+		return id
+	}
+	return name
+}
+
 // clientsRegister is the issuance command (ADR-0020). Two auth modes, one op:
 //   - held-identity (default): the operator mints for another — `register <name>`
 //     — connecting with the operator credential `sextant up` provisioned.
@@ -225,7 +274,7 @@ func clientsRegister(args []string) {
 	self := fs.Bool("self", false, "bootstrap/enrollment: mint an identity for this local process")
 	kind := fs.String("kind", "client", "what the new client is (e.g. worker, reviewer)")
 	nameFlag := fs.String("name", "", "display name (for --self, defaults to $USER)")
-	store := fs.String("store", defaultStore(), "bus store dir (discovery + issuer credentials)")
+	store := fs.String("store", defaultStore(), "bus store dir: discovery + issuer credentials (or set $SEXTANT_STORE)")
 	url := fs.String("url", "", "bus URL (default: discovery file under --store)")
 	out := fs.String("out", "", "write the new creds here (default: <store>/<name>.creds)")
 	_ = fs.Parse(args)
@@ -263,7 +312,7 @@ func clientsRegister(args []string) {
 
 	path := *out
 	if path == "" {
-		path = filepath.Join(*store, name+".creds")
+		path = filepath.Join(*store, safeCredsName(name, res.ID)+".creds")
 	}
 	if err := os.WriteFile(path, []byte(res.Creds), 0o600); err != nil {
 		fatal("write creds: %v", err)
@@ -283,7 +332,7 @@ func clientsRetire(args []string) {
 		id, args = args[0], args[1:]
 	}
 	fs := flag.NewFlagSet("clients retire", flag.ExitOnError)
-	store := fs.String("store", defaultStore(), "bus store dir (discovery + operator credential)")
+	store := fs.String("store", defaultStore(), "bus store dir: discovery + operator credential (or set $SEXTANT_STORE)")
 	url := fs.String("url", "", "bus URL (default: discovery file under --store)")
 	_ = fs.Parse(args)
 	if id == "" {

@@ -8,6 +8,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Saved client contexts** (ADR-0021) — `sextant context add|use|list|current|delete`.
+  A *context* is a local (bus URL + identity + creds) profile under a name you
+  choose, so `publish`/`subscribe`/`artifact`/… need no `--creds`/`--url` once one
+  is active — the `kubectl`/`nats context` pattern. Connection resolution is a
+  precedence chain: explicit `--creds`/`$SEXTANT_CREDS` (URL from `--url`/`--store`
+  discovery) → a context named by `--context`/`$SEXTANT_CONTEXT` → the active
+  context. Contexts live under `$SEXTANT_HOME` (default `<user-config>/sextant`),
+  separate from the bus `--store`; the credential is kept in its own `0600` file
+  and referenced by path. Context commands are local-administration (like `up`),
+  not protocol operations, so they stay out of `methods.json`. `clients register`
+  auto-creating a context is a planned follow-up (it touches the M2 acceptance
+  golden).
+- `cmd/sextant`: **environment defaults for the connection flags** — `$SEXTANT_STORE`
+  backs `--store` and `$SEXTANT_CREDS` backs `--creds`, so a shell that exports them
+  once need not repeat the flags on every command. Precedence is explicit flag >
+  env var > built-in default (a per-user config path for the store; required-error
+  for creds). Matches the existing `$SEXTANT_SELF_NAME` convention.
 - **Clients are bus-issued identities** (ADR-0020) — the identity half of M2.
   - **One issuance path, two auth modes.** `clients.register` now *mints a new
     identity* (a ULID + its credential) and persists a durable record, returning
@@ -37,7 +54,6 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     just goes offline. **CLI:** `clients register <name>` / `register --self` /
     `clients retire <id>`, and `clients list` gains the presence column.
 
-<<<<<<< HEAD
 - `pkg/bus`: **the per-client credential allow-list — the unforgeable author**
   (ADR-0019). Each minted credential now carries a per-client JWT allow-list
   scoped to its bus-minted ULID: it may publish **only** under its own call
@@ -181,6 +197,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   id), where "listed" means "registered and hasn't cleanly left." The record is
   `{id, kind, epoch, sdk, connected_at}`; heartbeat, read-time liveness, and
   stale-entry reaping are deferred (TASK-20). See ADR-0004, ADR-0008.
+
+### Security
+
+- Hardened credential file handling (found by review while landing ADR-0021):
+  - `cmd/sextant`: `clients register` with a display name that contains a path
+    separator (the bus allows names like `a/b`) no longer fails to write — or
+    escapes the store via `../x` — when `--out` is omitted; the default creds
+    filename falls back to the minted ULID for path-bearing names, so a successful
+    mint never strands its credential.
+  - `pkg/bus`: the operator/enrollment infra credentials are now (re)provisioned
+    via an atomic owner-only (`0600`) write (temp file + rename). `os.WriteFile`
+    left an existing file's looser mode intact, so a reused or user-supplied store
+    with a world-readable leftover could keep high-privilege creds — which
+    authorize identity issuance and retirement — group/world-readable.
 
 ### Changed
 

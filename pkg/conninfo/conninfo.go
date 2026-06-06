@@ -1,6 +1,7 @@
 // Package conninfo is the small discovery file `sextant up` writes so a client
 // knows the bus URL. Credentials are not here: under JWT auth each client has
-// its own creds file, minted by `sextant token` (ADR-0012).
+// its own creds file, issued by the bus via `sextant clients register`
+// (ADR-0020 — the bus is the sole minter; the signing keys never leave it).
 package conninfo
 
 import (

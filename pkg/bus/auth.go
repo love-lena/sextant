@@ -403,9 +403,40 @@ func (b *Bus) provisionInfraCreds() error {
 		if err != nil {
 			return fmt.Errorf("bus: provision %s credential: %w", in.id, err)
 		}
-		if err := os.WriteFile(in.path, []byte(c), 0o600); err != nil {
+		if err := writeOwnerOnly(in.path, c); err != nil {
 			return fmt.Errorf("bus: write %s credential %s: %w", in.id, in.path, err)
 		}
+	}
+	return nil
+}
+
+// writeOwnerOnly writes content to path as a fresh owner-only (0600) file,
+// replacing any existing file atomically (temp file + rename). Unlike
+// os.WriteFile, it guarantees 0600 even when path already exists with looser
+// permissions — a reused or user-supplied store can hold a world-readable
+// leftover, and these credentials authorize identity issuance and retirement.
+func writeOwnerOnly(path, content string) error {
+	f, err := os.CreateTemp(filepath.Dir(path), ".creds-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	if _, err := f.WriteString(content); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Chmod(tmp, 0o600); err != nil { // defensive against umask
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
 	}
 	return nil
 }
