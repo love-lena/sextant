@@ -8,6 +8,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`register --self` creates an active context** (ADR-0021) — self-enrollment now
+  writes the new creds into the context store (`$SEXTANT_HOME`, not the bus
+  `--store`), records a context carrying the bus-minted ULID, and makes it active,
+  so the very next `publish`/`subscribe`/… runs with no connection flags. Held-mode
+  `register <name>` (minting for someone else) is unchanged — it writes a creds
+  file to hand off and creates no context. The M2 acceptance e2e is now hermetic (a
+  per-run `$SEXTANT_HOME`) so the issuance transcript stays deterministic.
 - **Saved client contexts** (ADR-0021) — `sextant context add|use|list|current|delete`.
   A *context* is a local (bus URL + identity + creds) profile under a name you
   choose, so `publish`/`subscribe`/`artifact`/… need no `--creds`/`--url` once one

@@ -57,8 +57,11 @@ func contextDir() string { return filepath.Join(Root(), "context") }
 func credsDir() string   { return filepath.Join(Root(), "creds") }
 func activeFile() string { return filepath.Join(Root(), "active") }
 
-// validName rejects handles that would escape the context directory.
-func validName(name string) error {
+// ValidName reports whether name is a usable context handle: non-empty and free
+// of path separators or "."/".." (which would escape the context directory or
+// fail as a filename). Callers can pre-flight a name before irreversible work —
+// e.g. minting an identity — so a bad name fails before, not after.
+func ValidName(name string) error {
 	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
 		return fmt.Errorf("clictx: invalid context name %q", name)
 	}
@@ -69,7 +72,7 @@ func contextPath(name string) string { return filepath.Join(contextDir(), name+"
 
 // Save writes a context record. The Name is the file key, not stored in the file.
 func Save(c Context) error {
-	if err := validName(c.Name); err != nil {
+	if err := ValidName(c.Name); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(contextDir(), 0o700); err != nil {
@@ -88,7 +91,7 @@ func Save(c Context) error {
 // Load reads the named context. It returns ErrNotFound if there is no such context.
 func Load(name string) (Context, error) {
 	var c Context
-	if err := validName(name); err != nil {
+	if err := ValidName(name); err != nil {
 		return c, err
 	}
 	b, err := os.ReadFile(contextPath(name))
@@ -133,7 +136,7 @@ func List() ([]Context, error) {
 // Delete removes the named context. If it was active, the active selection is
 // cleared. Returns ErrNotFound if there is no such context.
 func Delete(name string) error {
-	if err := validName(name); err != nil {
+	if err := ValidName(name); err != nil {
 		return err
 	}
 	err := os.Remove(contextPath(name))
@@ -177,7 +180,7 @@ func SetActive(name string) error {
 // the path. The secret material lives in its own private file, referenced by the
 // context record rather than inlined into it.
 func WriteCreds(name, creds string) (string, error) {
-	if err := validName(name); err != nil {
+	if err := ValidName(name); err != nil {
 		return "", err
 	}
 	if err := os.MkdirAll(credsDir(), 0o700); err != nil {

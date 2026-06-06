@@ -4,11 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/love-lena/sextant/internal/clictx"
-	"github.com/love-lena/sextant/pkg/conninfo"
 )
 
 // cmdContext manages saved client contexts (ADR-0021): local (bus URL + identity
@@ -139,12 +137,7 @@ func contextAdd(args []string) {
 	if err != nil {
 		fatal("%v", err)
 	}
-	busURL := *url
-	if busURL == "" {
-		if info, err := conninfo.Read(filepath.Join(*store, conninfo.DefaultFile)); err == nil {
-			busURL = info.URL
-		}
-	}
+	busURL := resolveBusURL(*url, *store)
 	if err := clictx.Save(clictx.Context{
 		Name: name, URL: busURL, ID: *id, Display: *display, Kind: *kind, Creds: credsPath,
 	}); err != nil {

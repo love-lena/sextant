@@ -33,9 +33,8 @@ distinction ADR-0020 implies:
   unique, server-side;
 - the **display name** — a human label on the bus record; *not* unique;
 - the **context name** — a handle on *your* machine, unique there, that you pick
-  (`context add` takes it explicitly; when `clients register` grows context
-  creation it will default to the display name). It is yours to rename and never
-  reaches the bus.
+  (`register --self` defaults it to the display name; `context add` takes it
+  explicitly). It is yours to rename and never reaches the bus.
 
 A context stores the ULID as the real identity and uses its name only as a local
 lookup key.
@@ -64,10 +63,13 @@ deliberately *outside* the verb surface
 `protocol/methods.json` — the conformance test that pins CLI⇔operation parity
 neither covers it nor should.
 
-**What it sets up.** `clients register` writing a context directly — register
-once, then run bare — is the obvious next step. It is deferred here only because
-it reaches into the M2 acceptance definition-of-done (the golden transcript and
-its hermeticity) and so ships as its own change; this decision provides the store
-and the resolution chain it will populate.
+**`register --self` writes a context directly** — register once, then run bare.
+A self-enrollment is "I am now this identity," so it writes the new creds into the
+context store (not the bus `--store`), records a context carrying the bus-minted
+ULID, and makes it active. Held-mode `register <name>` (the operator minting for
+someone else) is unchanged: it writes a creds file to hand off and creates no
+context. This landed as a follow-up to the original decision, after the M2
+acceptance e2e was made hermetic (a per-run `$SEXTANT_HOME`) so the issuance
+transcript stays deterministic.
 
 Map (ADR-0003): the CLI/SDK identity configuration (client-side), not the bus.

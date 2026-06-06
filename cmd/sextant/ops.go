@@ -276,7 +276,8 @@ func clientsRegister(args []string) {
 	nameFlag := fs.String("name", "", "display name (for --self, defaults to $USER)")
 	store := fs.String("store", defaultStore(), "bus store dir: discovery + issuer credentials (or set $SEXTANT_STORE)")
 	url := fs.String("url", "", "bus URL (default: discovery file under --store)")
-	out := fs.String("out", "", "write the new creds here (default: <store>/<name>.creds)")
+	out := fs.String("out", "", "held mode: write the new creds here (default: <store>/<name>.creds)")
+	force := fs.Bool("force", false, "with --self: re-enroll, replacing an existing context of the same name")
 	_ = fs.Parse(args)
 	if *nameFlag != "" {
 		name = *nameFlag
@@ -287,6 +288,12 @@ func clientsRegister(args []string) {
 		credsPath = bus.EnrollCredsPath(*store)
 		if name == "" {
 			name = selfName()
+		}
+		// Pre-flight before the bus mints anything, so a bad request (a name that
+		// can't be a context handle, --out, or an un-forced clobber) fails before
+		// an identity is created rather than stranding it after.
+		if err := checkSelfEnroll(name, *out, *force); err != nil {
+			fatal("%v", err)
 		}
 	} else {
 		credsPath = bus.OperatorCredsPath(*store)
@@ -310,6 +317,24 @@ func clientsRegister(args []string) {
 		fatal("%v", err)
 	}
 
+	// Self-enrollment is "I am now this identity": save it as a local context
+	// (creds in the context store, separate from the bus --store) and make it
+	// active, so subsequent commands need no connection flags (ADR-0021). The
+	// held-identity mode mints creds to hand to someone else, so it just writes the
+	// creds file (to --out or the store) and creates no context.
+	if *self {
+		busURL := resolveBusURL(*url, *store)
+		if busURL == "" {
+			fmt.Fprintln(os.Stderr, "warning: no bus URL recorded (no --url and no discovery file under --store)")
+		}
+		newCreds, err := saveSelfContext(name, *kind, busURL, res)
+		if err != nil {
+			fatal("%v", err)
+		}
+		fmt.Printf("enrolled as %s\n  creds:   %s\n  context: %s (now active)\n", res.ID, newCreds, name)
+		return
+	}
+
 	path := *out
 	if path == "" {
 		path = filepath.Join(*store, safeCredsName(name, res.ID)+".creds")
@@ -317,11 +342,7 @@ func clientsRegister(args []string) {
 	if err := os.WriteFile(path, []byte(res.Creds), 0o600); err != nil {
 		fatal("write creds: %v", err)
 	}
-	if *self {
-		fmt.Printf("enrolled as %s\n  creds: %s\n", res.ID, path)
-	} else {
-		fmt.Printf("registered %s as %s\n  creds: %s\n", name, res.ID, path)
-	}
+	fmt.Printf("registered %s as %s\n  creds: %s\n", name, res.ID, path)
 }
 
 // clientsRetire decommissions an identity for good (operator-only). It connects

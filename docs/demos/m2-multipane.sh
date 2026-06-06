@@ -42,9 +42,12 @@ tmux select-pane -t "$ALI" -T "alice  —  publish + artifact"
 tmux select-pane -t "$SUB" -T "bob  —  subscribe msg.topic.plan"
 tmux select-pane -t "$WAT" -T "bob  —  watch the-plan"
 
-# Each pane: a clean prompt + the env the typed commands rely on ($S, $ALICE, $BOB).
+# Each pane: a clean prompt + the env the typed commands rely on. $SEXTANT_HOME is
+# the shared context store, so bob's self-enroll (operator pane) creates an active
+# context every pane can use — bob's panes then run with NO connection flags.
+# alice is operator-minted (held mode, no context), so her pane uses --creds.
 for P in "$OP" "$ALI" "$SUB" "$WAT"; do
-  tmux send-keys -t "$P" "export PATH='$BIN_DIR':\$PATH S='$S' ALICE='$S/alice.creds' BOB='$S/bob.creds'; PS1='\$ '; clear" Enter
+  tmux send-keys -t "$P" "export PATH='$BIN_DIR':\$PATH S='$S' SEXTANT_HOME='$S/home' ALICE='$S/alice.creds'; PS1='\$ '; clear" Enter
 done
 
 run() { tmux send-keys -t "$1" "$2" Enter; }
@@ -56,11 +59,11 @@ run "$OP"  "# the bus is the sole minter — operator issues, keys stay in the b
 sleep 1.3
 run "$OP"  "sextant clients register alice --kind worker --store \$S"
 sleep 2.2
-run "$OP"  "sextant clients register --self --kind reviewer --name bob --store \$S"
+run "$OP"  "sextant clients register --self --kind reviewer --name bob --store \$S  # creates bob's active context"
 sleep 2.6
 
-# --- bob subscribes; alice publishes; the frame lands LIVE in bob's pane → ---
-run "$SUB" "sextant subscribe msg.topic.plan --creds \$BOB --store \$S"
+# --- bob subscribes (NO flags — his self-enroll left an active context) → ---
+run "$SUB" "sextant subscribe msg.topic.plan"
 sleep 1.9
 run "$ALI" "# alice publishes -- watch it appear in bob's subscribe pane, top-right"
 sleep 1.3
@@ -70,11 +73,11 @@ sleep 3.2
 # --- a shared artifact; bob watches; alice's update lands LIVE in bob's pane → ---
 run "$ALI" "sextant artifact create the-plan '{\"title\":\"v1\"}' --creds \$ALICE --store \$S"
 sleep 2.2
-run "$WAT" "sextant artifact watch the-plan --creds \$BOB --store \$S"
+run "$WAT" "sextant artifact watch the-plan"
 sleep 2.6
 run "$ALI" "sextant artifact update the-plan '{\"title\":\"v2\"}' --rev 1 --creds \$ALICE --store \$S"
 sleep 3.2
 
 # --- the live directory: both online, presence derived from the connection ---
-run "$OP"  "sextant clients list --creds \$ALICE --store \$S"
+run "$OP"  "sextant clients list  # no flags — bob's active context"
 sleep 4.5
