@@ -7,8 +7,6 @@ import (
 	"time"
 
 	"github.com/love-lena/sextant/pkg/sx"
-	"github.com/love-lena/sextant/pkg/wire"
-	"github.com/oklog/ulid/v2"
 )
 
 func TestPublishSubscribeRoundTrip(t *testing.T) {
@@ -33,11 +31,11 @@ func TestPublishSubscribeRoundTrip(t *testing.T) {
 		if m.Subject != subj {
 			t.Errorf("subject = %q, want %q", m.Subject, subj)
 		}
-		if m.Envelope.Sender != c.ID() {
-			t.Errorf("sender = %q, want %q", m.Envelope.Sender, c.ID())
+		if m.Frame.Author != c.ID() {
+			t.Errorf("author = %q, want %q", m.Frame.Author, c.ID())
 		}
-		if string(m.Envelope.Record) != `{"hello":"world"}` {
-			t.Errorf("record = %s", m.Envelope.Record)
+		if string(m.Frame.Record) != `{"hello":"world"}` {
+			t.Errorf("record = %s", m.Frame.Record)
 		}
 		if m.BusTime.IsZero() {
 			t.Error("BusTime not set")
@@ -84,101 +82,42 @@ func TestPublishRejectsNonMessageSubject(t *testing.T) {
 	}
 }
 
-// TestSkewQuarantine injects an envelope whose ULID time is far in the past
-// (bypassing Publish, via a second client's raw JetStream publish) and verifies
-// the receiver quarantines it while still delivering a well-formed message.
-func TestSkewQuarantine(t *testing.T) {
+// TestFetchMessages exercises the pull path (message.read): publish a few, fetch
+// from the start, and resume at the returned cursor with no gaps or duplicates.
+func TestFetchMessages(t *testing.T) {
 	b := startBus(t)
-	c := dialClient(t, b, "skew-rx")
+	c := dialClient(t, b, "fetcher")
 	ctx := t.Context()
-	subj := sx.TopicSubject("skew")
-
-	injector := inspectJS(t, b)
-
-	// A stale envelope: ULID timestamp 10 minutes in the past (> 5m tolerance).
-	staleID := ulid.MustNew(ulid.Timestamp(time.Now().Add(-10*time.Minute)), ulid.DefaultEntropy()).String()
-	stale := wire.Envelope{ID: staleID, Sender: "rogue", Kind: wire.KindMessage, Epoch: wire.Epoch, Record: json.RawMessage(`{"stale":true}`)}
-	staleBytes, _ := wire.Encode(stale)
-	if _, err := injector.Publish(ctx, subj, staleBytes); err != nil {
-		t.Fatalf("inject stale: %v", err)
+	subj := sx.TopicSubject("pull")
+	for i := 0; i < 3; i++ {
+		if err := c.Publish(ctx, subj, json.RawMessage(`{"n":1}`)); err != nil {
+			t.Fatalf("Publish: %v", err)
+		}
 	}
-	// A good envelope, published normally.
-	if err := c.Publish(ctx, subj, json.RawMessage(`{"good":true}`)); err != nil {
-		t.Fatalf("Publish good: %v", err)
-	}
-
-	got := make(chan Message, 4)
-	sub, err := c.Subscribe(ctx, subj, func(m Message) { got <- m }, DeliverAll())
+	frames, next, err := c.FetchMessages(ctx, subj, 0, 10)
 	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
+		t.Fatalf("FetchMessages: %v", err)
 	}
-	defer sub.Stop()
-
-	select {
-	case m := <-got:
-		if m.Envelope.ID == staleID {
-			t.Fatal("stale (skewed) message was delivered; should have been quarantined")
-		}
-		if string(m.Envelope.Record) != `{"good":true}` {
-			t.Errorf("unexpected delivered record: %s", m.Envelope.Record)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("did not receive the good message")
+	if len(frames) != 3 {
+		t.Fatalf("fetch from 0 got %d frames, want 3", len(frames))
+	}
+	if frames[0].Author != c.ID() {
+		t.Errorf("frame author = %q, want %q", frames[0].Author, c.ID())
+	}
+	frames2, _, err := c.FetchMessages(ctx, subj, next, 10)
+	if err != nil {
+		t.Fatalf("FetchMessages resume: %v", err)
+	}
+	if len(frames2) != 0 {
+		t.Fatalf("resume at cursor got %d frames, want 0", len(frames2))
 	}
 }
 
-// TestQuarantinesInvalidEnvelopes injects (raw, bypassing Publish) a wrong-epoch
-// envelope and a structurally-malformed one, and verifies the receiver delivers
-// only the well-formed message — a client can raw-publish to msg.>, so the SDK
-// must re-check the wire contract on consume.
-func TestQuarantinesInvalidEnvelopes(t *testing.T) {
-	b := startBus(t)
-	c := dialClient(t, b, "quar-rx")
-	ctx := t.Context()
-	subj := sx.TopicSubject("quar")
-	injector := inspectJS(t, b)
-
-	// Wrong epoch (otherwise well-formed).
-	wrongEpoch := wire.New("rogue", json.RawMessage(`{"epoch":"wrong"}`))
-	wrongEpoch.Epoch = wire.Epoch + 1
-	weBytes, _ := wire.Encode(wrongEpoch)
-	if _, err := injector.Publish(ctx, subj, weBytes); err != nil {
-		t.Fatalf("inject wrong-epoch: %v", err)
-	}
-	// Structurally malformed: empty sender (Validate rejects it).
-	bad := wire.New("", json.RawMessage(`{"bad":true}`))
-	badBytes, _ := wire.Encode(bad)
-	if _, err := injector.Publish(ctx, subj, badBytes); err != nil {
-		t.Fatalf("inject malformed: %v", err)
-	}
-	// A good message.
-	if err := c.Publish(ctx, subj, json.RawMessage(`{"good":true}`)); err != nil {
-		t.Fatalf("Publish good: %v", err)
-	}
-
-	got := make(chan Message, 8)
-	sub, err := c.Subscribe(ctx, subj, func(m Message) { got <- m }, DeliverAll())
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-	defer sub.Stop()
-
-	select {
-	case m := <-got:
-		if string(m.Envelope.Record) != `{"good":true}` {
-			t.Errorf("delivered a quarantined message: record=%s epoch=%d sender=%q",
-				m.Envelope.Record, m.Envelope.Epoch, m.Envelope.Sender)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("did not receive the good message")
-	}
-	// Nothing else should arrive — both bad envelopes were quarantined.
-	select {
-	case m := <-got:
-		t.Errorf("unexpected second delivery (should have been quarantined): %+v", m.Envelope)
-	case <-time.After(300 * time.Millisecond):
-	}
-}
+// The skew- and invalid-frame quarantine paths are exercised by TestSkewQuarantine
+// / TestQuarantinesInvalidFrames in package bus_test (pkg/bus/sdk_integration_test.go):
+// they need to inject raw frames that bypass the bus's stamping — something a
+// client can no longer do under the allow-list — which the operator seam there
+// provides without a production test surface. See docs/conventions/test-features.md.
 
 // TestSubscribeStopsOnContextCancel verifies the subscription tears down when
 // the caller cancels the context it was created with, not only on Stop.
@@ -203,7 +142,7 @@ func TestSubscribeStopsOnContextCancel(t *testing.T) {
 	}
 	select {
 	case m := <-got:
-		t.Errorf("received a message after ctx cancel; subscription should have stopped: %+v", m.Envelope)
+		t.Errorf("received a message after ctx cancel; subscription should have stopped: %+v", m.Frame)
 	case <-time.After(700 * time.Millisecond):
 		// good: no delivery after cancellation
 	}

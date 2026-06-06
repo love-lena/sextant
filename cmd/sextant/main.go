@@ -1,5 +1,5 @@
-// Command sextant is the operator CLI: run the embedded bus and mint per-client
-// credentials.
+// Command sextant is the operator CLI: run the embedded bus, issue and retire
+// client identities, and drive the protocol operations.
 //
 // (A full resource-verb CLI — likely Cobra — comes later; v1 dispatches a
 // couple of subcommands with the standard library.)
@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -28,8 +27,16 @@ func main() {
 	switch os.Args[1] {
 	case "up":
 		cmdUp(os.Args[2:])
-	case "token":
-		cmdToken(os.Args[2:])
+	case "publish":
+		cmdPublish(os.Args[2:])
+	case "subscribe":
+		cmdSubscribe(os.Args[2:])
+	case "read":
+		cmdRead(os.Args[2:])
+	case "clients":
+		cmdClients(os.Args[2:])
+	case "artifact":
+		cmdArtifact(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -44,8 +51,18 @@ func usage() {
 
 usage:
   sextant up    [--store DIR] [--port N]        run the embedded bus
-  sextant token <client-id> [--store DIR] [--out FILE]
-                                                mint a client credentials file
+
+identities (the bus is the sole minter; keys never leave it — ADR-0020):
+  sextant clients register <name> [--kind K]    operator mints for another
+  sextant clients register --self  [--kind K]   bootstrap/enrollment: mint for self
+  sextant clients retire   <id>                 decommission an identity (operator)
+  sextant clients list     [--json]             the directory (online + offline)
+
+operations (each needs --creds; bus URL from --store discovery or --url):
+  sextant publish   <subject> <record-json>
+  sextant read      <subject> [--since N] [--limit N] [--json]
+  sextant subscribe <subject> [--all] [--json]
+  sextant artifact  create|update|get|delete|watch <name> [<record-json>] [--rev N] [--json]
 
 `)
 }
@@ -74,10 +91,11 @@ func cmdUp(args []string) {
 		fatal("write discovery file: %v", err)
 	}
 
-	fmt.Printf("sextant bus up\n  url:        %s\n  discovery:  %s\n\n"+
-		"give each client its own identity:\n  sextant token <client-id> --store %s\n\n"+
+	fmt.Printf("sextant bus up\n  url:        %s\n  discovery:  %s\n  operator:   %s\n\n"+
+		"issue a client identity (the bus mints it; keys stay in the bus):\n"+
+		"  sextant clients register <name> --store %s\n\n"+
 		"Ctrl-C to drain and stop.\n",
-		b.ClientURL(), infoPath, *store)
+		b.ClientURL(), infoPath, bus.OperatorCredsPath(*store), *store)
 
 	<-ctx.Done()
 	stop() // restore default signal handling; a second signal force-quits
@@ -91,44 +109,8 @@ func cmdUp(args []string) {
 	fmt.Println("bus down")
 }
 
-func cmdToken(args []string) {
-	// The client id is the first positional; flags follow it (Go's flag package
-	// stops at the first non-flag, so the id can't come after the flags).
-	if len(args) < 1 || strings.HasPrefix(args[0], "-") {
-		fatal("usage: sextant token <client-id> [--store DIR] [--out FILE]")
-	}
-	id := args[0]
-
-	fs := flag.NewFlagSet("token", flag.ExitOnError)
-	store := fs.String("store", defaultStore(), "JetStream + key-material directory")
-	out := fs.String("out", "", "write the creds file here (default: <store>/tokens/<id>.creds; '-' for stdout)")
-	_ = fs.Parse(args[1:])
-
-	creds, err := bus.MintClientToken(*store, id)
-	if err != nil {
-		fatal("%v", err)
-	}
-
-	if *out == "-" {
-		fmt.Print(creds)
-		return
-	}
-	path := *out
-	if path == "" {
-		dir := filepath.Join(*store, "tokens")
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			fatal("create tokens dir: %v", err)
-		}
-		path = filepath.Join(dir, id+".creds")
-	}
-	if err := os.WriteFile(path, []byte(creds), 0o600); err != nil {
-		fatal("write creds: %v", err)
-	}
-	fmt.Printf("minted credentials for %q:\n  %s\n", id, path)
-}
-
-// defaultStore is a stable, CWD-independent location so `up` and `token` run
-// from different directories still share the same key material.
+// defaultStore is a stable, CWD-independent location so `up` and the client
+// commands run from different directories still share the same key material.
 func defaultStore() string {
 	if dir, err := os.UserConfigDir(); err == nil {
 		return filepath.Join(dir, "sextant", "jetstream")

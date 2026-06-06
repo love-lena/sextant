@@ -2,7 +2,6 @@ package sextant
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,10 +9,6 @@ import (
 
 	"github.com/love-lena/sextant/pkg/bus"
 	"github.com/love-lena/sextant/pkg/conninfo"
-	"github.com/love-lena/sextant/pkg/sx"
-	"github.com/love-lena/sextant/pkg/wire"
-	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
 )
 
 func startBus(t *testing.T) *bus.Bus {
@@ -30,11 +25,17 @@ func startBus(t *testing.T) *bus.Bus {
 // file, returning the path. Each client gets its own verified identity.
 func credsPath(t *testing.T, b *bus.Bus, id string) string {
 	t.Helper()
-	creds, err := b.MintClient(id)
+	creds, _, err := b.MintClient(t.Context(), id, "test")
 	if err != nil {
 		t.Fatalf("MintClient(%s): %v", id, err)
 	}
-	path := filepath.Join(t.TempDir(), id+".creds")
+	return writeCreds(t, creds)
+}
+
+// writeCreds writes credential text to a temp file and returns its path.
+func writeCreds(t *testing.T, creds string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "creds")
 	if err := os.WriteFile(path, []byte(creds), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -55,23 +56,6 @@ func dialClient(t *testing.T, b *bus.Bus, id string) *Client {
 	return c
 }
 
-// inspectJS connects a throwaway client (a raw connection that does not
-// register) and returns its JetStream handle, for reading the registry —
-// clients may read sx_clients.
-func inspectJS(t *testing.T, b *bus.Bus) jetstream.JetStream {
-	t.Helper()
-	nc, err := nats.Connect(b.ClientURL(), nats.UserCredentials(credsPath(t, b, "inspector")))
-	if err != nil {
-		t.Fatalf("inspector connect: %v", err)
-	}
-	t.Cleanup(nc.Close)
-	js, err := jetstream.New(nc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return js
-}
-
 func readCtx(t *testing.T) context.Context {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -79,20 +63,53 @@ func readCtx(t *testing.T) context.Context {
 	return ctx
 }
 
-// TestConnectRegisters also pins the identity contract: the client's id is the
-// credential's name, and that id is its registry key.
-func TestConnectRegisters(t *testing.T) {
-	b := startBus(t)
-	c := dialClient(t, b, "agent-reg")
-	if c.ID() != "agent-reg" {
-		t.Fatalf("ID() = %q; want the credential's name agent-reg", c.ID())
-	}
-	clients, err := inspectJS(t, b).KeyValue(readCtx(t), sx.BucketClients)
+// presenceOf returns a connected client's presence in the directory, or ("",
+// false) if it is absent.
+func presenceOf(t *testing.T, c *Client, id string) (online, present bool) {
+	t.Helper()
+	got, err := c.ListClients(readCtx(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := clients.Get(readCtx(t), c.ID()); err != nil {
-		t.Errorf("client not found in registry: %v", err)
+	for _, ci := range got {
+		if ci.ID == id {
+			return ci.Online, true
+		}
+	}
+	return false, false
+}
+
+// waitPresence polls the directory (via reader) until id reaches the wanted
+// online state, or fails after a short timeout. Presence is connection-derived,
+// so it is self-correcting but not instantaneous after a disconnect.
+func waitPresence(t *testing.T, reader *Client, id string, wantOnline bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if online, present := presenceOf(t, reader, id); present && online == wantOnline {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	online, present := presenceOf(t, reader, id)
+	t.Fatalf("client %q presence did not reach online=%v (present=%v online=%v)", id, wantOnline, present, online)
+}
+
+// TestConnectAndDirectory pins the identity contract and connection-derived
+// presence: the client's id is the bus-minted ULID in its credential, its
+// display_name is the human label minted with it, and a connected client shows up
+// online in the directory (ADR-0020).
+func TestConnectAndDirectory(t *testing.T) {
+	b := startBus(t)
+	c := dialClient(t, b, "agent-reg")
+	if c.ID() == "" {
+		t.Fatal("ID() is empty; want the credential's bus-minted ULID")
+	}
+	if c.DisplayName() != "agent-reg" {
+		t.Fatalf("DisplayName() = %q; want agent-reg", c.DisplayName())
+	}
+	if online, present := presenceOf(t, c, c.ID()); !present || !online {
+		t.Errorf("connected client %q should be present and online (present=%v online=%v)", c.ID(), present, online)
 	}
 }
 
@@ -121,35 +138,6 @@ func TestConnectViaConnInfoFile(t *testing.T) {
 	t.Cleanup(func() { _ = c.Close() })
 }
 
-func TestEpochMismatchFailsLoud(t *testing.T) {
-	b := startBus(t)
-	// Rewrite the bus epoch to something the client won't match. (A client can
-	// write sx_meta today — per-row write-precision is the deferred refinement,
-	// ADR-0012; here it's just the simplest way to force a mismatch.)
-	meta, err := inspectJS(t, b).KeyValue(readCtx(t), sx.BucketMeta)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := meta.Put(readCtx(t), sx.MetaKeyEpoch, []byte("999")); err != nil {
-		t.Fatal(err)
-	}
-	_, err = Connect(t.Context(), Options{
-		URL:       b.ClientURL(),
-		CredsPath: credsPath(t, b, "agent-epoch"),
-		Logf:      func(string, ...any) {},
-	})
-	if err == nil {
-		t.Fatal("expected connect to fail loud on epoch mismatch")
-	}
-	ee, ok := errors.AsType[*wire.EpochError](err)
-	if !ok {
-		t.Fatalf("expected a *wire.EpochError, got: %v", err)
-	}
-	if ee.Got != wire.Epoch || ee.Want != 999 {
-		t.Errorf("epoch error fields = %+v", ee)
-	}
-}
-
 func TestDrainClosesDrained(t *testing.T) {
 	b := startBus(t)
 	c := dialClient(t, b, "agent-drain")
@@ -163,9 +151,15 @@ func TestDrainClosesDrained(t *testing.T) {
 	}
 }
 
-func TestCloseLeavesRegistry(t *testing.T) {
+// TestCloseGoesOffline pins ADR-0020: a clean Close drops presence to offline but
+// does NOT retire — the durable identity persists in the directory, so the same
+// client can reconnect later. (Decommissioning for good is an explicit operator
+// retire, never a consequence of Close.)
+func TestCloseGoesOffline(t *testing.T) {
 	b := startBus(t)
-	c, err := Connect(t.Context(), Options{
+	// An observer stays connected to read the directory after the leaver closes.
+	observer := dialClient(t, b, "observer")
+	leaver, err := Connect(t.Context(), Options{
 		URL:       b.ClientURL(),
 		CredsPath: credsPath(t, b, "agent-leave"),
 		Logf:      func(string, ...any) {},
@@ -173,16 +167,14 @@ func TestCloseLeavesRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := c.ID()
-	if err := c.Close(); err != nil {
+	id := leaver.ID()
+	waitPresence(t, observer, id, true) // online while connected
+	if err := leaver.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	clients, err := inspectJS(t, b).KeyValue(readCtx(t), sx.BucketClients)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := clients.Get(readCtx(t), id); !errors.Is(err, jetstream.ErrKeyNotFound) {
-		t.Errorf("registry record should be gone after Close; got err=%v", err)
+	waitPresence(t, observer, id, false) // offline after a clean close...
+	if _, present := presenceOf(t, observer, id); !present {
+		t.Errorf("identity %q should persist in the directory after Close (offline, not gone)", id)
 	}
 }
 

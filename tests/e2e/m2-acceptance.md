@@ -11,11 +11,13 @@ It is also the single source of truth for the **VHS demo**: the same ordered ste
 two clients in two panes (alice, bob) over one bus, render the GIF. The transcript
 here is what the panes show.
 
-> **Status:** RED until ADR-0020 + the stack land. Not wired into the green CI gate
-> yet; it becomes PR8's DoD e2e. The CLI/output surface for the new ADR-0020 parts
-> (`register`/`--self`, the presence column, `retire`) is **decided** (Lena,
-> 2026-06-05) — see "Decided" at the foot. Everything else is grounded in the
-> existing CLI (#82). This surface is now the target, not a proposal.
+> **Status:** GREEN. ADR-0020 + the M2 stack are implemented on
+> `feat/m2-identity-model`; the runnable harness is `tests/e2e/m2_acceptance_test.go`
+> (build tag `e2e`, wrapper `tests/e2e/run.sh`, golden under `tests/e2e/testdata/`),
+> wired into CI as the M2 DoD e2e. Run it with `tests/e2e/run.sh` (`-update`
+> regenerates the golden). The CLI/output surface for the ADR-0020 parts
+> (`register`/`--self`, the presence column, `retire`) is as **decided** (Lena,
+> 2026-06-05) — see "Decided" at the foot.
 
 ## Normalizations (the diff masks these before comparing)
 

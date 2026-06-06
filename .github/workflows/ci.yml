@@ -27,3 +27,5 @@ jobs:
           fi
       - name: test
         run: go test ./... -race
+      - name: e2e (M2 DoD — tests/e2e/m2-acceptance.md)
+        run: go test -tags e2e -count=1 ./tests/e2e/

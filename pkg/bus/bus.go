@@ -16,11 +16,15 @@ package bus
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
+	"sync"
 	"time"
 
+	"github.com/love-lena/sextant/internal/backend"
+	"github.com/love-lena/sextant/internal/wireapi"
 	"github.com/love-lena/sextant/pkg/sx"
 	"github.com/love-lena/sextant/pkg/wire"
 	natsserver "github.com/nats-io/nats-server/v2/server"
@@ -36,12 +40,31 @@ type Config struct {
 	Port int
 }
 
-// Bus is a running embedded NATS server with the sx namespace bootstrapped.
+// Bus is a running embedded NATS server with the sx namespace bootstrapped. It
+// also serves the protocol's operations as calls over the Wire API (serve.go).
 type Bus struct {
 	ns     *natsserver.Server
 	opConn *nats.Conn
 	url    string
 	store  string
+	ident  *identity // signing material — the bus is the sole minter (ADR-0020)
+
+	// Operation serving (ADR-0018/0019): the backend the operations run against,
+	// the Wire API subscription, and the bounded worker semaphore.
+	backend backend.Backend
+	apiSub  *nats.Subscription
+	apiSem  chan struct{}
+
+	// Push-stream relays (ADR-0019 subscribe/watch): a per-(clientID, subID)
+	// registry of running relays from the backend into sx.deliver.<id>.<subID>.
+	// All relay goroutines are rooted at relayCtx, so stopServing cancels them en
+	// masse; a single relay is cancelled (and removed) on an explicit
+	// subscription.stop. Crash-driven teardown (a client that never stops) is
+	// TASK-20 liveness, the same gap the clients registry has.
+	relayCtx    context.Context
+	relayCancel context.CancelFunc
+	relaysMu    sync.Mutex
+	relays      map[string]map[string]*relay
 }
 
 // Start launches the embedded bus under JWT auth and bootstraps the reserved
@@ -88,7 +111,7 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 		return nil, err
 	}
 
-	b := &Bus{ns: ns, store: cfg.StoreDir}
+	b := &Bus{ns: ns, store: cfg.StoreDir, ident: ident}
 
 	// The bus's own operator-tier connection is in-process: it needs no TCP
 	// listener, so bootstrap runs while the client port is still closed and
@@ -112,6 +135,26 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 	b.opConn = opConn
 
 	if err := b.bootstrap(ctx); err != nil {
+		opConn.Close()
+		ns.Shutdown()
+		return nil, err
+	}
+
+	// Start serving the protocol's operations before any client can connect, so a
+	// client that connects the instant the listener opens can immediately call.
+	if err := b.startServing(); err != nil {
+		opConn.Close()
+		ns.Shutdown()
+		return nil, err
+	}
+
+	// Provision the two reserved infrastructure credentials in the store (ADR-0020):
+	// the operator credential (held-identity mode: mint for another, retire) and the
+	// enrollment credential (bootstrap mode: a local process self-enrolls). The
+	// signing keys never leave the bus — these are minted credentials, the locality-
+	// trusted way the operator and an identity-less local process reach the issuance
+	// path. Done before the listener opens, so they exist the instant a client could.
+	if err := b.provisionInfraCreds(); err != nil {
 		opConn.Close()
 		ns.Shutdown()
 		return nil, err
@@ -195,16 +238,30 @@ func waitReady(ctx context.Context, ns *natsserver.Server, max time.Duration) er
 	}
 }
 
-// Drain broadcasts the cooperative-drain control message (ADR-0010).
+// Drain delivers the cooperative-drain signal to every online client over its
+// own push space (sx.deliver.<id>.drain), so a client needs no extra permission
+// beyond its delivery subscription to receive it (ADR-0010, ADR-0019). It targets
+// the clients that are connected right now — derived from the live connection
+// table (ADR-0020), the same source of truth as presence — so there is no
+// register/deregister-maintained set to drift out of sync.
 func (b *Bus) Drain() error {
-	if err := b.opConn.Publish(sx.SubjectDrain, nil); err != nil {
-		return fmt.Errorf("bus: publish drain: %w", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ids, err := b.onlineClientIDs(ctx)
+	if err != nil {
+		return fmt.Errorf("bus: drain: %w", err)
+	}
+	for _, id := range ids {
+		if err := b.opConn.Publish(wireapi.DeliverSubject(id, wireapi.DrainSubID), nil); err != nil {
+			return fmt.Errorf("bus: publish drain to %s: %w", id, err)
+		}
 	}
 	return b.opConn.Flush()
 }
 
 // Shutdown stops the embedded server and closes the operator connection.
 func (b *Bus) Shutdown() {
+	b.stopServing()
 	if b.opConn != nil {
 		b.opConn.Close()
 	}
@@ -215,8 +272,35 @@ func (b *Bus) Shutdown() {
 // ClientURL is the address clients connect to.
 func (b *Bus) ClientURL() string { return b.url }
 
-// MintClient mints a client-tier credentials file for id — its own verified
-// identity, with the shared client-tier guardrail.
-func (b *Bus) MintClient(id string) (string, error) {
-	return MintClientToken(b.store, id)
+// MintClient is the issuance path (ADR-0020): the bus mints a NEW client identity
+// — a fresh ULID id and its per-client credential (JWT+seed) — AND persists its
+// durable registry record, so the identity exists and can connect. The signing
+// keys never leave the bus. It returns the credential text and the minted id.
+// This is what clients.register calls once it has authorized the caller; tests
+// use it directly to issue a client. The kind is the client's self-declared role
+// (e.g. "worker"); display_name is its human label.
+func (b *Bus) MintClient(ctx context.Context, displayName, kind string) (creds, id string, err error) {
+	creds, id, subject, err := b.mintIdentity(displayName)
+	if err != nil {
+		return "", "", err
+	}
+	epoch, err := b.readEpoch(ctx)
+	if err != nil {
+		return "", "", fmt.Errorf("bus: issue: %w", err)
+	}
+	rec, err := json.Marshal(wireapi.ClientEntry{
+		ID:          id,
+		Subject:     subject,
+		DisplayName: displayName,
+		Kind:        kind,
+		Epoch:       epoch,
+		IssuedAt:    nowRFC3339(),
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("bus: issue: encode record: %w", err)
+	}
+	if _, err := b.backend.Put(ctx, sx.BucketClients, id, rec); err != nil {
+		return "", "", fmt.Errorf("bus: issue: persist record: %w", err)
+	}
+	return creds, id, nil
 }

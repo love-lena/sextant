@@ -6,20 +6,23 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
+	"strings"
+	"unicode"
 
-	"github.com/love-lena/sextant/pkg/sx"
+	"github.com/love-lena/sextant/internal/wireapi"
 	"github.com/nats-io/jwt/v2"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nkeys"
+	"github.com/oklog/ulid/v2"
 )
 
 // The bus authenticates with NATS decentralized JWT auth (ADR-0012): a single
 // operator, one SEXTANT account (where all clients live and the sx_ infra is
 // provisioned), a system account, and one user JWT per client — so every
 // connection is a distinct, verified identity and every op is attributable.
-// The same client-tier permission template applies to all clients for now;
-// per-client (write-precision) permissions are the deferred refinement.
+// Each client's credential carries a per-client allow-list (ADR-0019): it may
+// publish only under its own call prefix and subscribe only to its own delivery
+// space, which is what makes the bus-stamped author unforgeable.
 
 // identity is the bus's signing material: the operator and account key pairs,
 // persisted in the store so `sextant token` can mint user JWTs out-of-band.
@@ -51,33 +54,6 @@ func loadOrCreateIdentity(storeDir string) (*identity, error) {
 		return nil, err
 	}
 	return &identity{op: op, acc: acc, sys: sys}, nil
-}
-
-// loadIdentity loads an existing identity, returning an error (never creating)
-// when the store has no key material. Used by `sextant token`, so a wrong or
-// empty --store fails clearly instead of minting a mismatched identity.
-func loadIdentity(storeDir string) (*identity, error) {
-	dir := keysDir(storeDir)
-	op, err := loadSeed(filepath.Join(dir, "operator.nk"))
-	if err != nil {
-		return nil, identityErr(storeDir, err)
-	}
-	acc, err := loadSeed(filepath.Join(dir, "account.nk"))
-	if err != nil {
-		return nil, identityErr(storeDir, err)
-	}
-	sys, err := loadSeed(filepath.Join(dir, "system.nk"))
-	if err != nil {
-		return nil, identityErr(storeDir, err)
-	}
-	return &identity{op: op, acc: acc, sys: sys}, nil
-}
-
-func identityErr(storeDir string, err error) error {
-	if errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("bus: no bus identity under %s — run `sextant up` there first", storeDir)
-	}
-	return err
 }
 
 // ensureKeysDir creates the keys dir (0700) and verifies it isn't accessible to
@@ -221,10 +197,10 @@ func (id *identity) systemJWT() (string, error) {
 	return sc.Encode(id.op)
 }
 
-// mintUser signs a user JWT in the SEXTANT account with the given name and
-// permissions, returning the JWT, the user's seed, and the user's subject (its
-// public key — the principal the bus actually authenticates).
-func (id *identity) mintUser(name string, perms jwt.Permissions) (userJWT, seed, subject string, err error) {
+// mintUser signs a user JWT in the SEXTANT account with the given name,
+// permissions, and tags, returning the JWT, the user's seed, and the user's
+// subject (its public key — the principal the bus actually authenticates).
+func (id *identity) mintUser(name string, perms jwt.Permissions, tags ...string) (userJWT, seed, subject string, err error) {
 	ukp, err := nkeys.CreateUser()
 	if err != nil {
 		return "", "", "", fmt.Errorf("bus: create user key: %w", err)
@@ -234,6 +210,7 @@ func (id *identity) mintUser(name string, perms jwt.Permissions) (userJWT, seed,
 	uc.Name = name
 	uc.IssuerAccount = pub(id.acc)
 	uc.Permissions = perms
+	uc.Tags.Add(tags...)
 	j, err := uc.Encode(id.acc)
 	if err != nil {
 		return "", "", "", fmt.Errorf("bus: encode user jwt: %w", err)
@@ -245,23 +222,22 @@ func (id *identity) mintUser(name string, perms jwt.Permissions) (userJWT, seed,
 	return j, string(sb), subject, nil
 }
 
-// clientIDRe constrains a client id to a safe charset: alphanumerics plus
-// internal '.', '-', '_', with no leading/trailing punctuation. The id has to
-// be a valid KV key, a NATS user name, a safe single-component filename (the
-// issued-names ledger), and an envelope sender — this charset satisfies all
-// four and forecloses path traversal.
-var clientIDRe = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9_.-]*[a-zA-Z0-9])?$`)
-
-// validateClientID rejects ids that aren't safe as an identity / registry key.
-func validateClientID(id string) error {
-	if id == "" {
-		return errors.New("bus: client id is empty")
+// validateDisplayName rejects a human display_name that isn't safe to carry in a
+// JWT tag and a registry record. Since a client's primary id is now a bus-minted
+// ULID (not the display_name), the display_name need not be a key or filename —
+// it is just a readable label — so this is permissive: non-empty, bounded, and
+// free of control characters (which would corrupt the tag/JSON).
+func validateDisplayName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return errors.New("bus: display name is empty")
 	}
-	if len(id) > 128 {
-		return fmt.Errorf("bus: client id %q is too long (max 128)", id)
+	if len(name) > 128 {
+		return fmt.Errorf("bus: display name %q is too long (max 128)", name)
 	}
-	if !clientIDRe.MatchString(id) {
-		return fmt.Errorf("bus: client id %q must be alphanumerics with internal '.', '-', or '_' (no leading/trailing punctuation, spaces, or slashes)", id)
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("bus: display name %q contains a control character", name)
+		}
 	}
 	return nil
 }
@@ -294,20 +270,45 @@ func reserveName(storeDir, id, subject string) error {
 // operatorPermissions is full access — the bus's own connection and tooling.
 func operatorPermissions() jwt.Permissions { return jwt.Permissions{} }
 
-// clientPermissions is the ADR-0012 client-tier guardrail, as JWT permissions.
-func clientPermissions() jwt.Permissions {
-	var p jwt.Permissions
-	p.Pub.Deny = []string{
-		sx.ControlPrefix + ">", // operator-only control subjects
-		// No stream/bucket lifecycle: the operator provisions buckets, so
-		// clients can't create/alter/delete or squat any stream.
-		"$JS.API.STREAM.CREATE.>",
-		"$JS.API.STREAM.UPDATE.>",
-		"$JS.API.STREAM.DELETE.>",
-		"$JS.API.STREAM.PURGE.>",
+// clientPermissions is the ADR-0019 client-tier guardrail: a per-client JWT
+// allow-list, scoped to clientID (the bus-minted ULID that is this credential's
+// authenticated identity). It is the keystone of the unforgeable author — a
+// client may publish ONLY under its own call prefix, so the subject token the
+// bus reads the author from is exactly the identity NATS authenticated, and no
+// client can issue a call (and thus stamp a frame) under another id.
+//
+// Allow-list, not deny-list: everything is denied unless named. A client
+// reaches the messages stream, the KV buckets, and the control space only by
+// asking the bus over a call — never directly — so there is no stream or bucket
+// lifecycle to squat and no operator state to read.
+func clientPermissions(clientID string) jwt.Permissions {
+	// The id is woven into NATS subject patterns below, so it must be a single
+	// plain subject token. A bus-minted ULID always is; this guards the security
+	// path against a future custom-id path slipping in a `.` (which would misparse
+	// the call subject) or a wildcard (`*`/`>`, which would broaden the allow-list
+	// past the client's own scope). Fail loud — a malformed id here is a
+	// programming error on the trust path, not user input.
+	if strings.ContainsAny(clientID, ".*> \t\r\n") || clientID == "" {
+		panic(fmt.Sprintf("bus: client id %q is not a single subject token (allow-list scoping is unsafe)", clientID))
 	}
-	// No subscribe denials: with no operator-only bucket in v1, there is no
-	// in-account state to hide from clients.
+	var p jwt.Permissions
+	// Publish: only this client's own Wire API call space (sx.api.<id>.>). The
+	// <id> in the subject is the authenticated identity, so the author the bus
+	// stamps from it cannot be forged.
+	p.Pub.Allow = []string{wireapi.APIPrefix + clientID + ".>"}
+	// Subscribe: this client's own push-delivery space (subscribe/watch/drain
+	// deliveries: sx.deliver.<id>.>) and its OWN request/reply inbox
+	// (_INBOX.<id>.>). The inbox must be subscribable or a client's own nc.Request
+	// never receives the bus's reply and every call times out. It is scoped per
+	// client, not the shared _INBOX.> — otherwise any client could subscribe the
+	// wildcard and eavesdrop on every other client's call replies. The SDK sets a
+	// matching nats.CustomInboxPrefix so its replies land under this prefix.
+	// (allow_responses/Resp is not needed: a client is a requester, never a
+	// responder.)
+	p.Sub.Allow = []string{
+		wireapi.DeliverPrefix + clientID + ".>",
+		wireapi.InboxPrefix(clientID) + ".>",
+	}
 	return p
 }
 
@@ -320,28 +321,93 @@ func credsFile(userJWT, seed string) (string, error) {
 	return string(b), nil
 }
 
-// MintClientToken mints a client-tier credentials file for id, loading the
-// account signing key from the store. This is what `sextant token` calls; it
-// requires an existing identity (it never creates one) so a wrong --store
-// fails clearly rather than minting a mismatched credential.
-func MintClientToken(storeDir, id string) (string, error) {
-	if err := validateClientID(id); err != nil {
-		return "", err
+// mintIdentity mints a new client credential — a fresh ULID id and its per-client
+// allow-list credential — using the bus's own signing keys (b.ident). The keys
+// never leave the bus, so the bus is the sole minter (key custody, ADR-0020). It
+// records the issued id + authenticated subject in the durable ledger and returns
+// the creds text, the id, and the subject (the authenticated public key, which
+// presence joins against the live connection table). It does NOT persist the
+// registry record — MintClient does, so issuance is one atomic act.
+func (b *Bus) mintIdentity(displayName string) (creds, id, subject string, err error) {
+	if err := validateDisplayName(displayName); err != nil {
+		return "", "", "", err
 	}
-	ident, err := loadIdentity(storeDir)
+	id = ulid.Make().String()
+	j, seed, subject, err := b.ident.mintUser(id, clientPermissions(id), wireapi.EncodeDisplayNameTag(displayName))
 	if err != nil {
-		return "", err
+		return "", "", "", err
 	}
-	j, seed, subject, err := ident.mintUser(id, clientPermissions())
+	// Record the issued id (and the authenticated subject) for audit. The id is a
+	// fresh ULID, so this never collides; the ledger is a durable issuance trail.
+	if err := reserveName(b.store, id, subject); err != nil {
+		return "", "", "", err
+	}
+	c, err := credsFile(j, seed)
 	if err != nil {
-		return "", err
+		return "", "", "", err
 	}
-	// Claim the name before returning creds, so a duplicate fails loud rather
-	// than handing out a second identity that collides on the registry key.
-	if err := reserveName(storeDir, id, subject); err != nil {
-		return "", err
+	return c, id, subject, nil
+}
+
+// OperatorCredsPath and EnrollCredsPath are the two reserved infra-credential
+// files `sextant up` provisions in the store (ADR-0020). They are minted
+// credentials, not signing keys — the keys stay in the bus. Locality is the trust:
+// a process that can read these files is on the operator's machine.
+func OperatorCredsPath(storeDir string) string { return filepath.Join(storeDir, "operator.creds") }
+func EnrollCredsPath(storeDir string) string   { return filepath.Join(storeDir, "enroll.creds") }
+
+// operatorCredPermissions is the held-identity authority (ADR-0020): the operator
+// may call any Wire API op under its own reserved prefix — issuance
+// (clients.register), retire, clients.list — and receive replies on its own inbox.
+func operatorCredPermissions() jwt.Permissions {
+	var p jwt.Permissions
+	p.Pub.Allow = []string{wireapi.APIPrefix + wireapi.OperatorID + ".>"}
+	p.Sub.Allow = []string{
+		wireapi.DeliverPrefix + wireapi.OperatorID + ".>",
+		wireapi.InboxPrefix(wireapi.OperatorID) + ".>",
 	}
-	return credsFile(j, seed)
+	return p
+}
+
+// enrollCredPermissions is the bootstrap/enrollment authority (ADR-0020): the
+// tightest possible allow-list. The enrollment identity may ONLY call
+// clients.register (to self-enroll) and receive that one reply — it cannot publish
+// messages, retire, or even read the directory. This is the enrollment connection
+// tier: how an identity-less local process reaches the issuance path at all.
+func enrollCredPermissions() jwt.Permissions {
+	var p jwt.Permissions
+	p.Pub.Allow = []string{wireapi.CallSubject(wireapi.EnrollID, wireapi.OpClientsRegister)}
+	p.Sub.Allow = []string{wireapi.InboxPrefix(wireapi.EnrollID) + ".>"}
+	return p
+}
+
+// provisionInfraCreds mints the operator and enrollment credentials and writes
+// them into the store (ADR-0020). Called once at Start; idempotent in effect (it
+// overwrites with a freshly minted credential each boot — the identities are
+// reserved names, not durable records). Both files are owner-only.
+func (b *Bus) provisionInfraCreds() error {
+	infra := []struct {
+		id    string
+		perms jwt.Permissions
+		path  string
+	}{
+		{wireapi.OperatorID, operatorCredPermissions(), OperatorCredsPath(b.store)},
+		{wireapi.EnrollID, enrollCredPermissions(), EnrollCredsPath(b.store)},
+	}
+	for _, in := range infra {
+		j, seed, _, err := b.ident.mintUser(in.id, in.perms)
+		if err != nil {
+			return fmt.Errorf("bus: provision %s credential: %w", in.id, err)
+		}
+		c, err := credsFile(j, seed)
+		if err != nil {
+			return fmt.Errorf("bus: provision %s credential: %w", in.id, err)
+		}
+		if err := os.WriteFile(in.path, []byte(c), 0o600); err != nil {
+			return fmt.Errorf("bus: write %s credential %s: %w", in.id, in.path, err)
+		}
+	}
+	return nil
 }
 
 // serverAuthOptions sets the JWT auth fields on opts and returns the in-memory

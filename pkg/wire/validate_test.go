@@ -84,16 +84,16 @@ func TestCheckEpoch(t *testing.T) {
 }
 
 func TestValidate(t *testing.T) {
-	good := New("agent-1", json.RawMessage(`{"x":1}`))
+	good := New("client-1", json.RawMessage(`{"x":1}`))
 	if err := good.Validate(); err != nil {
-		t.Fatalf("good envelope should validate: %v", err)
+		t.Fatalf("good frame should validate: %v", err)
 	}
-	bad := map[string]Envelope{
-		"empty sender": {ID: good.ID, Kind: KindMessage, Epoch: Epoch, Record: good.Record},
-		"bad id":       {ID: "nope", Sender: "a", Kind: KindMessage, Epoch: Epoch, Record: good.Record},
-		"wrong kind":   {ID: good.ID, Sender: "a", Kind: "event", Epoch: Epoch, Record: good.Record},
-		"empty record": {ID: good.ID, Sender: "a", Kind: KindMessage, Epoch: Epoch},
-		"bad record":   {ID: good.ID, Sender: "a", Kind: KindMessage, Epoch: Epoch, Record: json.RawMessage(`{`)},
+	bad := map[string]Frame{
+		"empty author": {ID: good.ID, Kind: KindMessage, Epoch: Epoch, Record: good.Record},
+		"bad id":       {ID: "nope", Author: "a", Kind: KindMessage, Epoch: Epoch, Record: good.Record},
+		"wrong kind":   {ID: good.ID, Author: "a", Kind: "event", Epoch: Epoch, Record: good.Record},
+		"empty record": {ID: good.ID, Author: "a", Kind: KindMessage, Epoch: Epoch},
+		"bad record":   {ID: good.ID, Author: "a", Kind: KindMessage, Epoch: Epoch, Record: json.RawMessage(`{`)},
 	}
 	for name, e := range bad {
 		if err := e.Validate(); err == nil {

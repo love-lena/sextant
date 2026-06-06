@@ -72,21 +72,21 @@ func CheckEpoch(msgEpoch, busEpoch int) error {
 	return nil
 }
 
-// Validate checks the envelope is structurally well-formed: a parseable ULID
-// id, a non-empty sender, a known kind, and a non-empty, syntactically valid
-// JSON record. It does not check the epoch — that is contextual (see
-// CheckEpoch), because durable streams outlive epochs.
-func (e Envelope) Validate() error {
-	if _, err := ulid.Parse(e.ID); err != nil {
+// Validate checks the frame is structurally well-formed: a parseable ULID id, a
+// non-empty author, a known kind, and a non-empty, syntactically valid JSON
+// record. It does not check the epoch — that is contextual (see CheckEpoch),
+// because durable streams outlive epochs.
+func (f Frame) Validate() error {
+	if _, err := ulid.Parse(f.ID); err != nil {
 		return fmt.Errorf("wire: invalid id: %w", err)
 	}
-	if e.Sender == "" {
-		return errors.New("wire: empty sender")
+	if f.Author == "" {
+		return errors.New("wire: empty author")
 	}
-	if e.Kind != KindMessage {
-		return fmt.Errorf("wire: unknown kind %q", e.Kind)
+	if f.Kind != KindMessage && f.Kind != KindArtifact {
+		return fmt.Errorf("wire: unknown kind %q", f.Kind)
 	}
-	if len(e.Record) == 0 || !json.Valid(e.Record) {
+	if len(f.Record) == 0 || !json.Valid(f.Record) {
 		return errors.New("wire: record must be non-empty valid JSON")
 	}
 	return nil

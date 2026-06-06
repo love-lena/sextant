@@ -2,116 +2,71 @@ package sextant
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"sort"
 	"time"
 
-	"github.com/love-lena/sextant/pkg/sx"
-	"github.com/nats-io/nats.go/jetstream"
+	"github.com/love-lena/sextant/internal/wireapi"
 )
 
-// ClientInfo is one entry in the clients registry: a client that is connected
-// right now. The registry is a presence-only, self-maintained directory — each
-// client writes its own entry on Connect and removes it on Close (ADR-0004,
-// ADR-0008). "Listed" therefore means "registered and has not cleanly left": a
-// client that crashes without Close leaves a stale entry until read-time
-// liveness and stale-entry reaping land (TASK-20). There is no heartbeat in M1.
+// ClientInfo is one entry in the clients directory (ADR-0020): a bus-issued
+// identity and whether it is connected right now. The directory is a durable
+// store of issued identities joined with live presence — an identity is listed
+// whether it is online or offline, from the moment it is issued
+// (`sextant clients register`) until it is retired (`sextant clients retire`).
+// Disconnecting does not remove it; it only flips Presence to offline.
 type ClientInfo struct {
-	// ID is the client's verified identity — its credential's name, which is
-	// both its registry key and its envelope sender. ListClients sources it from
-	// the registry key (the authoritative locator), not the record body.
+	// ID is the client's verified identity — the bus-minted ULID in its
+	// credential, which is both its registry key and its frame author. The bus
+	// sources it from the registry key (the authoritative locator).
 	ID string
-	// Kind is what the client is (e.g. "harness", "coordinator"), self-declared
-	// at connect via Options.Kind.
+	// DisplayName is the human-readable label minted with the credential. Unique
+	// by convention, not by the bus.
+	DisplayName string
+	// Kind is what the client is (e.g. "worker", "reviewer"), declared at issuance.
 	Kind string
-	// Epoch is the protocol epoch the client connected under.
+	// Epoch is the protocol epoch the identity was issued under.
 	Epoch int
-	// SDK is the SDK version that wrote the entry.
-	SDK string
-	// ConnectedAt is when the client registered, by its own UTC clock. (The
-	// bus-authoritative stamp is what TASK-20 liveness will age against; this
-	// self-reported time is the lean M1 field.)
-	ConnectedAt time.Time
+	// Online is the bus-derived presence: true iff an authenticated connection for
+	// this identity exists right now. The bus computes it from the live connection
+	// table, not from any stored field (ADR-0020) — there is no heartbeat.
+	Online bool
+	// IssuedAt is when the bus minted the identity (its UTC clock).
+	IssuedAt time.Time
 }
 
-// registryRecord is a client's on-the-wire entry in the registry (the JSON
-// stored under its id in sx_clients). It is written by register (the connect
-// handshake, see client.go) and read back by ListClients; ClientInfo is its
-// public, parsed view.
-type registryRecord struct {
-	ID          string `json:"id"`
-	Kind        string `json:"kind"`
-	Epoch       int    `json:"epoch"`
-	SDK         string `json:"sdk"`
-	ConnectedAt string `json:"connected_at"`
-}
-
-// checkRecordKey enforces the registry's identity invariant: a record's
-// self-reported id must equal the key it is filed under. The key is the
-// authoritative identity (what register writes under, and the name the bus
-// authenticated the connection as — ADR-0012); the body id duplicates it. We
-// keep that duplicate field in the schema, but never trust it to diverge: a
-// mismatch is corruption, rejected on write (so the SDK never files one) and on
-// read (so a foreign or corrupt one never surfaces).
-func checkRecordKey(recordID, key string) error {
-	if recordID != key {
-		return fmt.Errorf("registry record id %q does not match its key %q", recordID, key)
-	}
-	return nil
-}
-
-// info parses a stored record into its public view. ID is taken from the key
-// (the authoritative locator), the body id is only checked against it, and a
-// connected_at that isn't the RFC3339 the SDK writes fails loud rather than
-// being coerced.
-func (r registryRecord) info(key string) (ClientInfo, error) {
-	if err := checkRecordKey(r.ID, key); err != nil {
-		return ClientInfo{}, err
-	}
-	t, err := time.Parse(time.RFC3339, r.ConnectedAt)
-	if err != nil {
-		return ClientInfo{}, fmt.Errorf("bad connected_at %q: %w", r.ConnectedAt, err)
-	}
-	return ClientInfo{ID: key, Kind: r.Kind, Epoch: r.Epoch, SDK: r.SDK, ConnectedAt: t}, nil
-}
-
-// ListClients returns the registry directory: every client connected right now,
-// sorted by id. The directory is presence-only — an entry means the client
-// registered and has not cleanly left (see ClientInfo). An empty directory is
-// an empty slice, not an error.
+// ListClients returns the clients directory: every issued identity — online and
+// offline — sorted by id, via the clients.list operation. The bus reads the
+// durable records and stamps each with a presence derived from the live
+// connection (ADR-0020). An empty directory is an empty slice, not an error.
 func (c *Client) ListClients(ctx context.Context) ([]ClientInfo, error) {
-	clients, err := c.js.KeyValue(ctx, sx.BucketClients)
-	if err != nil {
-		return nil, fmt.Errorf("sextant: open %s: %w", sx.BucketClients, err)
-	}
-	keys, err := clients.Keys(ctx)
-	if errors.Is(err, jetstream.ErrNoKeysFound) {
-		return nil, nil // empty directory — no clients connected
-	}
-	if err != nil {
-		return nil, fmt.Errorf("sextant: list clients: %w", err)
-	}
-	out := make([]ClientInfo, 0, len(keys))
-	for _, k := range keys {
-		e, err := clients.Get(ctx, k)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			continue // left between the key listing and this read; presence is point-in-time
-		}
-		if err != nil {
-			return nil, fmt.Errorf("sextant: read client %q: %w", k, err)
-		}
-		var rec registryRecord
-		if err := json.Unmarshal(e.Value(), &rec); err != nil {
-			return nil, fmt.Errorf("sextant: decode client %q: %w", k, err)
-		}
-		info, err := rec.info(k)
-		if err != nil {
-			return nil, fmt.Errorf("sextant: decode client %q: %w", k, err)
-		}
-		out = append(out, info)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out, nil
+	return listClients(ctx, c.call)
 }
+
+// listClients is the shared implementation behind Client.ListClients and
+// Issuer.ListClients — both make the same clients.list call, differing only in
+// which connection (and thus which call subject) carries it.
+func listClients(ctx context.Context, call callFunc) ([]ClientInfo, error) {
+	var out wireapi.ClientsListOutput
+	if err := call(ctx, wireapi.OpClientsList, struct{}{}, &out); err != nil {
+		return nil, err
+	}
+	infos := make([]ClientInfo, 0, len(out.Clients))
+	for _, e := range out.Clients {
+		t, err := time.Parse(time.RFC3339, e.IssuedAt)
+		if err != nil {
+			continue // the bus owns these records; skip one with a bad timestamp
+		}
+		infos = append(infos, ClientInfo{
+			ID:          e.ID,
+			DisplayName: e.DisplayName,
+			Kind:        e.Kind,
+			Epoch:       e.Epoch,
+			Online:      e.Presence == wireapi.PresenceOnline,
+			IssuedAt:    t,
+		})
+	}
+	return infos, nil
+}
+
+// callFunc is the signature of the SDK's Wire API call method, shared by Client
+// and Issuer so directory reads have one implementation.
+type callFunc func(ctx context.Context, op string, in, out any) error

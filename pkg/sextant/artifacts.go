@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
-	"github.com/love-lena/sextant/pkg/sx"
+	"github.com/love-lena/sextant/internal/wireapi"
 	"github.com/love-lena/sextant/pkg/wire"
-	"github.com/nats-io/nats.go/jetstream"
+	"github.com/nats-io/nats.go"
+	"github.com/oklog/ulid/v2"
 )
 
 // Artifact is a named, versioned unit of durable shared work. Its Record is a
@@ -26,7 +28,8 @@ type Artifact struct {
 }
 
 // validArtifactRecord rejects a record that isn't a non-empty JSON lexicon, so a
-// malformed artifact never reaches the bucket (fail-loud at the writer).
+// malformed artifact never reaches the bus (fail-loud at the writer; the bus
+// re-checks too).
 func validArtifactRecord(r wire.Lexicon) error {
 	if len(r) == 0 || !json.Valid(r) {
 		return errors.New("sextant: artifact record must be a non-empty JSON lexicon")
@@ -39,72 +42,53 @@ type Watch interface {
 	Stop() error
 }
 
-func (c *Client) artifacts(ctx context.Context) (jetstream.KeyValue, error) {
-	kv, err := c.js.KeyValue(ctx, sx.BucketArtifacts)
-	if err != nil {
-		return nil, fmt.Errorf("sextant: open artifacts: %w", err)
-	}
-	return kv, nil
-}
-
-// CreateArtifact creates a new artifact from a Lexicon record. It fails if name
-// already exists or record is not a valid lexicon.
+// CreateArtifact creates a new artifact from a Lexicon record as an
+// artifact.create call: the bus stamps the frame (id, author, timestamps) and
+// stores it. It fails if name already exists or record is not a valid lexicon.
 func (c *Client) CreateArtifact(ctx context.Context, name string, record wire.Lexicon) (uint64, error) {
 	if err := validArtifactRecord(record); err != nil {
 		return 0, err
 	}
-	kv, err := c.artifacts(ctx)
-	if err != nil {
+	var out wireapi.ArtifactWriteOutput
+	if err := c.call(ctx, wireapi.OpArtifactCreate, wireapi.ArtifactCreateInput{Name: name, Record: json.RawMessage(record)}, &out); err != nil {
 		return 0, err
 	}
-	rev, err := kv.Create(ctx, name, record)
-	if err != nil {
-		return 0, fmt.Errorf("sextant: create artifact %q: %w", name, err)
-	}
-	return rev, nil
+	return out.Revision, nil
 }
 
-// UpdateArtifact compare-and-set updates an artifact: it succeeds only if the
-// current revision equals expectedRev, otherwise it returns an error (a
-// concurrent write moved it on). This is the single-author discipline.
+// UpdateArtifact compare-and-set updates an artifact as an artifact.update call:
+// it succeeds only if the current revision equals expectedRev, otherwise it
+// returns an error (a concurrent write moved it on). This is the single-author
+// discipline; the bus enforces the compare-and-set.
 func (c *Client) UpdateArtifact(ctx context.Context, name string, record wire.Lexicon, expectedRev uint64) (uint64, error) {
 	if err := validArtifactRecord(record); err != nil {
 		return 0, err
 	}
-	kv, err := c.artifacts(ctx)
-	if err != nil {
+	var out wireapi.ArtifactWriteOutput
+	if err := c.call(ctx, wireapi.OpArtifactUpdate, wireapi.ArtifactUpdateInput{Name: name, Record: json.RawMessage(record), ExpectedRev: expectedRev}, &out); err != nil {
 		return 0, err
 	}
-	rev, err := kv.Update(ctx, name, record, expectedRev)
-	if err != nil {
-		return 0, fmt.Errorf("sextant: update artifact %q (rev %d): %w", name, expectedRev, err)
-	}
-	return rev, nil
+	return out.Revision, nil
 }
 
-// GetArtifact reads an artifact's current value and revision.
+// GetArtifact reads an artifact's current value and bus-stamped metadata as an
+// artifact.get call.
 func (c *Client) GetArtifact(ctx context.Context, name string) (Artifact, error) {
-	kv, err := c.artifacts(ctx)
-	if err != nil {
+	var out wireapi.ArtifactGetOutput
+	if err := c.call(ctx, wireapi.OpArtifactGet, wireapi.ArtifactGetInput{Name: name}, &out); err != nil {
 		return Artifact{}, err
 	}
-	e, err := kv.Get(ctx, name)
-	if err != nil {
-		return Artifact{}, fmt.Errorf("sextant: get artifact %q: %w", name, err)
-	}
-	return artifactFrom(e), nil
+	return Artifact{
+		Name:     out.Name,
+		Record:   wire.Lexicon(out.Record),
+		Revision: out.Revision,
+		Created:  parseArtifactTime(out.CreatedAt),
+	}, nil
 }
 
-// DeleteArtifact removes an artifact.
+// DeleteArtifact removes an artifact as an artifact.delete call.
 func (c *Client) DeleteArtifact(ctx context.Context, name string) error {
-	kv, err := c.artifacts(ctx)
-	if err != nil {
-		return err
-	}
-	if err := kv.Delete(ctx, name); err != nil {
-		return fmt.Errorf("sextant: delete artifact %q: %w", name, err)
-	}
-	return nil
+	return c.call(ctx, wireapi.OpArtifactDelete, wireapi.ArtifactDeleteInput{Name: name}, nil)
 }
 
 // ArtifactChange is a change delivered to a WatchArtifact handler: the artifact
@@ -116,56 +100,83 @@ type ArtifactChange struct {
 	Deleted bool
 }
 
-// WatchArtifact calls h on each change to name, starting with its current value
-// if present. Deletes are delivered too (with Deleted set). The watch runs until
-// Stop is called or ctx is cancelled, whichever comes first.
+// WatchArtifact calls h on each change to name as an artifact.watch call: the bus
+// relays changes to this client's private delivery subject, starting with the
+// current value if present, and the SDK fans them out to h. Deletes are delivered
+// too (with Deleted set). The watch runs until Stop is called or ctx is
+// cancelled, whichever comes first.
 func (c *Client) WatchArtifact(ctx context.Context, name string, h func(ArtifactChange)) (Watch, error) {
-	kv, err := c.artifacts(ctx)
+	subID := ulid.Make().String()
+	deliver := wireapi.DeliverSubject(c.id, subID)
+	// Subscribe before the call so a change the bus relays the instant it replies
+	// can't outrun our subscription.
+	natsSub, err := c.nc.Subscribe(deliver, func(m *nats.Msg) {
+		var d wireapi.ArtifactDelivery
+		if err := json.Unmarshal(m.Data, &d); err != nil {
+			c.logf("sextant: undecodable artifact delivery for %s, skipping: %v", name, err)
+			return
+		}
+		ch := ArtifactChange{
+			Artifact: Artifact{Name: d.Name, Revision: d.Revision},
+			Deleted:  d.Deleted,
+		}
+		if !d.Deleted {
+			ch.Record = wire.Lexicon(d.Record)
+			ch.Created = parseArtifactTime(d.CreatedAt)
+		}
+		h(ch)
+	})
 	if err != nil {
+		return nil, fmt.Errorf("sextant: watch delivery: %w", err)
+	}
+	if err := c.call(ctx, wireapi.OpArtifactWatch, wireapi.WatchInput{Name: name, SubID: subID}, nil); err != nil {
+		_ = natsSub.Unsubscribe()
 		return nil, err
 	}
-	w, err := kv.Watch(ctx, name)
-	if err != nil {
-		return nil, fmt.Errorf("sextant: watch artifact %q: %w", name, err)
-	}
-	go func() {
-		for e := range w.Updates() {
-			if e == nil {
-				continue // marks the end of the initial replay
-			}
-			h(ArtifactChange{
-				Artifact: artifactFrom(e),
-				Deleted:  e.Operation() != jetstream.KeyValuePut,
-			})
-		}
-	}()
-	// Bridge ctx cancellation to teardown: stopping the watcher closes Updates(),
-	// which ends the delivery goroutine above.
 	subCtx, cancel := context.WithCancel(ctx)
+	w := &artifactWatch{c: c, subID: subID, natsSub: natsSub, cancel: cancel}
 	go func() {
 		<-subCtx.Done()
-		_ = w.Stop()
+		w.teardown()
 	}()
-	return &artifactWatch{cancel: cancel}, nil
+	return w, nil
 }
 
 // artifactWatch tears the watch down on Stop or ctx cancellation.
 type artifactWatch struct {
-	cancel context.CancelFunc
+	c       *Client
+	subID   string
+	natsSub *nats.Subscription
+	cancel  context.CancelFunc
+	once    sync.Once
 }
 
 // Stop ends the watch (idempotent). It cancels the internal context, which the
-// bridge goroutine observes to stop the underlying KV watcher.
+// bridge goroutine observes to run teardown.
 func (a *artifactWatch) Stop() error {
 	a.cancel()
 	return nil
 }
 
-func artifactFrom(e jetstream.KeyValueEntry) Artifact {
-	return Artifact{
-		Name:     e.Key(),
-		Record:   e.Value(),
-		Revision: e.Revision(),
-		Created:  e.Created(),
+// teardown unsubscribes the delivery subject and asks the bus to stop the relay.
+// It runs exactly once, whether reached via Stop or a cancelled ctx.
+func (a *artifactWatch) teardown() {
+	a.once.Do(func() {
+		if a.natsSub != nil {
+			_ = a.natsSub.Unsubscribe()
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = a.c.call(ctx, wireapi.OpSubscriptionStop, wireapi.SubscriptionStopInput{SubID: a.subID}, nil)
+	})
+}
+
+// parseArtifactTime parses a bus RFC3339 timestamp, returning the zero time if it
+// is empty or unparseable (a missing creation time is not worth failing a read).
+func parseArtifactTime(s string) time.Time {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return time.Time{}
 	}
+	return t
 }

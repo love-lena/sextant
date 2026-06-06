@@ -4,29 +4,33 @@
   "defs": {
     "main": {
       "type": "object",
-      "description": "A clients registry entry stored under the client's verified id. Note: moving client identity to a ULID primary id plus a display_name is a forthcoming ADR-0018 follow-on; the fields below are the current shape.",
-      "required": ["id", "kind", "epoch", "sdk", "connected_at"],
+      "description": "A clients directory entry: a durable bus-issued identity joined with live presence (ADR-0020). Stored under the client's verified id; identity is a bus-minted ULID (the primary id and registry key); display_name is the human label, unique by convention. The record is written once at issuance (clients.register) and removed only by retire; presence is derived at read time, not stored.",
+      "required": ["id", "kind", "epoch", "issued_at"],
       "properties": {
         "id": {
           "type": "string",
-          "description": "Client's verified identity; must equal the registry key."
+          "description": "Client's verified identity: a bus-minted ULID; must equal the registry key."
+        },
+        "display_name": {
+          "type": "string",
+          "description": "Human-readable label minted with the credential; unique by convention, not by the bus."
         },
         "kind": {
           "type": "string",
-          "description": "Self-declared client kind."
+          "description": "Client kind (e.g. worker, reviewer), declared at issuance."
         },
         "epoch": {
           "type": "integer",
-          "description": "Protocol epoch the client connected under."
+          "description": "Protocol epoch the identity was issued under."
         },
-        "sdk": {
-          "type": "string",
-          "description": "SDK name and version that wrote the entry."
-        },
-        "connected_at": {
+        "issued_at": {
           "type": "string",
           "format": "datetime",
-          "description": "Client-reported RFC3339 connect time."
+          "description": "Bus-stamped RFC3339 time the identity was minted."
+        },
+        "presence": {
+          "type": "string",
+          "description": "Derived at read time, not stored: \"online\" iff an authenticated connection for this identity exists right now, else \"offline\"."
         }
       }
     }

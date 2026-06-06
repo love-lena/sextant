@@ -78,9 +78,22 @@ carry it — never honoured.
 
 ## 3 — Bus-minted ULID is the identity for everything trusted; `display_name` is the human handle
 
+> **Refined by [ADR-0020](0020-clients-are-bus-issued-identities.md) (the identity
+> half of M2).** This section's *ULID-is-the-address* model stands. What ADR-0020
+> revises is the client-identity *lifecycle*: a client is a **durable bus-issued
+> identity**, not "one process, gone when it exits." The bus is the sole minter —
+> `sextant token` (offline minting from keys on disk) is retired in favour of
+> `clients.register`, which mints and persists the identity inside the bus (the
+> signing keys never leave it). Presence is **derived from the live connection**,
+> not asserted by a register/deregister call; the registry becomes a durable store
+> of issued identities joined with presence at read time. The three lifecycle
+> events are *register* (mint), *disconnect* (offline), and *retire*
+> (decommission) — a clean `Close` goes offline, it does not retire. Read the rest
+> of this section with "minted by `sextant token`" → "issued by `clients.register`".
+
 Every serious id is a **bus-minted ULID** — unforgeable, collision-free, owned by
-the bus: the `frame.id` of every message and artifact, the client id (minted by
-`sextant token`, carried in the credential, so it is exactly the authenticated
+the bus: the `frame.id` of every message and artifact, the client id (issued by
+`clients.register`, carried in the credential, so it is exactly the authenticated
 identity), and the artifact's id. **Identity and addressing are uniform: all three
 entity types — clients, messages, artifacts — are identified *and addressed* by
 their ULID.** A **`display_name`** is a non-keying, human-readable **attribute** on
