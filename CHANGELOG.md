@@ -1,641 +1,245 @@
 # Changelog
 
-All notable changes to sextant are documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-See `CLAUDE.md` § "Versioning + PR policy" for the bump-classification rule
-and the path-based scope (when an entry is required vs. when a PR is exempt).
+All notable changes to this project are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
+follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
 ### Added
-- **Edit a running agent's spec and reality follows; a stale sidecar
-  self-converges after a daemon upgrade.** The reconciler grew a second
-  convergence branch — **drift detection** (control-plane RFC §5.6, §8).
-  It compares the running container's stamped spec-fingerprint + wire-epoch
-  labels against the **recomputed** desired fingerprint (rebuilt from the
-  persisted spec via the same single-source container builder) and the
-  daemon's current `WireEpoch`; a mismatch means the container was built
-  from a stale spec and is converged by **restart at a turn boundary**
-  (the sidecar's `lifecycle.turn_ended`) — never mid-turn, so an
-  in-progress turn is not interrupted. Drift is diffed against *our*
-  recomputed fingerprint, not docker's normalized live spec, so
-  docker-injected mounts/env never read as a false positive, and any
-  recompute error fails safe (a healthy agent is left running). Editing a
-  live spec converges via the `generation` / `observed_generation` pair:
-  the reconciler stamps `observed_generation` once it has actuated the
-  latest edit, so "has it caught up?" is answerable (run-identity stays on
-  `current_incarnation_id`, untouched). Every container now also carries a
-  `sextant.wire_epoch` label so the skew check works even for an exited
-  container.
-- **Lost agents now self-heal.** The reconciler grew a recovery branch
-  (control-plane RFC §5.3, §8): when a `desired=run` agent is observed
-  `lost` or `crashed`, the daemon auto-restarts it via the single-source
-  actuator instead of leaving it parked — closing the "noticed it was
-  lost and wrote that down" gap. Recovery is governed by a per-agent
-  **`RestartPolicy`** (`Always` / `OnFailure` / `Never`, default
-  `OnFailure` — a clean exit is not restarted) and the full safety rails:
-  exponential backoff (10s ×2, cap 300s), a stable-run backoff reset
-  (10 min continuous), a crash budget (5 restarts / 10 min → the agent
-  parks in terminal `crashed`), a SIGTERM→30s→SIGKILL grace, and a
-  **liveness** probe (3 consecutive missed heartbeats / 10s) that catches
-  a wedged-but-still-running agent a container `die` never fires for. All
-  timing runs off an injected clock, so the schedule is deterministic in
-  tests. Operator surface: `sextant agents list` gains a **`RESTARTS`**
-  column and `agents show` reports the restart count + last-exit reason
-  (both also on the `list_agents` / `get_agent_status` wire payloads).
-- **The wire contract is now generated end-to-end, and a CI gate guards
-  it.** The `payloads.go → schemas/*.json` generator (`cmd/sextantproto-gen`)
-  also emits `schemas/wire.json` — a machine-readable manifest carrying the
-  proto version, the new `WireEpoch` compatibility key, and the closed
-  envelope / address / frame enums — and now drives the TypeScript codegen
-  too (`go generate ./...` regenerates both the Go schemas and the TS types
-  + `proto_version.ts`). `sextantproto.WireEpoch` (Go) / `WIRE_EPOCH` (TS)
-  is the single source of truth for the bus compatibility epoch (RFC §5.8).
-  A new `schema-compat` CI check (sibling to `changelog entry required`,
-  backed by `cmd/sextant-schema-compat` + `pkg/wirecompat`) regenerates the
-  schemas, asserts the committed copy is in sync, and **fails the build if a
-  breaking wire change — removed/renamed field, type change,
-  optional→required, removed enum value — lands without a `WireEpoch` bump.**
-  A checked-in Go↔TS message corpus (`pkg/sextantproto/testdata/wire-corpus`)
-  is decoded by the generated TS types so the two ends can't silently drift.
-- **Every agent container now carries a spec-fingerprint label**
-  (`sextant.spec_fingerprint`): a deterministic hash of the image, the
-  ordered mount targets, and the sorted env-var key set, stamped at
-  build time by the single-source container-spec builder. It is
-  identity-independent — a restart of an unchanged definition reproduces
-  the same fingerprint — which is the seed for control-plane drift
-  detection and converge-by-restart (RFC §5.6). No operator-facing
-  behavior change beyond the new label; it's inert until the reconciler
-  reads it.
+
+- **`register --self` creates an active context** (ADR-0021) — self-enrollment now
+  writes the new creds into the context store (`$SEXTANT_HOME`, not the bus
+  `--store`), records a context carrying the bus-minted ULID, and makes it active,
+  so the very next `publish`/`subscribe`/… runs with no connection flags. Held-mode
+  `register <name>` (minting for someone else) is unchanged — it writes a creds
+  file to hand off and creates no context. The M2 acceptance e2e is now hermetic (a
+  per-run `$SEXTANT_HOME`) so the issuance transcript stays deterministic.
+- **Saved client contexts** (ADR-0021) — `sextant context add|use|list|current|delete`.
+  A *context* is a local (bus URL + identity + creds) profile under a name you
+  choose, so `publish`/`subscribe`/`artifact`/… need no `--creds`/`--url` once one
+  is active — the `kubectl`/`nats context` pattern. Connection resolution is a
+  precedence chain: explicit `--creds`/`$SEXTANT_CREDS` (URL from `--url`/`--store`
+  discovery) → a context named by `--context`/`$SEXTANT_CONTEXT` → the active
+  context. Contexts live under `$SEXTANT_HOME` (default `<user-config>/sextant`),
+  separate from the bus `--store`; the credential is kept in its own `0600` file
+  and referenced by path. Context commands are local-administration (like `up`),
+  not protocol operations, so they stay out of `methods.json`.
+- `cmd/sextant`: **environment defaults for the connection flags** — `$SEXTANT_STORE`
+  backs `--store` and `$SEXTANT_CREDS` backs `--creds`, so a shell that exports them
+  once need not repeat the flags on every command. Precedence is explicit flag >
+  env var > built-in default (a per-user config path for the store; required-error
+  for creds). Matches the existing `$SEXTANT_SELF_NAME` convention.
+- **Clients are bus-issued identities** (ADR-0020) — the identity half of M2.
+  - **One issuance path, two auth modes.** `clients.register` now *mints a new
+    identity* (a ULID + its credential) and persists a durable record, returning
+    the creds; the signing keys never leave the bus (key custody). It is the single
+    exception to "you must already be someone," authorized by the caller's
+    authority: a held identity (the **operator**, minting for another) or a
+    bootstrap/enrollment authorization with no pre-existing identity (the
+    **enrollment** connection tier — locality-trusted, minting for self). `sextant
+    up` provisions both reserved credentials in the store; the CLI never touches the
+    signing keys. `sextant token` is gone — there is no offline mint.
+  - **Connection-derived presence.** The bus computes online/offline first-hand
+    from its own connection table (`Connz` AuthorizedUser ≡ the record's
+    authenticated subject), not from a register/deregister call. No heartbeat, no
+    ghost-reaping; a disconnected client is legitimately offline, not stale.
+  - **Durable identity store.** The clients registry is a persisted directory of
+    issued identities that survives disconnect and bus restart. `clients.list` is
+    the join of records with live presence — it shows offline clients by default,
+    each with an `online`/`offline` column.
+  - **Three lifecycle events, not two.** *Register* mints (once); *disconnect*
+    drops presence to offline (a clean SDK `Close` no longer deregisters); *retire*
+    (`clients.retire`, operator-only) decommissions for good — removes the record
+    and drops any live connection. The connect handshake is now `clients.hello`
+    (confirms a known identity + folds the epoch hard-gate), which also makes retire
+    effective: a retired identity can no longer complete a handshake.
+  - **SDK:** new `Issuer` (`ConnectIssuer` + `Register`/`Enroll`/`Retire`) for the
+    issuance/decommission path; `ClientInfo` gains `Online` and `IssuedAt`; `Close`
+    just goes offline. **CLI:** `clients register <name>` / `register --self` /
+    `clients retire <id>`, and `clients list` gains the presence column.
+
+- `pkg/bus`: **the per-client credential allow-list — the unforgeable author**
+  (ADR-0019). Each minted credential now carries a per-client JWT allow-list
+  scoped to its bus-minted ULID: it may publish **only** under its own call
+  prefix (`sx.api.<id>.>`) and subscribe **only** to its own delivery space
+  (`sx.deliver.<id>.>`) plus its own per-client request/reply inbox
+  (`_INBOX.<id>.>`, with a matching `nats.CustomInboxPrefix` on the SDK
+  connection — a per-client inbox, not the shared `_INBOX.>`, so one client
+  cannot eavesdrop on another's call replies). Because the subject token a client
+  publishes a call under is now exactly the identity NATS authenticated, the
+  author the bus stamps from it **cannot be forged** — and with this flip nothing
+  reaches the messages stream, the KV buckets, or the control space except by
+  asking the bus over a call. This is the last slice of
+  the "nothing direct" cutover: the data plane (messages + artifacts) and the
+  connect handshake already flowed through the bus; the credential is now precise
+  rather than deny-only.
+- `pkg/bus` + `pkg/sextant`: **the connect handshake moves through the bus**
+  (ADR-0019). The SDK no longer touches the backend directly at connect: it
+  registers with a `clients.register` call (the bus writes the directory record,
+  keyed by the client's authenticated id and stamped with the bus clock), leaves
+  with `clients.deregister` on `Close`, and the **protocol-epoch hard-gate is
+  folded into register** — the call returns the bus epoch, which the SDK
+  exact-matches, plus the bus-stamped `connected_at` for the clock-skew announce.
+  Cooperative **drain now delivers over each client's own push space**
+  (`sx.deliver.<id>.drain`) instead of a broadcast on `sx.control.*`, so a client
+  needs no permission beyond its delivery subscription to receive it; the bus
+  targets an in-memory connected set (authoritative, not the eventually-consistent
+  registry). This completes the "nothing direct" cutover for the whole data plane
+  **and** the connect handshake; only the per-client credential allow-list flip
+  (which makes the deny-only guardrail precise, and the stamped author
+  unforgeable) remains. The SDK's `Client` no longer holds a JetStream handle.
+- `pkg/bus` + `pkg/sextant`: **the push-stream operations and the artifact
+  cutover** (ADR-0019). The bus now serves `message.subscribe` and
+  `artifact.watch` as server-side relays into a client's private delivery space
+  (`sx.deliver.<clientID>.<subID>`), each ended by a `subscription.stop` control
+  op (or by bus shutdown, which cancels them all). The SDK's `Subscribe` /
+  `WatchArtifact` and **all** artifact methods (`CreateArtifact`,
+  `UpdateArtifact`, `GetArtifact`, `DeleteArtifact`) now go through Wire API
+  **calls** instead of the backend directly — the artifact ops moved as one unit
+  because the bus stores artifacts as frames at rest. With this slice the whole
+  data plane (messages + artifacts) flows through the bus; what remains is the
+  per-client credential **allow-list flip** (which makes the stamped author
+  unforgeable and routes the connect handshake itself through calls), in the
+  next slice. Crash-driven relay teardown — a client that never stops — is
+  deferred to the liveness work (TASK-20), the same gap the clients registry has.
+- `cmd/sextant`: **the operator/test CLI** — the human face of the operation
+  surface and the M2 e2e harness (TASK-28). Commands with exact operation-name
+  parity (no aliases): `publish`, `read` (cursor-pull via `FetchMessages`),
+  `subscribe` (live stream), `clients list`, and `artifact create|update|get|
+  delete|watch`, each `--json`-capable. A **conformance test** reads
+  `protocol/methods.json` and asserts the CLI exposes exactly one command per
+  operation and invents none — making "one surface, many faces" mechanical (the
+  MCP server will extend the same test). Smoke-verified end to end: two clients
+  exchange a message and collaborate on a compare-and-set artifact through the
+  bus, the read frame carrying the publisher's bus-stamped ULID author.
+- `pkg/sextant`: **the SDK begins speaking the Wire API** (ADR-0019 cutover).
+  `Client.Publish` now sends a `message.publish` **call** to the bus (which stamps
+  the frame and appends it) instead of publishing to the stream directly, and the
+  new `Client.FetchMessages` pulls a batch via `message.read` (cursor + resume —
+  the pull complement to `Subscribe`, and the SDK half of the test CLI's `read`).
+  `Client.ListClients` now goes through the `clients.list` operation too. Since
+  the bus reads the whole registry on every client's behalf, a single corrupt
+  record now **skips quietly** rather than failing the listing for everyone (the
+  bus also sources each id from its authoritative registry key). (`Subscribe` and
+  the artifact methods complete the cutover in the push-stream entry above; only
+  the credential allow-list flip then remains.)
+- `pkg/bus`: the bus now **serves the protocol's operations** as calls over the
+  Wire API (ADR-0018, ADR-0019). A client makes a NATS request to
+  `sx.api.<clientID>.<operation>`; the bus serves it against the backend interface
+  (`internal/backend`), **stamps the frame** (id ULID, author from the call's
+  subject token, kind, epoch; artifacts also revision + createdAt/updatedAt), and
+  replies. Request/reply operations land here — `message.publish`, `message.read`
+  (cursor-pull), `artifact.create/update/get/delete`, `clients.list` — with
+  bounded concurrent responders (no head-of-line blocking) and reply-after-ack.
+  The push-stream operations (`message.subscribe`, `artifact.watch`) and the SDK
+  cutover follow. `internal/wireapi` defines the call subject scheme + the
+  per-operation request/response shapes shared by the bus and SDK.
+- `internal/backend`: the backend interface — the semantic contract
+  (`protocol/semantic-contract.md`) as one internal Go interface the bus
+  implements the operations against: a durable, ordered, replayable log
+  (`Append`/`Read`/`Subscribe`, cursor = a bus-opaque synthesized sequence) and
+  versioned records (`Create`/`Put`/`CompareAndSet`/`Get`/`Delete`/`Watch`/`Keys`,
+  CAS on revision). A deep module behind a narrow interface; frame semantics stay
+  in the bus. `internal/backend/natsbackend` is the first module (JetStream + KV);
+  `internal/backend/conformance` is the executable contract every backend module
+  must pass — so a future Redis module is portable by construction. See ADR-0018,
+  ADR-0019.
+
+- Go module (`github.com/love-lena/sextant`) and the polyglot-monorepo skeleton.
+- `pkg/wire`: the wire atom — the JSON `Envelope` (`{id, sender, kind, epoch,
+  record}`), the protocol `Epoch`, ULID-timestamp skew validation (`CheckSkew`,
+  enforced sender- and receiver-side), and the per-message epoch check
+  (`CheckEpoch`). `Record` is typed `Lexicon` (a `json.RawMessage` alias today,
+  a seam for adding validation later). See ADR-0006 and ADR-0010.
+- `sextant up`: runs the embedded bus. `sextant token <client-id>`: mints a
+  per-client credentials file.
+- `pkg/bus`: an embedded NATS server (JetStream) under **decentralized JWT
+  auth** — one operator, one `SEXTANT` account, and **one user JWT per client**,
+  so every connection is a distinct, verified identity and every op is
+  attributable. Bootstraps the reserved `sx_` buckets; applies the client-tier
+  guardrail (deny bucket/stream lifecycle, `sx_system` writes, `sx.control.*`);
+  `Drain` broadcasts the cooperative-drain message. See ADR-0007, ADR-0012.
+- `pkg/sx`: the reserved-namespace names (`sx_` buckets, `sx.` subjects).
+- `pkg/conninfo`: the `bus.json` discovery file (URL only; credentials are
+  per-client creds files).
+- `pkg/sextant`: the Go SDK. `Connect` runs the connect handshake —
+  authenticate with the client's own credentials file (`Options.CredsPath`,
+  minted by `sextant token`), the protocol-epoch hard gate, a clients-registry
+  write, a soft clock-skew announcement, a cooperative-drain handler, and
+  auto-reconnect; with `Client.Drained`, `Close`, and `ID`. The client id
+  (registry key and envelope sender) is read from the credential itself, so it
+  is exactly the identity the bus authenticated. See ADR-0008, ADR-0010, ADR-0012.
+- `pkg/bus`: publishes the protocol epoch to the client-readable `sx_meta`
+  bucket at bootstrap, so clients read and hard-gate on it at connect (ADR-0015).
+- `pkg/bus`: the client TCP listener opens only **after** bootstrap completes,
+  so a client can never connect into a half-ready bus and fail its epoch read;
+  the bus's own operator connection is in-process.
+- `pkg/bus`: `sextant token` / `MintClient` reject a duplicate or malformed
+  client id — each client gets exactly one verified identity, so two clients can
+  never silently share a registry key (issued ids are recorded under
+  `<store>/issued`).
+- `pkg/sextant`: the Messages primitive. `Client.Publish` wraps a record in a
+  wire envelope and publishes it to the `msg.*` space (waiting for the stream
+  ack); `Client.Subscribe` delivers matching messages via an ephemeral ordered
+  consumer with client-controlled replay (`DeliverAll`), checking each against
+  the bus-stamped clock and quarantining skew violations. `pkg/bus` provisions
+  the durable `MESSAGES` stream at bootstrap; `pkg/sx` adds the `msg.*` subject
+  helpers (`ChannelSubject`, `AgentSubject`). See ADR-0005, ADR-0006.
+- `pkg/sextant`: the Artifacts primitive — named, versioned units of durable
+  shared work whose `Record` is a **Lexicon** (typed JSON), the same content
+  model as a message's `Record` (ADR-0016). `CreateArtifact`, `UpdateArtifact`
+  (compare-and-set on revision — the single-author-at-a-time discipline),
+  `GetArtifact`, `DeleteArtifact`, and `WatchArtifact` (current value then live
+  changes, deletes included via `ArtifactChange.Deleted`); a write is rejected
+  unless the record is a non-empty valid lexicon.
+  `pkg/bus` provisions the `ARTIFACTS` KV bucket at bootstrap, keeping **64
+  revisions** (the NATS KV maximum). See ADR-0005, ADR-0016.
+- `pkg/sextant`: `Client.ListClients` and the public `ClientInfo` type — the
+  read half of the clients registry, a presence-only self-maintained directory.
+  Every client already self-registers on `Connect` and leaves on `Close` (the
+  write half); `ListClients` returns everyone connected right now (sorted by
+  id), where "listed" means "registered and hasn't cleanly left." The record is
+  `{id, kind, epoch, sdk, connected_at}`; heartbeat, read-time liveness, and
+  stale-entry reaping are deferred (TASK-20). See ADR-0004, ADR-0008.
 
 ### Security
-- **The daemon is now the broker-ENFORCED sole publisher to agent
-  inboxes (control-plane RFC §5.7).** The single unrestricted NATS
-  account (`publish: ">"`) is gone; `nats-server.conf` now renders three
-  role-scoped principals the broker enforces: **daemon** (`publish: ">"`,
-  the only principal that may publish to `agents.*.inbox`), **operator**
-  (publish `sextant.rpc.*` + reply inboxes + the JetStream/KV read API
-  *only* — never inboxes), and **sidecar** (publish its own
-  `agents.*.{frames,heartbeat,lifecycle}`; subscribe `agents.*.inbox`).
-  The prompt gate stops being a politeness clients observe and becomes a
-  rule the broker enforces — so the audit becomes the system of record
-  (every command provably transited the daemon). Reads stay off the
-  gauntlet: KV-backed TUIs and `pkg/client.Subscribe` keep working over
-  the JetStream API. The daemon + sidecar credentials are boot-generated
-  and never persisted (regenerated each boot, stable across NATS
-  restarts); the daemon principal is threaded to the shipper via
-  `runtime.json`'s mode-0600 `nats_daemon_*` fields.
-- **A shared admission pre-step (`decode → default → validate`) now runs
-  in front of every RPC handler** — one choke point so no handler can
-  skip envelope validation or the wire-epoch check (RFC §5.7).
-- **The front door checks `WireEpoch` on every RPC envelope.** A
-  stale-epoch peer (an envelope whose `proto_version` — generated in
-  lockstep with `WireEpoch` — differs from the daemon's) is rejected with
-  a new `wire_epoch_mismatch` error and an actionable `make install`
-  diagnostic, because the daemon can converge an out-of-epoch agent by
-  restart but cannot restart the operator's CLI (RFC §5.8 "stale peer").
+
+- Hardened credential file handling (found by review while landing ADR-0021):
+  - `cmd/sextant`: `clients register` with a display name that contains a path
+    separator (the bus allows names like `a/b`) no longer fails to write — or
+    escapes the store via `../x` — when `--out` is omitted; the default creds
+    filename falls back to the minted ULID for path-bearing names, so a successful
+    mint never strands its credential.
+  - `pkg/bus`: the operator/enrollment infra credentials are now (re)provisioned
+    via an atomic owner-only (`0600`) write (temp file + rename). `os.WriteFile`
+    left an existing file's looser mode intact, so a reused or user-supplied store
+    with a world-readable leftover could keep high-privilege creds — which
+    authorize identity issuance and retirement — group/world-readable.
 
 ### Changed
-- **The reconcile worker now bounds every external op on the reconcile
-  path with a per-operation deadline.** Each docker call the actuator
-  performs (container run, stop, volume reclaim, session-log copy) and
-  each reconciler-side op (docker list/drift-recompute, KV get/update/
-  list) is wrapped with a timeout DERIVED FROM the reconcile ctx
-  (`handlers.DockerOpTimeout` 30s; a container stop gets `grace +
-  DockerStopGraceBuffer`; KV ops `ReconcileKVTimeout` 10s). A wedged
-  dockerd or JetStream now surfaces a LOUD `context deadline exceeded`
-  (logged with agent uuid + which op) and the existing retry/backoff
-  re-enqueues, instead of blocking the single worker forever. Fixes the
-  silent reconcile-loop stall observed under sustained recovery churn
-  (`bug-ctl-reconcile-loop-stalls-under-sustained-recovery-churn`).
-- **A reconcile-loop stall watchdog logs loudly when the loop goes
-  silent.** A lightweight monitor shouts `reconcile: worker stalled on
-  agent <uuid> for <dur>` when a single pass exceeds 2× the docker-op
-  timeout, and `reconcile: sweep overdue by <dur>` when the periodic
-  sweep ticker hasn't fired within 2× `SweepInterval` — so a future
-  stall is observable in the logs immediately. `Reconciler.Progress()`
-  exposes last-pass / last-sweep age + the in-flight agent for a future
-  daemon health surface.
-- **New internal `archiving` observed-state in the agent lifecycle
-  enum** (declared breakage for the archive volume-leak fix, above). The
-  finalizer-shaped archive adds `ObservedArchiving` (intermediate, name
-  held) and `ObservedArchived` (terminal, name released, replacing the
-  former reuse of `ended` for archive convergence). Internal and minor:
-  exhaustive switches over observed/lifecycle states handle the new value,
-  and the operator-facing `archived` lifecycle label is unchanged (the
-  `Lifecycle()` projection maps both new states to `archived`). No wire
-  change (the `observed` field is a free-form string on the wire).
-- **The persistent `claude-projects` bind-mount is gone, killing the
-  mount-drift class at the root.** The per-agent host bind-mount at
-  `/home/agent/.claude/projects` (the mount restart had to learn to
-  re-apply, the source of the #49/#50 mount-drift bugs) is **removed** from
-  the single-source container-spec builder — the agent container now mounts
-  **five** things (workspace, git-dir, gitconfig, ssh, claude-seed), not
-  six, and restart has no projects-mount to forget by construction
-  (control-plane RFC §5.10). The SDK session JSONL stays **in-container
-  ground-truth**, and its two former jobs split: `sextant agents context`
-  now reads the **live NATS frame stream** (`agents.<uuid>.frames`) by
-  default — `--follow` tails it; the **authoritative `.jsonl`** is read
-  **on demand** via `--raw` (the `read_file` RPC against the in-container
-  path) or `--backup` (the durable host snapshot); and the reconciler takes
-  a **durable snapshot-on-stop** into the agent data dir
-  (`<data>/agents/<uuid>/session-snapshot.jsonl`) whenever an agent leaves
-  `running`, via a new docker-cp-style `containermgr.CopyFileFromContainer`
-  that works on an already-stopped container. `get_agent_status`'s
-  `session_log` is reinterpreted accordingly: `projects_dir` is now the
-  **in-container** base, plus new `container_jsonl_path` + `snapshot_path`
-  fields (additive wire change; no `WireEpoch` bump).
-  - **Behavior change (declared):** `agents context --follow` switches from
-    tailing a host file to tailing the **frame stream**. Anything that read
-    the host-mounted `claude-projects` path directly no longer works (the
-    only in-tree reader, the CLI's `resolveSessionJSONLPath` host-dir walk,
-    is **retired**). The `-i` viewport reads the on-demand in-container
-    `.jsonl` via `read_file` instead of tailing a host file.
-- **BREAKING — direct publishing to `agents.*.inbox` is now forbidden,
-  and the unrestricted NATS credential is gone.** Any client or test that
-  published straight to an agent inbox (bypassing the `prompt_agent` /
-  `send_message` daemon path) is now rejected by the broker; route every
-  prompt through the daemon RPC/MCP surface instead. **Cred rotation
-  (required on upgrade): restart `sextantd`** so it re-renders
-  `nats-server.conf` with the three broker-scoped principals instead of
-  the old single unrestricted `operator` account. The daemon + sidecar
-  NATS secrets are minted fresh on each daemon boot (no operator action).
-  To fully re-issue the operator credential as well, run
-  `sextant init --force` (rewrites `~/.config/sextant/operator.creds`;
-  note `--force` also rotates the CA + ClickHouse password) — or re-run
-  `make bootstrap` on a clean config dir — then restart `sextantd`.
-  (RFC §5.7.)
-- **`sextantd` is now a declarative control plane: handlers write
-  desired state, a single reconciler is the sole actuator.** `spawn`,
-  `stop` (the `kill_agent` verb), and `archive` no longer touch Docker
-  — they write `spec.desired` (`run` / `paused` / `archived`) to KV and
-  enqueue a reconcile; `restart` bumps `spec.reactuation_nonce` to
-  request a fresh incarnation of the same desired state. One
-  level-triggered reconcile loop — fed by a work queue, a 30–60s
-  periodic sweep, and sensor events treated strictly as *hints* (never
-  the source of truth) — is the only thing that builds + runs + stops
-  containers (via the single-source `buildAgentContainerSpec`) and the
-  only writer of `status.observed`. The `AgentDefinition` record is
-  split into `spec` (operator/desired intent: `desired`, `runtime`,
-  `sandbox`, `generation`, `reactuation_nonce`, …) and `status`
-  (reconciler-observed reality: `observed`, `observed_generation`,
-  `current_incarnation_id`, …); the old top-level `lifecycle` field is
-  gone and `Lifecycle()` is now a derived method projecting spec/status
-  onto the legacy strings (RFC §5, §5.2, Appendix C). The
-  carried-forward runtime invariants — incarnation-CAS, a terminal
-  sidecar status outranking a `lost` reading, and the 5s container-die
-  debounce — are unchanged and covered in
-  `pkg/sextantd/reconcile_test.go`. `WireEpoch` bumps 1→2: the
-  persisted `AgentDefinition` shape changed.
 
-  **Declared breakage (operators):**
-  - **Old persisted KV agent records do not auto-migrate.** There is no
-    in-place migration; a record written under the pre-split (`v1`)
-    shape will not decode into the new `spec`/`status` layout. Operators
-    upgrading an existing daemon must perform a **one-time reset** of the
-    agents/incarnations KV buckets (drain or delete running agents
-    first). This is acceptable at the current pre-1.0 stage; a real
-    migration is a separate follow-up if/when one is warranted.
-  - **Auto-recovery is still absent: a `lost` agent stays `lost`.** The
-    reconciler observes and records loss but does not yet re-actuate a
-    crashed/ended incarnation back to its desired `run` state. That
-    closed-loop recovery is restored by `feat-ctl-p1-recovery`.
-- **The TypeScript client's wire constants are now generated, not
-  hand-written.** `PROTO_VERSION`, the `KIND_*` / `ADDRESS_*` / `FRAME_*`
-  constant sets, and the new `WIRE_EPOCH` live in a generated
-  `clients/typescript/src/proto_version.ts` (sourced from `wire.json`) and
-  are re-exported from `@sextant/client`. The public package surface is
-  unchanged (plus the new `WIRE_EPOCH` / `FRAME_*` / `ADDRESS_KINDS`
-  exports); the previously hand-maintained definitions of these constants in
-  `src/envelope.ts` are removed. No external consumers exist today; any code
-  importing the constants from the internal `./envelope.js` path (rather than
-  the package root) must import from `./proto_version.js`.
-- **`spawn_agent` and `restart_agent` now build the container spec
-  through one `buildAgentContainerSpec` projection.** Previously each
-  handler assembled the mount/env/label set inline, which is how
-  `restart` drifted from `spawn` (see Fixed). The spec is now a pure
-  projection of the persisted `AgentDefinition` plus the daemon's
-  host-environment context; the only spawn-vs-restart differences are
-  the freshly-minted incarnation id, the per-incarnation JWT, and the
-  session-resume decision — explicit parameters, never the absence of a
-  mount. `RestartDeps` gains `Worktree` + `RepoRoot` so restart can
-  re-mount the same worktree `/workspace` and the `<repo>/.git` bind
-  spawn produced (the lossless-restart prerequisite, RFC §5.4). No
-  operator-facing CLI change.
-- **`sextant tui` now walks you through arg-requiring surfaces.** Picking
-  an agent-scoped surface (chat, agent detail, agents context) prompts an
-  agent picker (live `list_agents`, falls back to free text if the daemon
-  is unreachable); a trace surface prompts for the trace id. The resolved
-  command is printed (`→ sextant agents show <uuid> -i`) so it's easy to
-  copy/paste and reuse. `component.Meta` gains `Arg` / `ArgKind` /
-  `NoIFlag` to drive this.
-- **The RPC surface is now one declarative `VerbSpec` table instead of
-  four parallel enumerations.** The verb-name constants, the `CapFor`
-  capability mapping, the daemon's staged handler registration, and the
-  schema generator's hand-maintained payload list used to enumerate the
-  same verbs in four places; adding a verb and forgetting one was a live
-  drift class (the generator's type list was the hidden 4th copy). They
-  now derive from `rpc.VerbSpecs` (`{name, capability, phase, req, resp}`):
-  dispatch registration iterates it per phase, `CapFor` reads it, and
-  `cmd/sextantproto-gen` walks its req/resp types. Registration fails
-  loudly if a verb lacks a handler or a handler lacks a verb. Pure
-  internal refactor — no observable behavior change: every verb keeps its
-  exact name and capability, the staged registration order is preserved,
-  and `go generate ./...` produces byte-identical schema output (no
-  `WireEpoch` bump). RFC §5.8.
-
-### Fixed
-- **A hard-killed daemon no longer orphans its `sextant-shipper`
-  child (Linux).** When the daemon was SIGKILLed (e.g. a timed-out test
-  binary) it ran no Go cleanup, so the shipper survived as a PPID=1
-  orphan (failed test runs were observed leaving ~8). On Linux the
-  shipper child now starts with `Pdeathsig=SIGKILL`, so the kernel reaps
-  it when the parent dies regardless of how. Darwin (the local dev/test
-  host) has no `Pdeathsig` equivalent and still relies on the graceful
-  shutdown path + `stopShipperNow` safety net; `natsboot`/`clickhouseboot`
-  share the same hard-kill exposure and can take the same split later.
-- **The two host-saturating recovery e2e
-  (`TestRecovery_E2E_CrashLoopTripsBudgetToTerminal`,
-  `TestRecovery_E2E_WedgedAgentLivenessRestart`) now skip cleanly
-  instead of hanging the suite.** They are by far the most
-  container-churn-intensive tests and saturate OrbStack on a Mac — the
-  exact host condition that wedged the reconcile loop. The recovery
-  logic they assert is covered by the injected-clock unit tests in
-  `pkg/sextantd` plus the lighter real-docker
-  `TestRecovery_E2E_KillRestartsAndSurfacesRestartCount`; the
-  host-saturation cause is tracked by
-  `bug-ctl-reconcile-loop-stalls-under-sustained-recovery-churn`. The
-  wedge test's mechanism was also corrected (kept honest if re-enabled):
-  `docker kill --signal=STOP` from an ancestor namespace (the in-container
-  `kill -STOP 1` was a no-op on a PID-namespace init) plus a
-  wait-for-first-heartbeat before wedging.
-- **Operator and sidecar JetStream consumers can now acknowledge —
-  `$JS.ACK.>` was missing from the front-door publish allow-lists.** The
-  role-scoped principals (RFC §5.7) granted the JetStream *management* API
-  (`$JS.API.>`) but not the JetStream *ack* subject space (`$JS.ACK.>`),
-  which is where a consumer publishes its acks, flow-control replies, and
-  `Term`s. The two are distinct subject trees, so every non-daemon consumer
-  hit a `Permissions Violation for Publish to "$JS.ACK.…"` the moment it
-  acked: the operator read path (`agents context`, the frame/lifecycle read
-  TUIs, `pkg/client.Subscribe`'s OrderedConsumer) and the **sidecar's inbox
-  prompt loop** (an `AckPolicy.Explicit` consumer that acks every delivered
-  prompt) both wedged — in production, not just the docker e2e suite.
-  `$JS.ACK.>` is now in both the operator and sidecar publish allow-lists
-  (the daemon already publishes `>`); a new `pkg/natsboot` authz test stands
-  up a real `nats-server` and asserts an operator-principal `AckExplicit`
-  JetStream consumer can `DoubleAck` without a permissions violation — the
-  regression guard the original F0 authz test lacked.
-- **A spawned agent's SDK session is now actually recorded and resumable.**
-  Two front-door regressions, both surfaced the first time the control-plane
-  docker e2e ran on a real host, broke session-id persistence: (1) the
-  sidecar wrote the SDK session_id to the *pre-split* `runtime.session_id`
-  KV path, but the P0 spec/status split moved it to `spec.runtime.session_id`
-  (where the daemon reads it), so it was silently dropped; (2) even with the
-  right path, the sidecar's `agent_definitions` KV update was rejected by the
-  broker — a KV put is a publish to `$KV.<bucket>.<key>`, which the sidecar's
-  `$JS.API.>` grant does not cover, so the front door now grants the sidecar
-  a narrow `$KV.agent_definitions.>` (mirroring the operator's
-  `$KV.ui_state.>`). With both fixed, `get_agent_status` returns the
-  session-log locators and a later spawn resumes the session.
-- **A sidecar now stops promptly on SIGTERM instead of waiting out the full
-  SIGKILL grace.** The graceful-shutdown handler published `lifecycle.ended`
-  and then hung on `mcp.client.close()` / the NATS connection close, so
-  `process.exit(0)` was never reached and docker SIGKILLed the container at
-  the end of its (default 30s) stop grace — making every stop/pause/archive
-  teardown take the full grace. Each close is now bounded by a short budget
-  and an overall hard-deadline backstop guarantees the process exits well
-  inside the grace window. Stops are now ~1s, not ~30s.
-- **Archive no longer leaks the per-agent volume on a cleanup failure.**
-  Archive used to flip the record terminal and *then* best-effort remove
-  the per-agent `claude_seed` volume, logging any failure to stderr — so a
-  failed reclaim left a "reclaimed" record (name released) sitting on a
-  **leaked volume**, silently. Archive is now finalizer-shaped
-  (control-plane RFC §10.1): the reconciler reclaims the volume **before**
-  finalizing — tear down container → reclaim volume → only on a *confirmed*
-  reclaim flip to terminal. A reclaim failure parks the agent in a new
-  intermediate **`archiving`** observed-state and the reconciler **retries**
-  it every pass (level-triggered) instead of swallowing the error. The
-  **name is held until reclamation is confirmed** (`agentNameInUse` /
-  `AgentDefinition.NameReleased` now gate on the terminal archived state,
-  not merely `desired=archived`), so a re-spawn can't collide with a record
-  whose volume isn't actually gone. The operator-facing `archived` lifecycle
-  label is unchanged (both `archiving` and `archived` project to it). No
-  wire change — `observed` is a free-form string on the wire, so adding the
-  enum value is additive and needs no `WireEpoch` bump.
-- **`restart_agent` silently dropped three mounts `spawn_agent` adds —
-  the gitconfig, the worktree `<repo>/.git` bind, and the opt-in SSH
-  bind.** A restarted agent lost its git identity (`user.name`/`email`),
-  couldn't resolve its worktree's `.git` pointer (so `git status`/commit
-  failed), restarted into the M11 stop-gap dir instead of its worktree,
-  and — for `mounts = ["ssh"]` templates — lost `git push` auth. Latent
-  until now because restart was operator-initiated and rare; it becomes
-  load-bearing under the upcoming auto-restart path, where a lossy
-  restart would *propagate* the drift on every recovery. The
-  single-source `buildAgentContainerSpec` (above) makes restart reproduce
-  the full spawn mount set by construction; a docker-backed e2e
-  `docker inspect`s both containers and asserts identical mount sets +
-  env (modulo incarnation id / JWT). Subsumes RFC §10.3.
-- **`restart_agent` dropped the per-agent claude-projects bind-mount —
-  the real reason `sextant agents context <agent>` showed nothing.**
-  `spawn_agent` bind-mounts `<data>/agents/<uuid>/claude-projects` at
-  `/home/agent/.claude/projects` so the SDK's session journal lands on a
-  host path the operator can read; `restart_agent` re-attached the
-  claude-seed volume but **not** that bind-mount, so a restarted
-  incarnation wrote its session inside the container and the host dir
-  stayed empty (and `agents context` reported "no on-disk session yet").
-  Restart now re-applies the mount (gated on `AgentsDataRoot`, wired via
-  `RestartDeps`), with a regression test asserting the restart container
-  spec includes it. Operators must restart the daemon + the affected
-  agent to pick this up.
-- **`sextant agents context <agent>` leaked a raw filesystem error** when
-  the agent's per-agent projects dir doesn't exist on disk (agent spawned
-  before the context bind-mount, or no SDK turn flushed yet) — the daemon
-  reports a `SessionLog` in KV but the dir was never created. The command
-  printed `read projects dir …: no such file or directory`; it now returns
-  the same friendly, actionable message as the missing-session-file case
-  (`agent has no on-disk session yet … prompt the agent then retry`).
-  Affects both the CLI dump and `agents context <agent> -i`. Found by
-  `sextant agents context assistant` against an agent with a stale KV
-  session pointer.
-- **`sextant tui` could only launch 5 of its 9 entries; `q`/`esc` didn't
-  quit.** Selecting chat / agent-detail / agents-context / traces errored
-  (`accepts 1 arg(s)` / `unknown shorthand flag 'i'`) because the menu ran
-  `sextant <command> -i` with no positional and no per-surface launch
-  rules. The menu now collects the required arg (above), launches chat
-  bare (it has no `-i`), and binds `q`/`esc` to quit (huh's default was
-  ctrl+c-only, contradicting the menu's own help). Found by manually
-  driving every entry through the menu in a PTY.
-
-## [0.5.0] — 2026-05-28
-
-Interactive-surfaces workstream, phase 2: four more `-i` surfaces built
-on the P0 widget toolkit — `daemon logs`, `worktree list`, `audit list`,
-and the `agents show` detail inspector (the `DetailPane`'s first real
-consumer). MINOR — all additive; `agents show -i` now opens the detail
-inspector rather than the focused list, but no scripted invocation,
-output format, or wire shape changed. Per the RFC `plans/rfc-tui-workstream.md` (P2).
-
-### Added
-- **`sextant agents show <id> -i` detail inspector** — `agents show -i`
-  now opens a `DetailPane` inspector (`pkg/tui/agentdetail`) instead of
-  the focused agents list: lifecycle / template / version / session /
-  owning-worktree, assembled client-side from `get_agent_status` +
-  `list_agents` + `worktree_list` (no new RPC; degrades gracefully when
-  a field is missing — RFC §6 †). Self-registers for `sextant tui`.
-  Per the RFC P2.
-- **`sextant audit list -i`** — interactive audit-log browser
-  (`pkg/tui/auditlist`): a `ListPane` over the `query_audit` RPC (last
-  24h; j/k nav, `/` filter, `r` refresh, Enter emits a detail intent).
-  Self-registers for `sextant tui` / `sextant dash`. Per the RFC P2.
-- **`sextant worktree list -i`** — interactive worktree browser
-  (`pkg/tui/worktreelist`): a `ListPane` over the `worktree_list` RPC
-  (j/k nav, `/` filter, `r` refresh, Enter emits a diff intent).
-  Self-registers for `sextant tui` / `sextant dash`. Per the RFC P2.
-- **`sextant daemon logs -i`** — interactive tailing log viewport
-  (`pkg/tui/logsview`): a scrollback `StreamViewport` over the daemon log
-  file (j/k scroll, g/G top/bottom, tail-follow). A thin composition —
-  `StreamViewport` + `widget.TailSource` — demonstrating the P0 widget
-  leverage. Self-registers for `sextant tui`. Per the RFC P2.
-
-### Changed
-- **Proto version → 0.5.0** to track the binary number (per
-  `conventions/versioning.md`). **No wire change this window** — the new
-  surfaces are pure front-ends over existing RPCs / subjects / files.
-
-## [0.4.0] — 2026-05-28
-
-Interactive-surfaces workstream, phase 1: a shared TUI widget layer
-(`pkg/tui/widget`) plus three new `-i` surfaces composed from it
-(`pending list`, `traces show`, `agents context`). MINOR bump —
-everything is additive; no verb, flag, output format, or wire shape was
-removed. Per the RFC `plans/rfc-tui-workstream.md` (P0 + P1).
-
-### Added
-- **`sextant agents context <agent> -i` (Phase B)** — the raw-context
-  view's interactive TUI (`pkg/tui/contextview`): a scrollable, tailing
-  `StreamViewport` over the agent's SDK session JSONL with mode keys 1–6
-  (raw/conversation/tools/thinking/usage/tree). The per-line rendering +
-  mode vocabulary moved into `pkg/sessionlog` (`Mode` / `RenderLine` /
-  `ParseMode`), so the CLI dump and the TUI render identically (DRY).
-  Self-registers for `sextant tui` / `sextant dash`. Completes
-  `plans/issues/feat-agents-context-view.md`.
-- **`sextant traces show <id> -i`** — interactive span-tree explorer
-  (`pkg/tui/traces`): a collapse/expand outline (j/k nav, Enter toggles,
-  Esc collapses) over a `query_trace` result, built on `widget.ListPane`
-  fed a flattened depth-annotated row slice. The static `traces show`
-  stdout renderer now shares the same `BuildSpanTree` / `FlattenVisible`
-  projection (DRY). Self-registers for `sextant tui` / `sextant dash`.
-  Resolves `plans/issues/feat-tui-traces-component.md`.
-- **`sextant pending list -i` + dash pending pane** — the pending-requests
-  TUI now exists (`pkg/tui/pending`): a live `ListPane` of unanswered
-  user_input requests with j/k nav, `/` filter, and Enter emitting an
-  answer intent, built on the P0 widget toolkit. Self-registers, so the
-  `sextant dash` pending pane (previously a placeholder) and the
-  `sextant tui` menu pick it up automatically. NOTE: nothing in production
-  publishes input-requests yet, so the surface is empty against a live
-  daemon until an escalation producer lands (RFC §6 / Open Q5). Resolves
-  `plans/issues/feat-tui-pending-component.md`.
-- **`pkg/tui/widget` shared TUI toolkit** — the widget layer the
-  interactive-surface workstream composes: `ListPane[T]` (generic cursor
-  list with nav / selection / `/`-filter / scroll-window), `StreamViewport`
-  (scrollback over `bubbles/viewport` with tail-follow + ring-buffer cap +
-  `g`/`G`), `DetailPane` (label/value sections), and the `Source[T]` /
-  `Pump` data adapter (`SubscribeSource` / `TailSource` / `OnceSource`).
-  Internal foundation; no operator-visible change on its own. Per the RFC
-  `plans/rfc-tui-workstream.md` (P0).
-
-### Changed
-- **Proto version → 0.4.0** to track the binary number (per
-  `conventions/versioning.md`, proto tracks the binary until the
-  version-line split lands). **No wire change this window** — the new
-  surfaces are pure front-ends over existing RPCs / subjects / files;
-  no RPC, envelope field, or payload shape changed.
-
-### Fixed
-- **Sidecar `version` reported a stale hard-coded string** —
-  [[bug-sidecar-version-string-stale]]. The `version` command printed
-  `sextant-sidecar 0.2.0` while `package.json` (and the MCP
-  client-identity handshake) said `0.1.0`. Both call sites now read the
-  version from `package.json` at runtime via a new `src/version.ts`
-  (`SIDECAR_VERSION`), so they can't drift from the manifest or each
-  other; a test pins the invariant.
-
-## [0.3.0] — 2026-05-28
-
-Interactive surfaces (`tui`, `dash`, `agents context`) plus the
-version-observability tooling that this release-cut workflow itself
-relies on. MINOR bump: everything below is additive — no verb, flag,
-output format, or wire shape was removed.
-
-### Added
-- **`sextant dash` flagship multi-pane TUI** — composes registered
-  Tier 1 components into a Stickers flex layout with BubbleZone
-  mouse click regions. Default pane layout is embedded as
-  `dash-default-config.toml`; `~/.config/sextant/config.toml`
-  overrides when present. `sextant dash --dump-default-config`
-  prints the embedded default. Tab / Shift+Tab cycles focus;
-  number keys + mouse click also work. Inter-pane routing via
-  the existing `OpenMsg` / `LoadMsg` component convention.
-  Pending pane is a placeholder until `feat-tui-pending-component`
-  lands.
-- **`sextant tui` Huh-driven discovery menu** — lists every Tier 1
-  component registered via `pkg/tui/component`'s registry and
-  launches the corresponding `-i` surface on selection. New
-  components appear automatically as they self-register via
-  `init()`.
-- **`sextant agents context <agent>` (Phase A)** — operator surface
-  for inspecting an agent's SDK session in raw form. CLI dump +
-  `--follow` (tail) + `--mode=<raw|conversation|tools|thinking|usage|tree>`
-  filters. New `pkg/sessionlog` typed JSONL parser underlies the view
-  modes. Daemon bind-mounts a per-agent `<data-dir>/agents/<uuid>/claude-projects/`
-  host directory at `/home/agent/.claude/projects/` inside the container
-  so the SDK's session writer ends up writing to a path the host can
-  read directly. `get_agent_status` surfaces the projects-dir path +
-  current session_id via the new `SessionLogInfo`. Verb `context`
-  added to the closed-exception list in `conventions/tui-conventions.md`.
-  `-i` TUI mount is a follow-up (depends on `feat-cli-iflag-tier1-components`).
-  See `plans/issues/feat-agents-context-view.md`.
-- **`sextant doctor` daemon version surface** — `doctor` now queries
-  a new `get_version` RPC and prints CLI + daemon version, proto
-  version, daemon PID, and start time. Warns when CLI and daemon
-  versions diverge (the common case after `make install` without
-  a daemon restart).
-- **TTY interactive confirm for destructive verbs** — `agents stop`,
-  `agents restart`, `agents archive` (incl. `--all-dead`), `daemon
-  stop`, `daemon restart` now render a `huh.NewConfirm` prompt when
-  stdin is a TTY and neither `--yes` nor `--dry-run` is set.
-  Non-TTY callers still get the existing `--yes`-required error.
-- **Tier 1 `-i` / `--tui` flag + component registry** — `sextant
-  agents list -i` and `sextant agents show <id> -i` launch the
-  existing agents TUI inline; `sextant pending list -i` and
-  `sextant traces show <id> -i` accept the flag but surface a
-  clear "not yet implemented" pointer at the follow-up tickets
-  ([[feat-tui-pending-component]], [[feat-tui-traces-component]]).
-  New `pkg/tui/component` registry (`Register` / `List`)
-  underpins the wiring; each component package self-registers via
-  `init()` (`pkg/tui/chat`, `pkg/tui/agents`). The legacy
-  `cmd/sextant-tui-agents/` binary now wraps `pkg/tui/agents` as a
-  thin standalone.
-- `sextant version` and `sextantd version` subcommands print the binary
-  version + git short SHA, populated at build time via `-ldflags` from
-  the top-level `VERSION` file.
-- `CHANGELOG.md` (this file) + CI gate that fails PRs touching
-  bump-required paths without a changelog entry.
-- `pkg/version` package exposing `Version` and `Commit` vars (defaults:
-  `dev` / `unknown` for `go run` paths).
-
-### Changed
-- **Protocol version → `0.3.0`** — `pkg/sextantproto.ProtoVersion`
-  and the TypeScript client's `PROTO_VERSION` both advance to track
-  the binary semver. The wire surface changed additively this cycle
-  (new `get_version` RPC; new optional `session_log` field on the
-  `get_agent_status` response), so the bump is informational, not a
-  break. (A follow-up will split the proto version onto its own line
-  — see CLAUDE.md § "Versioning + PR policy".)
-- Bump `@anthropic-ai/claude-agent-sdk` 0.3.150 → 0.3.154 in the
-  sidecar workspace. Notable upstream changes: parity with Claude
-  Code v2.1.153 (0.3.153); fix for stdio MCP servers being
-  incorrectly restarted on every reconcile pass (0.3.154); new
-  `SessionStart` `reloadSkills` + `MessageDisplay` hook events
-  (0.3.152) — sextant doesn't currently consume the hook API.
-- Bump `@types/node` 22.19.19 → 25.9.1 in the sidecar workspace.
-  Major bump of the Node.js typings package; runtime stays on
-  Node 22 per `engines.node`. CI confirms clean tsc build of
-  both the sidecar entrypoint and `clients/typescript`.
-- Bump `typescript` 5.6.3 → 6.0.3 across the workspace. Major
-  compiler upgrade; both `clients/typescript` and the sidecar
-  entrypoint compile clean under TS 6 with no diagnostics. The
-  99-test sidecar vitest suite + 19-test clients/typescript
-  suite both pass. (Build-tooling major; not an operator-facing
-  change, so no MAJOR bump of the binary.)
-
-### Fixed
-- **`kill_agent` retries on CAS conflict** —
-  [[bug-kill-agent-cas-flakes-integration-tests]]. The kill handler's
-  final def-write now retries up to 3 times against concurrent
-  legitimate writers (the daemon's L2 reconciler and lifecycle
-  watcher) instead of bailing immediately on every CAS conflict.
-  Container Stop runs exactly once before the retry loop — kill_agent
-  alone among the CAS-migrated handlers retries because its side
-  effect is idempotent in practice (a stopped container can be
-  stopped again as a no-op), while restart_agent / archive_agent
-  keep their BAIL-with-rollback shape. The retry budget mirrors
-  `lifecycle_watcher.go`'s `watcherCASRetries`. Fixes the six
-  `cmd/sextantd` integration-test flakes
-  (`TestM12CLIBinaryWalkthroughAcceptance`, `TestM12CLIWalkthroughAcceptance`,
-  `TestSidecarSDKDriverMockRoundTrip`, `TestSidecarSDKDriverMockErrorPath`,
-  `TestM11SpawnFlowAcceptance`, `TestAgentCanEditWorkspaceFile`).
-- **Reconciler-quiet daemon-test harness** — `startDaemonHarness` now
-  writes `reconcile_on_startup = false` into the test config so the L2
-  reconciler can't race operator-driven kill / restart CAS writes
-  under the integration matrix. Belt-and-suspenders to the kill_agent
-  retry budget above; production reconciler behavior is unchanged.
-- **`cmd/sextantd` CLI-binary walkthrough** — `TestM12CLIBinaryWalkthroughAcceptance`
-  now decodes `--json` output through the `pkg/cliout` envelope
-  wrapper (added in commit `e916508`) and gates the destructive
-  `agents stop` call behind `--yes`. The test had drifted from the
-  CLI surface; without these fixes the test failed before the
-  kill_agent flake even had a chance to fire.
-- **Sidecar `@sextant/client` resolution on fresh clone** — `make
-  lint-sidecar` and `make test-sidecar` no longer fail with `Cannot
-  find module '@sextant/client'`. The dependency is now wired through
-  an npm workspace at the repo root (`clients/typescript` +
-  `images/sidecar/entrypoint`), replacing the dangling
-  `node_modules/@sextant/client → ../../../client-ts` symlink that
-  pointed at a directory that doesn't exist in the repo. The sidecar
-  image build inlines an equivalent workspace root so the container
-  layout stays self-contained.
-
-## [0.2.0] — 2026-05-28
-
-First tagged baseline. Establishes the version surface that prior
-untagged releases (`v0.1.x` informal) lacked.
-
-### Added
-- **Agent lifecycle truth** — heartbeat cache, startup reconciler,
-  container watcher (PR #2, PR #3). `lost` transition added as a
-  fourth terminal state; `LifecyclePayload.source` field carries the
-  reporter discriminator.
-- **Chat TUI lifecycle word** — header renders the lifecycle state
-  next to the existing color-coded dot (PR #9), with relative-time
-  suffix on terminal states (`ended (12m ago)`).
-- **Chat TUI restart error banner** — inline banner surfaces
-  `restart_agent` RPC failures when the lost-state TUI has input
-  disabled (PR #10).
-- **`agents check` heartbeat secondary signal** — `get_agent_status`
-  extended with `IncludeHeartbeat` flag; `agents check` returns
-  `degraded` when lifecycle is `running` but the heartbeat is stale
-  (PR #11).
-
-### Changed
-- **CLI verb migration** (PR #12, breaking-compatible via aliases):
-  `agents spawn → agents create`, `agents kill → agents stop`,
-  `audit query → audit list`, `worktree destroy → worktree delete`.
-  Old verbs continue working as aliases for one release.
-- Conventions doc adopts the closed-exception verb-vocabulary list
-  (`restart`, `archive`, `prompt`, `answer`, `defer`, `escalate`,
-  `tail`, `merge`, `diff` allowed as exceptions to default CRUD).
-
-### Fixed
-- **`archive_agent` CAS write** (PR #8) — prevents concurrent
-  `restart_agent` / `kill_agent` / `update_agent` from clobbering an
-  archive's def commit. Completes the handler-CAS sweep started for
-  `restart_agent` and `kill_agent`.
-- **Nilaway false positives in `pkg/tui/chat/`** (PR #7) — explicit
-  slice init in `wordWrap` / `wrapWithFirstWidth` / `FramesToTurns`;
-  guard on `lastAgentTurnIndex`. CI gate for `make lint-nilaway`
-  restored (was silently disabled by a prior install step).
-
-### Internal
-- 7 PRs merged in a single dispatch session on 2026-05-27/28 (PRs #6
-  through #12). Documented in `plans/issues/` with deferred /
-  resolved tickets cross-linked.
-
-[Unreleased]: https://github.com/love-lena/sextant/compare/v0.5.0...HEAD
-[0.5.0]: https://github.com/love-lena/sextant/compare/v0.4.0...v0.5.0
-[0.4.0]: https://github.com/love-lena/sextant/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/love-lena/sextant/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/love-lena/sextant/releases/tag/v0.2.0
+- **Client identity is now a bus-minted ULID + a `display_name`** (ADR-0019, the
+  §3 review decision). `sextant token <display-name>` (was `<client-id>`) now
+  mints a fresh ULID as the client's primary id — bus-owned, unforgeable — and
+  carries the human `display_name` in the credential (a JWT tag). `Client.ID()`
+  returns the ULID; the new `Client.DisplayName()` returns the label. The clients
+  registry is keyed by the ULID, and `ClientInfo` / `clients.list` carry both id
+  and `display_name`. Display names are unique by convention, not enforced by the
+  bus (so duplicate-id minting no longer errors — each mint is a distinct ULID).
+- `pkg/sx`: renamed the bus "channel" convention to **topic** — `ChannelSubject`
+  → `TopicSubject` and the subject namespace `msg.chan.<name>` →
+  `msg.topic.<name>`. A topic is a named room (a naming convention over the
+  messages space, not a bus construct); "channel" is reserved for the Claude
+  Code harness push mechanism, to avoid the two colliding. See ADR-0017.
+- `pkg/sx`: renamed direct addressing `msg.agent.<id>` → `msg.client.<id>`
+  (`AgentSubject` → `ClientSubject`). "Client" is the universal term; "agent" is
+  not a Sextant concept. See ADR-0018 / CONTEXT.md.
+- `pkg/wire`: renamed the wire atom `Envelope` → **`Frame`** and its `sender`
+  field → **`author`**, and unified messages and artifacts under one frame —
+  added the `artifact` kind and the bus-stamped artifact fields (`revision`,
+  `createdAt`, `updatedAt`). The frame is the bus-stamped wrapper around a record
+  (record = user space, frame = bus space); `author` is the authenticated
+  identity the bus stamps, not a client-set field. `pkg/sextant`'s
+  `Message.Envelope` is now `Message.Frame`. First step of implementing
+  ADR-0018 / ADR-0019.

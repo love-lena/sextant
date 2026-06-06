@@ -1,132 +1,145 @@
-// sextant is the operator CLI. Built on Cobra (command structure) with
-// Fang styling help/errors/version, and charmbracelet/log driving the
-// user-facing + diagnostic loggers.
+// Command sextant is the operator CLI: run the embedded bus, issue and retire
+// client identities, and drive the protocol operations.
 //
-// Plan: plans/bootstrap.md#M5 (initial scaffold), then
-// plans/issues/feat-cli-cobra-fang-migration.md (framework migration)
-// and plans/issues/feat-cli-resource-verb-cleanup.md (resource-verb
-// shape + new daemon/events nouns).
+// (A full resource-verb CLI — likely Cobra — comes later; v1 dispatches a
+// couple of subcommands with the standard library.)
 package main
 
 import (
 	"context"
-	"errors"
+	"flag"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
+	"time"
 
-	"github.com/charmbracelet/fang"
-
-	"github.com/love-lena/sextant/pkg/cliout"
-	"github.com/love-lena/sextant/pkg/version"
+	"github.com/love-lena/sextant/pkg/bus"
+	"github.com/love-lena/sextant/pkg/conninfo"
 )
 
 func main() {
-	os.Exit(mainErr())
+	if len(os.Args) < 2 {
+		usage()
+		os.Exit(2)
+	}
+	switch os.Args[1] {
+	case "up":
+		cmdUp(os.Args[2:])
+	case "publish":
+		cmdPublish(os.Args[2:])
+	case "subscribe":
+		cmdSubscribe(os.Args[2:])
+	case "read":
+		cmdRead(os.Args[2:])
+	case "clients":
+		cmdClients(os.Args[2:])
+	case "context":
+		cmdContext(os.Args[2:])
+	case "artifact":
+		cmdArtifact(os.Args[2:])
+	case "-h", "--help", "help":
+		usage()
+	default:
+		fmt.Fprintf(os.Stderr, "sextant: unknown command %q\n\n", os.Args[1])
+		usage()
+		os.Exit(2)
+	}
 }
 
-func mainErr() int {
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
+func usage() {
+	fmt.Fprint(os.Stderr, `sextant — a protocol + SDK for AI agents over a bus
 
-	root := newRootCmd()
+usage:
+  sextant up    [--store DIR] [--port N]        run the embedded bus
 
-	opts := []fang.Option{
-		fang.WithVersion(version.String()),
-		fang.WithErrorHandler(errorBanner),
-	}
-	if version.GitSHA != "" {
-		opts = append(opts, fang.WithCommit(version.GitSHA))
-	}
+identities (the bus is the sole minter; keys never leave it — ADR-0020):
+  sextant clients register <name> [--kind K]    operator mints for another
+  sextant clients register --self  [--kind K]   bootstrap/enrollment: mint for self
+  sextant clients retire   <id>                 decommission an identity (operator)
+  sextant clients list     [--json]             the directory (online + offline)
 
-	err := fang.Execute(ctx, root, opts...)
-	return exitCodeFor(err)
+contexts (saved URL+identity+creds, so operations need no flags — ADR-0021):
+  sextant context add <name> --creds F          save a context (and activate it)
+  sextant context use <name>                    make <name> the active context
+  sextant context list                          list saved contexts
+  sextant context current                       print the active context name
+
+operations (creds from --creds, $SEXTANT_CREDS, or the active context):
+  sextant publish   <subject> <record-json>
+  sextant read      <subject> [--since N] [--limit N] [--json]
+  sextant subscribe <subject> [--all] [--json]
+  sextant artifact  create|update|get|delete|watch <name> [<record-json>] [--rev N] [--json]
+
+environment (avoids repeating the flags):
+  SEXTANT_STORE   default for --store (the bus store dir; discovery + creds)
+  SEXTANT_CREDS   default for --creds (the client credentials file)
+  SEXTANT_CONTEXT default for --context (the saved context to connect as)
+  SEXTANT_HOME    where contexts live (default: <user-config>/sextant)
+
+`)
 }
 
-// errorBanner is Fang's WithErrorHandler — it controls how the
-// failure surfaces on stderr. Two modes:
-//
-//   - Plain text (`sextant: <err>`) — the default human surface,
-//     matches pre-cobra behavior.
-//   - cliout error envelope (`{"error":{"code":..., "message":...}}`) —
-//     emitted when `globalFlags.asJSON` is set so `sextant <verb>
-//     --json` failures honor the same envelope contract the success
-//     path uses. Per the codex adversarial-review finding that flagged
-//     the bare-text path as a protocol break.
-//
-// Verbs that print their own user-facing failure (status's
-// "daemon: not running", exec's verbatim pass-through) suppress the
-// banner entirely so output stays clean.
-func errorBanner(w io.Writer, _ fang.Styles, err error) {
-	if err == nil {
-		return
+func cmdUp(args []string) {
+	fs := flag.NewFlagSet("up", flag.ExitOnError)
+	store := fs.String("store", defaultStore(), "JetStream + key-material directory (or set $SEXTANT_STORE)")
+	port := fs.Int("port", 0, "listen port (0 = random)")
+	_ = fs.Parse(args)
+
+	if err := os.MkdirAll(*store, 0o700); err != nil { // holds key material + JS data
+		fatal("create store dir: %v", err)
 	}
-	if errors.Is(err, errSilentExit) {
-		// The verb already emitted its own user-facing failure on
-		// stderr (exec's pass-through). Suppressing applies in both
-		// text AND JSON modes — in JSON mode the verb is expected to
-		// have written its own envelope.
-		return
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	b, err := bus.Start(ctx, bus.Config{StoreDir: *store, Port: *port})
+	if err != nil {
+		fatal("%v", err)
 	}
-	if isStatusNotRunningErr(err) {
-		// `sextant daemon status` (and its alias `sextant status`)
-		// has already written the canonical status surface — a text
-		// "daemon: not running" line OR a JSON `daemon_status` row,
-		// depending on --json. Banner-suppression must apply in BOTH
-		// modes; without this check, the JSON path below would write
-		// a second stderr envelope conflicting with the verb's own
-		// stdout row. See Codex follow-up review finding 1.
-		return
+
+	infoPath := filepath.Join(*store, conninfo.DefaultFile)
+	if err := conninfo.Write(infoPath, conninfo.Info{URL: b.ClientURL()}); err != nil {
+		b.Shutdown()
+		fatal("write discovery file: %v", err)
 	}
-	if globalFlags.asJSON {
-		// JSON mode emits an envelope for every error, including
-		// errNoResults and other text-mode-suppressed sentinels.
-		// Scripts pivoting on stderr need the machine-readable failure
-		// object regardless of the operator-visible text suppression
-		// rules. See Codex follow-up review.
-		code, msg := mapErrorToCode(err)
-		_ = cliout.WriteErrorEnvelope(w, code, msg)
-		return
+
+	fmt.Printf("sextant bus up\n  url:        %s\n  discovery:  %s\n  operator:   %s\n\n"+
+		"issue a client identity (the bus mints it; keys stay in the bus):\n"+
+		"  sextant clients register <name> --store %s\n\n"+
+		"Ctrl-C to drain and stop.\n",
+		b.ClientURL(), infoPath, bus.OperatorCredsPath(*store), *store)
+
+	<-ctx.Done()
+	stop() // restore default signal handling; a second signal force-quits
+
+	fmt.Println("\ndraining…")
+	if err := b.Drain(); err != nil {
+		fmt.Fprintf(os.Stderr, "drain: %v\n", err)
 	}
-	if shouldSuppressErrorBanner(err) {
-		// Text-mode suppression: the verb already printed its own
-		// human-readable line on stdout (e.g. "no agents" for
-		// errNoResults, "daemon: not running" for the status verb)
-		// and a banner here would be noise.
-		return
-	}
-	_, _ = fmt.Fprintf(w, "sextant: %s\n", err.Error())
+	time.Sleep(200 * time.Millisecond) // brief grace for delivery
+	b.Shutdown()
+	fmt.Println("bus down")
 }
 
-// errSilentExit is a sentinel used by commands that already printed
-// their own user-facing failure and want main() to skip the banner.
-var errSilentExit = errors.New("silent exit")
+// defaultStore is a stable, CWD-independent location so `up` and the client
+// commands run from different directories still share the same key material.
+// defaultStore is the store dir a command uses when --store is not given:
+// $SEXTANT_STORE if set, else a per-user config path. An explicit --store still
+// overrides this, since flag parsing replaces the default when the flag is
+// present.
+func defaultStore() string {
+	if v := os.Getenv("SEXTANT_STORE"); v != "" {
+		return v
+	}
+	if dir, err := os.UserConfigDir(); err == nil {
+		return filepath.Join(dir, "sextant", "jetstream")
+	}
+	return filepath.Join(".sextant", "jetstream")
+}
 
-// Exit codes per specs/cli/commands.md.
-//
-// 10 (exitNoResults) is the "empty result set" sentinel — distinct
-// from real errors so shell loops can branch on it
-// (`if foo; then ...; elif [ $? -eq 10 ]; then ...`). Per
-// conventions/tui-conventions.md § "Tier 0 → Exit codes".
-const (
-	exitOK        = 0
-	exitUser      = 1
-	exitSystem    = 2
-	exitNoResults = 10
-)
-
-// errNoResults is the sentinel a verb returns when its query returned
-// zero rows but no actual error occurred. main() maps this to
-// exitNoResults; the verb is responsible for printing the user-visible
-// "no results" line first (or nothing, for --json).
-var errNoResults = errors.New("no results")
-
-// usageError carries a free-form user-error message. main() inspects via
-// errors.As to map it to exit code 1.
-type usageError string
-
-func (e usageError) Error() string { return string(e) }
-
-func errUserUsage(msg string) error { return usageError(msg) }
+func fatal(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "sextant: "+format+"\n", args...)
+	os.Exit(1)
+}

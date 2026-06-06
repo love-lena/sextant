@@ -1,0 +1,8 @@
+{
+  "name": "sextant-backlog-cli",
+  "private": true,
+  "description": "Pinned Backlog.md CLI for sextant ticket management. Installed by `npm install --prefix tools/backlog`; invoked as tools/backlog/node_modules/.bin/backlog.",
+  "dependencies": {
+    "backlog.md": "1.45.2"
+  }
+}

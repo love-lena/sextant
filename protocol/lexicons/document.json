@@ -1,0 +1,24 @@
+{
+  "lexicon": 1,
+  "id": "document",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "A titled Markdown document artifact.",
+      "record": {
+        "type": "object",
+        "required": ["title", "body"],
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Short human title."
+          },
+          "body": {
+            "type": "string",
+            "description": "Markdown body."
+          }
+        }
+      }
+    }
+  }
+}
