@@ -1,0 +1,17 @@
+project_name: "sextant"
+default_status: "To Do"
+statuses: ["To Do", "In Progress", "Done"]
+labels: []
+date_format: yyyy-mm-dd
+max_column_width: 20
+auto_open_browser: true
+default_port: 6420
+remote_operations: false
+auto_commit: false
+filesystem_only: false
+bypass_git_hooks: false
+# false: the rebuild shares its .git with the old build's branches; cross-branch
+# scanning would pull their tickets into this board. Only this branch's tasks.
+check_active_branches: false
+active_branch_days: 30
+task_prefix: "task"

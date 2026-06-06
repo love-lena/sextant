@@ -1,5 +1,0 @@
-node_modules/
-dist/
-*.tsbuildinfo
-.vitest-cache/
-coverage/

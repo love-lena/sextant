@@ -1,0 +1,82 @@
+{
+  "$comment": "Index of the operations the bus implements. An operation is a call a client makes to the bus over the Wire API: the client invokes it and receives its result. The bus serves the call, stamps the frame around the record, and enforces identity (author) from the authenticated request — the client never sets id, author, revision, or timestamps. The backend the bus runs on is opaque: no backend operations appear here. Delivery shapes the call's result: one-shot returns once; pull-batch returns a batch plus a cursor to continue; push-stream delivers frames until stopped. Types are informal hints; 'lexicon' references protocol/lexicons/.",
+  "operations": [
+    {
+      "name": "message.publish",
+      "summary": "Publish a typed message on a subject. The bus stamps the frame (id, author, epoch) around the record.",
+      "delivery": "one-shot",
+      "input": { "subject": "string (must be under msg.)", "record": "lexicon" },
+      "output": { "id": "ulid", "seq": "uint64" }
+    },
+    {
+      "name": "message.read",
+      "summary": "Fetch a batch of retained messages from a cursor. Cursor 0 means the beginning; next_cursor can be passed unchanged to continue.",
+      "delivery": "pull-batch",
+      "input": { "subject": "string (exact or wildcard)", "since": "uint64 (next sequence to read; 0 = from start)", "limit": "int" },
+      "output": { "messages": "frame[]", "next_cursor": "uint64" }
+    },
+    {
+      "name": "message.subscribe",
+      "summary": "Stream messages matching a subject until stopped.",
+      "delivery": "push-stream",
+      "input": { "subject": "string (exact or wildcard)", "deliver": "new | all" },
+      "output": { "stream": "frame" }
+    },
+    {
+      "name": "artifact.create",
+      "summary": "Create a new artifact from a lexicon record. Fails if the name exists. The bus stamps revision and timestamps.",
+      "delivery": "one-shot",
+      "input": { "name": "string", "record": "lexicon" },
+      "output": { "name": "string", "revision": "uint64" }
+    },
+    {
+      "name": "artifact.update",
+      "summary": "Compare-and-set update of an artifact. The bus advances the revision and stamps updatedAt.",
+      "delivery": "one-shot",
+      "input": { "name": "string", "record": "lexicon", "expected_rev": "uint64" },
+      "output": { "name": "string", "revision": "uint64" }
+    },
+    {
+      "name": "artifact.get",
+      "summary": "Read an artifact's current value and bus-stamped metadata.",
+      "delivery": "one-shot",
+      "input": { "name": "string" },
+      "output": { "name": "string", "record": "lexicon", "revision": "uint64", "createdAt": "datetime", "updatedAt": "datetime" }
+    },
+    {
+      "name": "artifact.delete",
+      "summary": "Remove an artifact. Delete is unconditional in the reference surface.",
+      "delivery": "one-shot",
+      "input": { "name": "string" },
+      "output": {}
+    },
+    {
+      "name": "artifact.watch",
+      "summary": "Stream changes to an artifact: initial value, updates, and deletes.",
+      "delivery": "push-stream",
+      "input": { "name": "string" },
+      "output": { "stream": "ArtifactChange" }
+    },
+    {
+      "name": "clients.list",
+      "summary": "List the clients directory: every bus-issued identity, online and offline, with its derived presence. The bus computes presence from the live connection, not a stored field (ADR-0020).",
+      "delivery": "one-shot",
+      "input": {},
+      "output": { "clients": "client[]" }
+    },
+    {
+      "name": "clients.register",
+      "summary": "Issue a new client identity (ADR-0020). The bus mints a ULID and its credential and persists the durable record; the signing keys never leave the bus. This is the single exception to 'you must already be someone': it is authorized — not by a held client identity alone — but by the caller's authority, either a held identity (the operator, minting for another) or a bootstrap/enrollment authorization with no pre-existing identity (locality at the weak end, a signed token at the strong end; minting for self). Same mint-and-return either way; the auth mode is only the gate.",
+      "delivery": "one-shot",
+      "input": { "display_name": "string", "kind": "string" },
+      "output": { "id": "ulid", "creds": "string (NATS credentials: JWT+seed)" }
+    },
+    {
+      "name": "clients.retire",
+      "summary": "Decommission an identity for good (ADR-0020): remove it from the directory and drop any live connection. Operator-only for now (managed-auth parents later, ADR-0009). Distinct from a disconnect, which only drops presence to offline; a clean client Close does not retire.",
+      "delivery": "one-shot",
+      "input": { "id": "ulid" },
+      "output": {}
+    }
+  ]
+}

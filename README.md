@@ -1,66 +1,49 @@
-# sextant
+# Sextant
 
-A Go control plane for AI coding agents. Sextant supervises a NATS JetStream bus, a ClickHouse store, and one Docker container per running agent — each container drives the Claude Agent SDK and reports back over the bus.
+A protocol and an SDK for AI agents to communicate and collaborate over a bus.
+The core is small and fixed — a bus, two primitives (Messages and Artifacts), a
+wire format, and the SDK. Everything else is an optional, forkable convention or
+a client you build.
 
-## Quickstart (operators)
+> **Status: greenfield rebuild in progress.** This branch carries the
+> human-signed-off design canon; the implementation is being built against it.
+> Start with the [vision](docs/adr/0001-vision.md).
 
-```bash
-git clone git@github.com:love-lena/sextant.git
-cd sextant
-make bootstrap                   # installs host deps, builds, installs, runs `sextant init`
-sextant daemon start             # bring up the daemon
-sextant agents create assistant --template default
-sextant agents chat assistant
-```
+## Where things are
 
-`make bootstrap` audits host deps (Go ≥ 1.26, `nats-server`, `clickhouse`, `docker`/OrbStack, `node`), prints what it's about to brew-install, prompts `Y/n`, then chains `make install` → `sextant doctor --preflight` → `sextant init`. Pass `YES=1` for non-interactive (CI / repeat runs).
+- **Why we decided things** — [`docs/adr/`](docs/adr/) (the
+  [index](docs/adr/README.md) lists the accepted decisions).
+- **The shared language** — [`CONTEXT.md`](CONTEXT.md).
+- **How to work here** — [`AGENTS.md`](AGENTS.md) (`CLAUDE.md` symlinks to it).
+- **Human reference + API** — an mdbook under `docs/book/`, *forthcoming* (to be
+  rewritten against the ADR-0018 architecture; the protocol source of truth lives
+  in [`protocol/`](protocol/) and the [ADRs](docs/adr/) until then).
+- **What's next** — tickets in [`backlog/`](backlog/) (Backlog.md).
 
-macOS via Homebrew is the tested path. Linux is partial — `nats-server` and `clickhouse` aren't in default apt repos, so on Linux the script bails with upstream URLs if those are missing.
+## Agent skills
 
-For a deeper walkthrough — what each step writes, how the daemon is supervised, where logs land — read [`docs/book/src/getting-started/first-run.md`](docs/book/src/getting-started/first-run.md).
+The engineering skills this repo uses
+([mattpocock/skills](https://github.com/mattpocock/skills)) are committed under
+`.claude/skills/`, so a fresh clone has them with no install.
+[`skills-lock.json`](skills-lock.json) records their provenance.
 
-### Verifying
+## Optional: the Backlog.md CLI
 
-```bash
-sextant doctor
-```
-
-Runs ~15 checks: config files present, CA keypair valid, sextantd reachable, NATS and ClickHouse running, host binaries on PATH, installed binary's `GitSHA` matches the repo. Exit code `0` on green, `2` if anything failed. `sextant doctor --preflight` runs only the host-binary checks (faster, doesn't need the daemon running).
-
-> **macOS gotcha — do not use plain `cp`.** `cp bin/sextant ~/.local/bin/` stamps `com.apple.provenance` onto the destination, and Gatekeeper SIGKILLs the resulting binary on invocation (exit 137, **no stderr**). The failure looks like the binary itself is broken. `make install` (which `make bootstrap` uses) invokes `/usr/bin/install`, which writes a clean file. Cross-reference: [`plans/issues/docs-install-via-make-install-not-cp.md`](plans/issues/docs-install-via-make-install-not-cp.md).
-
-### Where to go next
-
-The reference book lives in [`docs/book/`](docs/book/). Run `mdbook serve docs/book` to browse in a browser, or open the `.md` files directly.
-
-- [CLI reference](docs/book/src/operator-guide/cli.md) — every `sextant <subcommand>`
-- [TUIs](docs/book/src/operator-guide/tuis.md) — `sextant agents chat`, `sextant-tui-agents`
-- [Templates](docs/book/src/operator-guide/templates.md) — defining new agent kinds
-- [Worktrees](docs/book/src/operator-guide/worktrees.md) — how agents work in isolated git worktrees
-- [Architecture overview](docs/book/src/architecture/overview.md) — the why behind the design
-
-## Contributing
-
-If you're working *on* sextant rather than driving it:
-
-- **[`PRINCIPLES.md`](PRINCIPLES.md)** — three load-bearing values that constrain every feature decision. Read once.
-- **[`CLAUDE.md`](CLAUDE.md)** — auto-loaded project guidance for AI agents (and a useful orientation for humans too).
-- **[`conventions/`](conventions/)** — Go style, git workflow, TUI patterns, operator-experience conventions.
-- **[`plans/bootstrap.md`](plans/bootstrap.md)** — the M0–M17 milestone plan. M0–M15 are merged on `main`; M16 (self-update) and M17 (test environments) are not implemented.
-- **[`plans/issues/`](plans/issues/)** — open + closed bugs and feature requests, one markdown file per issue.
-
-For the build/test/lint loop, after `make bootstrap`:
+Tickets live as plain markdown under `backlog/` and read fine as-is. To drive
+them with the [Backlog.md](https://github.com/MrLesk/Backlog.md) board and CLI
+— optional — install the pinned CLI once:
 
 ```bash
-make test       # go test -race + TS vitest + sidecar tests
-make lint       # golangci-lint + nilaway + tsc --noEmit
-make install    # rebuild and reinstall binaries to ~/.local/bin
+npm install --prefix tools/backlog
 ```
 
-Worktree-based feature work uses the `EnterWorktree` tool (Claude Code) or `git worktree add` directly — see [`conventions/git-workflow.md`](conventions/git-workflow.md).
+Then, for example:
 
-Every commit carries `Co-Authored-By: <model> <noreply@anthropic.com>` when an AI participated. If you spawn subagents to commit, tell them to include the trailer too.
+```bash
+tools/backlog/node_modules/.bin/backlog board          # the kanban board
+tools/backlog/node_modules/.bin/backlog task list --plain
+```
 
----
-
-The earlier experimental Rust version, code-named "pilot" (v0), lives archived at [`love-lena/sextant-pilot`](https://github.com/love-lena/sextant-pilot). No code carryover; design reconsidered top-to-bottom for v1.
+Reading tickets needs nothing; *writing* them should go through the CLI rather
+than hand-editing the files (see
+[`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md)).

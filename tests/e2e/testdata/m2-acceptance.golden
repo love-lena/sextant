@@ -1,0 +1,50 @@
+### 0 — bus up
+sextant bus up
+ url: <URL>
+ discovery: <PATH>/bus.json
+ operator: <PATH>/operator.creds
+
+issue a client identity (the bus mints it; keys stay in the bus):
+ sextant clients register <name> --store <PATH>
+
+Ctrl-C to drain and stop.
+
+### 1 — issuance (operator mints alice; bob self-enrolls)
+registered alice as <ULID:alice>
+ creds: <PATH>/alice.creds
+enrolled as <ULID:bob>
+ creds: <HOME>/creds/bob.creds
+ context: bob (now active)
+
+### 1b — bob's self-enroll created an active context
+* bob <ULID:bob> <URL>
+
+### 2 — message with an unforgeable author
+published to msg.topic.plan
+[msg.topic.plan] <ULID> <<ULID:alice>> {"hello":"world"}
+
+### 3 — shared artifact via compare-and-set
+the-plan now at revision 1
+the-plan now at revision 2
+sextant: sextant: artifact.update: bus: artifact "the-plan" changed since revision 1
+the-plan (revision 2)
+{"title":"v2"}
+
+### 4 — the live directory shows presence
+<ULID:alice> alice worker epoch=1 online
+<ULID:bob> bob reviewer epoch=1 online
+(2 clients)
+
+### 5 — durable identity across reconnect (offline, then back online)
+<ULID:alice> alice worker epoch=1 online
+<ULID:bob> bob reviewer epoch=1 offline
+(2 clients)
+<ULID:alice> alice worker epoch=1 online
+<ULID:bob> bob reviewer epoch=1 online
+(2 clients)
+
+### 6 — retire decommissions the identity
+retired <ULID:bob>
+<ULID:alice> alice worker epoch=1 online
+(1 clients)
+
