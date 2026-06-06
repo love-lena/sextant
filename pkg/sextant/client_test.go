@@ -25,11 +25,17 @@ func startBus(t *testing.T) *bus.Bus {
 // file, returning the path. Each client gets its own verified identity.
 func credsPath(t *testing.T, b *bus.Bus, id string) string {
 	t.Helper()
-	creds, _, err := b.MintClient(id)
+	creds, _, err := b.MintClient(t.Context(), id, "test")
 	if err != nil {
 		t.Fatalf("MintClient(%s): %v", id, err)
 	}
-	path := filepath.Join(t.TempDir(), id+".creds")
+	return writeCreds(t, creds)
+}
+
+// writeCreds writes credential text to a temp file and returns its path.
+func writeCreds(t *testing.T, creds string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "creds")
 	if err := os.WriteFile(path, []byte(creds), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -57,10 +63,43 @@ func readCtx(t *testing.T) context.Context {
 	return ctx
 }
 
-// TestConnectRegisters also pins the identity contract: the client's id is the
-// bus-minted ULID in its credential (its registry key), and its display_name is
-// the human label minted with it.
-func TestConnectRegisters(t *testing.T) {
+// presenceOf returns a connected client's presence in the directory, or ("",
+// false) if it is absent.
+func presenceOf(t *testing.T, c *Client, id string) (online, present bool) {
+	t.Helper()
+	got, err := c.ListClients(readCtx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ci := range got {
+		if ci.ID == id {
+			return ci.Online, true
+		}
+	}
+	return false, false
+}
+
+// waitPresence polls the directory (via reader) until id reaches the wanted
+// online state, or fails after a short timeout. Presence is connection-derived,
+// so it is self-correcting but not instantaneous after a disconnect.
+func waitPresence(t *testing.T, reader *Client, id string, wantOnline bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if online, present := presenceOf(t, reader, id); present && online == wantOnline {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	online, present := presenceOf(t, reader, id)
+	t.Fatalf("client %q presence did not reach online=%v (present=%v online=%v)", id, wantOnline, present, online)
+}
+
+// TestConnectAndDirectory pins the identity contract and connection-derived
+// presence: the client's id is the bus-minted ULID in its credential, its
+// display_name is the human label minted with it, and a connected client shows up
+// online in the directory (ADR-0020).
+func TestConnectAndDirectory(t *testing.T) {
 	b := startBus(t)
 	c := dialClient(t, b, "agent-reg")
 	if c.ID() == "" {
@@ -69,21 +108,8 @@ func TestConnectRegisters(t *testing.T) {
 	if c.DisplayName() != "agent-reg" {
 		t.Fatalf("DisplayName() = %q; want agent-reg", c.DisplayName())
 	}
-	// Confirm the registry write through the SDK's own read path — under the
-	// allow-list a client has no direct registry access, so clients.list is how
-	// it learns it is registered.
-	got, err := c.ListClients(readCtx(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, ci := range got {
-		if ci.ID == c.ID() {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("client %q not found in registry: %+v", c.ID(), got)
+	if online, present := presenceOf(t, c, c.ID()); !present || !online {
+		t.Errorf("connected client %q should be present and online (present=%v online=%v)", c.ID(), present, online)
 	}
 }
 
@@ -125,10 +151,13 @@ func TestDrainClosesDrained(t *testing.T) {
 	}
 }
 
-func TestCloseLeavesRegistry(t *testing.T) {
+// TestCloseGoesOffline pins ADR-0020: a clean Close drops presence to offline but
+// does NOT retire — the durable identity persists in the directory, so the same
+// client can reconnect later. (Decommissioning for good is an explicit operator
+// retire, never a consequence of Close.)
+func TestCloseGoesOffline(t *testing.T) {
 	b := startBus(t)
-	// An observer stays connected to read the directory after the leaver closes:
-	// the leaver's own connection is gone, so it can no longer list itself.
+	// An observer stays connected to read the directory after the leaver closes.
 	observer := dialClient(t, b, "observer")
 	leaver, err := Connect(t.Context(), Options{
 		URL:       b.ClientURL(),
@@ -139,17 +168,13 @@ func TestCloseLeavesRegistry(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := leaver.ID()
+	waitPresence(t, observer, id, true) // online while connected
 	if err := leaver.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	got, err := observer.ListClients(readCtx(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, ci := range got {
-		if ci.ID == id {
-			t.Errorf("registry record should be gone after Close, still listed: %+v", ci)
-		}
+	waitPresence(t, observer, id, false) // offline after a clean close...
+	if _, present := presenceOf(t, observer, id); !present {
+		t.Errorf("identity %q should persist in the directory after Close (offline, not gone)", id)
 	}
 }
 

@@ -59,10 +59,24 @@
     },
     {
       "name": "clients.list",
-      "summary": "List entries in the clients registry.",
+      "summary": "List the clients directory: every bus-issued identity, online and offline, with its derived presence. The bus computes presence from the live connection, not a stored field (ADR-0020).",
       "delivery": "one-shot",
       "input": {},
       "output": { "clients": "client[]" }
+    },
+    {
+      "name": "clients.register",
+      "summary": "Issue a new client identity (ADR-0020). The bus mints a ULID and its credential and persists the durable record; the signing keys never leave the bus. This is the single exception to 'you must already be someone': it is authorized — not by a held client identity alone — but by the caller's authority, either a held identity (the operator, minting for another) or a bootstrap/enrollment authorization with no pre-existing identity (locality at the weak end, a signed token at the strong end; minting for self). Same mint-and-return either way; the auth mode is only the gate.",
+      "delivery": "one-shot",
+      "input": { "display_name": "string", "kind": "string" },
+      "output": { "id": "ulid", "creds": "string (NATS credentials: JWT+seed)" }
+    },
+    {
+      "name": "clients.retire",
+      "summary": "Decommission an identity for good (ADR-0020): remove it from the directory and drop any live connection. Operator-only for now (managed-auth parents later, ADR-0009). Distinct from a disconnect, which only drops presence to offline; a clean client Close does not retire.",
+      "delivery": "one-shot",
+      "input": { "id": "ulid" },
+      "output": {}
     }
   ]
 }

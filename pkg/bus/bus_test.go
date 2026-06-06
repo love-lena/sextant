@@ -50,7 +50,7 @@ func testCtx(t *testing.T) context.Context {
 // per-client allow-list.
 func mintCredsFile(t *testing.T, b *Bus, name string) (creds, path, id string) {
 	t.Helper()
-	creds, id, err := b.MintClient(name)
+	creds, id, err := b.MintClient(t.Context(), name, "test")
 	if err != nil {
 		t.Fatalf("MintClient(%s): %v", name, err)
 	}
@@ -158,11 +158,11 @@ func TestPerClientIdentity(t *testing.T) {
 // (the old silent-collision footgun is gone — ids are no longer the human name).
 func TestMintGivesDistinctIDs(t *testing.T) {
 	b := startTestBus(t)
-	_, id1, err := b.MintClient("dup")
+	_, id1, err := b.MintClient(t.Context(), "dup", "test")
 	if err != nil {
 		t.Fatalf("first mint: %v", err)
 	}
-	_, id2, err := b.MintClient("dup")
+	_, id2, err := b.MintClient(t.Context(), "dup", "test")
 	if err != nil {
 		t.Fatalf("second mint: %v", err)
 	}
@@ -177,12 +177,12 @@ func TestMintGivesDistinctIDs(t *testing.T) {
 func TestMintValidatesDisplayName(t *testing.T) {
 	b := startTestBus(t)
 	for _, bad := range []string{"", "   ", "with\nnewline", "ctrl\x00here"} {
-		if _, _, err := b.MintClient(bad); err == nil {
+		if _, _, err := b.MintClient(t.Context(), bad, "test"); err == nil {
 			t.Errorf("MintClient(%q) should be rejected", bad)
 		}
 	}
 	for _, ok := range []string{"has space", "a/b", "Capitalized", "trail-", ".lead"} {
-		if _, _, err := b.MintClient(ok); err != nil {
+		if _, _, err := b.MintClient(t.Context(), ok, "test"); err != nil {
 			t.Errorf("MintClient(%q) should be accepted: %v", ok, err)
 		}
 	}
@@ -212,24 +212,40 @@ func TestClientCannotCreateBuckets(t *testing.T) {
 	}
 }
 
-// TestClientRegistersViaCall is the positive shape of the allow-list: a client
-// reaches the registry only by asking the bus over a call, never by writing KV
-// directly (it has no JetStream access at all). It registers via clients.register
-// and then sees itself in the directory.
-func TestClientRegistersViaCall(t *testing.T) {
+// TestIssuedClientIsInDirectory is the positive shape of issuance (ADR-0020): a
+// client minted by MintClient (the issuance path) is in the directory the moment
+// it is issued, before it ever connects — the record is durable, not presence.
+func TestIssuedClientIsInDirectory(t *testing.T) {
 	b := startTestBus(t)
-	nc, id := connectClient(t, b, "agent-reg")
-	if resp := call(t, nc, id, wireapi.OpClientsRegister, wireapi.RegisterInput{Epoch: wire.Epoch, Kind: "harness"}); resp.Error != "" {
-		t.Fatalf("register: %s", resp.Error)
-	}
+	nc, id := connectClient(t, b, "agent-reg") // mints + persists the record
 	var list wireapi.ClientsListOutput
 	mustJSON(t, call(t, nc, id, wireapi.OpClientsList, struct{}{}).Result, &list)
 	for _, e := range list.Clients {
 		if e.ID == id {
-			return // registered and visible — the call path works
+			if e.Presence != wireapi.PresenceOnline {
+				t.Errorf("a connected client should be online, got %q", e.Presence)
+			}
+			return
 		}
 	}
-	t.Fatalf("registered client %q absent from directory: %+v", id, list.Clients)
+	t.Fatalf("issued client %q absent from directory: %+v", id, list.Clients)
+}
+
+// TestRegularClientCannotMint pins the authorization on the issuance path: a
+// regular client (a ULID) may not call clients.register to mint identities —
+// only the reserved operator/enroll authorities can (ADR-0020). The allow-list
+// lets the client *publish* the call under its own prefix; the bus rejects it on
+// authorization, so identity creation stays governed by key custody.
+func TestRegularClientCannotMint(t *testing.T) {
+	b := startTestBus(t)
+	nc, id := connectClient(t, b, "agent-nomint")
+	resp := call(t, nc, id, wireapi.OpClientsRegister, wireapi.RegisterInput{DisplayName: "evil", Kind: "worker"})
+	if resp.Error == "" {
+		t.Fatal("a regular client must not be authorized to mint identities")
+	}
+	if !strings.Contains(resp.Error, "not authorized") {
+		t.Errorf("expected an authorization error, got: %s", resp.Error)
+	}
 }
 
 func TestClientCannotPublishControl(t *testing.T) {
@@ -297,11 +313,9 @@ func TestDrainDelivers(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = nc.Flush()
-	// The client must be registered for Drain to target it (Drain iterates the
-	// connected set, which clients.register populates).
-	if resp := call(t, nc, id, wireapi.OpClientsRegister, wireapi.RegisterInput{Epoch: wire.Epoch}); resp.Error != "" {
-		t.Fatalf("register: %s", resp.Error)
-	}
+	// No register call: Drain targets the clients connected right now, derived from
+	// the live connection table (ADR-0020). This client is issued (its record
+	// exists) and connected, so it is online and Drain reaches it.
 	if err := b.Drain(); err != nil {
 		t.Fatalf("Drain: %v", err)
 	}
@@ -310,28 +324,32 @@ func TestDrainDelivers(t *testing.T) {
 	}
 }
 
-// TestRegisterEpochGate pins the connect-handshake gate: clients.register returns
-// the bus epoch (so the SDK can hard-gate) but registers only an epoch-compatible
-// client — a mismatched one never enters the directory.
-func TestRegisterEpochGate(t *testing.T) {
+// TestHelloHandshake pins the connect handshake (ADR-0020): clients.hello returns
+// the bus epoch (so the SDK can hard-gate) for a known identity, and rejects a
+// caller with no durable record (never issued, or retired).
+func TestHelloHandshake(t *testing.T) {
 	b := startTestBus(t)
-	nc, id := connectClient(t, b, "epoch-x")
+	nc, id := connectClient(t, b, "hello-x")
 
-	var out wireapi.RegisterOutput
-	resp := call(t, nc, id, wireapi.OpClientsRegister, wireapi.RegisterInput{Epoch: wire.Epoch + 1})
+	var out wireapi.HelloOutput
+	resp := call(t, nc, id, wireapi.OpClientsHello, wireapi.HelloInput{})
 	if resp.Error != "" {
-		t.Fatalf("register: %s", resp.Error)
+		t.Fatalf("hello: %s", resp.Error)
 	}
 	mustJSON(t, resp.Result, &out)
 	if out.BusEpoch != wire.Epoch {
 		t.Errorf("BusEpoch = %d, want %d", out.BusEpoch, wire.Epoch)
 	}
+	if out.ServerTime == "" {
+		t.Error("hello did not stamp a server time")
+	}
 
-	var list wireapi.ClientsListOutput
-	mustJSON(t, call(t, nc, id, wireapi.OpClientsList, struct{}{}).Result, &list)
-	for _, e := range list.Clients {
-		if e.ID == id {
-			t.Errorf("a mismatched-epoch client must not be in the directory: %+v", list.Clients)
-		}
+	// Delete the record out from under the connection (stands in for retire): a
+	// subsequent hello must be rejected — the identity is no longer known.
+	if err := b.DeleteClientRecord(t.Context(), id); err != nil {
+		t.Fatalf("delete record: %v", err)
+	}
+	if resp := call(t, nc, id, wireapi.OpClientsHello, wireapi.HelloInput{}); resp.Error == "" {
+		t.Error("hello for a retired/unknown identity must be rejected")
 	}
 }

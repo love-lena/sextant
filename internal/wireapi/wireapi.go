@@ -77,6 +77,8 @@ const (
 	OpArtifactDelete   = "artifact.delete"
 	OpArtifactWatch    = "artifact.watch"
 	OpClientsList      = "clients.list"
+	OpClientsRegister  = "clients.register"
+	OpClientsRetire    = "clients.retire"
 )
 
 // OpSubscriptionStop is the internal control op that ends a push-stream
@@ -86,20 +88,31 @@ const (
 // server-side relay it started.
 const OpSubscriptionStop = "subscription.stop"
 
-// OpClientsRegister and OpClientsDeregister are the connect-handshake ops — the
-// write half of the clients directory (clients.list is the read half). A client
-// registers itself by calling clients.register, and the bus validates that call
-// like any other: it keys the record by the caller's authenticated id (never the
-// body), so a client can only ever register *as itself*. They are control ops,
-// not user-invoked protocol operations (not in methods.json, no CLI/MCP surface) —
-// the SDK issues them automatically on Connect and Close — but they are
-// first-class, bus-validated requests, not a side channel. Folding the epoch
-// hard-gate into register keeps the handshake one round-trip: register returns
-// the bus's epoch (the SDK gates on it) and the bus-stamped connected_at (the SDK
-// clock-skew-checks against it).
+// OpClientsHello is the internal connect-handshake op (ADR-0020). It is bus
+// plumbing, not one of the protocol's operations (not in methods.json, no
+// CLI/MCP surface): the SDK calls it once on Connect to confirm the caller is a
+// known (issued, not retired) identity and to fold the protocol-epoch hard-gate
+// into one round-trip — it returns the bus epoch (the SDK exact-matches) and the
+// bus-stamped server time (the SDK clock-skew-checks). Presence is NOT asserted
+// here: the bus derives online/offline from the live connection, so connecting
+// (and disconnecting) needs no registry write at all.
+const OpClientsHello = "clients.hello"
+
+// OperatorID and EnrollID are the two reserved infrastructure identities that
+// authorize the issuance path (ADR-0020). They are not minted client ULIDs and
+// never appear in the clients directory; they exist only to satisfy
+// clients.register's "you must already be someone" exception:
+//   - OperatorID — the human operator at the terminal. `sextant up` provisions
+//     its credential in the store (held-identity mode: mint for another, and
+//     retire).
+//   - EnrollID — the bootstrap/enrollment identity. `sextant up` provisions its
+//     credential too; a local process reads it (locality trust) to self-enroll.
+//
+// The bus authorizes clients.register from either, and clients.retire from the
+// operator only; a regular client (a ULID) may call neither.
 const (
-	OpClientsRegister   = "clients.register"
-	OpClientsDeregister = "clients.deregister"
+	OperatorID = "operator"
+	EnrollID   = "enroll"
 )
 
 // DrainSubID is the reserved sub-id for the cooperative-drain delivery on a
@@ -220,16 +233,31 @@ type ClientsListOutput struct {
 	Clients []ClientEntry `json:"clients"`
 }
 
-// ClientEntry is one registry record (matches the sx_clients record shape). ID
-// is the bus-minted ULID; DisplayName is the human label.
+// ClientEntry is one entry in the clients directory (ADR-0020). At rest it is the
+// durable identity record the bus persists in sx_clients, written once at
+// issuance (clients.register) and removed only by retire — it survives disconnect
+// and bus restart. In a clients.list reply it carries, in addition, the derived
+// Presence ("online"/"offline"), which the bus computes from the live connection
+// rather than from any stored field. ID is the bus-minted ULID; Subject is the
+// authenticated public key the bus joins against the live connection table for
+// presence (internal — omitted from list replies); IssuedAt is when the identity
+// was minted.
 type ClientEntry struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"display_name"`
 	Kind        string `json:"kind"`
 	Epoch       int    `json:"epoch"`
-	SDK         string `json:"sdk"`
-	ConnectedAt string `json:"connected_at"`
+	SDK         string `json:"sdk,omitempty"`
+	IssuedAt    string `json:"issued_at"`
+	Subject     string `json:"subject,omitempty"`
+	Presence    string `json:"presence,omitempty"`
 }
+
+// Presence values for ClientEntry.Presence.
+const (
+	PresenceOnline  = "online"
+	PresenceOffline = "offline"
+)
 
 // --- message.subscribe (push-stream over sx.deliver.<id>.<sub_id>) ---
 
@@ -294,26 +322,46 @@ type SubscriptionStopInput struct {
 	SubID string `json:"sub_id"`
 }
 
-// --- clients.register / clients.deregister (connect handshake) ---
+// --- clients.register (issuance) ---
 
-// RegisterInput carries the client's self-declared directory fields. The id is
-// the call's subject token (the bus stamps it as the record key), not the body,
-// so a client cannot register under an identity it did not authenticate as.
+// RegisterInput is the issuance request (ADR-0020). The caller asks the bus to
+// mint a NEW identity (it does not name itself — the id is generated by the bus):
+// DisplayName is the human label to carry in the credential and record, Kind is
+// what the new client is. The authorization (held-identity vs bootstrap/
+// enrollment) is the caller's reserved id, not a field here.
 type RegisterInput struct {
 	DisplayName string `json:"display_name"`
 	Kind        string `json:"kind"`
-	Epoch       int    `json:"epoch"`
-	SDK         string `json:"sdk"`
 }
 
-// RegisterOutput returns the bus's protocol epoch (the SDK hard-gates on it) and
-// the bus-stamped connected_at (the SDK clock-skew-checks against it). The bus
-// registers the client only if its epoch matches; an incompatible client still
-// gets the epoch back so the SDK can fail loud without ever entering the directory.
+// RegisterOutput returns the freshly minted identity: its bus-generated ULID id
+// and its NATS credential (JWT+seed). The credential is secret material, so the
+// reply rides the caller's own connection (per-client inbox). The caller writes
+// the credential to a file and hands it to the new client.
 type RegisterOutput struct {
-	BusEpoch    int    `json:"bus_epoch"`
-	ConnectedAt string `json:"connected_at"`
+	ID    string `json:"id"`
+	Creds string `json:"creds"`
 }
 
-// DeregisterInput leaves the directory; the id is the call's subject token.
-type DeregisterInput struct{}
+// --- clients.retire (decommission) ---
+
+// RetireInput decommissions the identity named by ID for good (operator-only).
+// Distinct from a disconnect, which only drops presence to offline.
+type RetireInput struct {
+	ID string `json:"id"`
+}
+
+// --- clients.hello (connect handshake) ---
+
+// HelloInput carries no fields: the caller is identified by the call's subject
+// token (its authenticated id).
+type HelloInput struct{}
+
+// HelloOutput returns the bus's protocol epoch (the SDK exact-matches it, failing
+// loud on mismatch) and the bus-stamped server time (the SDK clock-skew-checks
+// against it). The handshake asserts no presence — online/offline is derived from
+// the connection itself.
+type HelloOutput struct {
+	BusEpoch   int    `json:"bus_epoch"`
+	ServerTime string `json:"server_time"`
+}

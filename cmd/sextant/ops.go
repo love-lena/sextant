@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"syscall"
 
+	"github.com/love-lena/sextant/pkg/bus"
 	"github.com/love-lena/sextant/pkg/conninfo"
 	"github.com/love-lena/sextant/pkg/sextant"
 	"github.com/love-lena/sextant/pkg/wire"
@@ -39,6 +41,8 @@ var cliOperations = map[string]string{
 	"artifact.delete":   "artifact delete",
 	"artifact.watch":    "artifact watch",
 	"clients.list":      "clients list",
+	"clients.register":  "clients register",
+	"clients.retire":    "clients retire",
 }
 
 // connFlags are the bus-connection flags shared by every operation command.
@@ -50,7 +54,7 @@ type connFlags struct {
 
 func addConnFlags(fs *flag.FlagSet) connFlags {
 	return connFlags{
-		creds: fs.String("creds", "", "client credentials file (mint with `sextant token`)"),
+		creds: fs.String("creds", "", "client credentials file (issue with `sextant clients register`)"),
 		store: fs.String("store", defaultStore(), "JetStream + key-material directory (for bus discovery)"),
 		url:   fs.String("url", "", "bus URL (default: discovery file under --store)"),
 	}
@@ -59,13 +63,12 @@ func addConnFlags(fs *flag.FlagSet) connFlags {
 // connect dials an SDK client from the connection flags. ctx governs the call.
 func (cf connFlags) connect(ctx context.Context) *sextant.Client {
 	if *cf.creds == "" {
-		fatal("--creds is required (mint one with `sextant token <display-name>`)")
+		fatal("--creds is required (issue one with `sextant clients register <name>`)")
 	}
 	c, err := sextant.Connect(ctx, sextant.Options{
 		CredsPath:    *cf.creds,
 		URL:          *cf.url,
 		ConnInfoPath: filepath.Join(*cf.store, conninfo.DefaultFile),
-		Kind:         "cli",
 		Logf:         func(string, ...any) {},
 	})
 	if err != nil {
@@ -157,14 +160,30 @@ func cmdSubscribe(args []string) {
 }
 
 func cmdClients(args []string) {
-	// Exact parity with the operation name: `clients list`.
-	if len(args) < 1 || args[0] != "list" {
-		fatal("usage: sextant clients list [--json] [--creds F] [--store DIR]")
+	if len(args) < 1 {
+		fatal("usage: sextant clients register|retire|list ...")
 	}
+	verb, rest := args[0], args[1:]
+	switch verb {
+	case "list":
+		clientsList(rest)
+	case "register":
+		clientsRegister(rest)
+	case "retire":
+		clientsRetire(rest)
+	default:
+		fatal("unknown clients verb %q (register|retire|list)", verb)
+	}
+}
+
+// clientsList prints the directory: every issued identity, online and offline
+// (ADR-0020), with its presence in the last column. Offline clients are shown by
+// default — that durable directory is the point.
+func clientsList(args []string) {
 	fs := flag.NewFlagSet("clients list", flag.ExitOnError)
 	asJSON := fs.Bool("json", false, "emit the directory as JSON")
 	cf := addConnFlags(fs)
-	_ = fs.Parse(args[1:])
+	_ = fs.Parse(args)
 
 	ctx := context.Background()
 	c := cf.connect(ctx)
@@ -178,9 +197,132 @@ func cmdClients(args []string) {
 		return
 	}
 	for _, ci := range clients {
-		fmt.Printf("%s  %-20s  %s  epoch=%d\n", ci.ID, ci.DisplayName, ci.Kind, ci.Epoch)
+		presence := "offline"
+		if ci.Online {
+			presence = "online"
+		}
+		fmt.Printf("%s  %-20s  %-10s  epoch=%d  %s\n", ci.ID, ci.DisplayName, ci.Kind, ci.Epoch, presence)
 	}
 	fmt.Fprintf(os.Stderr, "(%d clients)\n", len(clients))
+}
+
+// clientsRegister is the issuance command (ADR-0020). Two auth modes, one op:
+//   - held-identity (default): the operator mints for another — `register <name>`
+//     — connecting with the operator credential `sextant up` provisioned.
+//   - bootstrap/enrollment (--self): an identity-less local process mints for
+//     itself — `register --self` — connecting with the enrollment credential.
+//
+// The bus mints the identity and returns its credential; the CLI writes it to a
+// file and prints the path. The CLI never touches the signing keys.
+func clientsRegister(args []string) {
+	// A held-mode name may be the first positional (flags follow it; Go's flag
+	// package stops at the first non-flag). --self takes no positional.
+	var name string
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		name, args = args[0], args[1:]
+	}
+	fs := flag.NewFlagSet("clients register", flag.ExitOnError)
+	self := fs.Bool("self", false, "bootstrap/enrollment: mint an identity for this local process")
+	kind := fs.String("kind", "client", "what the new client is (e.g. worker, reviewer)")
+	nameFlag := fs.String("name", "", "display name (for --self, defaults to $USER)")
+	store := fs.String("store", defaultStore(), "bus store dir (discovery + issuer credentials)")
+	url := fs.String("url", "", "bus URL (default: discovery file under --store)")
+	out := fs.String("out", "", "write the new creds here (default: <store>/<name>.creds)")
+	_ = fs.Parse(args)
+	if *nameFlag != "" {
+		name = *nameFlag
+	}
+
+	var credsPath string
+	if *self {
+		credsPath = bus.EnrollCredsPath(*store)
+		if name == "" {
+			name = selfName()
+		}
+	} else {
+		credsPath = bus.OperatorCredsPath(*store)
+		if name == "" {
+			fatal("register needs a <name> (or use --self to enroll this process)")
+		}
+	}
+
+	ctx := context.Background()
+	iss, err := sextant.ConnectIssuer(ctx, sextant.Options{
+		CredsPath:    credsPath,
+		URL:          *url,
+		ConnInfoPath: filepath.Join(*store, conninfo.DefaultFile),
+	})
+	if err != nil {
+		fatal("connect: %v", err)
+	}
+	defer iss.Close()
+	res, err := iss.Register(ctx, name, *kind)
+	if err != nil {
+		fatal("%v", err)
+	}
+
+	path := *out
+	if path == "" {
+		path = filepath.Join(*store, name+".creds")
+	}
+	if err := os.WriteFile(path, []byte(res.Creds), 0o600); err != nil {
+		fatal("write creds: %v", err)
+	}
+	if *self {
+		fmt.Printf("enrolled as %s\n  creds: %s\n", res.ID, path)
+	} else {
+		fmt.Printf("registered %s as %s\n  creds: %s\n", name, res.ID, path)
+	}
+}
+
+// clientsRetire decommissions an identity for good (operator-only). It connects
+// with the operator credential and asks the bus to delete the identity.
+func clientsRetire(args []string) {
+	var id string
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		id, args = args[0], args[1:]
+	}
+	fs := flag.NewFlagSet("clients retire", flag.ExitOnError)
+	store := fs.String("store", defaultStore(), "bus store dir (discovery + operator credential)")
+	url := fs.String("url", "", "bus URL (default: discovery file under --store)")
+	_ = fs.Parse(args)
+	if id == "" {
+		fatal("usage: sextant clients retire <id> [--store DIR] [--url U]")
+	}
+
+	ctx := context.Background()
+	iss, err := sextant.ConnectIssuer(ctx, sextant.Options{
+		CredsPath:    bus.OperatorCredsPath(*store),
+		URL:          *url,
+		ConnInfoPath: filepath.Join(*store, conninfo.DefaultFile),
+	})
+	if err != nil {
+		fatal("connect: %v", err)
+	}
+	defer iss.Close()
+	if err := iss.Retire(ctx, id); err != nil {
+		fatal("%v", err)
+	}
+	fmt.Printf("retired %s\n", id)
+}
+
+// selfName resolves the display name for `clients register --self`. It prefers an
+// explicit env override, then the login name ($USER/$LOGNAME — the natural "who
+// enrolled" on a real shell, and what a test harness can set per process), then
+// the OS user, then the hostname.
+func selfName() string {
+	for _, env := range []string{"SEXTANT_SELF_NAME", "USER", "LOGNAME"} {
+		if v := os.Getenv(env); v != "" {
+			return v
+		}
+	}
+	if u, err := user.Current(); err == nil && u.Username != "" {
+		return u.Username
+	}
+	if h, err := os.Hostname(); err == nil && h != "" {
+		return h
+	}
+	return "self"
 }
 
 func cmdArtifact(args []string) {

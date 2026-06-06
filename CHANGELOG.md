@@ -8,6 +8,35 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Clients are bus-issued identities** (ADR-0020) — the identity half of M2.
+  - **One issuance path, two auth modes.** `clients.register` now *mints a new
+    identity* (a ULID + its credential) and persists a durable record, returning
+    the creds; the signing keys never leave the bus (key custody). It is the single
+    exception to "you must already be someone," authorized by the caller's
+    authority: a held identity (the **operator**, minting for another) or a
+    bootstrap/enrollment authorization with no pre-existing identity (the
+    **enrollment** connection tier — locality-trusted, minting for self). `sextant
+    up` provisions both reserved credentials in the store; the CLI never touches the
+    signing keys. `sextant token` is gone — there is no offline mint.
+  - **Connection-derived presence.** The bus computes online/offline first-hand
+    from its own connection table (`Connz` AuthorizedUser ≡ the record's
+    authenticated subject), not from a register/deregister call. No heartbeat, no
+    ghost-reaping; a disconnected client is legitimately offline, not stale.
+  - **Durable identity store.** The clients registry is a persisted directory of
+    issued identities that survives disconnect and bus restart. `clients.list` is
+    the join of records with live presence — it shows offline clients by default,
+    each with an `online`/`offline` column.
+  - **Three lifecycle events, not two.** *Register* mints (once); *disconnect*
+    drops presence to offline (a clean SDK `Close` no longer deregisters); *retire*
+    (`clients.retire`, operator-only) decommissions for good — removes the record
+    and drops any live connection. The connect handshake is now `clients.hello`
+    (confirms a known identity + folds the epoch hard-gate), which also makes retire
+    effective: a retired identity can no longer complete a handshake.
+  - **SDK:** new `Issuer` (`ConnectIssuer` + `Register`/`Enroll`/`Retire`) for the
+    issuance/decommission path; `ClientInfo` gains `Online` and `IssuedAt`; `Close`
+    just goes offline. **CLI:** `clients register <name>` / `register --self` /
+    `clients retire <id>`, and `clients list` gains the presence column.
+
 <<<<<<< HEAD
 - `pkg/bus`: **the per-client credential allow-list — the unforgeable author**
   (ADR-0019). Each minted credential now carries a per-client JWT allow-list

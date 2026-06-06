@@ -15,6 +15,7 @@ import (
 	"github.com/love-lena/sextant/internal/wireapi"
 	"github.com/love-lena/sextant/pkg/sx"
 	"github.com/love-lena/sextant/pkg/wire"
+	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/oklog/ulid/v2"
@@ -50,7 +51,6 @@ func (b *Bus) startServing() error {
 	b.apiSem = make(chan struct{}, apiMaxConcurrent)
 	b.relayCtx, b.relayCancel = context.WithCancel(context.Background())
 	b.relays = make(map[string]map[string]*relay)
-	b.connected = make(map[string]struct{})
 	sub, err := b.opConn.Subscribe(wireapi.WildcardSubject, func(msg *nats.Msg) {
 		// Spawn immediately so the NATS dispatcher never blocks (no head-of-line
 		// blocking), then bound concurrency by waiting for a worker slot.
@@ -125,8 +125,10 @@ func (b *Bus) dispatch(ctx context.Context, clientID, op string, data []byte) (j
 		return b.opClientsList(ctx)
 	case wireapi.OpClientsRegister:
 		return b.opClientsRegister(ctx, clientID, data)
-	case wireapi.OpClientsDeregister:
-		return b.opClientsDeregister(ctx, clientID)
+	case wireapi.OpClientsRetire:
+		return b.opClientsRetire(ctx, clientID, data)
+	case wireapi.OpClientsHello:
+		return b.opClientsHello(ctx, clientID)
 	case wireapi.OpMessageSubscribe:
 		return b.opSubscribe(clientID, data)
 	case wireapi.OpArtifactWatch:
@@ -313,10 +315,25 @@ func (b *Bus) opArtifactDelete(ctx context.Context, data []byte) (json.RawMessag
 	return json.Marshal(struct{}{})
 }
 
-// --- clients registry ---
+// --- clients registry (ADR-0020: a durable store of bus-issued identities,
+// joined at read time with connection-derived presence) ---
 
+// connzLimit bounds how many connections the presence query inspects. The MVP
+// reads a single page; far more than any single-host deployment will reach.
+const connzLimit = 4096
+
+// opClientsList is the directory read (ADR-0020): the join of the durable identity
+// records with live presence. It lists every issued identity — online and offline
+// — and stamps each with a derived presence computed from the connection table,
+// never from a stored field. Offline clients are shown by default; that durable
+// directory is the point. The authenticated subject is the internal join key and
+// is dropped from the client-facing reply.
 func (b *Bus) opClientsList(ctx context.Context) (json.RawMessage, error) {
 	keys, err := b.backend.Keys(ctx, sx.BucketClients)
+	if err != nil {
+		return nil, fmt.Errorf("bus: clients.list: %w", err)
+	}
+	online, err := b.onlineSubjects()
 	if err != nil {
 		return nil, fmt.Errorf("bus: clients.list: %w", err)
 	}
@@ -334,59 +351,160 @@ func (b *Bus) opClientsList(ctx context.Context) (json.RawMessage, error) {
 			continue // skip a corrupt entry rather than fail the listing
 		}
 		e.ID = k // the registry key is the authoritative id, not the record body
+		e.Presence = wireapi.PresenceOffline
+		if e.Subject != "" && online[e.Subject] {
+			e.Presence = wireapi.PresenceOnline
+		}
+		e.Subject = "" // internal join key — not part of the client-facing directory
 		out.Clients = append(out.Clients, e)
 	}
 	sort.Slice(out.Clients, func(i, j int) bool { return out.Clients[i].ID < out.Clients[j].ID })
 	return json.Marshal(out)
 }
 
-// opClientsRegister is the write half of the directory (the connect handshake).
-// The bus owns the record: it keys it under the call's subject token (the
-// authoritative id) and stamps connected_at with its own clock. It registers the
-// client only if its epoch matches the bus's; an incompatible client still gets
-// the bus epoch back so the SDK fails loud without ever entering the directory.
-func (b *Bus) opClientsRegister(ctx context.Context, clientID string, data []byte) (json.RawMessage, error) {
+// opClientsRegister is the issuance path (ADR-0020): the single exception to "you
+// must already be someone." The caller asks the bus to mint a NEW identity (it
+// does not name itself — the bus generates the id). The bus authorizes by the
+// caller's reserved id — OperatorID is held-identity mode (mint for another),
+// EnrollID is bootstrap/enrollment mode (mint for self) — and a regular client
+// (a ULID) may not mint at all. Either way the bus does the same thing: mint the
+// credential, persist the durable record, return the id and creds.
+func (b *Bus) opClientsRegister(ctx context.Context, callerID string, data []byte) (json.RawMessage, error) {
+	if callerID != wireapi.OperatorID && callerID != wireapi.EnrollID {
+		return nil, fmt.Errorf("bus: clients.register: caller %q is not authorized to mint identities", callerID)
+	}
 	var in wireapi.RegisterInput
 	if err := json.Unmarshal(data, &in); err != nil {
 		return nil, fmt.Errorf("bus: clients.register: bad input: %w", err)
 	}
-	busEpoch, err := b.readEpoch(ctx)
+	creds, id, err := b.MintClient(ctx, in.DisplayName, in.Kind)
 	if err != nil {
 		return nil, fmt.Errorf("bus: clients.register: %w", err)
 	}
-	connectedAt := nowRFC3339()
-	if in.Epoch == busEpoch {
-		rec, err := json.Marshal(wireapi.ClientEntry{
-			ID:          clientID,
-			DisplayName: in.DisplayName,
-			Kind:        in.Kind,
-			Epoch:       in.Epoch,
-			SDK:         in.SDK,
-			ConnectedAt: connectedAt,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("bus: clients.register: encode record: %w", err)
-		}
-		if _, err := b.backend.Put(ctx, sx.BucketClients, clientID, rec); err != nil {
-			return nil, fmt.Errorf("bus: clients.register: %w", err)
-		}
-		b.addConnected(clientID)
-	}
-	return json.Marshal(wireapi.RegisterOutput{BusEpoch: busEpoch, ConnectedAt: connectedAt})
+	return json.Marshal(wireapi.RegisterOutput{ID: id, Creds: creds})
 }
 
-// opClientsDeregister is the leave half (Close). Keyed under the caller's own
-// subject token, so a client can only remove its own entry.
-func (b *Bus) opClientsDeregister(ctx context.Context, clientID string) (json.RawMessage, error) {
-	b.removeConnected(clientID)
-	if err := b.backend.Delete(ctx, sx.BucketClients, clientID); err != nil {
-		return nil, fmt.Errorf("bus: clients.deregister: %w", err)
+// opClientsRetire decommissions an identity for good (ADR-0020): operator-only. It
+// deletes the durable record — so the identity leaves the directory — and kicks any
+// live connection for it. This is distinct from a disconnect, which only drops
+// presence to offline; retire is a deliberate end of life.
+func (b *Bus) opClientsRetire(ctx context.Context, callerID string, data []byte) (json.RawMessage, error) {
+	if callerID != wireapi.OperatorID {
+		return nil, fmt.Errorf("bus: clients.retire: only the operator may retire an identity")
+	}
+	var in wireapi.RetireInput
+	if err := json.Unmarshal(data, &in); err != nil {
+		return nil, fmt.Errorf("bus: clients.retire: bad input: %w", err)
+	}
+	if in.ID == "" {
+		return nil, errors.New("bus: clients.retire: id is required")
+	}
+	// Capture the subject before deleting, so the live connection can be kicked.
+	var subject string
+	if val, _, err := b.backend.Get(ctx, sx.BucketClients, in.ID); err == nil {
+		var e wireapi.ClientEntry
+		if json.Unmarshal(val, &e) == nil {
+			subject = e.Subject
+		}
+	}
+	if err := b.backend.Delete(ctx, sx.BucketClients, in.ID); err != nil {
+		return nil, fmt.Errorf("bus: clients.retire: %w", err)
+	}
+	if subject != "" {
+		b.disconnectSubject(subject) // best-effort: stop a retired client operating now
 	}
 	return json.Marshal(struct{}{})
 }
 
+// opClientsHello is the connect handshake (ADR-0020). A connecting client calls it
+// once to (a) confirm it is a known identity — a caller with no durable record was
+// never issued, or has been retired, and is rejected, which makes retire effective
+// even before the old credential is revoked — and (b) fold the protocol-epoch
+// hard-gate into one round-trip (it returns the bus epoch the SDK exact-matches and
+// the bus-stamped server time for the clock-skew announce). It asserts no presence:
+// online/offline is derived from the connection itself.
+func (b *Bus) opClientsHello(ctx context.Context, callerID string) (json.RawMessage, error) {
+	if _, _, err := b.backend.Get(ctx, sx.BucketClients, callerID); err != nil {
+		if errors.Is(err, backend.ErrNotFound) {
+			return nil, fmt.Errorf("bus: identity %q is not registered (or has been retired)", callerID)
+		}
+		return nil, fmt.Errorf("bus: clients.hello: %w", err)
+	}
+	epoch, err := b.readEpoch(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("bus: clients.hello: %w", err)
+	}
+	return json.Marshal(wireapi.HelloOutput{BusEpoch: epoch, ServerTime: nowRFC3339()})
+}
+
+// onlineSubjects returns the set of authenticated public keys with a live
+// connection right now — the bus's first-hand presence view from its own
+// connection table (ADR-0020). Because the bus is the embedded server, this is
+// authoritative: ConnInfo.AuthorizedUser is the JWT subject NATS verified, so a
+// client cannot spoof another's presence. A client record is online iff its
+// stored subject is in this set.
+func (b *Bus) onlineSubjects() (map[string]bool, error) {
+	// Username:true asks Connz to populate AuthorizedUser (the authenticated JWT
+	// subject); without it that field is empty and presence cannot be joined.
+	cz, err := b.ns.Connz(&natsserver.ConnzOptions{Username: true, Limit: connzLimit})
+	if err != nil {
+		return nil, fmt.Errorf("connz: %w", err)
+	}
+	set := make(map[string]bool, len(cz.Conns))
+	for _, c := range cz.Conns {
+		if c.AuthorizedUser != "" {
+			set[c.AuthorizedUser] = true
+		}
+	}
+	return set, nil
+}
+
+// onlineClientIDs returns the ids of the clients connected right now — the join of
+// the durable records with live presence — for Drain to target.
+func (b *Bus) onlineClientIDs(ctx context.Context) ([]string, error) {
+	online, err := b.onlineSubjects()
+	if err != nil {
+		return nil, err
+	}
+	keys, err := b.backend.Keys(ctx, sx.BucketClients)
+	if err != nil {
+		return nil, fmt.Errorf("clients keys: %w", err)
+	}
+	ids := make([]string, 0, len(keys))
+	for _, k := range keys {
+		val, _, err := b.backend.Get(ctx, sx.BucketClients, k)
+		if err != nil {
+			continue
+		}
+		var e wireapi.ClientEntry
+		if err := json.Unmarshal(val, &e); err != nil {
+			continue
+		}
+		if e.Subject != "" && online[e.Subject] {
+			ids = append(ids, k)
+		}
+	}
+	return ids, nil
+}
+
+// disconnectSubject best-effort closes any live connection authenticated as
+// subject, so a retire takes effect on an already-connected client. Best-effort:
+// a connection already gone, or a transient Connz error, is not a retire failure —
+// the record is deleted regardless, which removes the identity from the directory.
+func (b *Bus) disconnectSubject(subject string) {
+	cz, err := b.ns.Connz(&natsserver.ConnzOptions{Username: true, Limit: connzLimit})
+	if err != nil {
+		return
+	}
+	for _, c := range cz.Conns {
+		if c.AuthorizedUser == subject {
+			_ = b.ns.DisconnectClientByID(c.Cid)
+		}
+	}
+}
+
 // readEpoch reads the bus's protocol epoch from the public meta bucket (the value
-// bootstrap wrote). register returns it so the SDK hard-gates against it.
+// bootstrap wrote). The connect handshake returns it so the SDK hard-gates on it.
 func (b *Bus) readEpoch(ctx context.Context) (int, error) {
 	val, _, err := b.backend.Get(ctx, sx.BucketMeta, sx.MetaKeyEpoch)
 	if err != nil {
@@ -397,18 +515,6 @@ func (b *Bus) readEpoch(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("bad epoch %q: %w", val, err)
 	}
 	return n, nil
-}
-
-func (b *Bus) addConnected(id string) {
-	b.connectedMu.Lock()
-	b.connected[id] = struct{}{}
-	b.connectedMu.Unlock()
-}
-
-func (b *Bus) removeConnected(id string) {
-	b.connectedMu.Lock()
-	delete(b.connected, id)
-	b.connectedMu.Unlock()
 }
 
 func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339) }

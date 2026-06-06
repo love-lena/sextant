@@ -56,33 +56,6 @@ func loadOrCreateIdentity(storeDir string) (*identity, error) {
 	return &identity{op: op, acc: acc, sys: sys}, nil
 }
 
-// loadIdentity loads an existing identity, returning an error (never creating)
-// when the store has no key material. Used by `sextant token`, so a wrong or
-// empty --store fails clearly instead of minting a mismatched identity.
-func loadIdentity(storeDir string) (*identity, error) {
-	dir := keysDir(storeDir)
-	op, err := loadSeed(filepath.Join(dir, "operator.nk"))
-	if err != nil {
-		return nil, identityErr(storeDir, err)
-	}
-	acc, err := loadSeed(filepath.Join(dir, "account.nk"))
-	if err != nil {
-		return nil, identityErr(storeDir, err)
-	}
-	sys, err := loadSeed(filepath.Join(dir, "system.nk"))
-	if err != nil {
-		return nil, identityErr(storeDir, err)
-	}
-	return &identity{op: op, acc: acc, sys: sys}, nil
-}
-
-func identityErr(storeDir string, err error) error {
-	if errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("bus: no bus identity under %s — run `sextant up` there first", storeDir)
-	}
-	return err
-}
-
 // ensureKeysDir creates the keys dir (0700) and verifies it isn't accessible to
 // other users.
 func ensureKeysDir(storeDir string) (string, error) {
@@ -348,36 +321,93 @@ func credsFile(userJWT, seed string) (string, error) {
 	return string(b), nil
 }
 
-// MintClientToken mints a client-tier credentials file for a client whose
-// human display_name is given, loading the account signing key from the store.
-// The bus mints the client's primary id — a ULID — so every client identity is
-// bus-owned and unforgeable (ADR-0019); the display_name is carried as a JWT tag.
-// It returns the creds file and the minted ULID id. This is what `sextant token`
-// calls; it requires an existing identity (it never creates one) so a wrong
-// --store fails clearly rather than minting a mismatched credential.
-func MintClientToken(storeDir, displayName string) (creds, id string, err error) {
+// mintIdentity mints a new client credential — a fresh ULID id and its per-client
+// allow-list credential — using the bus's own signing keys (b.ident). The keys
+// never leave the bus, so the bus is the sole minter (key custody, ADR-0020). It
+// records the issued id + authenticated subject in the durable ledger and returns
+// the creds text, the id, and the subject (the authenticated public key, which
+// presence joins against the live connection table). It does NOT persist the
+// registry record — MintClient does, so issuance is one atomic act.
+func (b *Bus) mintIdentity(displayName string) (creds, id, subject string, err error) {
 	if err := validateDisplayName(displayName); err != nil {
-		return "", "", err
-	}
-	ident, err := loadIdentity(storeDir)
-	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	id = ulid.Make().String()
-	j, seed, subject, err := ident.mintUser(id, clientPermissions(id), wireapi.EncodeDisplayNameTag(displayName))
+	j, seed, subject, err := b.ident.mintUser(id, clientPermissions(id), wireapi.EncodeDisplayNameTag(displayName))
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	// Record the issued id (and the authenticated subject) for audit. The id is a
 	// fresh ULID, so this never collides; the ledger is a durable issuance trail.
-	if err := reserveName(storeDir, id, subject); err != nil {
-		return "", "", err
+	if err := reserveName(b.store, id, subject); err != nil {
+		return "", "", "", err
 	}
 	c, err := credsFile(j, seed)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	return c, id, nil
+	return c, id, subject, nil
+}
+
+// OperatorCredsPath and EnrollCredsPath are the two reserved infra-credential
+// files `sextant up` provisions in the store (ADR-0020). They are minted
+// credentials, not signing keys — the keys stay in the bus. Locality is the trust:
+// a process that can read these files is on the operator's machine.
+func OperatorCredsPath(storeDir string) string { return filepath.Join(storeDir, "operator.creds") }
+func EnrollCredsPath(storeDir string) string   { return filepath.Join(storeDir, "enroll.creds") }
+
+// operatorCredPermissions is the held-identity authority (ADR-0020): the operator
+// may call any Wire API op under its own reserved prefix — issuance
+// (clients.register), retire, clients.list — and receive replies on its own inbox.
+func operatorCredPermissions() jwt.Permissions {
+	var p jwt.Permissions
+	p.Pub.Allow = []string{wireapi.APIPrefix + wireapi.OperatorID + ".>"}
+	p.Sub.Allow = []string{
+		wireapi.DeliverPrefix + wireapi.OperatorID + ".>",
+		wireapi.InboxPrefix(wireapi.OperatorID) + ".>",
+	}
+	return p
+}
+
+// enrollCredPermissions is the bootstrap/enrollment authority (ADR-0020): the
+// tightest possible allow-list. The enrollment identity may ONLY call
+// clients.register (to self-enroll) and receive that one reply — it cannot publish
+// messages, retire, or even read the directory. This is the enrollment connection
+// tier: how an identity-less local process reaches the issuance path at all.
+func enrollCredPermissions() jwt.Permissions {
+	var p jwt.Permissions
+	p.Pub.Allow = []string{wireapi.CallSubject(wireapi.EnrollID, wireapi.OpClientsRegister)}
+	p.Sub.Allow = []string{wireapi.InboxPrefix(wireapi.EnrollID) + ".>"}
+	return p
+}
+
+// provisionInfraCreds mints the operator and enrollment credentials and writes
+// them into the store (ADR-0020). Called once at Start; idempotent in effect (it
+// overwrites with a freshly minted credential each boot — the identities are
+// reserved names, not durable records). Both files are owner-only.
+func (b *Bus) provisionInfraCreds() error {
+	infra := []struct {
+		id    string
+		perms jwt.Permissions
+		path  string
+	}{
+		{wireapi.OperatorID, operatorCredPermissions(), OperatorCredsPath(b.store)},
+		{wireapi.EnrollID, enrollCredPermissions(), EnrollCredsPath(b.store)},
+	}
+	for _, in := range infra {
+		j, seed, _, err := b.ident.mintUser(in.id, in.perms)
+		if err != nil {
+			return fmt.Errorf("bus: provision %s credential: %w", in.id, err)
+		}
+		c, err := credsFile(j, seed)
+		if err != nil {
+			return fmt.Errorf("bus: provision %s credential: %w", in.id, err)
+		}
+		if err := os.WriteFile(in.path, []byte(c), 0o600); err != nil {
+			return fmt.Errorf("bus: write %s credential %s: %w", in.id, in.path, err)
+		}
+	}
+	return nil
 }
 
 // serverAuthOptions sets the JWT auth fields on opts and returns the in-memory

@@ -7,52 +7,51 @@ import (
 	"github.com/love-lena/sextant/internal/wireapi"
 )
 
-// ClientInfo is one entry in the clients registry: a client that is connected
-// right now. The registry is a presence-only, self-maintained directory — each
-// client writes its own entry on Connect and removes it on Close (ADR-0004,
-// ADR-0008). "Listed" therefore means "registered and has not cleanly left": a
-// client that crashes without Close leaves a stale entry until read-time
-// liveness and stale-entry reaping land (TASK-20). There is no heartbeat in M1.
+// ClientInfo is one entry in the clients directory (ADR-0020): a bus-issued
+// identity and whether it is connected right now. The directory is a durable
+// store of issued identities joined with live presence — an identity is listed
+// whether it is online or offline, from the moment it is issued
+// (`sextant clients register`) until it is retired (`sextant clients retire`).
+// Disconnecting does not remove it; it only flips Presence to offline.
 type ClientInfo struct {
 	// ID is the client's verified identity — the bus-minted ULID in its
 	// credential, which is both its registry key and its frame author. The bus
 	// sources it from the registry key (the authoritative locator).
 	ID string
-	// DisplayName is the human-readable label minted with the credential
-	// (`sextant token <display-name>`). Unique by convention, not by the bus.
+	// DisplayName is the human-readable label minted with the credential. Unique
+	// by convention, not by the bus.
 	DisplayName string
-	// Kind is what the client is (e.g. "harness", "coordinator"), self-declared
-	// at connect via Options.Kind.
+	// Kind is what the client is (e.g. "worker", "reviewer"), declared at issuance.
 	Kind string
-	// Epoch is the protocol epoch the client connected under.
+	// Epoch is the protocol epoch the identity was issued under.
 	Epoch int
-	// SDK is the SDK version that wrote the entry.
-	SDK string
-	// ConnectedAt is when the client registered, by its own UTC clock. (The
-	// bus-authoritative stamp is what TASK-20 liveness will age against; this
-	// self-reported time is the lean M1 field.)
-	ConnectedAt time.Time
+	// Online is the bus-derived presence: true iff an authenticated connection for
+	// this identity exists right now. The bus computes it from the live connection
+	// table, not from any stored field (ADR-0020) — there is no heartbeat.
+	Online bool
+	// IssuedAt is when the bus minted the identity (its UTC clock).
+	IssuedAt time.Time
 }
 
-// The registry record shape (the JSON stored under each id in sx_clients) is now
-// bus-owned: the bus writes it on clients.register and the SDK reads it back via
-// clients.list as a wireapi.ClientEntry. The id↔key identity invariant the SDK
-// used to guard is now structural — the bus keys every record under the call's
-// authenticated subject token, so the body id cannot diverge from the key.
-
-// ListClients returns the registry directory: every client connected right now,
-// sorted by id, via the clients.list operation (the bus reads the registry and
-// sources each id from its authoritative key). The directory is presence-only —
-// an entry means the client registered and has not cleanly left (see ClientInfo).
-// An empty directory is an empty slice, not an error.
+// ListClients returns the clients directory: every issued identity — online and
+// offline — sorted by id, via the clients.list operation. The bus reads the
+// durable records and stamps each with a presence derived from the live
+// connection (ADR-0020). An empty directory is an empty slice, not an error.
 func (c *Client) ListClients(ctx context.Context) ([]ClientInfo, error) {
+	return listClients(ctx, c.call)
+}
+
+// listClients is the shared implementation behind Client.ListClients and
+// Issuer.ListClients — both make the same clients.list call, differing only in
+// which connection (and thus which call subject) carries it.
+func listClients(ctx context.Context, call callFunc) ([]ClientInfo, error) {
 	var out wireapi.ClientsListOutput
-	if err := c.call(ctx, wireapi.OpClientsList, struct{}{}, &out); err != nil {
+	if err := call(ctx, wireapi.OpClientsList, struct{}{}, &out); err != nil {
 		return nil, err
 	}
 	infos := make([]ClientInfo, 0, len(out.Clients))
 	for _, e := range out.Clients {
-		t, err := time.Parse(time.RFC3339, e.ConnectedAt)
+		t, err := time.Parse(time.RFC3339, e.IssuedAt)
 		if err != nil {
 			continue // the bus owns these records; skip one with a bad timestamp
 		}
@@ -61,9 +60,13 @@ func (c *Client) ListClients(ctx context.Context) ([]ClientInfo, error) {
 			DisplayName: e.DisplayName,
 			Kind:        e.Kind,
 			Epoch:       e.Epoch,
-			SDK:         e.SDK,
-			ConnectedAt: t,
+			Online:      e.Presence == wireapi.PresenceOnline,
+			IssuedAt:    t,
 		})
 	}
 	return infos, nil
 }
+
+// callFunc is the signature of the SDK's Wire API call method, shared by Client
+// and Issuer so directory reads have one implementation.
+type callFunc func(ctx context.Context, op string, in, out any) error

@@ -1,20 +1,21 @@
 // Package sextant is the Go SDK — the library you build a client with.
 //
-// Connect performs the connect handshake (ADR-0008, ADR-0010): authenticate
-// with this client's own credential, hard-gate on the protocol epoch, register
-// in the clients registry, and announce a soft warning if the local clock is
-// far from the bus. A dropped connection alone never ends the client — the SDK
-// reconnects; only an explicit drain does. The default drain behavior signals
-// Drained(); the client's owner blocks on it and returns. (ADR-0010 frames the
-// SDK as "ending the client" on drain; v1 implements that as a signal +
-// best-effort registry-leave rather than calling os.Exit from a library —
-// flagged for review.)
+// Connect performs the connect handshake (ADR-0008, ADR-0010, ADR-0020):
+// authenticate with this client's own credential, confirm the identity is known
+// (issued, not retired) and hard-gate on the protocol epoch via clients.hello,
+// and announce a soft warning if the local clock is far from the bus. It writes
+// no registry entry — presence is derived from the connection itself — so a
+// dropped connection alone never ends the client (the SDK reconnects; only an
+// explicit drain does), and a clean Close just goes offline without retiring. The
+// default drain behavior signals Drained(); the client's owner blocks on it and
+// returns. (ADR-0010 frames the SDK as "ending the client" on drain; v1
+// implements that as a signal rather than calling os.Exit from a library.)
 //
-// Identity (ADR-0012): every client connects as its own verified identity,
-// minted out-of-band by `sextant token <id>` into a credentials file. The SDK
-// does not invent identities — the client id (its registry key and, later, its
-// envelope sender) is read from the credential itself, so what a client claims
-// to be and what the bus authenticated it as cannot diverge.
+// Identity (ADR-0012, ADR-0020): every client connects as its own verified
+// identity, issued by the bus (`sextant clients register`) into a credentials
+// file. The SDK does not invent identities — the client id (its registry key and
+// frame author) is read from the credential itself, so what a client claims to be
+// and what the bus authenticated it as cannot diverge.
 package sextant
 
 import (
@@ -33,15 +34,11 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// sdkVersion is recorded in the registry record. (A real version surface comes
-// later; see the versioning ADR.)
-const sdkVersion = "0.0.0-dev"
-
 // Options configures Connect.
 type Options struct {
 	// CredsPath is this client's NATS credentials file — its verified identity,
-	// minted out-of-band by `sextant token <id>`. Required. The client's id
-	// (registry key and envelope sender) is the identity inside it.
+	// issued by the bus (`sextant clients register`). Required. The client's id
+	// (registry key and frame author) is the identity inside it.
 	CredsPath string
 
 	// URL is the bus address. If empty, it is read from ConnInfoPath.
@@ -50,21 +47,19 @@ type Options struct {
 	// is not set explicitly.
 	ConnInfoPath string
 
-	// Kind is what this client is (e.g. "harness", "coordinator"), recorded in
-	// the registry. Default "client".
-	Kind string
 	// SkewTolerance overrides the clock-skew announce threshold.
 	SkewTolerance time.Duration
 	// Logf receives announcements; defaults to log.Printf.
 	Logf func(string, ...any)
 }
 
-// Client is a connected Sextant client.
+// Client is a connected Sextant client. Its kind is a property of the identity,
+// set at issuance (`sextant clients register --kind`), not at connect — so a
+// connecting client carries no kind of its own.
 type Client struct {
 	nc          *nats.Conn
 	id          string
 	displayName string
-	kind        string
 	skewTol     time.Duration
 	logf        func(string, ...any)
 
@@ -73,12 +68,12 @@ type Client struct {
 }
 
 // Connect dials the bus and runs the connect handshake. ctx governs the
-// post-dial handshake (epoch read, registry write, drain-subscription flush);
-// the dial itself uses the NATS client's own connect timeout, as nats.Connect
-// has no context-aware form.
+// post-dial handshake (clients.hello, drain-subscription flush); the dial itself
+// uses the NATS client's own connect timeout, as nats.Connect has no
+// context-aware form.
 func Connect(ctx context.Context, opts Options) (*Client, error) {
 	if opts.CredsPath == "" {
-		return nil, errors.New("sextant: no credentials (set Options.CredsPath; mint one with `sextant token <id>`)")
+		return nil, errors.New("sextant: no credentials (set Options.CredsPath; issue one with `sextant clients register <name>`)")
 	}
 	url := opts.URL
 	if url == "" && opts.ConnInfoPath != "" {
@@ -99,10 +94,6 @@ func Connect(ctx context.Context, opts Options) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	kind := opts.Kind
-	if kind == "" {
-		kind = "client"
-	}
 	tol := opts.SkewTolerance
 	if tol == 0 {
 		tol = wire.SkewTolerance
@@ -112,7 +103,7 @@ func Connect(ctx context.Context, opts Options) (*Client, error) {
 		logf = log.Printf
 	}
 
-	c := &Client{id: id, displayName: displayName, kind: kind, skewTol: tol, logf: logf, drained: make(chan struct{})}
+	c := &Client{id: id, displayName: displayName, skewTol: tol, logf: logf, drained: make(chan struct{})}
 
 	nc, err := nats.Connect(
 		url,
@@ -139,10 +130,10 @@ func Connect(ctx context.Context, opts Options) (*Client, error) {
 	}
 	c.nc = nc
 
-	// The connect handshake runs entirely through Wire API calls: register folds
-	// the protocol-epoch hard-gate, and watchDrain sets up the drain subscription.
-	// The SDK never touches the backend directly (ADR-0019).
-	if err := c.register(ctx, tol); err != nil {
+	// The connect handshake runs entirely through Wire API calls: hello confirms
+	// the identity and folds the protocol-epoch hard-gate, and watchDrain sets up
+	// the drain subscription. The SDK never touches the backend directly (ADR-0019).
+	if err := c.hello(ctx, tol); err != nil {
 		nc.Close()
 		return nil, err
 	}
@@ -184,26 +175,22 @@ func identityFromCreds(path string) (id, displayName string, err error) {
 	return uc.Name, displayName, nil
 }
 
-// register is the write half of the clients directory: a clients.register call
-// that has the bus file this client's entry — keyed by its authenticated id and
-// stamped with the bus clock. The call folds the protocol-epoch hard-gate: it
-// returns the bus epoch, which the SDK exact-matches (mismatch fails loud,
-// ADR-0010), and the bus-stamped connected_at, which the SDK clock-skew-checks
-// (a soft announce, not a gate). The entry is removed again by Close.
-func (c *Client) register(ctx context.Context, tol time.Duration) error {
-	var out wireapi.RegisterOutput
-	if err := c.call(ctx, wireapi.OpClientsRegister, wireapi.RegisterInput{
-		DisplayName: c.displayName,
-		Kind:        c.kind,
-		Epoch:       wire.Epoch,
-		SDK:         sdkVersion,
-	}, &out); err != nil {
+// hello is the connect handshake (ADR-0020): a single clients.hello call that
+// confirms this client is a known (issued, not retired) identity and folds the
+// protocol-epoch hard-gate into one round-trip. The bus returns its epoch, which
+// the SDK exact-matches (mismatch fails loud, ADR-0010), and the bus-stamped
+// server time, which the SDK clock-skew-checks (a soft announce, not a gate). It
+// writes nothing: presence is derived from this connection, so there is no
+// registry entry to create here and none to remove on Close.
+func (c *Client) hello(ctx context.Context, tol time.Duration) error {
+	var out wireapi.HelloOutput
+	if err := c.call(ctx, wireapi.OpClientsHello, wireapi.HelloInput{}, &out); err != nil {
 		return err
 	}
 	if err := wire.CheckEpoch(wire.Epoch, out.BusEpoch); err != nil {
 		return fmt.Errorf("%w (rebuild the client against the bus's protocol)", err)
 	}
-	if t, perr := time.Parse(time.RFC3339, out.ConnectedAt); perr == nil {
+	if t, perr := time.Parse(time.RFC3339, out.ServerTime); perr == nil {
 		if skew := clockSkew(time.Now(), t); skew.Abs() > tol {
 			c.logf("sextant: clock skew %s vs the bus exceeds %s; messages may be rejected — sync NTP", skew, tol)
 		}
@@ -244,12 +231,11 @@ func (c *Client) ID() string { return c.id }
 // It may be empty for a credential minted without one.
 func (c *Client) DisplayName() string { return c.displayName }
 
-// Close leaves the clients directory (a best-effort clients.deregister call) and
-// closes the connection.
+// Close closes the connection. It does NOT retire the identity (ADR-0020): a
+// clean close just drops presence to offline — the durable identity persists, so
+// the same client can reconnect later under the same id. Decommissioning for good
+// is an explicit operator `clients retire`, never an implicit consequence of Close.
 func (c *Client) Close() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = c.call(ctx, wireapi.OpClientsDeregister, wireapi.DeregisterInput{}, nil) // best-effort leave
 	c.nc.Close()
 	return nil
 }

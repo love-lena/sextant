@@ -148,25 +148,30 @@ func TestServeArtifactLifecycle(t *testing.T) {
 func TestServeClientsList(t *testing.T) {
 	b := startTestBus(t)
 	nc, id := connectClient(t, b, "lister")
-	// Inject a registry record via the backend (the SDK writes these on Connect;
-	// here we exercise the listing operation directly).
+	// Seed a durable identity record directly via the backend (no live connection),
+	// to exercise the listing + presence join: it must appear, and be offline (no
+	// connection authenticates as its subject).
 	rec, _ := json.Marshal(wireapi.ClientEntry{
-		ID: "ghost", Kind: "harness", Epoch: wire.Epoch, SDK: "test",
-		ConnectedAt: time.Now().UTC().Format(time.RFC3339),
+		ID: "ghost", Kind: "harness", Epoch: wire.Epoch,
+		Subject:  "UGHOSTSUBJECTKEY",
+		IssuedAt: time.Now().UTC().Format(time.RFC3339),
 	})
 	if _, err := b.backend.Put(t.Context(), sx.BucketClients, "ghost", rec); err != nil {
 		t.Fatalf("seed registry: %v", err)
 	}
 	var out wireapi.ClientsListOutput
 	mustJSON(t, call(t, nc, id, wireapi.OpClientsList, struct{}{}).Result, &out)
-	found := false
-	for _, c := range out.Clients {
-		if c.ID == "ghost" && c.Kind == "harness" {
-			found = true
+	var ghost *wireapi.ClientEntry
+	for i := range out.Clients {
+		if out.Clients[i].ID == "ghost" {
+			ghost = &out.Clients[i]
 		}
 	}
-	if !found {
+	if ghost == nil || ghost.Kind != "harness" {
 		t.Fatalf("clients.list did not return the seeded entry: %+v", out.Clients)
+	}
+	if ghost.Presence != wireapi.PresenceOffline {
+		t.Errorf("seeded ghost (no connection) should be offline, got %q", ghost.Presence)
 	}
 }
 

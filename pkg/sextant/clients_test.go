@@ -8,17 +8,18 @@ import (
 	"github.com/love-lena/sextant/pkg/wire"
 )
 
-// dialOpts dials a client with caller-supplied Options (URL, creds, and a quiet
-// logger are filled in), so registry-record fields beyond the id — like Kind —
-// can be exercised.
-func dialOpts(t *testing.T, b *bus.Bus, id string, opts Options) *Client {
+// dialKind issues a client with a specific kind (kind is an issuance-time
+// attribute, ADR-0020) and connects it.
+func dialKind(t *testing.T, b *bus.Bus, name, kind string) *Client {
 	t.Helper()
-	opts.URL = b.ClientURL()
-	opts.CredsPath = credsPath(t, b, id)
-	opts.Logf = func(string, ...any) {}
-	c, err := Connect(t.Context(), opts)
+	creds, _, err := b.MintClient(t.Context(), name, kind)
 	if err != nil {
-		t.Fatalf("Connect(%s): %v", id, err)
+		t.Fatalf("MintClient(%s): %v", name, err)
+	}
+	path := writeCreds(t, creds)
+	c, err := Connect(t.Context(), Options{URL: b.ClientURL(), CredsPath: path, Logf: func(string, ...any) {}})
+	if err != nil {
+		t.Fatalf("Connect(%s): %v", name, err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
 	return c
@@ -26,10 +27,10 @@ func dialOpts(t *testing.T, b *bus.Bus, id string, opts Options) *Client {
 
 func TestListClients(t *testing.T) {
 	b := startBus(t)
-	// alpha is a plain client (default kind); beta declares a kind. Names are
-	// chosen so the expected sort order is [alpha, beta].
-	alpha := dialClient(t, b, "c-alpha")
-	dialOpts(t, b, "c-beta", Options{Kind: "coordinator"})
+	// Names are chosen so the expected sort order is [alpha, beta]; kind is set at
+	// issuance, so beta is minted as a coordinator.
+	alpha := dialClient(t, b, "c-alpha") // credsPath mints it with kind "test"
+	dialKind(t, b, "c-beta", "coordinator")
 
 	got, err := alpha.ListClients(t.Context())
 	if err != nil {
@@ -38,7 +39,6 @@ func TestListClients(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("ListClients returned %d clients, want 2: %+v", len(got), got)
 	}
-	// The primary id is a bus-minted ULID; look clients up by display_name.
 	byName := make(map[string]ClientInfo, len(got))
 	for _, ci := range got {
 		byName[ci.DisplayName] = ci
@@ -47,12 +47,11 @@ func TestListClients(t *testing.T) {
 	if !ok {
 		t.Fatalf("c-alpha not in directory: %+v", got)
 	}
-	// The directory includes the caller itself (alpha), with the default kind.
-	if alphaInfo.Kind != "client" {
-		t.Errorf("alpha kind = %q, want default %q", alphaInfo.Kind, "client")
+	if !alphaInfo.Online {
+		t.Errorf("connected alpha should be online: %+v", alphaInfo)
 	}
 
-	// beta's record carries the fields it registered with.
+	// beta's record carries the kind it was issued with.
 	bt, ok := byName["c-beta"]
 	if !ok {
 		t.Fatalf("c-beta not in directory: %+v", got)
@@ -63,11 +62,8 @@ func TestListClients(t *testing.T) {
 	if bt.Epoch != wire.Epoch {
 		t.Errorf("beta epoch = %d, want %d", bt.Epoch, wire.Epoch)
 	}
-	if bt.SDK != sdkVersion {
-		t.Errorf("beta sdk = %q, want %q", bt.SDK, sdkVersion)
-	}
-	if bt.ConnectedAt.IsZero() || time.Since(bt.ConnectedAt) > time.Minute {
-		t.Errorf("beta connected_at = %v, want a recent non-zero time", bt.ConnectedAt)
+	if bt.IssuedAt.IsZero() || time.Since(bt.IssuedAt) > time.Minute {
+		t.Errorf("beta issued_at = %v, want a recent non-zero time", bt.IssuedAt)
 	}
 	// IDs are bus-minted ULIDs: non-empty and distinct.
 	if alphaInfo.ID == "" || alphaInfo.ID == bt.ID {
@@ -75,26 +71,30 @@ func TestListClients(t *testing.T) {
 	}
 }
 
-// TestListClientsReflectsDeregister proves "listed = registered and hasn't
-// cleanly left": a client that Closes drops out of the directory (deletes are
-// filtered, not surfaced as ghost entries).
-func TestListClientsReflectsDeregister(t *testing.T) {
+// TestListClientsReflectsPresence proves the ADR-0020 directory: a client that
+// Closes stays listed (the identity is durable) but flips to offline — it is not
+// removed. Removal is retire, not disconnect.
+func TestListClientsReflectsPresence(t *testing.T) {
 	b := startBus(t)
 	alpha := dialClient(t, b, "c-alpha")
 	beta := dialClient(t, b, "c-beta")
+	betaID := beta.ID()
 
+	waitPresence(t, alpha, betaID, true)
 	if got, err := alpha.ListClients(t.Context()); err != nil || len(got) != 2 {
 		t.Fatalf("before leave: got %d (err %v), want 2", len(got), err)
 	}
 	if err := beta.Close(); err != nil {
 		t.Fatalf("beta.Close: %v", err)
 	}
+	waitPresence(t, alpha, betaID, false) // offline, but still listed
+
 	got, err := alpha.ListClients(t.Context())
 	if err != nil {
 		t.Fatalf("ListClients after leave: %v", err)
 	}
-	if len(got) != 1 || got[0].DisplayName != "c-alpha" {
-		t.Fatalf("after beta left: %+v, want only c-alpha", got)
+	if len(got) != 2 {
+		t.Fatalf("after beta closed both identities should remain listed: %+v", got)
 	}
 }
 

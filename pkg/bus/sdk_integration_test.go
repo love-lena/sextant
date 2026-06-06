@@ -52,7 +52,7 @@ func readCtx(t *testing.T) context.Context {
 // to a temp file, returning the path.
 func credsPath(t *testing.T, b *bus.Bus, name string) string {
 	t.Helper()
-	creds, _, err := b.MintClient(name)
+	creds, _, err := b.MintClient(t.Context(), name, "test")
 	if err != nil {
 		t.Fatalf("MintClient(%s): %v", name, err)
 	}
@@ -135,7 +135,7 @@ func TestListClientsSkipsCorruptRecords(t *testing.T) {
 	c := dialClient(t, b, "c-real")
 	corrupt := map[string]string{
 		"c-badjson": "not json at all",
-		"c-badtime": `{"id":"c-badtime","kind":"x","epoch":1,"sdk":"y","connected_at":"not-a-time"}`,
+		"c-badtime": `{"id":"c-badtime","kind":"x","epoch":1,"issued_at":"not-a-time"}`,
 	}
 	for key, value := range corrupt {
 		if err := b.SeedClientRecord(readCtx(t), key, []byte(value)); err != nil {
