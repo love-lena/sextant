@@ -12,9 +12,10 @@ two clients in two panes (alice, bob) over one bus, render the GIF. The transcri
 here is what the panes show.
 
 > **Status:** RED until ADR-0020 + the stack land. Not wired into the green CI gate
-> yet; it becomes PR8's DoD e2e. Lines marked **[PROPOSED]** pin a CLI/output
-> surface ADR-0020 does not specify — they are this spec's design proposal, for
-> review. Everything else is grounded in the existing CLI (#82).
+> yet; it becomes PR8's DoD e2e. The CLI/output surface for the new ADR-0020 parts
+> (`register`/`--self`, the presence column, `retire`) is **decided** (Lena,
+> 2026-06-05) — see "Decided" at the foot. Everything else is grounded in the
+> existing CLI (#82). This surface is now the target, not a proposal.
 
 ## Normalizations (the diff masks these before comparing)
 
@@ -42,22 +43,23 @@ sextant bus up
 ```
 **asserts:** bus is listening; discovery file written.
 
-### 1 — alice is issued by the operator; bob self-enrolls  **[PROPOSED]**
+### 1 — alice is issued by the operator; bob self-enrolls
 
 alice is minted *by the operator* (held-identity mode — the human at the terminal
 is the operator), bob *self-enrolls* on the same box (bootstrap/locality mode). Both
 are `clients.register`; the difference is only how the request is authorized
-(ADR-0020).
+(ADR-0020). **Enrollment is an explicit step** (decided) — bob runs `register
+--self`; it is *not* folded implicitly into connect.
 
 ```
 # pane: bus (operator)            — held-identity mode: mint for another
 $ sextant clients register alice --kind worker
-registered alice as <ULID:alice>            # [PROPOSED] output shape
+registered alice as <ULID:alice>
   creds: <PATH>/alice.creds
 
 # pane: bob                       — bootstrap/locality mode: mint for self
 $ sextant clients register --self --kind reviewer
-enrolled as <ULID:bob>                       # [PROPOSED]
+enrolled as <ULID:bob>
   creds: <PATH>/bob.creds
 ```
 **asserts:** two **distinct** bus-minted ULIDs (`<ULID:alice>` ≠ `<ULID:bob>`);
@@ -106,7 +108,7 @@ the-plan (revision 2)
 **asserts:** create→rev 1; bob's update→rev 2; the stale (rev 1) update is
 **rejected**; get shows rev 2 with bob as the stamped author.
 
-### 4 — the live directory shows presence  **[PROPOSED: the presence column]**
+### 4 — the live directory shows presence
 
 ```
 # pane: alice
@@ -119,7 +121,7 @@ $ sextant clients list --creds <PATH>/alice.creds
 presence is *derived from the live connection*, not from a register/deregister call
 (ADR-0020).
 
-### 5 — durable identity across disconnect/reconnect  **[PROPOSED]**
+### 5 — durable identity across disconnect/reconnect
 
 ```
 # pane: bob — stop the process (Ctrl-C / kill), then, shortly after, on alice:
@@ -141,7 +143,7 @@ $ sextant clients list --creds <PATH>/alice.creds
 — not reaped; on reconnect it is the **same `<ULID:bob>`** flipped back `online`.
 Identity is durable; presence is the connection.
 
-### 6 — retire decommissions the identity  **[PROPOSED]**
+### 6 — retire decommissions the identity
 
 ```
 # pane: bus (operator)
@@ -172,13 +174,14 @@ against the #82 CLI with `sextant token` in place of step 1's `register`), so th
 only thing red is the genuinely-unbuilt ADR-0020 surface (steps 1, 4-presence, 5,
 6) — not harness bugs.
 
-## Open design choices this spec pins (review these)
+## Decided (Lena, 2026-06-05)
 
 1. **`clients register` CLI shape** — `register <name>` (operator/held-identity,
-   mints for another) vs `register --self` (bootstrap/enrollment, mints for self);
+   mints for another) and `register --self` (bootstrap/enrollment, mints for self);
    output `registered <name> as <ULID>` / `enrolled as <ULID>` + a creds path.
-2. **presence column** in `clients list` (`online`/`offline`) and whether `list`
-   shows offline clients by default (proposed: yes — that's the durable directory).
-3. **`clients retire <id>`** as the decommission verb (vs `deregister`).
-4. whether retire is operator-only for now (proposed: yes; managed-auth grants it
-   to parents later, ADR-0009).
+   **Enrollment is explicit** (`register --self`) — *not* folded into connect.
+2. **presence column** in `clients list` (`online`/`offline`), and `list` **shows
+   offline clients by default** (that's the durable directory).
+3. **`clients retire <id>`** is the decommission verb (replaces `deregister`).
+4. **retire is operator-only for now** (managed-auth grants it to parents later,
+   ADR-0009).

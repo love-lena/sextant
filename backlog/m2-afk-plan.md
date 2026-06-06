@@ -169,6 +169,13 @@ Then the rest of M2: **PR5.5** artifact-ULID-addressing, **PR7** MCP (TASK-22),
 **PR8** ergonomics + M2 DoD e2e (TASK-27). M2 ships when all of it is green
 together.
 
+**▶ START THE NEXT (IMPLEMENTATION) SESSION HERE:**
+`backlog/m2-identity-impl-brief.md` — self-contained brief whose goal is making
+**`tests/e2e/m2-acceptance.md`** (the executable DoD; CLI/output surface decided
+2026-06-05) pass end-to-end. It maps the ADR-0020 work to the acceptance steps,
+gives a green-sliced build order (stack on #85), the verify path, and the process
+rules. The acceptance spec is the definition of done.
+
 Remaining BUILD work (beyond the current review goal): **PR5.5**
 artifact-ULID-addressing + artifact.list (§3 artifact half; methods.json name→id),
 **PR7 MCP** (TASK-22: server + channel + skill), **PR8 ergonomics** (TASK-27:
