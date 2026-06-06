@@ -62,17 +62,22 @@ registered alice as <ULID:alice>
 # pane: bob                       — bootstrap/locality mode: mint for self
 $ sextant clients register --self --kind reviewer
 enrolled as <ULID:bob>
-  creds: <PATH>/bob.creds
+  creds:   <HOME>/creds/bob.creds
+  context: bob (now active)
 ```
 **asserts:** two **distinct** bus-minted ULIDs (`<ULID:alice>` ≠ `<ULID:bob>`);
 neither the operator nor bob ever touched the signing keys (keys stay in the bus);
-bob obtained an identity with no pre-existing credential (enrollment).
+bob obtained an identity with no pre-existing credential (enrollment). bob's
+self-enroll also saves his creds in the context store and makes an active
+**context** (ADR-0021), so his later commands run with **no** `--creds`/`--url`.
+alice was minted *for hand-off* (held mode), so her creds land at `<PATH>` and her
+commands pass `--creds`.
 
 ### 2 — bob subscribes; alice publishes; the message arrives with an unforgeable author
 
 ```
-# pane: bob                       — long-running subscriber
-$ sextant subscribe msg.topic.plan --creds <PATH>/bob.creds
+# pane: bob                       — long-running subscriber (bare: active context)
+$ sextant subscribe msg.topic.plan
 subscribed to msg.topic.plan (Ctrl-C to stop)        # stderr
 
 # pane: alice
@@ -94,8 +99,8 @@ allow-list (the unforgeable-author guarantee, #85).
 $ sextant artifact create the-plan '{"title":"v1"}' --creds <PATH>/alice.creds
 the-plan now at revision 1
 
-# pane: bob — update at the revision it last saw
-$ sextant artifact update the-plan '{"title":"v2"}' --rev 1 --creds <PATH>/bob.creds
+# pane: bob — update at the revision it last saw (bare: active context)
+$ sextant artifact update the-plan '{"title":"v2"}' --rev 1
 the-plan now at revision 2
 
 # pane: alice — a stale update is rejected (CAS)
@@ -132,8 +137,8 @@ $ sextant clients list --creds <PATH>/alice.creds
 <ULID:bob>    bob                   reviewer    epoch=1  offline      # was online
 (2 clients)
 
-# pane: bob — reconnect with the SAME creds
-$ sextant subscribe msg.topic.plan --creds <PATH>/bob.creds
+# pane: bob — reconnect (same identity, via the same active context)
+$ sextant subscribe msg.topic.plan
 subscribed to msg.topic.plan (Ctrl-C to stop)
 
 # pane: alice

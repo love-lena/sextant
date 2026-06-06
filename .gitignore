@@ -40,3 +40,6 @@ node_modules/
 
 # VHS renders an mp4 alongside the gif; only the gif is committed
 docs/demos/*.mp4
+
+# stray build output of `go build ./cmd/sextant` from the repo root
+/sextant

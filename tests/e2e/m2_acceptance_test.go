@@ -86,7 +86,8 @@ func TestM2Acceptance(t *testing.T) {
 	h.rec("1b — bob's self-enroll created an active context", ctxList)
 
 	// --- 2: bob subscribes; alice publishes; unforgeable author ----------------
-	sub := h.startBg(map[string]string{}, "subscribe", topic, "--creds", bobCreds, "--store", h.store)
+	// bob runs bare — no --creds/--store — resolving through his active context.
+	sub := h.startBg(map[string]string{}, "subscribe", topic)
 	sub.waitStderr(t, "subscribed to "+topic)
 	pubOut, code := h.run(nil, "publish", topic, `{"hello":"world"}`, "--creds", aliceCreds, "--store", h.store)
 	if code != 0 {
@@ -110,7 +111,7 @@ func TestM2Acceptance(t *testing.T) {
 	if code != 0 || !strings.Contains(createOut, "revision 1") {
 		t.Fatalf("artifact create: code=%d out=%q", code, createOut)
 	}
-	updOut, code := h.run(nil, "artifact", "update", artifact, `{"title":"v2"}`, "--rev", "1", "--creds", bobCreds, "--store", h.store)
+	updOut, code := h.run(nil, "artifact", "update", artifact, `{"title":"v2"}`, "--rev", "1") // bare: bob's active context
 	if code != 0 || !strings.Contains(updOut, "revision 2") {
 		t.Fatalf("artifact update by bob: code=%d out=%q", code, updOut)
 	}
@@ -138,7 +139,7 @@ func TestM2Acceptance(t *testing.T) {
 	assertPresence(t, offlineList, bobID, "offline") // still listed — durable, not reaped
 	assertPresence(t, offlineList, aliceID, "online")
 
-	sub2 := h.startBg(map[string]string{}, "subscribe", topic, "--creds", bobCreds, "--store", h.store)
+	sub2 := h.startBg(map[string]string{}, "subscribe", topic) // bare again: same active context
 	sub2.waitStderr(t, "subscribed to "+topic)
 	h.waitPresence(t, aliceCreds, bobID, true)
 	reconnList := h.listClients(t, aliceCreds)

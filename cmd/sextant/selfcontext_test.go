@@ -6,8 +6,53 @@ import (
 	"testing"
 
 	"github.com/love-lena/sextant/internal/clictx"
+	"github.com/love-lena/sextant/pkg/conninfo"
 	"github.com/love-lena/sextant/pkg/sextant"
 )
+
+func TestResolveBusURL(t *testing.T) {
+	if got := resolveBusURL("nats://explicit", "/does/not/exist"); got != "nats://explicit" {
+		t.Fatalf("explicit --url should win: got %q", got)
+	}
+	dir := t.TempDir()
+	if err := conninfo.Write(filepath.Join(dir, conninfo.DefaultFile), conninfo.Info{URL: "nats://disco"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveBusURL("", dir); got != "nats://disco" {
+		t.Fatalf("should fall back to discovery: got %q", got)
+	}
+	if got := resolveBusURL("", t.TempDir()); got != "" {
+		t.Fatalf("no url, no discovery → empty: got %q", got)
+	}
+}
+
+// TestCheckSelfEnroll: the pre-flight must reject everything that would strand a
+// mint or clobber state — BEFORE the bus mints — so register --self never leaves
+// an unusable identity behind.
+func TestCheckSelfEnroll(t *testing.T) {
+	t.Setenv("SEXTANT_HOME", t.TempDir())
+
+	if err := checkSelfEnroll("alice", "", false); err != nil {
+		t.Fatalf("clean enroll should pass: %v", err)
+	}
+	if err := checkSelfEnroll("alice", "/x.creds", false); err == nil {
+		t.Fatal("--out with --self should be rejected")
+	}
+	// a name that clictx would reject as a filename must fail before any mint
+	if err := checkSelfEnroll("a/b", "", false); err == nil {
+		t.Fatal("a path-bearing name should be rejected")
+	}
+	// an existing context must not be silently clobbered without --force
+	if err := clictx.Save(clictx.Context{Name: "bob", URL: "u", Creds: "c"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkSelfEnroll("bob", "", false); err == nil {
+		t.Fatal("existing context should be rejected without --force")
+	}
+	if err := checkSelfEnroll("bob", "", true); err != nil {
+		t.Fatalf("--force should allow re-enroll: %v", err)
+	}
+}
 
 // TestSaveSelfContext: enrolling yourself writes the creds into the context store
 // (0600), records a context carrying the bus-minted identity, and makes it active.
