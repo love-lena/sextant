@@ -64,12 +64,16 @@ operations (each needs --creds; bus URL from --store discovery or --url):
   sextant subscribe <subject> [--all] [--json]
   sextant artifact  create|update|get|delete|watch <name> [<record-json>] [--rev N] [--json]
 
+environment (avoids repeating the flags):
+  SEXTANT_STORE   default for --store (the bus store dir; discovery + creds)
+  SEXTANT_CREDS   default for --creds (the client credentials file)
+
 `)
 }
 
 func cmdUp(args []string) {
 	fs := flag.NewFlagSet("up", flag.ExitOnError)
-	store := fs.String("store", defaultStore(), "JetStream + key-material directory")
+	store := fs.String("store", defaultStore(), "JetStream + key-material directory (or set $SEXTANT_STORE)")
 	port := fs.Int("port", 0, "listen port (0 = random)")
 	_ = fs.Parse(args)
 
@@ -111,7 +115,14 @@ func cmdUp(args []string) {
 
 // defaultStore is a stable, CWD-independent location so `up` and the client
 // commands run from different directories still share the same key material.
+// defaultStore is the store dir a command uses when --store is not given:
+// $SEXTANT_STORE if set, else a per-user config path. An explicit --store still
+// overrides this, since flag parsing replaces the default when the flag is
+// present.
 func defaultStore() string {
+	if v := os.Getenv("SEXTANT_STORE"); v != "" {
+		return v
+	}
 	if dir, err := os.UserConfigDir(); err == nil {
 		return filepath.Join(dir, "sextant", "jetstream")
 	}

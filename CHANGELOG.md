@@ -8,6 +8,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `cmd/sextant`: **environment defaults for the connection flags** — `$SEXTANT_STORE`
+  backs `--store` and `$SEXTANT_CREDS` backs `--creds`, so a shell that exports them
+  once need not repeat the flags on every command. Precedence is explicit flag >
+  env var > built-in default (a per-user config path for the store; required-error
+  for creds). Matches the existing `$SEXTANT_SELF_NAME` convention.
 - **Clients are bus-issued identities** (ADR-0020) — the identity half of M2.
   - **One issuance path, two auth modes.** `clients.register` now *mints a new
     identity* (a ULID + its credential) and persists a durable record, returning
@@ -37,7 +42,6 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     just goes offline. **CLI:** `clients register <name>` / `register --self` /
     `clients retire <id>`, and `clients list` gains the presence column.
 
-<<<<<<< HEAD
 - `pkg/bus`: **the per-client credential allow-list — the unforgeable author**
   (ADR-0019). Each minted credential now carries a per-client JWT allow-list
   scoped to its bus-minted ULID: it may publish **only** under its own call

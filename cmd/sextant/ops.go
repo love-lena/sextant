@@ -54,8 +54,8 @@ type connFlags struct {
 
 func addConnFlags(fs *flag.FlagSet) connFlags {
 	return connFlags{
-		creds: fs.String("creds", "", "client credentials file (issue with `sextant clients register`)"),
-		store: fs.String("store", defaultStore(), "JetStream + key-material directory (for bus discovery)"),
+		creds: fs.String("creds", os.Getenv("SEXTANT_CREDS"), "client credentials file (issue with `sextant clients register`; or set $SEXTANT_CREDS)"),
+		store: fs.String("store", defaultStore(), "JetStream + key-material directory for bus discovery (or set $SEXTANT_STORE)"),
 		url:   fs.String("url", "", "bus URL (default: discovery file under --store)"),
 	}
 }
@@ -63,7 +63,7 @@ func addConnFlags(fs *flag.FlagSet) connFlags {
 // connect dials an SDK client from the connection flags. ctx governs the call.
 func (cf connFlags) connect(ctx context.Context) *sextant.Client {
 	if *cf.creds == "" {
-		fatal("--creds is required (issue one with `sextant clients register <name>`)")
+		fatal("--creds is required (or set $SEXTANT_CREDS); issue one with `sextant clients register <name>`")
 	}
 	c, err := sextant.Connect(ctx, sextant.Options{
 		CredsPath:    *cf.creds,
@@ -225,7 +225,7 @@ func clientsRegister(args []string) {
 	self := fs.Bool("self", false, "bootstrap/enrollment: mint an identity for this local process")
 	kind := fs.String("kind", "client", "what the new client is (e.g. worker, reviewer)")
 	nameFlag := fs.String("name", "", "display name (for --self, defaults to $USER)")
-	store := fs.String("store", defaultStore(), "bus store dir (discovery + issuer credentials)")
+	store := fs.String("store", defaultStore(), "bus store dir: discovery + issuer credentials (or set $SEXTANT_STORE)")
 	url := fs.String("url", "", "bus URL (default: discovery file under --store)")
 	out := fs.String("out", "", "write the new creds here (default: <store>/<name>.creds)")
 	_ = fs.Parse(args)
@@ -283,7 +283,7 @@ func clientsRetire(args []string) {
 		id, args = args[0], args[1:]
 	}
 	fs := flag.NewFlagSet("clients retire", flag.ExitOnError)
-	store := fs.String("store", defaultStore(), "bus store dir (discovery + operator credential)")
+	store := fs.String("store", defaultStore(), "bus store dir: discovery + operator credential (or set $SEXTANT_STORE)")
 	url := fs.String("url", "", "bus URL (default: discovery file under --store)")
 	_ = fs.Parse(args)
 	if id == "" {
