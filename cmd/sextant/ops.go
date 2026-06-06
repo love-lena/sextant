@@ -243,6 +243,18 @@ func clientsList(args []string) {
 	fmt.Fprintf(os.Stderr, "(%d clients)\n", len(clients))
 }
 
+// safeCredsName picks a filesystem-safe basename for a client's default creds
+// file. A display name may legitimately contain a path separator (the bus allows
+// names like "a/b"), which would make `<store>/<name>.creds` fail on a missing
+// subdir or escape the store ("../x"). In that case fall back to the bus-minted
+// id — always a flat, safe token — so a successful mint never strands its creds.
+func safeCredsName(name, id string) string {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
+		return id
+	}
+	return name
+}
+
 // clientsRegister is the issuance command (ADR-0020). Two auth modes, one op:
 //   - held-identity (default): the operator mints for another — `register <name>`
 //     — connecting with the operator credential `sextant up` provisioned.
@@ -300,7 +312,7 @@ func clientsRegister(args []string) {
 
 	path := *out
 	if path == "" {
-		path = filepath.Join(*store, name+".creds")
+		path = filepath.Join(*store, safeCredsName(name, res.ID)+".creds")
 	}
 	if err := os.WriteFile(path, []byte(res.Creds), 0o600); err != nil {
 		fatal("write creds: %v", err)

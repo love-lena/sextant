@@ -198,6 +198,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `{id, kind, epoch, sdk, connected_at}`; heartbeat, read-time liveness, and
   stale-entry reaping are deferred (TASK-20). See ADR-0004, ADR-0008.
 
+### Security
+
+- Hardened credential file handling (found by review while landing ADR-0021):
+  - `cmd/sextant`: `clients register` with a display name that contains a path
+    separator (the bus allows names like `a/b`) no longer fails to write — or
+    escapes the store via `../x` — when `--out` is omitted; the default creds
+    filename falls back to the minted ULID for path-bearing names, so a successful
+    mint never strands its credential.
+  - `pkg/bus`: the operator/enrollment infra credentials are now (re)provisioned
+    via an atomic owner-only (`0600`) write (temp file + rename). `os.WriteFile`
+    left an existing file's looser mode intact, so a reused or user-supplied store
+    with a world-readable leftover could keep high-privilege creds — which
+    authorize identity issuance and retirement — group/world-readable.
+
 ### Changed
 
 - **Client identity is now a bus-minted ULID + a `display_name`** (ADR-0019, the
