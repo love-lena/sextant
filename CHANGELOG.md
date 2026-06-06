@@ -8,6 +8,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+<<<<<<< HEAD
 - `pkg/bus`: **the per-client credential allow-list — the unforgeable author**
   (ADR-0019). Each minted credential now carries a per-client JWT allow-list
   scoped to its bus-minted ULID: it may publish **only** under its own call
@@ -52,6 +53,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unforgeable and routes the connect handshake itself through calls), in the
   next slice. Crash-driven relay teardown — a client that never stops — is
   deferred to the liveness work (TASK-20), the same gap the clients registry has.
+- `cmd/sextant`: **the operator/test CLI** — the human face of the operation
+  surface and the M2 e2e harness (TASK-28). Commands with exact operation-name
+  parity (no aliases): `publish`, `read` (cursor-pull via `FetchMessages`),
+  `subscribe` (live stream), `clients list`, and `artifact create|update|get|
+  delete|watch`, each `--json`-capable. A **conformance test** reads
+  `protocol/methods.json` and asserts the CLI exposes exactly one command per
+  operation and invents none — making "one surface, many faces" mechanical (the
+  MCP server will extend the same test). Smoke-verified end to end: two clients
+  exchange a message and collaborate on a compare-and-set artifact through the
+  bus, the read frame carrying the publisher's bus-stamped ULID author.
 - `pkg/sextant`: **the SDK begins speaking the Wire API** (ADR-0019 cutover).
   `Client.Publish` now sends a `message.publish` **call** to the bus (which stamps
   the frame and appends it) instead of publishing to the stream directly, and the

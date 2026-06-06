@@ -30,6 +30,16 @@ func main() {
 		cmdUp(os.Args[2:])
 	case "token":
 		cmdToken(os.Args[2:])
+	case "publish":
+		cmdPublish(os.Args[2:])
+	case "subscribe":
+		cmdSubscribe(os.Args[2:])
+	case "read":
+		cmdRead(os.Args[2:])
+	case "clients":
+		cmdClients(os.Args[2:])
+	case "artifact":
+		cmdArtifact(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -44,8 +54,15 @@ func usage() {
 
 usage:
   sextant up    [--store DIR] [--port N]        run the embedded bus
-  sextant token <client-id> [--store DIR] [--out FILE]
+  sextant token <display-name> [--store DIR] [--out FILE]
                                                 mint a client credentials file
+
+operations (each needs --creds; bus URL from --store discovery or --url):
+  sextant publish   <subject> <record-json>
+  sextant read      <subject> [--since N] [--limit N] [--json]
+  sextant subscribe <subject> [--all] [--json]
+  sextant clients   list [--json]
+  sextant artifact  create|update|get|delete|watch <name> [<record-json>] [--rev N] [--json]
 
 `)
 }
