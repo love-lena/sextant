@@ -24,9 +24,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   context. Contexts live under `$SEXTANT_HOME` (default `<user-config>/sextant`),
   separate from the bus `--store`; the credential is kept in its own `0600` file
   and referenced by path. Context commands are local-administration (like `up`),
-  not protocol operations, so they stay out of `methods.json`. `clients register`
-  auto-creating a context is a planned follow-up (it touches the M2 acceptance
-  golden).
+  not protocol operations, so they stay out of `methods.json`.
 - `cmd/sextant`: **environment defaults for the connection flags** — `$SEXTANT_STORE`
   backs `--store` and `$SEXTANT_CREDS` backs `--creds`, so a shell that exports them
   once need not repeat the flags on every command. Precedence is explicit flag >

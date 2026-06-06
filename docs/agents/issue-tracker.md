@@ -16,8 +16,10 @@ filing, driving, resolving, finding; the priority ladder; the `[[slug]]`
 cross-link convention). This file covers only what the engineering skills
 (`to-issues`, `to-prd`, `triage`) need to map their verbs onto the `backlog` CLI.
 
-> **Setup pending:** the `backlog` CLI and the `backlog/` directory are not yet
-> created in this repo. The conventions below are the intended target.
+> **Setup:** the `backlog/` directory is live, and the CLI is pinned under
+> `tools/backlog/` — `npm install --prefix tools/backlog`, then invoke
+> `tools/backlog/node_modules/.bin/backlog` (see the README). A `backlog` project
+> skill (the full filing/driving/resolving workflow) is still to be installed.
 
 ## Ground rules
 - **Never hand-edit ticket files.** Drive everything through the `backlog` CLI so
