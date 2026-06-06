@@ -97,14 +97,34 @@ Acceptance spine: the conformance test (PR6) + the M2 DoD e2e (PR8).
 Parked: TASK-23 (request/reply), TASK-20 robust liveness (only --reclaim stopgap).
 
 ## Resumability
-**THE CALL-TRANSPORT CUTOVER IS DONE; the IDENTITY HALF (ADR-0020) REMAINS and
-ships with it.** Open PRs **#76–#85** (all green, stacked, unmerged). DAG: #81 ←
-#82 (CLI); #81 ← #83 (data-plane) ← #84 (connect-handshake, 5d-i) ← **#85
-(allow-list flip, 5d-ii)**. After #85 nothing reaches the backend except through
-the bus and the stamped author is unforgeable — but per Review round 2 (below) the
-stack is **M2 part 1 (call transport), not the finished milestone**: the
-bus-issued-identity model (ADR-0020) is M2's identity half and must land + ship
-with it. Do not merge #76–#85 alone.
+**IDENTITY HALF (ADR-0020) IMPLEMENTED — the DoD e2e is GREEN.** The whole M2
+collaboration loop (`tests/e2e/m2-acceptance.md`) passes end-to-end on
+**`feat/m2-identity-model`** → **PR #86** (base `feat/m2-allowlist`; integrates the
+#82 CLI + the ADR-0020 identity work + the runnable DoD e2e + the re-recorded
+demo gif). Open, unmerged — ships with the stack as one milestone; `status:
+accepted` on ADR-0020 is still Lena's to flip. What landed on #86:
+- Issuance via `clients.register` (mints + persists; keys stay in the bus), two
+  auth modes — operator (held) + the reserved **enroll** identity (the new
+  enrollment connection tier); `sextant up` provisions both creds; `token` retired.
+- Connection-derived presence (`Connz`), durable identity store, `clients.list`
+  join with an online/offline column (offline shown by default).
+- `clients.retire` (operator-only) + `clients.hello` connect handshake; clean
+  `Close` goes offline, does not retire.
+- SDK `Issuer`; CLI `clients register/--self/retire`; methods.json + lexicon +
+  nats-binding + ADR-0019 §3 reconciled. `go build/vet/test ./... -race` + gofumpt
+  green; the `e2e`-tagged DoD harness (`tests/e2e/run.sh`) wired into CI.
+
+**Remaining for the milestone:** PR5.5 artifact-ULID-addressing, PR7 MCP (TASK-22),
+PR8 ergonomics (TASK-27). Then the whole thing merges together.
+
+### Prior state (call-transport cutover)
+**THE CALL-TRANSPORT CUTOVER IS DONE.** Open PRs **#76–#85** (all green, stacked,
+unmerged). DAG: #81 ← #82 (CLI); #81 ← #83 (data-plane) ← #84 (connect-handshake,
+5d-i) ← **#85 (allow-list flip, 5d-ii)**. After #85 nothing reaches the backend
+except through the bus and the stamped author is unforgeable — but per Review round
+2 (below) the stack is **M2 part 1 (call transport)**: the bus-issued-identity
+model (ADR-0020) is M2's identity half (now implemented on #86) and ships with it.
+Do not merge #76–#85 alone.
 
 Current goal (Stop hook, 2026-06-05): *cutover complete + all PRs self-reviewed +
 change stories sent to Lena's Manta for review.* **ALL THREE DONE:**
