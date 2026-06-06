@@ -97,11 +97,14 @@ Acceptance spine: the conformance test (PR6) + the M2 DoD e2e (PR8).
 Parked: TASK-23 (request/reply), TASK-20 robust liveness (only --reclaim stopgap).
 
 ## Resumability
-**THE CUTOVER IS COMPLETE.** Open PRs **#76–#85** (all green, stacked, unmerged).
-DAG: #81 ← #82 (CLI); #81 ← #83 (data-plane) ← #84 (connect-handshake, 5d-i) ←
-**#85 (allow-list flip, 5d-ii)**. After #85 nothing reaches the backend except
-through the bus and the stamped author is unforgeable — the M2 SDK↔bus cutover is
-done.
+**THE CALL-TRANSPORT CUTOVER IS DONE; the IDENTITY HALF (ADR-0020) REMAINS and
+ships with it.** Open PRs **#76–#85** (all green, stacked, unmerged). DAG: #81 ←
+#82 (CLI); #81 ← #83 (data-plane) ← #84 (connect-handshake, 5d-i) ← **#85
+(allow-list flip, 5d-ii)**. After #85 nothing reaches the backend except through
+the bus and the stamped author is unforgeable — but per Review round 2 (below) the
+stack is **M2 part 1 (call transport), not the finished milestone**: the
+bus-issued-identity model (ADR-0020) is M2's identity half and must land + ship
+with it. Do not merge #76–#85 alone.
 
 Current goal (Stop hook, 2026-06-05): *cutover complete + all PRs self-reviewed +
 change stories sent to Lena's Manta for review.* **ALL THREE DONE:**
@@ -131,12 +134,40 @@ Both Qs resolved:
   for out-of-process e2e, not needed yet). Commit `7c12f25` on **#85** (with #84
   merged forward). Lena: *"that's the last thing for my approval."*
 
-**Stack APPROVED — ready for Lena to merge #76–#85 bottom-up** (never `--admin`).
-Remaining open flags (not blockers): `clients.list` skip-quietly shift (#81),
-deferred crash-teardown → TASK-20 (#83), drain-as-signal vs os.Exit (ADR-0010).
+**Review round 2 — ADR-0020 (2026-06-05).** A long design grilling produced
+**ADR-0020 "Clients are bus-issued identities"** (`docs/adr/0020-...`, on rebuild).
+Lena annotated it on the Manta: **approval throughout (checkmarks + signature)**,
+with ONE correction that changes the plan. My ADR said "nothing blocks merging the
+cutover as it stands"; Lena: *"It does — we need this fix to finish this milestone,
+and it will ship together."* So:
 
-Next BUILD work (not part of the review goal): **PR5.5** artifact-ULID-addressing +
-artifact.list, **PR7** MCP (TASK-22), **PR8** ergonomics + M2 DoD e2e (TASK-27).
+**⚠ THE CUTOVER IS *NOT* DONE-AND-MERGEABLE ON ITS OWN. ADR-0020's identity model
+is the identity HALF of M2 and ships together with #76–#85 as one milestone — DO
+NOT merge the stack alone.** Hold the merge until the identity model is implemented
+and folded in. (Sign-off: Lena's signature + checkmarks read as approval of the
+decision; the formal `status: accepted` flip is still hers to make — not yet
+flipped.)
+
+**The model (ADR-0020), concretely, = the next inflight build work:** (a) **one
+issuance path** `clients.register` accepting two auth modes — a held identity
+(issuer mints for another) OR a bootstrap authorization with no pre-existing
+identity (enrollment: locality at the weak end, a signed token at the strong end;
+mint for self) — same mint-and-return either way; the bootstrap/enrollment
+connection tier (local-trust / auth-callout) is the genuinely new mechanism;
+(b) **`token` → `register`**: retire offline minting, keys stay in the bus, the
+operator credential is provisioned at `sextant up`; (c) **durable identity store**
+(persist issued identities, survive restart, recognize reconnect by key);
+(d) **connection-derived presence** ($SYS / the embedded server's connection table;
+no heartbeat, no ghost-reaping); (e) **`deregister` → `retire`** (decommission;
+`Close` just goes offline); (f) `clients.list` = registered ⨝ presence; update the
+ADR-0019 identity half + `protocol/nats-binding.md` handshake notes.
+
+Open flags carried (not blockers): `clients.list` skip-quietly shift (#81),
+crash-teardown → TASK-20 (#83), drain-as-signal vs os.Exit (ADR-0010).
+
+Then the rest of M2: **PR5.5** artifact-ULID-addressing, **PR7** MCP (TASK-22),
+**PR8** ergonomics + M2 DoD e2e (TASK-27). M2 ships when all of it is green
+together.
 
 Remaining BUILD work (beyond the current review goal): **PR5.5**
 artifact-ULID-addressing + artifact.list (§3 artifact half; methods.json name→id),
