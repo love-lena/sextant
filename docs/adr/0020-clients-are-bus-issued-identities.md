@@ -102,14 +102,16 @@ and authorization layer is **managed auth**, deferred to [ADR-0009](0009-spawn.m
 it. (Issuance returns secret material — the new client's key — so the reply rides
 the caller's own connection; fine for the operator-local and managed cases.)
 
-**Status of the implementation.** The M2 cutover (the #76–#85 stack) implements the
-*prior* model: `token` mints offline, `clients.register`/`deregister` are
-authenticated calls a client makes about *itself*, and the registry is
-presence-only. This ADR is the next step. Adopting it revises that identity and
-registry surface in a follow-up — the single issuance path and its two auth modes,
-the durable identity store, and connection-derived presence — and updates the
-identity half of ADR-0019 and the connect-handshake notes in
-`protocol/nats-binding.md` accordingly. Nothing here blocks merging the cutover as
-it stands.
+**Status of the implementation.** The M2 cutover (the #76–#85 stack) landed the
+call-transport half of the protocol; this ADR is the **identity half**. The stack
+still reflects the *prior* identity model — `token` mints offline,
+`clients.register`/`deregister` are authenticated calls a client makes about
+*itself*, and the registry is presence-only — and this decision revises that: the
+single issuance path and its two auth modes, the durable identity store,
+connection-derived presence, `token`→`register`, `deregister`→`retire`. It also
+updates the identity half of ADR-0019 and the connect-handshake notes in
+`protocol/nats-binding.md`. **This is required to finish M2, not a later
+follow-up: the cutover stack and this identity model ship together as one
+milestone — the cutover is not released on its own.**
 
 Map (ADR-0003): the bus and the SDK (identity + authn), and the clients registry.
