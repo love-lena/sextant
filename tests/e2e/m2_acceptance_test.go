@@ -62,14 +62,28 @@ func TestM2Acceptance(t *testing.T) {
 	}
 	h.label(aliceID, "alice")
 	h.label(bobID, "bob")
+	// alice is minted for hand-off, so her creds land in the bus store; bob
+	// self-enrolled, so his creds + an active context land in the context store
+	// ($SEXTANT_HOME), separate from the bus store (ADR-0021).
 	aliceCreds := filepath.Join(h.store, "alice.creds")
-	bobCreds := filepath.Join(h.store, "bob.creds")
+	bobCreds := filepath.Join(h.home, "creds", "bob.creds")
 	for _, p := range []string{aliceCreds, bobCreds} {
 		if _, err := os.Stat(p); err != nil {
 			t.Fatalf("creds not written: %s: %v", p, err)
 		}
 	}
 	h.rec("1 — issuance (operator mints alice; bob self-enrolls)", aliceOut+bobOut)
+
+	// bob's self-enroll made an active context; subsequent bob commands need no flags.
+	cur, code := h.run(nil, "context", "current")
+	if code != 0 || strings.TrimSpace(cur) != "bob" {
+		t.Fatalf("self-enroll should make bob the active context; `context current` = %q (code %d)", cur, code)
+	}
+	ctxList, code := h.run(nil, "context", "list")
+	if code != 0 || !strings.Contains(ctxList, "bob") {
+		t.Fatalf("context list missing bob: code=%d out=%q", code, ctxList)
+	}
+	h.rec("1b — bob's self-enroll created an active context", ctxList)
 
 	// --- 2: bob subscribes; alice publishes; unforgeable author ----------------
 	sub := h.startBg(map[string]string{}, "subscribe", topic, "--creds", bobCreds, "--store", h.store)
@@ -164,6 +178,7 @@ type harness struct {
 	t         *testing.T
 	bin       string
 	store     string
+	home      string // $SEXTANT_HOME: the context store, isolated per run (hermetic)
 	busCmd    *exec.Cmd
 	busBanner string
 	labels    map[string]string // id -> token (alice/bob)
@@ -174,7 +189,25 @@ type harness struct {
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	bin := buildBinary(t)
-	return &harness{t: t, bin: bin, store: t.TempDir(), labels: map[string]string{}}
+	return &harness{t: t, bin: bin, store: t.TempDir(), home: t.TempDir(), labels: map[string]string{}}
+}
+
+// childEnv builds the environment for a child sextant process: the developer's
+// own SEXTANT_* vars are stripped (so a real ~/.config context can't leak into
+// the run) and SEXTANT_HOME is pinned to this harness's isolated context store.
+func (h *harness) childEnv(extra map[string]string) []string {
+	env := make([]string, 0, len(os.Environ())+len(extra)+1)
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "SEXTANT_") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	env = append(env, "SEXTANT_HOME="+h.home)
+	for k, v := range extra {
+		env = append(env, k+"="+v)
+	}
+	return env
 }
 
 func buildBinary(t *testing.T) string {
@@ -229,10 +262,7 @@ func (h *harness) startBus() {
 func (h *harness) run(env map[string]string, args ...string) (string, int) {
 	h.t.Helper()
 	cmd := exec.Command(h.bin, args...)
-	cmd.Env = os.Environ()
-	for k, v := range env {
-		cmd.Env = append(cmd.Env, k+"="+v)
-	}
+	cmd.Env = h.childEnv(env)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
@@ -335,6 +365,7 @@ func (h *harness) label(id, token string) {
 // bus URL to <URL>, the store path to <PATH>, and runs of spaces collapsed (so
 // column widths that shift under id substitution do not matter).
 func (h *harness) normalize(s string) string {
+	s = strings.ReplaceAll(s, h.home, "<HOME>")
 	s = strings.ReplaceAll(s, h.store, "<PATH>")
 	s = urlRe.ReplaceAllString(s, "<URL>")
 	h.mu.Lock()
@@ -389,10 +420,7 @@ type bgProc struct {
 func (h *harness) startBg(env map[string]string, args ...string) *bgProc {
 	h.t.Helper()
 	cmd := exec.Command(h.bin, args...)
-	cmd.Env = os.Environ()
-	for k, v := range env {
-		cmd.Env = append(cmd.Env, k+"="+v)
-	}
+	cmd.Env = h.childEnv(env)
 	out, errb := &bgBuffer{}, &bgBuffer{}
 	cmd.Stdout = out
 	cmd.Stderr = errb

@@ -13,7 +13,11 @@ Ctrl-C to drain and stop.
 registered alice as <ULID:alice>
  creds: <PATH>/alice.creds
 enrolled as <ULID:bob>
- creds: <PATH>/bob.creds
+ creds: <HOME>/creds/bob.creds
+ context: bob (now active)
+
+### 1b — bob's self-enroll created an active context
+* bob <ULID:bob> <URL>
 
 ### 2 — message with an unforgeable author
 published to msg.topic.plan
