@@ -35,6 +35,8 @@ func main() {
 		cmdRead(os.Args[2:])
 	case "clients":
 		cmdClients(os.Args[2:])
+	case "context":
+		cmdContext(os.Args[2:])
 	case "artifact":
 		cmdArtifact(os.Args[2:])
 	case "-h", "--help", "help":
@@ -58,7 +60,13 @@ identities (the bus is the sole minter; keys never leave it — ADR-0020):
   sextant clients retire   <id>                 decommission an identity (operator)
   sextant clients list     [--json]             the directory (online + offline)
 
-operations (each needs --creds; bus URL from --store discovery or --url):
+contexts (saved URL+identity+creds, so operations need no flags — ADR-0021):
+  sextant context add <name> --creds F          save a context (and activate it)
+  sextant context use <name>                    make <name> the active context
+  sextant context list                          list saved contexts
+  sextant context current                       print the active context name
+
+operations (creds from --creds, $SEXTANT_CREDS, or the active context):
   sextant publish   <subject> <record-json>
   sextant read      <subject> [--since N] [--limit N] [--json]
   sextant subscribe <subject> [--all] [--json]
@@ -67,6 +75,8 @@ operations (each needs --creds; bus URL from --store discovery or --url):
 environment (avoids repeating the flags):
   SEXTANT_STORE   default for --store (the bus store dir; discovery + creds)
   SEXTANT_CREDS   default for --creds (the client credentials file)
+  SEXTANT_CONTEXT default for --context (the saved context to connect as)
+  SEXTANT_HOME    where contexts live (default: <user-config>/sextant)
 
 `)
 }

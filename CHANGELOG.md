@@ -8,6 +8,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Saved client contexts** (ADR-0021) — `sextant context add|use|list|current|delete`.
+  A *context* is a local (bus URL + identity + creds) profile under a name you
+  choose, so `publish`/`subscribe`/`artifact`/… need no `--creds`/`--url` once one
+  is active — the `kubectl`/`nats context` pattern. Connection resolution is a
+  precedence chain: explicit `--creds`/`$SEXTANT_CREDS` (URL from `--url`/`--store`
+  discovery) → a context named by `--context`/`$SEXTANT_CONTEXT` → the active
+  context. Contexts live under `$SEXTANT_HOME` (default `<user-config>/sextant`),
+  separate from the bus `--store`; the credential is kept in its own `0600` file
+  and referenced by path. Context commands are local-administration (like `up`),
+  not protocol operations, so they stay out of `methods.json`. `clients register`
+  auto-creating a context is a planned follow-up (it touches the M2 acceptance
+  golden).
 - `cmd/sextant`: **environment defaults for the connection flags** — `$SEXTANT_STORE`
   backs `--store` and `$SEXTANT_CREDS` backs `--creds`, so a shell that exports them
   once need not repeat the flags on every command. Precedence is explicit flag >
