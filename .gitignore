@@ -37,3 +37,6 @@ node_modules/
 !/.claude/skills/
 /.agents/
 /.superpowers/
+
+# VHS renders an mp4 alongside the gif; only the gif is committed
+docs/demos/*.mp4

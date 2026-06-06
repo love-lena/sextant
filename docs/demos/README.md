@@ -9,22 +9,30 @@ rendered recording. They are produced with [VHS](https://github.com/charmbracele
 ![The M2 collaboration loop](m2-collaboration-loop.gif)
 
 Two clients — `alice` and `bob` — collaborate **through** the bus. Nothing talks
-directly: the bus mints each client's identity, stamps every frame, and serves
-the protocol operations. The recording walks the whole loop:
+directly: the bus is the sole minter of identities (ADR-0020), stamps every frame,
+and derives presence from the live connection. This is the scenario the M2
+definition-of-done codes against ([`tests/e2e/m2-acceptance.md`](../../tests/e2e/m2-acceptance.md)).
+The recording walks the whole loop:
 
-1. **Start the bus** — one process implements the protocol over a pluggable backend.
-2. **Mint two clients** — the bus assigns each its own trusted ULID identity.
+1. **Start the bus** — one process implements the protocol; the signing keys never
+   leave it.
+2. **Issue identities, two auth modes** — the operator mints `alice`
+   (held-identity mode); `bob` self-enrolls on the same box (bootstrap/locality
+   mode). Both are `clients register`; the difference is only how the request is
+   authorized.
 3. **Subscribe** — `bob` subscribes to a topic for live delivery.
-4. **Publish** — `alice` publishes; the frame lands on `bob`'s subscription live,
-   stamped with `alice`'s identity (the author is the bus-verified ULID, not a
-   value the client supplied).
-5. **Read** — the same message read back as a full frame shows what the bus
-   stamped: `id`, `author`, `kind`, `epoch`, and the record.
-6. **List clients** — the live directory of who is connected right now
-   (ULID + display name).
-7. **Share an artifact** — `alice` drafts `design-notes`; `bob` revises it with a
-   compare-and-set on the revision (one author at a time); `alice` reads back
-   `bob`'s revision.
+4. **Publish with an unforgeable author** — `alice` publishes; the frame lands on
+   `bob`'s subscription stamped with `alice`'s bus-minted id. `alice` cannot stamp
+   it with anyone else's — the per-client allow-list forbids it.
+5. **Share an artifact** — `alice` drafts `the-plan`; `bob` revises it with a
+   compare-and-set on the revision (one author at a time); a stale write is rejected.
+6. **List clients** — the live directory, with presence derived from the
+   connection (no heartbeat): both online.
+7. **Durable identity across reconnect** — `bob` disconnects (his identity persists,
+   now `offline` — it is not reaped); he reconnects with the same creds under the
+   **same id**, flipped back `online`.
+8. **Retire** — the operator decommissions `bob` for good; he is gone from the
+   directory.
 
 ## Regenerating
 
