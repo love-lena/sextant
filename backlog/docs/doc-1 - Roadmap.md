@@ -42,16 +42,25 @@ clients exchanging messages + artifacts.
 **Tickets (build order):**
 - **TASK-29** — implement ADR-0018: the bus implements the operations over the
   backend interface. The foundation; splits into frame · backend interface ·
-  bus-serves-operations · SDK-as-client.
+  bus-serves-operations · SDK-as-client. — ✅ Done.
 - **TASK-30** — client identity: bus-minted ULID primary id + display_name
-  (settled before the faces bake in addressing).
+  (settled before the faces bake in addressing). — ✅ Done (ADR-0019/0020).
 - **TASK-28** — test/operator CLI + the **conformance test** (the load-bearing
-  "one surface, many faces" guarantee).
+  "one surface, many faces" guarantee). — *mostly done*: the CLI, conformance
+  test, and e2e DoD shipped; `--format <template>` output and the MCP half of the
+  parity test remain.
 - **TASK-22** — MCP server + `claude/channel` + skill: BYO harnesses as
-  first-class clients, packaged as a Claude Code plugin.
+  first-class clients, packaged as a Claude Code plugin. — ☐ not started.
 - **TASK-27** — run ergonomics + getting-started: the documented bring-up + the
-  e2e DoD walkthrough.
+  e2e DoD walkthrough. — *partial*: the manual fleet + e2e walkthrough exist; a
+  one-command bring-up and a getting-started doc remain.
 - TASK-12 — lexicon subset (chat + artifact record shapes) — ✅ Done.
+- TASK-31 — saved client contexts + `register --self` auto-context (ADR-0021) —
+  ✅ Done (a run-bare ergonomics layer that landed alongside identity).
+
+Beyond the build order, M2 also landed the **bus-issued-identity model** (ADR-0020
+— sole minter, enrollment, connection-derived presence, retire). What gates M2 to
+*complete* now is the **MCP server** (TASK-22) and the run ergonomics (TASK-27).
 
 M2 ships **Go only** — the Go SDK, the Go CLI, and the Go MCP server. (The
 TypeScript SDK is **Future**, TASK-5.)

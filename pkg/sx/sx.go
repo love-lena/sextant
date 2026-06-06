@@ -34,7 +34,9 @@ const MetaKeyEpoch = "epoch"
 const (
 	// ControlPrefix is the operator-only control space.
 	ControlPrefix = "sx.control."
-	// SubjectDrain is the cooperative-drain broadcast (operator → clients).
+	// SubjectDrain is a reserved operator-only control subject. Cooperative drain
+	// is now delivered per-client over sx.deliver.<id>.drain (ADR-0019); this name
+	// remains reserved in the operator-only control space.
 	SubjectDrain = "sx.control.drain"
 	// WorkflowPrefix is the workflow convention space.
 	WorkflowPrefix = "sx.workflow."

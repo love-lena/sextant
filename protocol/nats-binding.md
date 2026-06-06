@@ -10,7 +10,8 @@ NATS provides three facilities the module uses:
 
 - JetStream streams for the durable message log;
 - JetStream KV buckets for artifacts, metadata, and reference conventions;
-- core pub/sub for cooperative drain broadcast.
+- core pub/sub for each client's private push delivery (`sx.deliver.<id>.*`),
+  which carries subscribe/watch results and the cooperative-drain signal.
 
 ## Topology
 
@@ -29,11 +30,11 @@ Reserved subjects:
 | Subject | Purpose |
 |---|---|
 | `sx.control.*` | Operator-only control subjects. Clients may not publish here. |
-| `sx.control.drain` | Cooperative drain broadcast. |
+| `sx.deliver.<id>.*` | A client's private push-delivery space: subscribe/watch results and the cooperative-drain signal (`sx.deliver.<id>.drain`). |
 | `sx.workflow.*` | Workflow convention subjects. |
 
 Messages use the `msg.>` subject space. The reference naming conventions are
-`msg.topic.<name>` and `msg.agent.<id>`.
+`msg.topic.<name>` and `msg.client.<id>`.
 
 ## Auth and identity
 

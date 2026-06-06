@@ -12,13 +12,13 @@ human has signed off — see
 | [0003](0003-high-level-architecture.md) | High-level architecture (the component map) | accepted |
 | [0004](0004-conventions-are-optional.md) | Conventions are optional, not core | accepted |
 | [0005](0005-two-primitives.md) | The two primitives | accepted |
-| [0006](0006-wire-atom.md) | The wire atom | accepted |
-| [0007](0007-bus-is-nats-no-daemon.md) | The bus is NATS, and there is no daemon | accepted |
-| [0008](0008-clients-are-processes.md) | Clients are processes | accepted |
+| [0006](0006-wire-atom.md) | The wire atom | accepted (refined by 0019) |
+| [0007](0007-bus-is-nats-no-daemon.md) | The bus is NATS, and there is no daemon | accepted (refined by 0018) |
+| [0008](0008-clients-are-processes.md) | Clients are processes | accepted (refined by 0020) |
 | [0009](0009-spawn.md) | Spawn | accepted |
-| [0010](0010-lifecycle-and-versioning.md) | Lifecycle & versioning | accepted |
+| [0010](0010-lifecycle-and-versioning.md) | Lifecycle & versioning | accepted (refined by 0019, 0020) |
 | [0011](0011-workflows.md) | Workflows | accepted |
-| [0012](0012-reserved-namespace-and-authn.md) | The reserved `sx` namespace, and authn | accepted |
+| [0012](0012-reserved-namespace-and-authn.md) | The reserved `sx` namespace, and authn | accepted (refined by 0015, 0020) |
 | [0013](0013-multi-backend.md) | Multi-backend posture | accepted |
 | [0014](0014-the-tui-is-a-client.md) | The TUI is a client | accepted |
 | [0015](0015-operator-only-account.md) | Operator-only state lives in its own account | accepted |

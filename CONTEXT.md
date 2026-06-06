@@ -80,7 +80,9 @@ Distinct from a **call** (client↔bus).
 _Avoid_: using "request/reply" for the client↔bus call
 
 **Clients registry**:
-The self-maintained directory of which clients are present.
+The durable, bus-maintained directory of issued client identities — written when
+the bus issues an identity, removed only by retire; it survives disconnect and bus
+restart and lists offline clients too (ADR-0020).
 _Avoid_: presence (that is the read-time liveness *view* over the registry, not
 the registry itself), service discovery
 
@@ -125,8 +127,9 @@ _Avoid_: kill (reserve that for forcing a process from the outside)
   **artifacts**.
 - A **workflow** is run by a **coordinator**; a **dispatcher** spawns new
   **clients**. Both coordinator and dispatcher are just clients.
-- The **clients registry** lists clients; **presence** is its liveness view —
-  who is currently alive, judged at read-time from heartbeat freshness.
+- The **clients registry** lists every issued client; **presence** is its liveness
+  view — who is connected right now, derived at read time from the bus's live
+  connection table.
 - A **client** makes a **call** to invoke an **operation** on the **bus**; the bus
   stamps a **frame** around the record and stores or relays it via the **backend**.
 

@@ -75,7 +75,10 @@ protocol epoch.
 ## Reference convention: clients registry
 
 The clients registry is built on key enumeration. The bus writes a client's entry
-on connect and removes it on clean close. Listed means registered and not cleanly
-removed; it is not a perfect liveness guarantee (presence is the read-time liveness
-view over the registry). The registry key is the authoritative client id; a record
-whose body id disagrees with its key is corrupt.
+when it issues the identity (`clients.register`) and removes it only on `retire`;
+the entry is durable across disconnect and bus restart. Listed means *issued and
+not retired* — so the registry includes offline clients. Whether a listed client
+is connected right now is **presence**, the read-time liveness view derived from
+the bus's live connection table, not a field the registry stores (ADR-0020). The
+registry key is the authoritative client id; a record whose body id disagrees with
+its key is corrupt.
