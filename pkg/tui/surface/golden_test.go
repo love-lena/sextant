@@ -1,0 +1,252 @@
+package surface_test
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+	"time"
+
+	"github.com/charmbracelet/x/exp/teatest"
+	"github.com/love-lena/sextant/pkg/sextant"
+	"github.com/love-lena/sextant/pkg/tui/busfeed"
+	"github.com/love-lena/sextant/pkg/tui/surface"
+	"github.com/love-lena/sextant/pkg/tui/theme"
+	"github.com/love-lena/sextant/pkg/tui/widget"
+	"github.com/love-lena/sextant/pkg/wire"
+)
+
+// The golden tests render each surface's View deterministically — fixed size,
+// fixed synthetic state fed through the surface's own load/event messages, no
+// bus, no time, no randomness — and assert it against a committed golden via
+// teatest.RequireEqualOutput. A nil SDK client is safe here: the goldens never
+// call Init or any path that dereferences the client (they feed state directly).
+// Regenerate with:
+//
+//	go test ./pkg/tui/surface -update
+//
+// Sizes are the OUTER box dimensions; innerOf converts to the inner content area
+// the surface is sized to, exactly as the dash's layout engine does. The layout
+// owns the Box chrome, so the goldens wrap the surface's inner View in Box here.
+
+const (
+	boxOverheadW = 4
+	boxOverheadH = 2
+)
+
+func innerOf(w, h int) (int, int) { return w - boxOverheadW, h - boxOverheadH }
+
+func fixedDark() theme.Theme { return theme.Dark() }
+
+// box wraps a surface's inner content in the same Box chrome the layout draws, so
+// a golden captures what the operator actually sees.
+func box(t theme.Theme, s surface.Surface, focus widget.Focus, w, h int) string {
+	iw, ih := innerOf(w, h)
+	s.SetSize(iw, ih)
+	s.SetFocus(focus)
+	return widget.Box(t, focus, s.Title(), t.RoleHue(theme.RoleHuman), s.View(), w, h)
+}
+
+func sampleClients() []sextant.ClientInfo {
+	return []sextant.ClientInfo{
+		{ID: "01CLIENTLENA", DisplayName: "lena", Kind: theme.RoleHuman, Online: true},
+		{ID: "01CLIENTCOORD", DisplayName: "coordinator-1", Kind: theme.RoleCoordinator, Online: true},
+		{ID: "01CLIENTDISP", DisplayName: "dispatcher-1", Kind: theme.RoleDispatcher, Online: false},
+		{ID: "01CLIENTALPHA", DisplayName: "agent-alpha", Kind: theme.RoleAgent, Online: true},
+		{ID: "01CLIENTBETA", DisplayName: "agent-beta", Kind: theme.RoleAgent, Online: false},
+	}
+}
+
+// --- presence ---
+
+func TestPresenceGolden(t *testing.T) {
+	th := fixedDark()
+	for _, tc := range []struct {
+		name  string
+		focus widget.Focus
+		feed  bool
+	}{
+		{"empty_selected", widget.FocusSelected, false},
+		{"idle", widget.FocusIdle, true},
+		{"selected", widget.FocusSelected, true},
+		{"active", widget.FocusActive, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := surface.NewPresence(context.Background(), nil, th, theme.DefaultKeymap())
+			if tc.feed {
+				p.Update(surface.ClientsLoadedMsg{Clients: sampleClients()})
+			}
+			out := box(th, p, tc.focus, 28, 9)
+			teatest.RequireEqualOutput(t, []byte(out))
+		})
+	}
+}
+
+// --- message stream ---
+
+// chatEvent builds a synthetic received chat.message from author, as the bus
+// would echo it back on the subscription.
+func chatEvent(author, text string) busfeed.EventMsg {
+	rec, _ := json.Marshal(map[string]string{"$type": "chat.message", "text": text})
+	return busfeed.EventMsg{Message: sextant.Message{
+		Frame:   wire.Frame{ID: "01" + author, Author: author, Kind: wire.KindMessage, Epoch: wire.Epoch, Record: rec},
+		Subject: "msg.topic.plan",
+		BusTime: time.Unix(0, 0),
+	}}
+}
+
+// sampleAuthors maps the synthetic author ids to display names + roles, the
+// presence-derived map the dash hands the stream so authors render in role hue.
+func sampleAuthors() map[string]surface.Author {
+	return map[string]surface.Author{
+		"lena":          {Name: "lena", Role: theme.RoleHuman},
+		"coordinator-1": {Name: "coordinator-1", Role: theme.RoleCoordinator},
+		"agent-alpha":   {Name: "agent-alpha", Role: theme.RoleAgent},
+	}
+}
+
+func feedStream(s *surface.Stream) {
+	for _, e := range []busfeed.EventMsg{
+		chatEvent("lena", "let's get the dash building"),
+		chatEvent("coordinator-1", "spinning up agent-alpha for the toolkit"),
+		chatEvent("agent-alpha", "accepted — starting on theme + widgets"),
+		chatEvent("agent-alpha", "palette resolved, goldens green"),
+		chatEvent("coordinator-1", "nice, eyeball the gallery"),
+	} {
+		s.Update(e)
+	}
+}
+
+func TestStreamTailGolden(t *testing.T) {
+	th := fixedDark()
+	for _, tc := range []struct {
+		name  string
+		focus widget.Focus
+		feed  bool
+	}{
+		{"empty", widget.FocusSelected, false},
+		{"idle", widget.FocusIdle, true},
+		{"selected", widget.FocusSelected, true},
+		{"active", widget.FocusActive, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := surface.NewStream(context.Background(), nil, "msg.topic.plan", th, theme.DefaultKeymap(), surface.WithAuthors(sampleAuthors()))
+			if tc.feed {
+				feedStream(s)
+			}
+			out := box(th, s, tc.focus, 48, 9)
+			teatest.RequireEqualOutput(t, []byte(out))
+		})
+	}
+}
+
+func TestStreamComposeGolden(t *testing.T) {
+	th := fixedDark()
+	for _, tc := range []struct {
+		name  string
+		focus widget.Focus
+	}{
+		{"compose_selected", widget.FocusSelected}, // dim hint
+		{"compose_active", widget.FocusActive},     // live input
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := surface.NewStream(context.Background(), nil, "msg.topic.plan", th, theme.DefaultKeymap(), surface.WithCompose(), surface.WithAuthors(sampleAuthors()))
+			feedStream(s)
+			// size before feeding keystrokes so the input width is set
+			iw, ih := innerOf(48, 10)
+			s.SetSize(iw, ih)
+			s.SetFocus(tc.focus)
+			if tc.focus == widget.FocusActive {
+				typeInto(s, "ship it")
+			}
+			out := widget.Box(th, tc.focus, s.Title(), th.RoleHue(theme.RoleHuman), s.View(), 48, 10)
+			teatest.RequireEqualOutput(t, []byte(out))
+		})
+	}
+}
+
+func TestStreamDroppedGolden(t *testing.T) {
+	th := fixedDark()
+	s := surface.NewStream(context.Background(), nil, "msg.topic.plan", th, theme.DefaultKeymap())
+	iw, ih := innerOf(48, 9)
+	s.SetSize(iw, ih)
+	s.SetFocus(widget.FocusSelected)
+	s.Update(chatEvent("lena", "before the gap"))
+	s.Update(busfeed.DroppedMsg{N: 7})
+	s.Update(chatEvent("agent-alpha", "after the gap"))
+	out := widget.Box(th, widget.FocusSelected, s.Title(), th.RoleHue(theme.RoleHuman), s.View(), 48, 9)
+	teatest.RequireEqualOutput(t, []byte(out))
+}
+
+// --- artifact ---
+
+func sampleDocument() sextant.Artifact {
+	rec, _ := json.Marshal(map[string]string{
+		"$type": "document",
+		"title": "Dash build plan",
+		"body":  "The dash assembles **pane-surfaces** into a layout.\n\n- presence\n- message stream\n- artifact\n\nDetail-on-demand is toggled, never an always-on column.",
+	})
+	return sextant.Artifact{Name: "dash-plan", Record: wire.Lexicon(rec), Revision: 3}
+}
+
+func TestArtifactReaderGolden(t *testing.T) {
+	th := fixedDark()
+	for _, tc := range []struct {
+		name  string
+		focus widget.Focus
+		feed  bool
+	}{
+		{"empty", widget.FocusSelected, false},
+		{"idle", widget.FocusIdle, true},
+		{"selected", widget.FocusSelected, true},
+		{"active", widget.FocusActive, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := surface.NewArtifact(context.Background(), nil, "dash-plan", th, theme.DefaultKeymap())
+			iw, ih := innerOf(48, 14)
+			a.SetSize(iw, ih)
+			if tc.feed {
+				a.Update(surface.ArtifactLoadedMsg{Artifact: sampleDocument()})
+			}
+			a.SetFocus(tc.focus)
+			out := widget.Box(th, tc.focus, a.Title(), th.KindHue(theme.KindArtifactUpdate), a.View(), 48, 14)
+			teatest.RequireEqualOutput(t, []byte(out))
+		})
+	}
+}
+
+func TestArtifactReviewGolden(t *testing.T) {
+	th := fixedDark()
+	for _, tc := range []struct {
+		name  string
+		focus widget.Focus
+	}{
+		{"review_selected", widget.FocusSelected},
+		{"review_active", widget.FocusActive},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := surface.NewArtifact(context.Background(), nil, "dash-plan", th, theme.DefaultKeymap(), surface.WithReview())
+			iw, ih := innerOf(48, 14)
+			a.SetSize(iw, ih)
+			a.Update(surface.ArtifactLoadedMsg{Artifact: sampleDocument()})
+			a.SetFocus(tc.focus)
+			if tc.focus == widget.FocusActive {
+				typeIntoArtifact(a, "tighten the intro")
+			}
+			out := widget.Box(th, tc.focus, a.Title(), th.KindHue(theme.KindArtifactUpdate), a.View(), 48, 14)
+			teatest.RequireEqualOutput(t, []byte(out))
+		})
+	}
+}
+
+// typeInto feeds a string into a stream's active compose, key by key.
+func typeInto(s *surface.Stream, text string) {
+	for _, r := range text {
+		s.Update(keyRune(r))
+	}
+}
+
+func typeIntoArtifact(a *surface.Artifact, text string) {
+	for _, r := range text {
+		a.Update(keyRune(r))
+	}
+}
