@@ -3,13 +3,19 @@ id: doc-1
 title: Roadmap
 type: other
 created_date: '2026-06-04 18:18'
-updated_date: '2026-06-04 22:01'
+updated_date: '2026-06-06 00:46'
 ---
 
-Thin map of the rebuild's milestones — order, goal, definition-of-done, and the
+Thin map of Sextant's milestones — order, goal, definition-of-done, and the
 tickets that carry each. **Tickets are the source of truth**; this doc is the
 narrative the milestone list can't hold. Live status: `backlog milestone list`.
-Numbers are *sequence, not hard gates* (e.g. M3 can be probed early).
+
+The rewrite has landed on `main` (#91), and with it the **core module is (mostly)
+locked**. Past the MVP, the remaining milestones build as **independent modules
+over the stable core** (ADR-0022), not a strict sequence: M3, M4, M5, and the
+TypeScript SDK build in parallel — one module per worktree — while core-changing
+work (M3-proper, creds reissue, retention) stays serial: one writer on the core
+at a time.
 
 ## M1 · Core protocol + SDK — ✅ Done
 The minimal thing Sextant *is*: the bus (embedded NATS, JWT auth, `sx` namespace),
@@ -63,7 +69,8 @@ Beyond the build order, M2 also landed the **bus-issued-identity model** (ADR-00
 *complete* now is the **MCP server** (TASK-22) and the run ergonomics (TASK-27).
 
 M2 ships **Go only** — the Go SDK, the Go CLI, and the Go MCP server. (The
-TypeScript SDK is **Future**, TASK-5.)
+TypeScript SDK — TASK-5 — is a separate parallel track: low priority, but not
+deferred; see ADR-0022.)
 
 ## M3 · Cross-machine connectivity — spike, expands later
 **Goal:** reach the bus from another host (the real case: over SSH).
@@ -94,5 +101,6 @@ end-to-end (state→Artifact, control/events→Messages).
   folded into **ADR-0019** for M2 (identity mechanics TASK-8, the backend-contract
   TASK-11, write-precision TASK-9); the rest stay parked (retention TASK-13,
   salvage inventory TASK-14, creds reissue TASK-16, request/reply TBD TASK-23).
-- **Future** — deferred-but-wanted (TypeScript SDK, client liveness/heartbeat,
-  DAG-CBOR, blob tier, multi-backend, Mastra, golangci-lint).
+- **Future** — deferred-but-wanted (client liveness/heartbeat, DAG-CBOR, blob
+  tier, multi-backend, Mastra, golangci-lint). (The **TypeScript SDK** is *not*
+  here — it is an available, low-priority parallel track, not deferred; ADR-0022.)
