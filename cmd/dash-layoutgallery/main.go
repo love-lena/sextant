@@ -66,19 +66,24 @@ func resolveTheme(name string) theme.Theme {
 }
 
 // root adapts the layout.Model (which has a value-receiver Update returning a
-// Model) to the tea.Model interface (Update returns a tea.Model). It also
-// swallows the layout's re-emitted OpenMsg: the real dash would retarget the
-// detail surface here, but the gallery's detail mock is static, so the re-emit
-// is a no-op the gallery acknowledges.
+// Model) to the tea.Model interface (Update returns a tea.Model). It is also the
+// HOST end of the detail-on-demand contract: a surface's OpenMsg flows into the
+// layout, which opens detail and emits a layout.DetailOpenedMsg for the host to
+// retarget the detail content. The gallery reads that notification (a no-op,
+// since its detail mock is static) and otherwise forwards every message into the
+// layout — safe because DetailOpenedMsg is a distinct type the layout ignores, so
+// there is no re-trigger loop.
 type root struct{ m layout.Model }
 
 func (r root) Init() tea.Cmd { return r.m.Init() }
 
 func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if _, ok := msg.(surface.OpenMsg); ok {
-		// The dash (7.5) would retarget the detail surface to the opened ref. The
-		// gallery's detail mock is static; the layout has already shown + focused the
-		// detail pane, so there is nothing further to do here.
+	if opened, ok := msg.(layout.DetailOpenedMsg); ok {
+		// The real dash (7.5) retargets its detail surface onto opened.Ref here. The
+		// gallery's detail mock is static, so this is a no-op acknowledgement; the
+		// layout has already shown + focused the detail pane.
+		_ = opened
+		return r, nil
 	}
 	var cmd tea.Cmd
 	r.m, cmd = r.m.Update(msg)

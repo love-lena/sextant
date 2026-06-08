@@ -12,10 +12,12 @@ import (
 // machine, intent routing, and reflow triggers live:
 //
 //   - tea.WindowSizeMsg → record the size and reflow (re-fit every visible pane).
-//   - surface.OpenMsg → open the detail-on-demand pane on the named ref and
-//     RE-EMIT the OpenMsg as a Cmd, so the host (7.5) can retarget the detail
+//   - surface.OpenMsg → open the detail-on-demand pane on the named ref and emit
+//     a DetailOpenedMsg as a Cmd, so the host (7.5) can retarget the detail
 //     content. The layout handles the mechanics (show + focus + reflow) and stays
-//     domain-free about what was opened.
+//     domain-free about what was opened. The notification is a DISTINCT type, not
+//     the raw OpenMsg, so a host that forwards every message back into the layout
+//     never re-triggers the open (the loop that a same-type re-emit would cause).
 //   - surface.DoneMsg → step focus back to the layout level; if the done pane is
 //     the detail pane, hide it and reflow.
 //   - tea.KeyMsg → routed by level: layout-level keys (nav, toggle, preset,
@@ -98,14 +100,9 @@ func (m Model) handleLayoutKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Down), key.Matches(msg, m.keys.Right):
 		m.moveSelection(+1)
 		return m, nil
-	}
-	// The detail-toggle and preset-cycle keys are layout actions bound to single
-	// runes that are not in the core keymap (the keymap's nav/step/options/quit are
-	// the locked set). They are read here as overridable layout shortcuts.
-	switch msg.String() {
-	case detailToggleKey:
+	case key.Matches(msg, m.keys.DetailToggle):
 		return m.toggleDetail()
-	case presetCycleKey:
+	case key.Matches(msg, m.keys.PresetCycle):
 		m.preset = nextPreset(m.preset)
 		m.reflow()
 		return m, nil
@@ -216,25 +213,45 @@ func (m Model) toggleDetail() (Model, tea.Cmd) {
 	return m, nil
 }
 
+// DetailOpenedMsg is the layout's host-facing notification that a surface's
+// OpenMsg opened the detail-on-demand pane. The layout emits it as a Cmd so the
+// host (7.5) can retarget the detail surface's content onto the named ref (e.g.
+// load the artifact). It carries the open intent's payload verbatim — the layout
+// itself never resolves the ref, staying domain-free.
+//
+// It is deliberately a DISTINCT type from surface.OpenMsg, not the raw intent:
+// the host's Update typically forwards every message into the layout, so a raw
+// OpenMsg re-emit would land back in openDetail and re-emit again, spinning
+// forever. A distinct notification is inert if forwarded (the layout's Update
+// ignores it), so the host may forward-everything safely; it only needs to read
+// DetailOpenedMsg to retarget. The layout has already shown + focused the detail
+// pane by the time the host sees it, so the host only resolves the ref.
+type DetailOpenedMsg struct {
+	// Kind is what Ref refers to (mirrors surface.OpenMsg.Kind).
+	Kind surface.OpenKind
+	// Ref is the reference the host resolves onto the detail surface.
+	Ref string
+}
+
 // openDetail responds to a surface's OpenMsg: it records the target, shows the
-// detail pane (selecting and stepping into it), reflows, and RE-EMITS the
-// OpenMsg as a Cmd so the host can retarget the detail surface's content (e.g.
-// load the named artifact). The layout never resolves the ref — it stays
-// domain-free; the re-emit is the seam that hands resolution to the host (7.5).
-// Without a detail surface the intent is still re-emitted (the host may handle
-// it another way) but no pane is shown.
+// detail pane (selecting and stepping into it), reflows, and emits a
+// DetailOpenedMsg as a Cmd so the host can retarget the detail surface's content.
+// The layout never resolves the ref — it stays domain-free; the notification is
+// the seam that hands resolution to the host (7.5). Without a detail surface the
+// notification still fires (the host may handle it another way) but no pane is
+// shown.
 func (m Model) openDetail(msg surface.OpenMsg) (Model, tea.Cmd) {
 	m.detailTarget = msg.Ref
-	reemit := func() tea.Msg { return msg }
+	notify := func() tea.Msg { return DetailOpenedMsg{Kind: msg.Kind, Ref: msg.Ref} }
 	if !m.hasDetail {
-		return m, reemit
+		return m, notify
 	}
 	m.detailShown = true
 	m.reflow()
 	m.selected = detailPaneID
 	m.level = levelPane
 	m.applyFocus()
-	return m, reemit
+	return m, notify
 }
 
 // handleDone responds to a surface's DoneMsg ("I stepped out"): it returns focus

@@ -259,11 +259,13 @@ func TestEscClosesDetail(t *testing.T) {
 	}
 }
 
-// TestOpenMsgShowsDetailAndReemits is the detail-on-demand intent contract: a
-// surface's OpenMsg shows the detail pane AND is re-emitted as a Cmd so the host
-// can retarget the detail content. The layout records the target but never
-// resolves it (stays domain-free).
-func TestOpenMsgShowsDetailAndReemits(t *testing.T) {
+// TestOpenMsgShowsDetailAndNotifies is the detail-on-demand intent contract: a
+// surface's OpenMsg shows the detail pane AND emits a DetailOpenedMsg (a distinct
+// host-facing type, not the raw OpenMsg) so the host can retarget the detail
+// content. The layout records the target but never resolves it (stays
+// domain-free). Using a distinct type is what keeps a forward-everything host
+// from looping.
+func TestOpenMsgShowsDetailAndNotifies(t *testing.T) {
 	m, _ := newCockpit(t)
 	open := surface.OpenMsg{Kind: surface.OpenArtifact, Ref: "design-doc"}
 	m2, cmd := m.Update(open)
@@ -274,14 +276,31 @@ func TestOpenMsgShowsDetailAndReemits(t *testing.T) {
 		t.Errorf("OpenMsg should select + step into detail: selected=%q steppedIn=%v", m2.Selected(), m2.SteppedIn())
 	}
 	if cmd == nil {
-		t.Fatal("OpenMsg must be re-emitted as a Cmd for the host to retarget")
+		t.Fatal("OpenMsg must produce a DetailOpenedMsg Cmd for the host to retarget")
 	}
-	got, ok := cmd().(surface.OpenMsg)
-	if !ok || got != open {
-		t.Errorf("re-emitted cmd = %#v, want the original OpenMsg %#v", cmd(), open)
+	got, ok := cmd().(layout.DetailOpenedMsg)
+	if !ok {
+		t.Fatalf("notification = %#v, want layout.DetailOpenedMsg", cmd())
+	}
+	if got.Kind != open.Kind || got.Ref != open.Ref {
+		t.Errorf("DetailOpenedMsg = %#v, want Kind/Ref from %#v", got, open)
 	}
 	if cfg := m2.Config(); cfg.DetailTarget != "design-doc" {
 		t.Errorf("detail target not recorded in config: %q", cfg.DetailTarget)
+	}
+}
+
+// TestDetailOpenedMsgIsInertInLayout proves the loop-proofing: feeding a
+// DetailOpenedMsg back into the layout (as a forward-everything host would) does
+// NOT re-trigger the open — it produces no further DetailOpenedMsg, so there is
+// no infinite re-emit loop.
+func TestDetailOpenedMsgIsInertInLayout(t *testing.T) {
+	m, _ := newCockpit(t)
+	_, cmd := m.Update(layout.DetailOpenedMsg{Kind: surface.OpenArtifact, Ref: "design-doc"})
+	if cmd != nil {
+		if _, ok := cmd().(layout.DetailOpenedMsg); ok {
+			t.Fatal("DetailOpenedMsg fed back into the layout re-triggered another — loop risk")
+		}
 	}
 }
 
@@ -308,6 +327,43 @@ func TestPresetCycleReflows(t *testing.T) {
 	m, _ = m.Update(key("p"))
 	if m.Config().Preset == start {
 		t.Errorf("preset key did not change the preset (still %q)", start)
+	}
+}
+
+// TestLayoutShortcutsAreOverridable proves the layout reads the detail-toggle and
+// preset-cycle keys from the keymap (keys are data, nothing hardcoded): a remapped
+// keymap drives them by the new keys, and the default d/p no longer act.
+func TestLayoutShortcutsAreOverridable(t *testing.T) {
+	keys := theme.DefaultKeymap().Merge(
+		theme.Override{Action: "DetailToggle", Keys: []string{"f1"}},
+		theme.Override{Action: "PresetCycle", Keys: []string{"f2"}},
+	)
+	m := layout.New(theme.Dark(), keys, layout.DefaultConfig(),
+		newMock("presence", "presence"), newMock("stream", "stream"),
+		newMock("artifact", "artifact"), newMock("detail", "detail"))
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	// The old default keys are inert now.
+	m, _ = m.Update(key("d"))
+	if m.DetailShown() {
+		t.Error("d should be inert after remapping DetailToggle")
+	}
+	startPreset := m.Config().Preset
+	m, _ = m.Update(key("p"))
+	if m.Config().Preset != startPreset {
+		t.Error("p should be inert after remapping PresetCycle")
+	}
+
+	// The remapped keys act.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyF1})
+	if !m.DetailShown() {
+		t.Error("remapped DetailToggle (f1) should toggle the detail pane")
+	}
+	// Step back to the layout level so f2 is read as a layout key.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyF2})
+	if m.Config().Preset == startPreset {
+		t.Error("remapped PresetCycle (f2) should cycle the preset")
 	}
 }
 
