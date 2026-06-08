@@ -88,11 +88,11 @@ func newModel(th theme.Theme) model {
 }
 
 func clientItem(th theme.Theme, name, role string, st theme.Status) widget.ListItem {
-	glyph := lipgloss.NewStyle().Foreground(th.StatusHue(st)).Render(theme.StatusGlyph(st))
 	return widget.ListItem{
-		Title: name,
-		Glyph: glyph,
-		Hue:   th.RoleHue(role),
+		Title:    name,
+		Glyph:    theme.StatusGlyph(st),
+		Hue:      th.RoleHue(role),
+		GlyphHue: th.StatusHue(st),
 	}
 }
 
@@ -244,9 +244,7 @@ func (m *model) rebuild() {
 	listCursor := m.list.Cursor()
 	nm := newModel(m.th)
 	nm.selected, nm.active, nm.w, nm.h = m.selected, m.active, m.w, m.h
-	for i := 0; i < listCursor; i++ {
-		nm.list.MoveDown()
-	}
+	nm.list.SetCursor(listCursor)
 	nm.layout()
 	*m = nm
 }

@@ -8,19 +8,23 @@ import (
 	"github.com/love-lena/sextant/pkg/tui/theme"
 )
 
-// ListItem is one row in a List. Title is the row text; Hue, when set, tints the
-// leading glyph and the title (e.g. a role hue) — leave it the zero Color to
-// inherit the theme foreground. Glyph is an optional leading marker (e.g. a
-// status shape) rendered before the title.
+// ListItem is one row in a List: unstyled content plus the hues the widget
+// paints it in. The widget owns all styling — callers supply plain text and
+// colours, never pre-rendered ANSI — so the cursor bar can repaint a row
+// cleanly (no embedded reset codes to splice through, the bug Box's doc warns
+// against).
 type ListItem struct {
-	// Title is the row's text.
+	// Title is the row's text, unstyled.
 	Title string
-	// Glyph is an optional leading marker (e.g. a status shape) drawn before the
-	// title. Empty for none.
+	// Glyph is an optional leading marker (e.g. a status shape), unstyled and
+	// drawn before the title. Empty for none.
 	Glyph string
-	// Hue tints the glyph and title. The zero Color inherits the theme
-	// foreground.
+	// Hue tints the title. The zero Color inherits the theme foreground.
 	Hue lipgloss.Color
+	// GlyphHue tints the glyph. The zero Color falls back to Hue (then the theme
+	// foreground), so a status glyph can carry its own colour distinct from the
+	// title.
+	GlyphHue lipgloss.Color
 }
 
 // List is a cursor-driven selectable list: a vertical column of rows with a
@@ -99,6 +103,25 @@ func (l List) Update(msg tea.Msg) (List, tea.Cmd) {
 	return l, nil
 }
 
+// SetCursor moves the cursor to a row index, clamped into range, and scrolls so
+// it stays in view. Surfaces use it to drive selection from the outside (e.g.
+// mapping a record id to its row); an out-of-range index is clamped to the
+// nearest valid row. An empty list ignores it.
+func (l *List) SetCursor(i int) {
+	if len(l.items) == 0 {
+		l.cursor = 0
+		return
+	}
+	if i < 0 {
+		i = 0
+	}
+	if i > len(l.items)-1 {
+		i = len(l.items) - 1
+	}
+	l.cursor = i
+	l.clampOffset()
+}
+
 // MoveUp moves the cursor up one row, clamped at the top, and scrolls if needed.
 func (l *List) MoveUp() {
 	if l.cursor > 0 {
@@ -157,29 +180,11 @@ func (l List) View(t theme.Theme, focus Focus) string {
 	var b strings.Builder
 	for i := l.offset; i < end; i++ {
 		it := l.items[i]
-		hue := it.Hue
-		if hue == "" {
-			hue = t.Fg
-		}
-
-		var row strings.Builder
-		if it.Glyph != "" {
-			row.WriteString(it.Glyph)
-			row.WriteByte(' ')
-		}
-		row.WriteString(it.Title)
-
-		line := lipgloss.NewStyle().Foreground(hue).Render(row.String())
-
+		var line string
 		if i == l.cursor && focus == FocusActive {
-			// Active cursor: a filled accent bar across the full width.
-			line = lipgloss.NewStyle().
-				Background(t.Accent).
-				Foreground(t.OnAccent).
-				Bold(true).
-				Width(w).
-				MaxWidth(w).
-				Render(row.String())
+			line = l.renderCursorRow(t, it, w)
+		} else {
+			line = l.renderRow(t, it, w)
 		}
 		b.WriteString(line)
 		if i < end-1 {
@@ -187,4 +192,49 @@ func (l List) View(t theme.Theme, focus Focus) string {
 		}
 	}
 	return b.String()
+}
+
+// renderRow paints a resting row: the glyph and title in their own hues,
+// per-segment, clamped to the row width so a long title is truncated (Box must
+// never have to re-wrap a list row).
+func (l List) renderRow(t theme.Theme, it ListItem, w int) string {
+	titleHue := it.Hue
+	if titleHue == "" {
+		titleHue = t.Fg
+	}
+	var row strings.Builder
+	if it.Glyph != "" {
+		glyphHue := it.GlyphHue
+		if glyphHue == "" {
+			glyphHue = titleHue
+		}
+		row.WriteString(lipgloss.NewStyle().Foreground(glyphHue).Render(it.Glyph))
+		row.WriteByte(' ')
+	}
+	row.WriteString(lipgloss.NewStyle().Foreground(titleHue).Render(it.Title))
+	// Width pads short rows; MaxHeight(1) clamps a long row to one line
+	// (truncate, never wrap) so Box gets exactly one row per item.
+	return lipgloss.NewStyle().Width(w).MaxWidth(w).MaxHeight(1).Render(row.String())
+}
+
+// renderCursorRow paints the active cursor row as one filled accent bar. It
+// builds the row from UNSTYLED content (no embedded hue spans) so the single
+// background/foreground/bold style applies cleanly across the whole row — the
+// bar owns all colour. Splicing a style over already-styled text would let an
+// inner reset code blank the bar mid-row.
+func (l List) renderCursorRow(t theme.Theme, it ListItem, w int) string {
+	var plain strings.Builder
+	if it.Glyph != "" {
+		plain.WriteString(it.Glyph)
+		plain.WriteByte(' ')
+	}
+	plain.WriteString(it.Title)
+	return lipgloss.NewStyle().
+		Background(t.Accent).
+		Foreground(t.OnAccent).
+		Bold(true).
+		Width(w).
+		MaxWidth(w).
+		MaxHeight(1).
+		Render(plain.String())
 }

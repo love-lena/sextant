@@ -1,8 +1,6 @@
 package widget
 
 import (
-	"strings"
-
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/love-lena/sextant/pkg/tui/theme"
@@ -96,12 +94,10 @@ func (s *Stream) ScrollDown() {
 	}
 }
 
-// maxOffset is the largest top-line index that still fills the viewport.
+// maxOffset is the largest top-line index that still shows the tail, in step
+// with renderViewport's cue reservation.
 func (s Stream) maxOffset() int {
-	if s.height <= 0 {
-		return 0
-	}
-	return max(0, len(s.lines)-s.height)
+	return maxViewportOffset(len(s.lines), s.height)
 }
 
 // pinTail sets the offset so the last line is visible at the bottom.
@@ -116,42 +112,8 @@ func (s Stream) View(t theme.Theme, focus Focus) string {
 	if w <= 0 {
 		w = 1
 	}
-	h := s.height
-	if h <= 0 {
-		h = 1
-	}
 	if len(s.lines) == 0 {
 		return lipgloss.NewStyle().Foreground(t.Dim).Width(w).Render("(no messages)")
 	}
-
-	end := s.offset + h
-	if end > len(s.lines) {
-		end = len(s.lines)
-	}
-	visible := s.lines[s.offset:end]
-
-	// Overflow cues: a brighter accent when active, dim otherwise.
-	cueHue := t.Dim
-	if focus == FocusActive {
-		cueHue = t.Accent
-	}
-	cue := func(text string) string {
-		return lipgloss.NewStyle().Foreground(cueHue).Width(w).MaxWidth(w).Render(text)
-	}
-
-	var rows []string
-	if s.offset > 0 {
-		rows = append(rows, cue("↑ more"))
-	}
-	for _, ln := range visible {
-		rows = append(rows, lipgloss.NewStyle().Foreground(t.Fg).MaxWidth(w).Render(ln))
-	}
-	if end < len(s.lines) {
-		rows = append(rows, cue("↓ more"))
-	}
-	// Trim to height: drop interior lines if the cues pushed us over.
-	if len(rows) > h {
-		rows = rows[:h]
-	}
-	return strings.Join(rows, "\n")
+	return renderViewport(t, focus, s.lines, s.offset, s.width, s.height)
 }

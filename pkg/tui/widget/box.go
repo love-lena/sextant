@@ -23,7 +23,7 @@ func Box(t theme.Theme, focus Focus, title string, titleHue lipgloss.Color, body
 	if h < 3 {
 		h = 3
 	}
-	bc := lipgloss.Color(focus.borderColor(t))
+	bc := focus.borderColor(t)
 	innerW, innerH := w-2, h-2
 
 	// Body: wrap + pad to exactly innerW×innerH, with one column of horizontal

@@ -87,10 +87,7 @@ func (d *Detail) ScrollDown() {
 }
 
 func (d Detail) maxOffset() int {
-	if d.height <= 0 {
-		return 0
-	}
-	return max(0, len(d.wrapped)-d.height)
+	return maxViewportOffset(len(d.wrapped), d.height)
 }
 
 func (d *Detail) clampOffset() {
@@ -110,40 +107,8 @@ func (d Detail) View(t theme.Theme, focus Focus) string {
 	if w <= 0 {
 		w = 1
 	}
-	h := d.height
-	if h <= 0 {
-		h = 1
-	}
 	if len(d.wrapped) == 0 {
 		return lipgloss.NewStyle().Foreground(t.Dim).Width(w).Render("(nothing selected)")
 	}
-
-	end := d.offset + h
-	if end > len(d.wrapped) {
-		end = len(d.wrapped)
-	}
-	visible := d.wrapped[d.offset:end]
-
-	cueHue := t.Dim
-	if focus == FocusActive {
-		cueHue = t.Accent
-	}
-	cue := func(text string) string {
-		return lipgloss.NewStyle().Foreground(cueHue).Width(w).MaxWidth(w).Render(text)
-	}
-
-	var rows []string
-	if d.offset > 0 {
-		rows = append(rows, cue("↑ more"))
-	}
-	for _, ln := range visible {
-		rows = append(rows, lipgloss.NewStyle().Foreground(t.Fg).MaxWidth(w).Render(ln))
-	}
-	if end < len(d.wrapped) {
-		rows = append(rows, cue("↓ more"))
-	}
-	if len(rows) > h {
-		rows = rows[:h]
-	}
-	return strings.Join(rows, "\n")
+	return renderViewport(t, focus, d.wrapped, d.offset, d.width, d.height)
 }

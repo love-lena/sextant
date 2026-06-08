@@ -10,7 +10,10 @@
 // visible distinction for all three, driven entirely by theme tokens.
 package widget
 
-import "github.com/love-lena/sextant/pkg/tui/theme"
+import (
+	"github.com/charmbracelet/lipgloss"
+	"github.com/love-lena/sextant/pkg/tui/theme"
+)
 
 // Focus is a widget's three-state focus, the cue ADR-0023 locks: idle (resting),
 // selected (the layout's selection has landed on this pane), and active (the
@@ -32,9 +35,9 @@ const (
 // borderColor returns the box border colour for a focus state: the resting dim
 // line when idle, the accent when selected or active. The inside-the-widget cue
 // (a visible cursor) is what further separates selected from active.
-func (f Focus) borderColor(t theme.Theme) string {
+func (f Focus) borderColor(t theme.Theme) lipgloss.Color {
 	if f == FocusIdle {
-		return string(t.Line)
+		return t.Line
 	}
-	return string(t.Accent)
+	return t.Accent
 }
