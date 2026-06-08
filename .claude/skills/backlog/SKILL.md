@@ -95,8 +95,9 @@ What each piece carries:
   - the **priority label** `P1` / `P2` / `P3` (mirrors `--priority`, but keeps
     the exact sextant tier — `P1`/`P2`/`P3` carry more meaning than
     high/med/low; see the ladder).
-  - `needs-input` (or `needs-<name>`) when the ticket exists to get a human
-    decision, not to prescribe one.
+  - a **triage state** label when it's known — `ready-for-agent` /
+    `ready-for-human` / `needs-info` (see *Triage & AFK states* below); a fresh,
+    unevaluated ticket is `needs-triage`.
 - **`--notes`** — the provenance and pointers. Backlog.md doesn't keep
   arbitrary frontmatter, so the old `discovered_in` / `fixed_in` /
   `resolved_at` fields live here as `Discovered in: …`, `Fixed in: <sha>`, and
@@ -131,6 +132,39 @@ real identity:
   ships — e.g. ordered milestone work), also wire the native dependency so the
   board renders the edge: `--dep task-3,task-5` on create, or
   `backlog task edit <id> --dep …`.
+
+## Triage & AFK states
+
+Triage state is a **label**, orthogonal to status (`To Do` / `In Progress` /
+`Done`) — a task can be `To Do` + `ready-for-agent`. The five canonical state
+roles, mapped to their Backlog.md label strings in
+`docs/agents/triage-labels.md`, are:
+
+- `needs-triage` — a maintainer still needs to evaluate it (the default for a
+  fresh, unevaluated ticket).
+- `needs-info` — blocked on the reporter for more information.
+- `ready-for-agent` — **fully specified; an AFK agent can implement and merge it
+  with no human in the loop.**
+- `ready-for-human` — needs a human: a judgment call, a design decision, external
+  access, or manual testing.
+- `wontfix` — will not be actioned.
+
+Apply one with the CLI (never hand-edit the file):
+
+```
+backlog task edit <id> --label ready-for-agent
+```
+
+**AFK vs HITL is the load-bearing distinction.** A ticket is *AFK-ready* only when
+an agent could pick it up cold and finish it — complete description, concrete
+acceptance criteria, explicit scope boundaries, no open decisions. Anything that
+needs a human call is `ready-for-human`. Prefer AFK where the work allows.
+
+This skill is the CLI substrate. The **workflow** that decides AFK vs HITL, moves
+tickets through these states, and writes the durable **agent brief** a
+`ready-for-agent` ticket is handed off with lives in the `triage` and `to-issues`
+skills — reach for those to triage or break down work, and for this to drive the
+`backlog` CLI underneath them.
 
 ## Driving a ticket through its life
 
@@ -179,10 +213,10 @@ to have written down when someone has 30 minutes for polish.
 
 Also file:
 
-- **Design decisions that need a human.** Label `needs-input` (or
-  `needs-<name>`), frame the open questions explicitly, and don't speculate
-  about implementation when the decision hasn't been made. The ticket tracks
-  the question, not a prescribed answer.
+- **Design decisions that need a human.** Label `ready-for-human`, frame the
+  open questions explicitly, and don't speculate about implementation when the
+  decision hasn't been made. The ticket tracks the question, not a prescribed
+  answer.
 - **Root-cause bugs distinct from their symptoms.** When debugging surfaces
   multiple distinct root causes for one symptom, file separate tickets and
   cross-link them. Resist the umbrella ticket — the fix shapes rarely overlap.
