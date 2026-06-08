@@ -265,6 +265,60 @@ func TestTinyTerminalRendersNoticeNotGarbage(t *testing.T) {
 	}
 }
 
+// laidOut reports whether a pane id actually got a rect in the last reflow — i.e.
+// it is in the visible set AND it rendered (not dropped at a tiny terminal). It
+// reads View as the source of truth: a laid-out pane's title shows in the render.
+func laidOut(m layout.Model, id string) bool {
+	return strings.Contains(stripANSI(m.View()), id)
+}
+
+// TestDetailNeverStepsIntoDroppedPane is the selection-side mirror of the
+// small-terminal fix: at a terminal too tight to fit the detail pane, opening
+// detail (via the toggle key or a surface OpenMsg) must NOT leave the selection
+// stepped into a pane that has no rect. The reflow guard must demote the
+// selection to a laid-out pane (or none) and drop to the layout level.
+func TestDetailNeverStepsIntoDroppedPane(t *testing.T) {
+	// A tight terminal: the cockpit's right column can't also fit a detail slot at
+	// the Box minimum, so arrange drops the detail pane.
+	const tw, th = 30, 8
+
+	assertNotStuckOnDetail := func(t *testing.T, m layout.Model, via string) {
+		t.Helper()
+		if m.DetailShown() && !laidOut(m, "detail") {
+			// detail is "shown" but didn't render: the selection must not be on it,
+			// and we must not be stepped into it.
+			if m.Selected() == "detail" {
+				t.Errorf("%s: selection stuck on dropped detail pane", via)
+			}
+			if m.SteppedIn() && m.Selected() == "detail" {
+				t.Errorf("%s: stepped into a detail pane that never rendered", via)
+			}
+		}
+		// In all cases the selection must be a laid-out pane or empty, never a pane
+		// with no rect; and a stepped-in selection must be laid out.
+		if sel := m.Selected(); sel != "" && !laidOut(m, sel) {
+			t.Errorf("%s: selection %q is not in the laid-out set", via, sel)
+		}
+		if m.SteppedIn() && m.Selected() != "" && !laidOut(m, m.Selected()) {
+			t.Errorf("%s: stepped into non-rendered pane %q", via, m.Selected())
+		}
+	}
+
+	t.Run("toggle_key", func(t *testing.T) {
+		m, _ := newCockpit(t)
+		m, _ = m.Update(tea.WindowSizeMsg{Width: tw, Height: th})
+		m, _ = m.Update(key("d")) // toggleDetail
+		assertNotStuckOnDetail(t, m, "toggleDetail")
+	})
+
+	t.Run("open_intent", func(t *testing.T) {
+		m, _ := newCockpit(t)
+		m, _ = m.Update(tea.WindowSizeMsg{Width: tw, Height: th})
+		m, _ = m.Update(surface.OpenMsg{Kind: surface.OpenArtifact, Ref: "design-doc"}) // openDetail
+		assertNotStuckOnDetail(t, m, "openDetail")
+	})
+}
+
 // TestDetailOnDemandToggle is AC#2: the detail pane is hidden by default,
 // toggles in cleanly (visible, selected, stepped-in), and toggles back out
 // (hidden, others reclaim the space).

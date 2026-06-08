@@ -223,10 +223,13 @@ func (m Model) toggleDetail() (Model, tea.Cmd) {
 		return m, nil
 	}
 	m.detailShown = true
-	m.reflow()
+	// Set the selection + level BEFORE reflowing, so reflow's firstLaidOut guard
+	// catches the case where the detail pane was dropped at a tiny terminal: it
+	// then demotes the selection to a laid-out pane and drops to the layout level,
+	// rather than leaving the selection stepped into a pane that never rendered.
 	m.selected = detailPaneID
 	m.level = levelPane
-	m.applyFocus()
+	m.reflow()
 	return m, nil
 }
 
@@ -264,10 +267,11 @@ func (m Model) openDetail(msg surface.OpenMsg) (Model, tea.Cmd) {
 		return m, notify
 	}
 	m.detailShown = true
-	m.reflow()
+	// Select + step in BEFORE reflowing so reflow's firstLaidOut guard demotes the
+	// selection if the detail pane was dropped at a tiny terminal (see toggleDetail).
 	m.selected = detailPaneID
 	m.level = levelPane
-	m.applyFocus()
+	m.reflow()
 	return m, notify
 }
 
