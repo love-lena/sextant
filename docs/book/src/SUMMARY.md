@@ -10,22 +10,22 @@
 # The protocol
 
 - [Overview](protocol/overview.md)
-- [Operations]()
-- [Records & lexicons]()
-- [The frame]()
-- [Clients registry & presence]()
+- [Operations](protocol/operations.md)
+- [Records & lexicons](protocol/lexicons.md)
+- [The frame](protocol/frame.md)
+- [Clients registry & presence](protocol/registry.md)
 - [Connection, auth & credentials](protocol/connection.md)
 - [Epoch & versioning](protocol/epoch.md)
 
 # The Go SDK
 
 - [Overview](sdk-go/overview.md)
-- [Messages]()
-- [Artifacts]()
-- [Clients & identity]()
-- [API reference]()
+- [Messages](sdk-go/messages.md)
+- [Artifacts](sdk-go/artifacts.md)
+- [Clients & identity](sdk-go/clients.md)
+- [API reference](sdk-go/reference.md)
 
 # For implementers
 
 - [The Wire API](implementers/wire-api.md)
-- [The backend interface]()
+- [The backend interface](implementers/backend.md)

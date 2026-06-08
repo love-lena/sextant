@@ -14,7 +14,15 @@
   - **Subscribe / read** it back.
   - **Create** a `document` artifact, then **Get** it.
   - **Drain / Close** — a cooperative stop; presence goes offline (no retire).
-- `« runnable Go program inserted by TASK-32.3 »`
 - What "drain" means and why a clean Close ≠ retire.
 - Where to go next: [The protocol](../protocol/overview.md) for the contract, the
   Go SDK section for the full surface.
+
+---
+
+The full program — from [`examples/quickstart`](https://github.com/love-lena/sextant/tree/main/examples/quickstart),
+verified to compile and run against a local `sextant up`:
+
+```go
+{{#include ../../../../examples/quickstart/main.go}}
+```
