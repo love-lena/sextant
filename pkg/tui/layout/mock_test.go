@@ -1,0 +1,68 @@
+package layout_test
+
+import (
+	"fmt"
+	"strings"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/love-lena/sextant/pkg/tui/surface"
+	"github.com/love-lena/sextant/pkg/tui/widget"
+)
+
+// mockSurface is a trivial, deterministic Surface for the layout tests and the
+// gallery: it renders fixed text labelled with its id, tracks the last size and
+// focus it was granted, and emits the intents a test drives it to emit. It has
+// no SDK and no bus, which is the point — the layout composes against the
+// Surface contract alone, so a mock satisfies it and the layout never knows the
+// difference. It proves the layout is domain-free.
+type mockSurface struct {
+	id, title string
+	w, h      int
+	focus     widget.Focus
+	stopped   int
+
+	// onEsc, when set, makes the surface emit a DoneMsg on Esc while active (the
+	// "a surface steps itself out" path the layout must honour). Default off: the
+	// layout's own Back binding steps out.
+	onEsc bool
+	// done records the surface's chosen done id (defaults to its own id).
+	doneID string
+}
+
+func newMock(id, title string) *mockSurface {
+	return &mockSurface{id: id, title: title, doneID: id}
+}
+
+func (s *mockSurface) ID() string    { return s.id }
+func (s *mockSurface) Title() string { return s.title }
+
+func (s *mockSurface) SetSize(w, h int)        { s.w, s.h = w, h }
+func (s *mockSurface) SetFocus(f widget.Focus) { s.focus = f }
+func (s *mockSurface) Init() tea.Cmd           { return nil }
+func (s *mockSurface) Stop()                   { s.stopped++ }
+
+func (s *mockSurface) Update(msg tea.Msg) tea.Cmd {
+	if km, ok := msg.(tea.KeyMsg); ok && s.onEsc && km.String() == "esc" {
+		id := s.doneID
+		return func() tea.Msg { return surface.DoneMsg{ID: id} }
+	}
+	return nil
+}
+
+// View renders deterministic content: the id, the granted inner size, and the
+// focus state, so a golden shows the layout placed and sized the pane correctly.
+func (s *mockSurface) View() string {
+	state := []string{"idle", "selected", "active"}[s.focus]
+	body := fmt.Sprintf("%s\nsize %dx%d\n%s", s.id, s.w, s.h, state)
+	// A few filler lines so the body reads as content, not a stub.
+	body += strings.Repeat("\n· · ·", 2)
+	return body
+}
+
+// openIntentCmd is a tea.Cmd that emits an OpenMsg, the intent a surface raises
+// to ask the layout to open something in detail.
+func openIntentCmd(kind surface.OpenKind, ref string) tea.Cmd {
+	return func() tea.Msg { return surface.OpenMsg{Kind: kind, Ref: ref} }
+}
+
+var _ surface.Surface = (*mockSurface)(nil)
