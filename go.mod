@@ -13,6 +13,7 @@ require (
 	github.com/nats-io/nats.go v1.52.0
 	github.com/nats-io/nkeys v0.4.16
 	github.com/oklog/ulid/v2 v2.1.1
+	go.uber.org/goleak v1.3.0
 )
 
 require (
