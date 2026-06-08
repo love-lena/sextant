@@ -173,6 +173,12 @@ func (m *Model) stepOut() {
 // toggleVisible turns a pane on or off and reflows so the grid fills the freed
 // space (or makes room). The detail pane is never toggled this way — it is
 // governed by detail-on-demand (toggleDetail); toggling it here is ignored.
+//
+// It copies-on-mutate: Update returns Model by value, but hidden is a map (a
+// reference), so mutating it in place would retroactively change every earlier
+// Model copy still in scope and break Bubble Tea's "a returned model is
+// independent" contract. Cloning hidden before the write keeps each returned
+// Model's hidden set its own.
 func (m Model) toggleVisible(id string) Model {
 	if id == detailPaneID {
 		return m
@@ -180,6 +186,7 @@ func (m Model) toggleVisible(id string) Model {
 	if _, ok := m.surfaces[id]; !ok {
 		return m
 	}
+	m.hidden = cloneHidden(m.hidden)
 	if m.hidden[id] {
 		delete(m.hidden, id)
 	} else {
@@ -187,6 +194,16 @@ func (m Model) toggleVisible(id string) Model {
 	}
 	m.reflow()
 	return m
+}
+
+// cloneHidden returns an independent copy of a hidden set, so a mutation on the
+// copy never aliases back into a Model value that shared the original map.
+func cloneHidden(src map[string]bool) map[string]bool {
+	dst := make(map[string]bool, len(src))
+	for id, h := range src {
+		dst[id] = h
+	}
+	return dst
 }
 
 // toggleDetail shows or hides the detail-on-demand pane and reflows. With detail

@@ -59,10 +59,4 @@ func (s *mockSurface) View() string {
 	return body
 }
 
-// openIntentCmd is a tea.Cmd that emits an OpenMsg, the intent a surface raises
-// to ask the layout to open something in detail.
-func openIntentCmd(kind surface.OpenKind, ref string) tea.Cmd {
-	return func() tea.Msg { return surface.OpenMsg{Kind: kind, Ref: ref} }
-}
-
 var _ surface.Surface = (*mockSurface)(nil)

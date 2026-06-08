@@ -36,8 +36,8 @@ func (m Model) visibleOrder() []string {
 // none are visible. It is the fallback selection when the current selection is
 // hidden or the layout has just been built.
 func (m Model) firstVisible() string {
-	for _, id := range m.visibleOrder() {
-		return id
+	if v := m.visibleOrder(); len(v) > 0 {
+		return v[0]
 	}
 	return ""
 }
@@ -50,6 +50,20 @@ func (m Model) isVisible(id string) bool {
 		}
 	}
 	return false
+}
+
+// firstLaidOut returns the first visible pane that actually got a rect from the
+// last reflow, in registration order — the panes the operator can really land
+// on. It differs from firstVisible only at a tiny terminal, where arrange drops
+// the visible panes that don't fit; the selection must follow what is rendered,
+// not the nominal visible set.
+func (m Model) firstLaidOut() string {
+	for _, id := range m.visibleOrder() {
+		if _, ok := m.rects[id]; ok {
+			return id
+		}
+	}
+	return ""
 }
 
 // reflow recomputes the arrangement and resizes every surface to its box inner
@@ -78,9 +92,11 @@ func (m *Model) reflow() {
 		s.SetSize(iw, ih)
 	}
 
-	// Keep the selection on a visible pane.
-	if !m.isVisible(m.selected) {
-		m.selected = m.firstVisible()
+	// Keep the selection on a pane that was actually laid out. A pane can be in the
+	// visible set yet dropped by arrange at a tiny terminal, so check the rects, not
+	// just visibility.
+	if _, ok := m.rects[m.selected]; !ok {
+		m.selected = m.firstLaidOut()
 		m.level = levelLayout
 	}
 	m.applyFocus()

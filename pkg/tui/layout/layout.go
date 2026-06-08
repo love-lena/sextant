@@ -17,6 +17,8 @@
 package layout
 
 import (
+	"fmt"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/love-lena/sextant/pkg/tui/surface"
@@ -198,6 +200,12 @@ func (m Model) View() string {
 	if m.w == 0 || m.h == 0 {
 		return "starting dash…"
 	}
+	// Graceful degradation: when the area can't fit even one pane at the Box
+	// minimum, arrange returns no rects — render a notice instead of an overlapping
+	// composite. The minimum usable terminal is one pane plus the hint row.
+	if len(m.rects) == 0 {
+		return m.tooSmallNotice()
+	}
 	canvas := newCanvas(m.w, m.areaH(), m.th.Bg)
 	// Place panes in the stable visible order (not the map's randomized iteration
 	// order) so the composite is deterministic — goldens depend on it, and two
@@ -227,6 +235,27 @@ func (m Model) areaH() int {
 		h = 1
 	}
 	return h
+}
+
+// tooSmallNotice renders the degraded message shown when the terminal can't fit
+// even one pane at the Box minimum: a centred note stating the minimum size, on
+// the theme background. The minimum usable terminal is one pane (minPaneW ×
+// minPaneH) plus the one-row hint bar.
+func (m Model) tooSmallNotice() string {
+	const (
+		needW = minPaneW
+		needH = minPaneH + statusH
+	)
+	msg := fmt.Sprintf("terminal too small\nneed ≥ %d×%d", needW, needH)
+	return lipgloss.NewStyle().
+		Background(m.th.Bg).
+		Foreground(m.th.Fg).
+		Width(m.w).
+		Height(m.h).
+		MaxWidth(m.w).
+		MaxHeight(m.h).
+		Align(lipgloss.Center, lipgloss.Center).
+		Render(msg)
 }
 
 // focusOf returns a pane's three-state focus from the layout state: idle unless

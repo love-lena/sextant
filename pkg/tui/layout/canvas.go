@@ -18,9 +18,8 @@ import (
 // box's row over the background row by visible-cell width (ANSI-aware), so the
 // background's escape codes never bleed into the box and vice versa.
 type canvas struct {
-	w, h  int
-	rows  []string
-	blank string
+	w, h int
+	rows []string
 }
 
 // newCanvas builds a w×h canvas filled with background-coloured blank rows.
@@ -30,7 +29,7 @@ func newCanvas(w, h int, bg lipgloss.Color) *canvas {
 	for i := range rows {
 		rows[i] = blank
 	}
-	return &canvas{w: w, h: h, rows: rows, blank: blank}
+	return &canvas{w: w, h: h, rows: rows}
 }
 
 // place writes a rendered box (a multi-line string of exact outer size) onto the

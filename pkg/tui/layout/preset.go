@@ -41,6 +41,17 @@ type Rect struct {
 // detail surface is supplied by the host like any other.
 const detailPaneID = "detail"
 
+// minPaneW and minPaneH are the smallest outer pane rectangle that renders
+// cleanly: widget.Box clamps anything below 4×3 up to 4×3 and draws three rows
+// into the slot regardless, so a rect handed out below this would make Box
+// overrun its slot and overwrite a neighbour. arrange never returns a rect below
+// this minimum — it instead drops panes that don't fit (btop-style graceful
+// degradation), so the render is clean at any terminal size.
+const (
+	minPaneW = 4
+	minPaneH = 3
+)
+
 // arrange computes the outer rectangle for each visible pane under a preset, for
 // a terminal of size w×h. The visible slice is in the host's pane order (the
 // order surfaces were registered); arrange honours that order when filling
@@ -49,12 +60,38 @@ const detailPaneID = "detail"
 // the terminal edge exactly, because splits are computed by cumulative integer
 // boundaries (the last cell in a run absorbs the rounding remainder).
 //
+// Graceful degradation: when the area is too small to give every visible pane at
+// least minPaneW×minPaneH, arrange lays out only the largest prefix of the
+// visible set that fits and drops the rest (the host/View can note the drop).
+// When not even one pane fits, it returns an empty map and the caller renders a
+// "terminal too small" notice. Either way NO returned rect is ever below the Box
+// minimum, so the composite never overlaps.
+//
 // arrange is a pure function of (preset, visible, w, h) — the testable heart of
 // the layout. Switching preset, toggling a pane, and resizing all reduce to
 // calling arrange again with a new argument and reflowing onto the result.
 func arrange(preset string, visible []string, w, h int) map[string]Rect {
+	if len(visible) == 0 || w < minPaneW || h < minPaneH {
+		return map[string]Rect{}
+	}
+	// Find the largest prefix of the visible set whose every rect meets the Box
+	// minimum, by trying decreasing counts against the real geometry (so the fit
+	// check can never drift from what arrange actually produces).
+	for k := len(visible); k >= 1; k-- {
+		out := arrangeExactly(preset, visible[:k], w, h)
+		if fitsMin(out) {
+			return out
+		}
+	}
+	return map[string]Rect{}
+}
+
+// arrangeExactly lays out exactly the given panes under a preset, with no fit
+// check — the raw geometry arrange's degradation loop probes. Callers other than
+// arrange should not use it directly; it can return sub-minimum rects.
+func arrangeExactly(preset string, visible []string, w, h int) map[string]Rect {
 	out := make(map[string]Rect, len(visible))
-	if len(visible) == 0 || w <= 0 || h <= 0 {
+	if len(visible) == 0 {
 		return out
 	}
 	if len(visible) == 1 {
@@ -70,6 +107,16 @@ func arrange(preset string, visible []string, w, h int) map[string]Rect {
 		arrangeCockpit(out, visible, w, h)
 	}
 	return out
+}
+
+// fitsMin reports whether every rect in an arrangement meets the Box minimum.
+func fitsMin(rects map[string]Rect) bool {
+	for _, r := range rects {
+		if r.W < minPaneW || r.H < minPaneH {
+			return false
+		}
+	}
+	return true
 }
 
 // arrangeCockpit lays out the default cockpit: a left column for the first pane
@@ -120,10 +167,10 @@ func arrangeGrid(out map[string]Rect, visible []string, w, h int) {
 	rowBounds := splitInto(h, rows)
 	for i, id := range visible {
 		c, r := i%cols, i/cols
-		// The last row may be short of a full set of columns; widen its last cell
-		// to the terminal's right edge so the row still fills.
+		// The final pane may sit in a short last row; widen it to the terminal's
+		// right edge so that row still fills to the edge.
 		cEnd := colBounds[c+1]
-		if r == rows-1 && isLastInRow(i, n, cols) {
+		if i == n-1 {
 			cEnd = w
 		}
 		out[id] = Rect{
@@ -162,8 +209,14 @@ func tileRow(out map[string]Rect, ids []string, x, y, w, h int) {
 
 // splitInto returns n+1 cumulative integer boundaries dividing total into n
 // near-equal segments, with the rounding remainder spread across the earliest
-// segments (so segment widths differ by at most one and the boundaries reach
-// exactly total). bounds[i]..bounds[i+1] is segment i; bounds[0]=0, bounds[n]=total.
+// segments (so segment widths differ by at most one) and the boundaries reaching
+// exactly total. bounds[i]..bounds[i+1] is segment i; bounds[0]=0, bounds[n]=total.
+//
+// When total < n there is not enough to give every segment a full cell: the
+// first `total` segments get width 1 and the rest width 0 (the boundaries still
+// reach exactly total, just with zero-width trailing segments). arrange never
+// reaches this case — its fit loop drops panes before a split would go below the
+// Box minimum — but the helper degrades predictably rather than panicking.
 func splitInto(total, n int) []int {
 	bounds := make([]int, n+1)
 	if n <= 0 {
@@ -212,13 +265,6 @@ func bandHeight(h int) int {
 		top = h - 1
 	}
 	return top
-}
-
-// isLastInRow reports whether index i is the final pane that should stretch to
-// the right edge: the last pane overall, when it sits in the final (possibly
-// short) row.
-func isLastInRow(i, n, cols int) bool {
-	return i == n-1 && (i%cols == (n-1)%cols)
 }
 
 // validPreset reports whether name is a known built-in preset.

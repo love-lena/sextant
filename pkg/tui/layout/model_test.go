@@ -2,14 +2,21 @@ package layout_test
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/love-lena/sextant/pkg/tui/layout"
 	"github.com/love-lena/sextant/pkg/tui/surface"
 	"github.com/love-lena/sextant/pkg/tui/theme"
 	"github.com/love-lena/sextant/pkg/tui/widget"
 )
+
+// stripANSI removes escape sequences so a test can assert on the plain text of a
+// render.
+func stripANSI(s string) string { return ansi.Strip(s) }
 
 // key builds a tea.KeyMsg for a single rune or named key, the way bubbletea
 // delivers it. It lets the model tests drive the focus machine through the same
@@ -202,6 +209,59 @@ func TestResizeReflows(t *testing.T) {
 	w2 := panes["presence"].w
 	if w2 <= w1 {
 		t.Errorf("resize did not re-fit: presence width %d not > %d", w2, w1)
+	}
+}
+
+// TestToggleDoesNotAliasEarlierModel proves the copy-on-mutate fix: Update
+// returns Model by value, and toggling a pane on a derived copy must NOT
+// retroactively change an earlier Model value still in scope (the hidden map
+// used to alias across copies). A snapshotting host/test relies on this Bubble
+// Tea contract.
+func TestToggleDoesNotAliasEarlierModel(t *testing.T) {
+	before, _ := newCockpit(t)
+	beforeVisible := append([]string(nil), before.VisibleIDs()...)
+
+	// Toggle a pane off on a derived copy (via the options menu, the real toggle path).
+	after, _ := before.Update(key("o"))
+	after, _ = after.Update(key("down")) // move to "pane stream"
+	after, _ = after.Update(key("enter"))
+	after, _ = after.Update(key("esc"))
+
+	if contains(after.VisibleIDs(), "stream") {
+		t.Fatalf("precondition: stream should be hidden on the derived copy, got %v", after.VisibleIDs())
+	}
+	// The earlier Model must be untouched.
+	if got := before.VisibleIDs(); !reflect.DeepEqual(got, beforeVisible) {
+		t.Errorf("toggling on a derived copy aliased back into the earlier Model: before now %v, want %v", got, beforeVisible)
+	}
+}
+
+// TestTinyTerminalRendersNoticeNotGarbage is the graceful-degradation render
+// guarantee: at a terminal too small to fit even one pane, View renders a
+// "terminal too small" notice (clamped to the size) rather than an overlapping
+// composite, and a roomier resize recovers the cockpit.
+func TestTinyTerminalRendersNoticeNotGarbage(t *testing.T) {
+	m, _ := newCockpit(t)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 20, Height: 6})
+	// At 20×6 with 4 panes the cockpit can't give every pane the Box minimum, but
+	// some panes still fit — the render must be clean (no panic, sized to the term).
+	out := m.View()
+	if lipgloss.Height(out) > 6 {
+		t.Errorf("render overran the terminal height: %d rows for h=6", lipgloss.Height(out))
+	}
+
+	// Now shrink below one pane (only 2 rows for panes, below the Box minimum of 3):
+	// the notice shows. Width is roomy enough to read it.
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 30, Height: 3})
+	out = m.View()
+	if !strings.Contains(stripANSI(out), "terminal too small") {
+		t.Errorf("tiny terminal should show the too-small notice, got:\n%s", stripANSI(out))
+	}
+
+	// A roomy resize recovers the full cockpit.
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	if got := m.VisibleIDs(); !contains(got, "presence") || !contains(got, "stream") {
+		t.Errorf("cockpit did not recover after resize: %v", got)
 	}
 }
 

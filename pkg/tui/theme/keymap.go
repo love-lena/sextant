@@ -12,12 +12,14 @@ import "github.com/charmbracelet/bubbles/key"
 // Keys are expected to churn. Treat DefaultKeymap as a starting point and use
 // Merge to layer a user's overrides on top.
 type Keymap struct {
-	// Up and Down move the cursor / scroll within a pane, or move the selected
-	// pane vertically at the layout level.
+	// Up and Down move the cursor / scroll within a pane, or step the selection
+	// through the panes at the layout level.
 	Up   key.Binding
 	Down key.Binding
-	// Left and Right move horizontally — between panes at the layout level, or
-	// across columns within a pane.
+	// Left and Right move across columns within a pane. At the layout level they
+	// alias Up/Down: the selection steps through the flat list of visible panes
+	// (in registration order), so all four arrows advance the same one-dimensional
+	// selection rather than moving in pane geometry.
 	Left  key.Binding
 	Right key.Binding
 
