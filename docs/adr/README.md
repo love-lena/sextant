@@ -20,7 +20,7 @@ human has signed off — see
 | [0011](0011-workflows.md) | Workflows | accepted |
 | [0012](0012-reserved-namespace-and-authn.md) | The reserved `sx` namespace, and authn | accepted (refined by 0015, 0020) |
 | [0013](0013-multi-backend.md) | Multi-backend posture | accepted |
-| [0014](0014-the-tui-is-a-client.md) | The TUI is a client | accepted |
+| [0014](0014-the-tui-is-a-client.md) | The TUI is a client | accepted (sharpened by 0023) |
 | [0015](0015-operator-only-account.md) | Operator-only state lives in its own account | accepted |
 | [0016](0016-artifacts-are-lexicon-records.md) | Artifacts are Lexicon records | accepted |
 | [0017](0017-the-verb-surface-is-the-protocol.md) | The verb surface is the protocol | accepted |
@@ -29,6 +29,7 @@ human has signed off — see
 | [0020](0020-clients-are-bus-issued-identities.md) | Clients are bus-issued identities | accepted |
 | [0021](0021-saved-client-contexts.md) | Saved client contexts | accepted |
 | [0022](0022-modules-over-a-locked-core.md) | A locked core lets modules build in parallel | accepted |
+| [0023](0023-the-dash-is-a-composable-pane-cockpit.md) | The dash is a composable pane cockpit | accepted |
 
 ## Review batches
 - **Batch 1 — substrate:** 0004–0007 — *accepted*
@@ -37,3 +38,4 @@ human has signed off — see
 - **0014 — the TUI is a client** — *accepted* (grilled + signed off in-session, 2026-06-02)
 - **0015 — operator-only state in its own account** — *accepted* (refines 0012; from the #71 review)
 - **0016 — artifacts are Lexicon records** — *accepted* (the #70 JSON-vs-CBOR decision; signed off in-session 2026-06-03)
+- **0023 — the dash is a composable pane cockpit** — *accepted* (sharpens 0014; grilled in-session prototype-grounded, signed off 2026-06-05)

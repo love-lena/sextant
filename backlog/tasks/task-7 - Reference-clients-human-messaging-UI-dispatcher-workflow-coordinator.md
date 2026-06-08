@@ -12,8 +12,8 @@ dependencies:
   - TASK-6
   - TASK-21
 references:
-  - docs/adr/0009-spawn.md
-  - docs/adr/0011-workflows.md
+  - docs/adr/0023-the-dash-is-a-composable-pane-cockpit.md
+  - docs/adr/0014-the-tui-is-a-client.md
 priority: medium
 ordinal: 7000
 ---
@@ -21,5 +21,12 @@ ordinal: 7000
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-The dash (ADR-0014): one Bubble Tea client over the Go SDK composing pane-surfaces — presence (ListClients), the dialogue stream (Subscribe), an artifact review card, and a read-only workflow view. Per the proto/dash-tui verdict it is a composable, customizable pane library (sensible defaults, but swapping/arranging panes is first-class, btop-style), with the prototyped workflow (Checklist/Timeline/Pipeline) and artifact (Reader/Review + inline comments) variants as built-in options; cockpit default layout; detail-on-demand. Split out of the old reference-clients bundle: the Dispatcher (TASK-25) and Workflow coordinator (TASK-26) are deferred to M4; the MVP is manual-comms only.
+Umbrella for the M4 dash build — the forkable reference human-UI client
+(ADR-0014): a composable pane cockpit over the SDK. The design was settled in the
+TASK-21 pass; the customization mechanism (presets + toggle + reflow + config) and
+the widget → surface → dash contract are **ADR-0023**. Fans out into subtasks:
+TASK-7.1 theme + widget toolkit · 7.2 SDK→tea adapter · 7.3 surfaces (presence ·
+message-stream · artifact) · 7.4 layout engine · 7.5 the dash binary. M4 panes =
+presence + message-stream + artifact; the workflow pane and the reference
+Dispatcher (TASK-25) + Workflow coordinator (TASK-26) are M5. MVP is manual-comms.
 <!-- SECTION:DESCRIPTION:END -->
