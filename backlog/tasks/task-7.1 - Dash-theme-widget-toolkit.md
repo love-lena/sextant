@@ -25,7 +25,7 @@ Foundation of the dash library (ADR-0023, ADR-0014), no SDK: a theme package (ba
 <!-- AC:BEGIN -->
 - [ ] #1 theme: stock base16 light + dark + `Auto()` default; role/kind hue tokens; status glyphs; `DefaultKeymap()` + a working user-override path
 - [ ] #2 widgets (cursor list, stream viewport, detail pane) render only from theme tokens (incl. the idle/selected/active 3-state focus cue), no SDK import
-- [ ] #3 teatest goldens + a preview binary; verified in a PTY
+- [ ] #3 teatest goldens + a committed VHS `.tape` + a preview binary, PTY-verified; the rendered `.gif` attached to the PR for review
 <!-- AC:END -->
 
 ## Implementation Notes
@@ -59,6 +59,7 @@ Interaction model (Lena 2026-06-08 — a *default*, expected to churn):
   hardcodes a key; widgets read bindings from the keymap.
 - Widget focus is **3-state**: idle / selected (accent border) / active (stepped in).
 
-Verify: teatest goldens (focused/unfocused, narrow/wide reflow, empty/overflow) + a
-preview binary driven in tmux; ship a VHS gif — **Lena reviews the look on return**.
+Verify (AC = `.tape` + goldens): teatest goldens (focused/unfocused, narrow/wide reflow,
+empty/overflow) + a committed VHS `.tape`, preview binary driven in tmux; the rendered
+`.gif` goes in the PR — **Lena reviews the look there**.
 <!-- SECTION:NOTES:END -->

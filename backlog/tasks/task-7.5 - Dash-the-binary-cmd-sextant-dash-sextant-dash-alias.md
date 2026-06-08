@@ -27,5 +27,5 @@ The dash client itself (ADR-0023): cmd/sextant-dash connects under a bus identit
 <!-- AC:BEGIN -->
 - [ ] #1 cmd/sextant-dash connects under a bus identity + display_name; thin 'sextant dash' alias
 - [ ] #2 cockpit default assembles presence + message-stream + artifact; detail-on-demand; panes toggle/swap
-- [ ] #3 e2e: launch, see presence + live stream, send a message, open an artifact; VHS demo + PTY verify
+- [ ] #3 e2e: launch, see presence + live stream, send a message, open an artifact; recorded as a VHS `.tape`, PTY-verified, with the rendered `.gif` attached to the PR
 <!-- AC:END -->

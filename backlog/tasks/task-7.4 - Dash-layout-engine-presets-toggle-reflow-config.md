@@ -26,4 +26,5 @@ The customization engine (ADR-0023): built-in preset layouts, per-pane toggle on
 - [ ] #1 preset layouts + per-pane toggle + reflow to fill; config file load/save persists it
 - [ ] #2 detail-on-demand: a hidden pane toggles in/out cleanly
 - [ ] #3 layout config format leaves room for future free placement
+- [ ] #4 teatest goldens + a VHS `.tape` covering preset-switch, pane-toggle, reflow, and detail-on-demand; the rendered `.gif` attached to the PR
 <!-- AC:END -->

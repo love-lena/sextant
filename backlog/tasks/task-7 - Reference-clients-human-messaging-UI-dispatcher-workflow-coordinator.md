@@ -36,7 +36,7 @@ Dispatcher (TASK-25) + Workflow coordinator (TASK-26) are M5. MVP is manual-comm
 - [ ] #1 `cmd/sextant-dash` (+ thin `sextant dash` alias) launches under a bus identity and assembles presence + message-stream + artifact into a cockpit default
 - [ ] #2 composable pane library: built-in presets + per-pane toggle + reflow + persisted config (btop-style); detail-on-demand (hidden, toggled)
 - [ ] #3 the in-tree library holds the widget ⊂ surface ⊂ dash strata; widgets/surfaces import only theme/SDK, never NATS or `internal/` (import checks pass)
-- [ ] #4 e2e (**the goal**): launch → see presence + a live message stream → send a message (round-trip, no optimistic echo) → open an artifact; VHS demo + PTY verify
+- [ ] #4 e2e (**the goal**): launch → see presence + a live message stream → send a message (round-trip, no optimistic echo) → open an artifact; recorded as a VHS `.tape` + PTY verify, with the rendered `.gif` attached to the PR
 <!-- AC:END -->
 
 ## Implementation Notes
@@ -59,4 +59,9 @@ manual-comms. Design is ADR-0023 (sharpens ADR-0014). `proto/dash-tui` sets the 
 
 **Process.** One module per worktree off `main` (ADR-0022); isolate each subagent's
 worktree to avoid cross-writes; `gofumpt` before push; PRs into `main`.
+
+**Proof of completion.** Every visual stage's done-criteria is a committed VHS `.tape`
++ teatest goldens (deterministic, CI-checkable). Each PR also attaches the rendered
+`.gif` as a proof-of-completion artifact for Lena to review — the `.tape`/goldens are
+the agent's AC; the `.gif` is the human-review surface. (7.2 is exempt — no render.)
 <!-- SECTION:NOTES:END -->
