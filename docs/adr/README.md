@@ -28,6 +28,7 @@ human has signed off — see
 | [0019](0019-implementing-the-bus.md) | Implementing the bus: call transport, frame stamping, and identity | accepted |
 | [0020](0020-clients-are-bus-issued-identities.md) | Clients are bus-issued identities | accepted |
 | [0021](0021-saved-client-contexts.md) | Saved client contexts | accepted |
+| [0022](0022-modules-over-a-locked-core.md) | A locked core lets modules build in parallel | accepted |
 
 ## Review batches
 - **Batch 1 — substrate:** 0004–0007 — *accepted*
