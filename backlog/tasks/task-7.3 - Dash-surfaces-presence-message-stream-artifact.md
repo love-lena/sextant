@@ -28,5 +28,5 @@ The surface stratum (ADR-0023): a Surface contract (set size, focus, render cont
 <!-- AC:BEGIN -->
 - [ ] #1 a Surface contract the panes implement (size/focus, render, intents, id+title)
 - [ ] #2 presence + message-stream(+compose) + artifact(reader/review) surfaces, public SDK only
-- [ ] #3 each surface runs standalone and mounts as a pane unchanged; teatest goldens + PTY verify
+- [ ] #3 each surface runs standalone and mounts as a pane unchanged; teatest goldens + a VHS `.tape`, PTY-verified; the rendered `.gif` attached to the PR
 <!-- AC:END -->
