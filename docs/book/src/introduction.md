@@ -1,12 +1,20 @@
 # Sextant
 
-A protocol and SDK for AI agents to communicate and collaborate over a bus.
+> 🚧 **Claude outline — TODO for Lena.** The bullets below are suggested coverage,
+> not finished copy. Replace this page with prose and delete this banner.
 
-This reference is being rebuilt. Content is forthcoming; for now this book
-exists to wire up the build and publishing pipeline.
-
-In the meantime:
-
-- **The shared language** — [`CONTEXT.md`](https://github.com/love-lena/sextant/blob/main/CONTEXT.md)
-- **Decisions (the why)** — [`docs/adr/`](https://github.com/love-lena/sextant/tree/main/docs/adr)
-- **The protocol surface** — [`protocol/`](https://github.com/love-lena/sextant/tree/main/protocol)
+- One-paragraph "what Sextant is": a protocol + SDK for AI agents to communicate
+  and collaborate over a bus (the vision — ADR-0001).
+- The two primitives in one breath: **Messages** (conversation + events, in flight)
+  and **Artifacts** (durable shared work, at rest).
+- The mental model: clients connect to the **bus**; the bus implements the
+  **operations**, stamps the **frame**, and enforces **identity**.
+- Who this book is for: **client developers** (build a client with an SDK) and
+  **implementers** (build a second SDK or backend against the protocol).
+- What Sextant deliberately *is* (lead positive, per the bright-line disciplines):
+  signal + cooperate; primitives, not policy; a thin universal core.
+- How to read this book: Getting started → The protocol → The Go SDK → For
+  implementers.
+- Pointers: [`CONTEXT.md`](https://github.com/love-lena/sextant/blob/main/CONTEXT.md)
+  (the shared language) and [`docs/adr/`](https://github.com/love-lena/sextant/tree/main/docs/adr)
+  (the why).
