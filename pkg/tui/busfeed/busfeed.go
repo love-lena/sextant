@@ -59,8 +59,10 @@ type ErrMsg struct {
 
 // Feed wraps a public SDK subscription as a Bubble Tea stream source. Construct
 // it with New, start it from a model's Init with Subscribe, pump it by returning
-// Next on every EventMsg, and tear it down with Stop. A Feed is single-consumer:
-// exactly one Next command is in flight at a time, following the pump loop.
+// Next on every EventMsg and DroppedMsg, and tear it down with Stop. A Feed is
+// single-consumer: exactly one Next command is in flight at a time, following the
+// pump loop. Use one Feed per surface; a model embedding several feeds must
+// distinguish their messages itself (the messages carry no feed identity).
 type Feed struct {
 	client  *sextant.Client
 	subject string
@@ -143,10 +145,11 @@ func (f *Feed) handle(m sextant.Message) {
 }
 
 // Next is the pump step: it reads one event off the buffer, off the main loop,
-// and returns it as a tea.Msg. A model returns Next on every EventMsg to keep
-// the pump running. If events were dropped since the last step, Next reports the
-// coalesced DroppedMsg first (the dropped count is then cleared); the next Next
-// resumes reading events. Next returns nil when the feed is stopped and the
+// and returns it as a tea.Msg. A model returns Next on every EventMsg and every
+// DroppedMsg to keep the pump running (ErrMsg is terminal — the feed surfaces it
+// and stops reading). If events were dropped since the last step, Next reports
+// the coalesced DroppedMsg first (the dropped count is then cleared); the next
+// Next resumes reading events. Next returns nil when the feed is stopped and the
 // buffer is drained, ending the pump cleanly.
 func (f *Feed) Next() tea.Cmd {
 	return f.next
