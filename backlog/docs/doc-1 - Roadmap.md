@@ -84,10 +84,13 @@ multi-host topology when we commit to it.
 
 ## M4 · The dash (human UI)
 **Goal:** a human watches and participates through a forkable TUI client (ADR-0014).
-**Done when:** presence + dialogue + artifact panes compose into a cockpit default;
-the dash is a composable, customizable pane library (swap/arrange panes, btop-style);
+**Design:** ADR-0023 — the dash is a composable pane cockpit (presets + toggle +
+reflow + config; widget → surface → dash), settled in the TASK-21 pass.
+**Done when:** presence + message-stream + artifact panes compose into a cockpit
+default; the dash is a composable pane library (toggle/preset/reflow, btop-style);
 detail-on-demand. (Direction set by the `proto/dash-tui` prototype.)
-**Tickets:** TASK-7 (dash build) · TASK-21 (dash design pass).
+**Tickets:** TASK-7 (umbrella) → 7.1 theme+widget · 7.2 adapter · 7.3 surfaces ·
+7.4 layout · 7.5 binary. (TASK-21 design pass — done.)
 
 ## M5 · Orchestration (spawn + workflows)
 **Goal:** managed coordination on top of plain communication.
