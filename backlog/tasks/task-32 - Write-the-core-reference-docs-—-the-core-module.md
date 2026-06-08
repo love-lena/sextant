@@ -1,10 +1,11 @@
 ---
 id: TASK-32
-title: Write the core reference docs — the frozen spine
+title: Write the core reference docs — the core module
 status: To Do
 assignee:
   - lena
 created_date: '2026-06-08 18:41'
+updated_date: '2026-06-08 19:04'
 labels:
   - docs
 dependencies: []
@@ -15,7 +16,7 @@ ordinal: 31000
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-Real human-facing reference for Sextant's core — the frozen spine that ADR-0022 pins and every track builds against: the verb/operation surface (ADR-0017), the frame (ADR-0006), the clients-registry record shape + connection-derived presence (ADR-0020), and connection/auth/creds. This is the docs/book/ (mdbook) content AGENTS.md lists as forthcoming. Lena to write.
+Real human-facing reference for Sextant's core — the core module that ADR-0022 (mostly) locks and every other module builds over: the verb/operation surface (ADR-0017), the frame (ADR-0006), the clients-registry record shape + connection-derived presence (ADR-0020), and connection/auth/creds. This is the docs/book/ (mdbook) content AGENTS.md lists as forthcoming. Lena to write.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

@@ -10,11 +10,12 @@ Thin map of Sextant's milestones — order, goal, definition-of-done, and the
 tickets that carry each. **Tickets are the source of truth**; this doc is the
 narrative the milestone list can't hold. Live status: `backlog milestone list`.
 
-The rewrite has landed on `main` (#91). Past the MVP, the remaining milestones run
-as **parallel tracks over a frozen `main` surface** (ADR-0022), not a strict
-sequence: M3, M4, M5, and the TypeScript SDK fan out concurrently, while
-surface-changing work (M3-proper, creds reissue, retention) stays serial behind
-them — one writer per shared seam.
+The rewrite has landed on `main` (#91), and with it the **core module is (mostly)
+locked**. Past the MVP, the remaining milestones build as **independent modules
+over the stable core** (ADR-0022), not a strict sequence: M3, M4, M5, and the
+TypeScript SDK build in parallel — one module per worktree — while core-changing
+work (M3-proper, creds reissue, retention) stays serial: one writer on the core
+at a time.
 
 ## M1 · Core protocol + SDK — ✅ Done
 The minimal thing Sextant *is*: the bus (embedded NATS, JWT auth, `sx` namespace),
