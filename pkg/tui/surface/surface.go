@@ -85,6 +85,15 @@ type Surface interface {
 	Stop()
 }
 
+// The three M4 surfaces satisfy the contract. These compile-time assertions keep
+// the guarantee in the package itself, independent of any host (the gallery, the
+// dash binary), so the contract holds even if every caller is removed.
+var (
+	_ Surface = (*Presence)(nil)
+	_ Surface = (*Stream)(nil)
+	_ Surface = (*Artifact)(nil)
+)
+
 // OpenKind classifies what an OpenMsg refers to, so the dash can route the open
 // without parsing free-form strings. The set is deliberately small; new kinds
 // arrive only when a surface has a real new thing to open.
