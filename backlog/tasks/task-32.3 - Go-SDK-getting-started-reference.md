@@ -1,10 +1,10 @@
 ---
 id: TASK-32.3
 title: Go SDK getting-started + reference
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-08 22:42'
-updated_date: '2026-06-08 22:50'
+updated_date: '2026-06-08 23:11'
 labels:
   - docs
   - 'slug:docs-mdbook-sdk-reference'
@@ -25,10 +25,10 @@ The client-developer path Lena asked to fold into the book. A runnable getting-s
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Per-area SDK pages — Messages, Artifacts, Clients & identity — lead with the narrative doc comments and link the generated API reference
-- [ ] #2 API reference page wired from 32.1's 'go doc ./pkg/sextant' generation
-- [ ] #3 The runnable example is verified by building and running it, not just pasted
-- [ ] #4 A copy-pasteable Go program (Connect · publish chat.message · subscribe · create+get a document artifact · drain) that compiles and runs against a local 'sextant up', inserted into Lena's pre-stubbed getting-started narrative (agent does not author the install / first-client prose)
+- [x] #1 Per-area SDK pages — Messages, Artifacts, Clients & identity — lead with the narrative doc comments and link the generated API reference
+- [x] #2 API reference page wired from 32.1's 'go doc ./pkg/sextant' generation
+- [x] #3 The runnable example is verified by building and running it, not just pasted
+- [x] #4 A copy-pasteable Go program (Connect · publish chat.message · subscribe · create+get a document artifact · drain) that compiles and runs against a local 'sextant up', inserted into Lena's pre-stubbed getting-started narrative (agent does not author the install / first-client prose)
 <!-- AC:END -->
 
 ## Implementation Notes
@@ -37,4 +37,6 @@ The client-developer path Lena asked to fold into the book. A runnable getting-s
 Getting-started narrative is voice-sensitive (Lena's voice via writing-style); the runnable example + godoc reference are AFK + verifiable. Depends on [[docs-mdbook-ia-render-pipeline]].
 
 PROSE/AGENT SPLIT: agent owns the runnable+verified Go program, the per-area SDK pages rendered from the (already-written) package doc comments, and the go-doc API reference. The getting-started narrative and the SDK Overview are Lena's pre-stubbed prose (branch docs-mdbook-scope).
+
+IMPLEMENTED in PR #97 (commit 05c01e6), CI green. Agent portion complete; remaining work is Lena's prose pages. Verified: docgen deterministic + CI drift-check, mdbook builds clean, quickstart compiles + runs against a live bus. getting-started narrative + SDK Overview remain Lena's prose.
 <!-- SECTION:NOTES:END -->

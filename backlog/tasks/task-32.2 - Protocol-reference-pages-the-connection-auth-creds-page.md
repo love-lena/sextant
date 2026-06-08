@@ -1,10 +1,10 @@
 ---
 id: TASK-32.2
 title: Protocol reference pages + the connection/auth/creds page
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-08 22:42'
-updated_date: '2026-06-08 22:50'
+updated_date: '2026-06-08 23:11'
 labels:
   - docs
   - 'slug:docs-mdbook-protocol-reference'
@@ -25,10 +25,10 @@ Render the protocol contract from canon (via 32.1's pipeline) plus the one new c
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Operations page generated from methods.json: every operation with its delivery, input/output, and semantics
-- [ ] #2 Records & lexicons page generated from lexicons/*.json (chat.message, document, client, frame)
-- [ ] #3 The frame page (frame.json + ADR-0006): record=user space / frame=bus space, the bus-stamped fields, the message|artifact kind discriminator
-- [ ] #4 Clients registry & presence page (client.json + ADR-0020): durable directory, listed = issued-and-not-retired, presence derived at read time
+- [x] #1 Operations page generated from methods.json: every operation with its delivery, input/output, and semantics
+- [x] #2 Records & lexicons page generated from lexicons/*.json (chat.message, document, client, frame)
+- [x] #3 The frame page (frame.json + ADR-0006): record=user space / frame=bus space, the bus-stamped fields, the message|artifact kind discriminator
+- [x] #4 Clients registry & presence page (client.json + ADR-0020): durable directory, listed = issued-and-not-retired, presence derived at read time
 - [ ] #5 Epoch & versioning rendered as a short reference page (generated slot); the Protocol Overview and Connection/auth pages are Lena's pre-stubbed prose — NOT authored in this ticket
 <!-- AC:END -->
 
@@ -38,4 +38,6 @@ Render the protocol contract from canon (via 32.1's pipeline) plus the one new c
 Mostly AFK generation; connection.md is new canon prose (technical, agent-draftable) -> human sign-off (canon <=> signed-off). Depends on [[docs-mdbook-ia-render-pipeline]]. Closes TASK-32 AC#1 + AC#2.
 
 PROSE/AGENT SPLIT: this ticket fills only the generated draft slots (Operations, Records & lexicons, The frame, Clients registry & presence, Epoch) from protocol/ canon via 32.1's pipeline. The Overview + Connection pages are Lena's prose stubs (branch docs-mdbook-scope). OPEN (agent+Lena): whether Lena's Connection prose also becomes language-neutral canon protocol/connection.md for the TS SDK — decide when 32.2 lands. Refs ADR-0006 (frame), ADR-0020 (registry), ADR-0012 (auth).
+
+IMPLEMENTED in PR #97 (commit 05c01e6), CI green. Agent portion complete; remaining work is Lena's prose pages. Verified: docgen deterministic + CI drift-check, mdbook builds clean, quickstart compiles + runs against a live bus. Generated pages done (operations/lexicons/frame/registry); Epoch + Overview + Connection remain Lena's prose.
 <!-- SECTION:NOTES:END -->

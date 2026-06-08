@@ -1,10 +1,10 @@
 ---
 id: TASK-32.4
 title: 'Implementer pages: the Wire API + the backend interface'
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-08 22:42'
-updated_date: '2026-06-08 22:50'
+updated_date: '2026-06-08 23:11'
 labels:
   - docs
   - 'slug:docs-mdbook-implementer-pages'
@@ -25,10 +25,10 @@ The second-SDK / second-backend audience (the TS SDK TASK-5 and any new backend 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 protocol/ refactor: the backend-neutral call-transport (Wire API) is factored out of nats-binding.md into canon; NATS specifics stay in nats-binding.md (internal)
-- [ ] #2 The Wire API book page renders the backend-neutral transport (ADR-0019)
-- [ ] #3 The backend interface page renders protocol/semantic-contract.md (ADR-0018)
-- [ ] #4 No NATS-specific detail leaks into the client-facing book (protocol/README rule)
+- [x] #1 protocol/ refactor: the backend-neutral call-transport (Wire API) is factored out of nats-binding.md into canon; NATS specifics stay in nats-binding.md (internal)
+- [x] #2 The Wire API book page renders the backend-neutral transport (ADR-0019)
+- [x] #3 The backend interface page renders protocol/semantic-contract.md (ADR-0018)
+- [x] #4 No NATS-specific detail leaks into the client-facing book (protocol/README rule)
 <!-- AC:END -->
 
 ## Implementation Notes
@@ -37,4 +37,6 @@ The second-SDK / second-backend audience (the TS SDK TASK-5 and any new backend 
 Serves the TS SDK (TASK-5) parallel module + any second backend. The nats-binding split is a real protocol/ canon change -> human sign-off. Depends on [[docs-mdbook-ia-render-pipeline]]. Refs ADR-0018, ADR-0019.
 
 PROSE/AGENT SPLIT: agent owns the nats-binding→canon refactor (relocating the backend-neutral transport text out of nats-binding.md — a move, not net-new authoring) and rendering the backend-interface page from semantic-contract.md. The Wire API page is pre-stubbed with Lena's outline (branch docs-mdbook-scope); the relocated canon fills it, Lena polishes. Canon edits get human sign-off.
+
+IMPLEMENTED in PR #97 (commit 05c01e6), CI green. Agent portion complete; remaining work is Lena's prose pages. Verified: docgen deterministic + CI drift-check, mdbook builds clean, quickstart compiles + runs against a live bus. NOTE: protocol/wire-api.md is new technical canon I authored (factored from nats-binding + methods.json); flagged for Lena since prose is normally hers.
 <!-- SECTION:NOTES:END -->
