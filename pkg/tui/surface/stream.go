@@ -134,21 +134,33 @@ func (s *Stream) Title() string {
 }
 
 // SetSize sizes the inner area, reserving the bottom row for the compose line
-// when compose is on.
+// when compose is on and another for the error footer when an error is showing.
 func (s *Stream) SetSize(w, h int) {
 	s.w, s.h = w, h
-	streamH := h
-	if s.compose {
-		streamH = h - 1
-		if streamH < 1 {
-			streamH = 1
-		}
+	if w > 0 {
 		s.input.Width = w - lipgloss.Width(s.input.Prompt) - 1
 		if s.input.Width < 1 {
 			s.input.Width = 1
 		}
 	}
-	s.stream.SetSize(w, streamH)
+	s.relayout()
+}
+
+// relayout sizes the stream viewport to the inner area minus the compose row (if
+// any) and the error-footer row (if an error is showing), so neither overlaps the
+// stream.
+func (s *Stream) relayout() {
+	streamH := s.h
+	if s.compose {
+		streamH--
+	}
+	if s.err != nil {
+		streamH--
+	}
+	if streamH < 1 {
+		streamH = 1
+	}
+	s.stream.SetSize(s.w, streamH)
 }
 
 // SetFocus sets the three-state focus. Stepping in (active) focuses the compose
@@ -185,13 +197,15 @@ func (s *Stream) Update(msg tea.Msg) tea.Cmd {
 		s.stream.Append(s.dropMarker(msg.N))
 		return s.feed.Next() // DroppedMsg is not terminal; keep pumping
 	case busfeed.ErrMsg:
-		s.err = msg.Err // terminal: the feed stops reading
+		// Terminal: the feed stops reading. Surface the error in the footer.
+		s.err = msg.Err
+		s.relayout()
 		return nil
 	case publishedMsg:
-		if msg.err != nil {
-			s.err = msg.err
-		}
-		// Nothing else: the sent line appears via the round-trip echo, not here.
+		// A failed publish surfaces in the footer; a success clears any prior one.
+		// Either way the sent line appears via the round-trip echo, not here.
+		s.err = msg.err
+		s.relayout()
 		return nil
 	case tea.KeyMsg:
 		return s.handleKey(msg)
@@ -235,13 +249,18 @@ func (s *Stream) handleKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-// View renders the stream, plus the compose line below it when compose is on.
+// View renders the stream, the compose line below it when compose is on, and an
+// error footer below that when a subscribe or publish failed — kept visible
+// rather than swallowed (fail-loud).
 func (s *Stream) View() string {
-	body := s.stream.View(s.theme, s.focus)
-	if !s.compose {
-		return body
+	parts := []string{s.stream.View(s.theme, s.focus)}
+	if s.compose {
+		parts = append(parts, s.composeLine())
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, body, s.composeLine())
+	if s.err != nil {
+		parts = append(parts, errorFooter(s.theme, s.err, s.w))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
 // composeLine renders the bottom compose row. When active it shows the live
@@ -339,6 +358,7 @@ func (s *Stream) dropMarker(n int) string {
 	return lipgloss.NewStyle().Foreground(s.theme.StatusHue(theme.StatusDraining)).Render(marker)
 }
 
-// Stop tears the feed down. The dash calls it when unmounting the surface; a
-// standalone host calls it on quit. It is safe to call more than once.
+// Stop tears the feed down, ending its blocked Next pump (the Surface contract's
+// teardown). The layout calls it when unmounting the surface; a standalone host
+// calls it on quit. It is safe to call more than once.
 func (s *Stream) Stop() { s.feed.Stop() }

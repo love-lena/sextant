@@ -19,6 +19,8 @@ package surface
 
 import (
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/love-lena/sextant/pkg/tui/theme"
 	"github.com/love-lena/sextant/pkg/tui/widget"
 )
 
@@ -72,6 +74,15 @@ type Surface interface {
 	// View renders the surface's inner content, sized to the last SetSize. It does
 	// not draw box chrome — the layout owns that.
 	View() string
+
+	// Stop tears the surface down: it releases any live resource the surface owns
+	// (a busfeed subscription, an artifact watch, a refresh tick). The layout calls
+	// it exactly once when the surface is unmounted, and a standalone host calls it
+	// on quit; it must be safe to call more than once. A surface owning no resource
+	// no-ops. Without a contract teardown a dropped pane would leak a feed's blocked
+	// Next goroutine until its context is cancelled — fail-loud teardown is
+	// uniform and discoverable here instead.
+	Stop()
 }
 
 // OpenKind classifies what an OpenMsg refers to, so the dash can route the open
@@ -119,4 +130,23 @@ func openCmd(kind OpenKind, ref string) tea.Cmd {
 // doneCmd is the tea.Cmd form of a DoneMsg for the surface with the given id.
 func doneCmd(id string) tea.Cmd {
 	return func() tea.Msg { return DoneMsg{ID: id} }
+}
+
+// errorFooter renders a one-line error footer in the alert hue (base08, the
+// drain/alert slot), clamped to width and truncated to one row. Every surface
+// renders it from its captured error so a failure is visible, never swallowed
+// (Sextant's fail-loud discipline). A nil err renders nothing.
+func errorFooter(t theme.Theme, err error, w int) string {
+	if err == nil {
+		return ""
+	}
+	if w <= 0 {
+		w = 1
+	}
+	return lipgloss.NewStyle().
+		Foreground(t.StatusHue(theme.StatusDraining)).
+		Width(w).
+		MaxWidth(w).
+		MaxHeight(1).
+		Render("! " + err.Error())
 }

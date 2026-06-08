@@ -204,9 +204,11 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q":
 		if !m.active {
+			m.stopAll()
 			return m, tea.Quit
 		}
 	case "ctrl+c":
+		m.stopAll()
 		return m, tea.Quit
 	case "t":
 		if !m.active {
@@ -231,6 +233,14 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.panes[m.sel].s.Update(msg)
 	}
 	return m, nil
+}
+
+// stopAll tears down every surface on quit (the Surface contract's teardown), so
+// a feed-backed surface releases its pump cleanly.
+func (m model) stopAll() {
+	for _, p := range m.panes {
+		p.s.Stop()
+	}
 }
 
 func (m model) View() string {

@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/love-lena/sextant/pkg/sextant"
+	"github.com/love-lena/sextant/pkg/sx"
 	"github.com/love-lena/sextant/pkg/tui/theme"
 	"github.com/love-lena/sextant/pkg/tui/widget"
 )
@@ -123,22 +124,36 @@ func (a *Artifact) Title() string {
 }
 
 // SetSize sizes the inner reader area, reserving the bottom row for the comment
-// line in review mode. It re-renders the body to the new width.
+// line in review mode and another for the error footer when one is showing. It
+// re-renders the body to the new width.
 func (a *Artifact) SetSize(w, h int) {
 	a.w, a.h = w, h
-	readerH := h
-	if a.mode == ModeReview {
-		readerH = h - 1
-		if readerH < 1 {
-			readerH = 1
-		}
+	if a.mode == ModeReview && w > 0 {
 		a.input.Width = w - lipgloss.Width(a.input.Prompt) - 1
 		if a.input.Width < 1 {
 			a.input.Width = 1
 		}
 	}
-	a.detail.SetSize(w, readerH)
+	a.relayout()
 	a.rerender()
+}
+
+// relayout sizes the reader to the inner area minus the comment row (review mode)
+// and the error-footer row (when an error is showing). It re-renders the body
+// because the glamour wrap depends on the reader width, which is unchanged here —
+// only the height moves — so it does not re-run the markdown render.
+func (a *Artifact) relayout() {
+	readerH := a.h
+	if a.mode == ModeReview {
+		readerH--
+	}
+	if a.err != nil {
+		readerH--
+	}
+	if readerH < 1 {
+		readerH = 1
+	}
+	a.detail.SetSize(a.w, readerH)
 }
 
 // SetFocus sets the three-state focus; in review mode, active focuses the
@@ -170,12 +185,14 @@ func (a *Artifact) Update(msg tea.Msg) tea.Cmd {
 		a.applyArtifact(msg.Artifact)
 		return nil
 	case artifactErrMsg:
+		// Surface a fetch failure in the footer; keep the last good document.
 		a.err = msg.err
+		a.relayout()
 		return nil
 	case publishedMsg:
-		if msg.err != nil {
-			a.err = msg.err
-		}
+		// A failed comment publish surfaces in the footer; a success clears it.
+		a.err = msg.err
+		a.relayout()
 		return nil
 	case tea.KeyMsg:
 		return a.handleKey(msg)
@@ -216,14 +233,25 @@ func (a *Artifact) handleKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-// View renders the reader, plus the comment line below it in review mode.
+// View renders the reader, the comment line below it in review mode, and an
+// error footer below that when a fetch or comment publish failed — kept visible
+// rather than swallowed (fail-loud).
 func (a *Artifact) View() string {
-	body := a.detail.View(a.theme, a.focus)
-	if a.mode != ModeReview {
-		return body
+	parts := []string{a.detail.View(a.theme, a.focus)}
+	if a.mode == ModeReview {
+		parts = append(parts, a.commentLine())
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, body, a.commentLine())
+	if a.err != nil {
+		parts = append(parts, errorFooter(a.theme, a.err, a.w))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
+
+// Stop tears the artifact surface down (the Surface contract's teardown). The
+// reader fetches on open and holds no live subscription today, so this no-ops; it
+// is the seam a future WatchArtifact lives behind, and keeps teardown uniform
+// across surfaces. It is safe to call more than once.
+func (a *Artifact) Stop() {}
 
 // commentLine renders the review comment row: the live input when active, a dim
 // hint otherwise.
@@ -271,9 +299,11 @@ func (a *Artifact) comment(text string) tea.Cmd {
 	}
 }
 
-// applyArtifact stores a fetched artifact and re-renders its body.
+// applyArtifact stores a fetched artifact and re-renders its body. A successful
+// fetch clears any error footer (and gives its row back to the reader).
 func (a *Artifact) applyArtifact(art sextant.Artifact) {
 	a.loaded = true
+	hadErr := a.err != nil
 	a.err = nil
 	a.revision = art.Revision
 	if doc, ok := parseDocument(art.Record); ok {
@@ -283,6 +313,9 @@ func (a *Artifact) applyArtifact(art sextant.Artifact) {
 	} else {
 		a.hasDoc = false
 		a.rawBody = string(art.Record)
+	}
+	if hadErr {
+		a.relayout()
 	}
 	a.rerender()
 }
@@ -300,6 +333,13 @@ func (a *Artifact) rerender() {
 		return
 	}
 	title := lipgloss.NewStyle().Bold(true).Foreground(a.theme.Title).Render(a.doc.Title)
+	// A revision cue tells the reader which version they are looking at (artifacts
+	// are compare-and-set versioned; ADR-0005). Revision 0 is "unstamped" — a
+	// synthetic/seeded document — so it is omitted.
+	if a.revision > 0 {
+		rev := lipgloss.NewStyle().Foreground(a.theme.Dim).Render(fmt.Sprintf("  rev %d", a.revision))
+		title += rev
+	}
 	body := renderMarkdown(a.doc.Body, a.w, a.theme.Variant)
 	a.detail.SetText(title + "\n\n" + body)
 }
@@ -337,9 +377,10 @@ func renderMarkdown(md string, width int, variant theme.Variant) string {
 }
 
 // artifactCommentSubject is the subject a review comment publishes to: the
-// artifact's topic, msg.topic.artifact.<name>. It is a naming convention over
+// artifact's topic, msg.topic.artifact.<name>, built through sx.TopicSubject so
+// the subject convention has one source of truth. It is a naming convention over
 // the messages space (ADR-0023), not a bus construct — a reviewer subscribes to
 // it to see comments on an artifact.
 func artifactCommentSubject(name string) string {
-	return fmt.Sprintf("msg.topic.artifact.%s", name)
+	return sx.TopicSubject("artifact." + name)
 }

@@ -3,6 +3,7 @@ package surface_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -61,19 +62,23 @@ func sampleClients() []sextant.ClientInfo {
 func TestPresenceGolden(t *testing.T) {
 	th := fixedDark()
 	for _, tc := range []struct {
-		name  string
-		focus widget.Focus
-		feed  bool
+		name    string
+		focus   widget.Focus
+		clients []sextant.ClientInfo
+		feed    bool // whether a snapshot was delivered at all
 	}{
-		{"empty_selected", widget.FocusSelected, false},
-		{"idle", widget.FocusIdle, true},
-		{"selected", widget.FocusSelected, true},
-		{"active", widget.FocusActive, true},
+		// loading: no snapshot yet → "loading…" placeholder (not "empty").
+		{"loading", widget.FocusSelected, nil, false},
+		// empty: a snapshot arrived with zero clients → genuinely empty.
+		{"empty", widget.FocusSelected, nil, true},
+		{"idle", widget.FocusIdle, sampleClients(), true},
+		{"selected", widget.FocusSelected, sampleClients(), true},
+		{"active", widget.FocusActive, sampleClients(), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := surface.NewPresence(context.Background(), nil, th, theme.DefaultKeymap())
 			if tc.feed {
-				p.Update(surface.ClientsLoadedMsg{Clients: sampleClients()})
+				p.Update(surface.ClientsLoadedMsg{Clients: tc.clients})
 			}
 			out := box(th, p, tc.focus, 28, 9)
 			teatest.RequireEqualOutput(t, []byte(out))
@@ -236,6 +241,57 @@ func TestArtifactReviewGolden(t *testing.T) {
 			teatest.RequireEqualOutput(t, []byte(out))
 		})
 	}
+}
+
+// --- error footers (fail-loud: a captured error must render, never swallow) ---
+
+// TestErrorFootersGolden pins that each surface renders its captured error in a
+// footer line, driven through the surface's own (test-only) error messages. The
+// footer appears below any content/compose row — proof the error is visible, not
+// swallowed.
+func TestErrorFootersGolden(t *testing.T) {
+	th := fixedDark()
+
+	t.Run("presence_fetch_error", func(t *testing.T) {
+		p := surface.NewPresence(context.Background(), nil, th, theme.DefaultKeymap())
+		p.Update(surface.ClientsLoadedMsg{Clients: sampleClients()}) // last good snapshot stays
+		p.Update(surface.NewClientsErrMsg(errors.New("bus unreachable")))
+		out := box(th, p, widget.FocusSelected, 30, 9)
+		teatest.RequireEqualOutput(t, []byte(out))
+	})
+
+	t.Run("stream_subscribe_error", func(t *testing.T) {
+		s := surface.NewStream(context.Background(), nil, "msg.topic.plan", th, theme.DefaultKeymap(), surface.WithAuthors(sampleAuthors()))
+		feedStream(s)
+		iw, ih := innerOf(48, 9)
+		s.SetSize(iw, ih)
+		s.SetFocus(widget.FocusSelected)
+		s.Update(surface.NewFeedErrMsg(errors.New("subscribe failed")))
+		out := widget.Box(th, widget.FocusSelected, s.Title(), th.RoleHue(theme.RoleHuman), s.View(), 48, 9)
+		teatest.RequireEqualOutput(t, []byte(out))
+	})
+
+	t.Run("stream_compose_publish_error", func(t *testing.T) {
+		s := surface.NewStream(context.Background(), nil, "msg.topic.plan", th, theme.DefaultKeymap(), surface.WithCompose(), surface.WithAuthors(sampleAuthors()))
+		feedStream(s)
+		iw, ih := innerOf(48, 10)
+		s.SetSize(iw, ih)
+		s.SetFocus(widget.FocusActive)
+		s.Update(surface.NewPublishedErrMsg(errors.New("publish rejected")))
+		out := widget.Box(th, widget.FocusActive, s.Title(), th.RoleHue(theme.RoleHuman), s.View(), 48, 10)
+		teatest.RequireEqualOutput(t, []byte(out))
+	})
+
+	t.Run("artifact_fetch_error", func(t *testing.T) {
+		a := surface.NewArtifact(context.Background(), nil, "dash-plan", th, theme.DefaultKeymap())
+		iw, ih := innerOf(48, 14)
+		a.SetSize(iw, ih)
+		a.Update(surface.ArtifactLoadedMsg{Artifact: sampleDocument()})
+		a.Update(surface.NewArtifactErrMsg(errors.New("artifact not found")))
+		a.SetFocus(widget.FocusSelected)
+		out := widget.Box(th, widget.FocusSelected, a.Title(), th.KindHue(theme.KindArtifactUpdate), a.View(), 48, 14)
+		teatest.RequireEqualOutput(t, []byte(out))
+	})
 }
 
 // typeInto feeds a string into a stream's active compose, key by key.
