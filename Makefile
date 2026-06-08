@@ -1,4 +1,4 @@
-.PHONY: test vet lint fmt
+.PHONY: test vet lint fmt book
 
 # Run the Go test suite.
 test:
@@ -21,3 +21,8 @@ lint: vet
 # Format the tree with gofumpt.
 fmt:
 	gofumpt -w .
+
+# Build the mdbook reference into docs/book/book (gitignored output).
+# Install mdbook with: cargo install mdbook (or `brew install mdbook`).
+book:
+	mdbook build docs/book
