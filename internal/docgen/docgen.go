@@ -44,7 +44,6 @@ func Run(root string) error {
 	}{
 		// Full factual pages (pure reference — no conceptual prose).
 		{"src/protocol/operations.md", genOperations},
-		{"src/implementers/backend.md", genBackend},
 		{"src/sdk-go/reference.md", genSDKReference},
 		{"src/sdk-go/messages.md", genSDKMessages},
 		{"src/sdk-go/artifacts.md", genSDKArtifacts},
@@ -263,34 +262,6 @@ func propertyTable(raw json.RawMessage, required []string) (string, error) {
 			yes = "yes"
 		}
 		fmt.Fprintf(&b, "| `%s` | %s | %s | %s |\n", p.Key, cell(typ), yes, cell(pv.Description))
-	}
-	return b.String(), nil
-}
-
-// --- implementers/backend.md (render existing canon markdown) ---------------
-
-func genBackend(root string) (string, error) {
-	return renderCanonMarkdown(root, "protocol/semantic-contract.md")
-}
-
-// renderCanonMarkdown wraps an already-prose canon markdown file with the
-// generated-page banner and provenance note, leaving its body verbatim.
-func renderCanonMarkdown(root, rel string) (string, error) {
-	raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
-	if err != nil {
-		return "", err
-	}
-	body := string(raw)
-	var b strings.Builder
-	b.WriteString(header(rel))
-	lines := strings.SplitN(body, "\n", 2)
-	b.WriteString("\n" + lines[0] + "\n\n")
-	b.WriteString(provenance(rel))
-	if len(lines) > 1 {
-		b.WriteString("\n" + lines[1])
-	}
-	if !strings.HasSuffix(b.String(), "\n") {
-		b.WriteString("\n")
 	}
 	return b.String(), nil
 }

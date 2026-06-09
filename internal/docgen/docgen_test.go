@@ -84,7 +84,7 @@ func TestSDKPages(t *testing.T) {
 func TestDeterministic(t *testing.T) {
 	root := repoRoot(t)
 	gens := []func(string) (string, error){
-		genOperations, genBackend,
+		genOperations,
 		genSDKReference, genSDKMessages, genSDKArtifacts, genSDKClients,
 		lexiconFragment("chat.message.json"), lexiconFragment("document.json"),
 		lexiconFragment("frame.json"), lexiconFragment("client.json"),
