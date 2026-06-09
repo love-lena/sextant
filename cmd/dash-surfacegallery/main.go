@@ -12,10 +12,13 @@
 //	[--surface clients|topics|artifacts|stream|artifact]
 //	[--theme light|dark|auto]
 //
-// Keys: tab cycles surfaces · enter steps into the focused surface (in a
-// browser, Enter then opens the selected row's detail IN PLACE and esc pops
-// back to the list) · ↑/↓ move within an active surface · (stream/artifact,
-// when active) type to compose · t toggles theme · q / ctrl+c quits.
+// The shown surface is always focused (ADR-0026: keys go to the focused
+// surface; there is no step-in level). Keys: tab / shift+tab cycle the
+// surfaces · enter opens the selected row's detail IN PLACE (in a browser) or
+// sends (in a compose) · esc pops a detail back to its list · ↑/↓ move within
+// the surface · (stream/artifact) type to compose · t toggles theme and q
+// quits while the surface is not capturing text (while composing they type) ·
+// ctrl+c always quits.
 //
 // A browser's opened detail runs with a nil client, so its conversation/reader
 // starts empty (no live feed) — the master⇄detail motion is what this gallery
@@ -77,8 +80,9 @@ type pane struct {
 	seed func(surface.Surface)
 }
 
-// model hosts the surfaces and tracks which one is shown and whether the operator
-// has stepped in. It demonstrates the two-level focus model and that a surface
+// model hosts the surfaces and tracks which one is shown. The shown surface is
+// always focused (ADR-0026) — keys go straight to it; the host claims only the
+// cycle keys, the theme toggle, and quitting. It demonstrates that a surface
 // mounts unchanged inside widget.Box.
 type model struct {
 	th    theme.Theme
@@ -86,9 +90,8 @@ type model struct {
 	panes []pane
 	only  bool // a single surface (no cycling)
 
-	sel    int
-	active bool
-	w, h   int
+	sel  int
+	w, h int
 }
 
 // galleryOrder is the --surface names in pane order.
@@ -224,50 +227,43 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.w, m.h = msg.Width, msg.Height
 		m.layout()
 		return m, nil
-	case surface.DoneMsg:
-		// A surface stepped out: return focus to the layout level.
-		m.active = false
-		m.applyFocus()
-		return m, nil
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
 	return m, nil
 }
 
+// handleKey claims the host keys (cycle, theme, quit) and delivers everything
+// else to the shown surface (ADR-0026: keys go to the focused surface). The
+// cycle keys and ctrl+c are never claimed by a surface, so they work
+// mid-compose; the printable host keys (q, t) act only while the surface is not
+// capturing text — while a compose is capturing they type.
 func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "q":
-		if !m.active {
-			m.stopAll()
-			return m, tea.Quit
-		}
 	case "ctrl+c":
 		m.stopAll()
 		return m, tea.Quit
-	case "t":
-		if !m.active {
+	case "tab", "shift+tab":
+		if !m.only {
+			step := 1
+			if msg.String() == "shift+tab" {
+				step = len(m.panes) - 1
+			}
+			m.sel = (m.sel + step) % len(m.panes)
+			m.applyFocus()
+		}
+		return m, nil
+	}
+	if !m.panes[m.sel].s.CapturingText() {
+		switch msg.String() {
+		case "q":
+			m.stopAll()
+			return m, tea.Quit
+		case "t":
 			return m.toggleTheme(), nil
 		}
-	case "tab":
-		if !m.active && !m.only {
-			m.sel = (m.sel + 1) % len(m.panes)
-			m.applyFocus()
-			return m, nil
-		}
-	case "enter":
-		if !m.active {
-			m.active = true
-			m.applyFocus()
-			return m, nil
-		}
 	}
-	if m.active {
-		// Route the key into the focused surface; it may emit an intent (e.g.
-		// DoneMsg on esc) which comes back through Update.
-		return m, m.panes[m.sel].s.Update(msg)
-	}
-	return m, nil
+	return m, m.panes[m.sel].s.Update(msg)
 }
 
 // stopAll tears down every surface on quit (the Surface contract's teardown), so
@@ -283,26 +279,18 @@ func (m model) View() string {
 		return "starting surface gallery…"
 	}
 	p := m.panes[m.sel]
-	focus := widget.FocusSelected
-	if m.active {
-		focus = widget.FocusActive
-	}
 	boxH := m.h - 1
-	body := widget.Box(m.th, focus, p.s.Title(), m.titleHue(p.s.ID()), p.s.View(), m.w, boxH)
+	body := widget.Box(m.th, widget.FocusActive, p.s.Title(), m.titleHue(p.s.ID()), p.s.View(), m.w, boxH)
 	return lipgloss.JoinVertical(lipgloss.Left, body, m.statusBar())
 }
 
 func (m model) statusBar() string {
-	state := "selected"
-	if m.active {
-		state = "active"
-	}
 	left := lipgloss.NewStyle().Foreground(m.th.Fg).Render(
-		fmt.Sprintf(" %s · %s ", m.panes[m.sel].s.ID(), state),
+		fmt.Sprintf(" %s — %s ", m.panes[m.sel].s.ID(), m.panes[m.sel].s.Title()),
 	)
-	hints := "enter step in/open · esc pop/out · ↑/↓ move · t theme · q quit "
+	hints := "enter open · esc back · ↑/↓ move · t theme · q quit "
 	if !m.only {
-		hints = "tab cycle · " + hints
+		hints = "tab next · " + hints
 	}
 	hint := lipgloss.NewStyle().Foreground(m.th.Dim).Render(hints)
 	gap := m.w - lipgloss.Width(left) - lipgloss.Width(hint)
@@ -327,16 +315,13 @@ func (m model) titleHue(id string) lipgloss.Color {
 	}
 }
 
-// applyFocus sets each surface's focus from the gallery's selection + active
-// state, so only the shown-and-active surface lights its inner cursor.
+// applyFocus sets each surface's focus: the shown surface is active (it is the
+// focused pane — its cursor and compose light up), the rest idle.
 func (m *model) applyFocus() {
 	for i, p := range m.panes {
 		f := widget.FocusIdle
 		if i == m.sel {
-			f = widget.FocusSelected
-			if m.active {
-				f = widget.FocusActive
-			}
+			f = widget.FocusActive
 		}
 		p.s.SetFocus(f)
 	}
@@ -351,7 +336,7 @@ func (m model) toggleTheme() model {
 	// Rebuild surfaces against the new theme (hues are resolved at construction),
 	// re-seed, and restore size + focus.
 	nm := newModel(m.th, m.onlyName())
-	nm.sel, nm.active, nm.w, nm.h = m.sel, m.active, m.w, m.h
+	nm.sel, nm.w, nm.h = m.sel, m.w, m.h
 	for _, p := range nm.panes {
 		p.seed(p.s)
 	}

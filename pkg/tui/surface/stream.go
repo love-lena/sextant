@@ -42,9 +42,9 @@ type streamConfig struct {
 }
 
 // WithCompose turns on the compose affordance: the surface becomes the "chat"
-// config (participate), where stepping in lets the operator type a line and Enter
-// publishes it. Without it the surface is "tail" (observe only) — the same one
-// read-stream, no send side (ADR-0023).
+// config (participate) — while the surface is the focused pane the operator
+// types a line and Enter publishes it. Without it the surface is "tail"
+// (observe only) — the same one read-stream, no send side (ADR-0023).
 func WithCompose() StreamOption {
 	return func(c *streamConfig) { c.compose = true }
 }
@@ -74,7 +74,9 @@ func WithAuthors(authors map[string]Author) StreamOption {
 // the subscription. There is no optimistic echo.
 //
 // The surface renders from EventMsgs, so a test feeds it synthetic busfeed
-// events without a bus. Esc out of an active compose emits a DoneMsg.
+// events without a bus. Esc is a no-op at this surface's level (ADR-0026: a
+// stream opened as a browser's detail is popped by the BROWSER consuming Esc;
+// standalone, the host quits on its own keys).
 type Stream struct {
 	client  *sextant.Client
 	ctx     context.Context
@@ -231,8 +233,9 @@ func (s *Stream) renderEntry(e streamEntry) []string {
 	return []string{s.dropMarker(e.dropped)}
 }
 
-// SetFocus sets the three-state focus. Stepping in (active) focuses the compose
-// input when compose is on; stepping out blurs it.
+// SetFocus sets the three-state focus. Gaining focus (active) focuses the
+// compose input when compose is on; losing it blurs the input (the typed text
+// holds — the pane keeps its place while the operator works elsewhere).
 func (s *Stream) SetFocus(f widget.Focus) {
 	s.focus = f
 	if !s.compose {
@@ -263,7 +266,7 @@ func (s *Stream) Init() tea.Cmd {
 }
 
 // Update drives the feed pump, renders incoming frames, and — when active and
-// composing — handles typing, Enter (publish), and Esc (step out → DoneMsg).
+// composing — handles typing and Enter (publish).
 //
 // Several feeds can be live in one program (a topics-discovery wildcard, another
 // pane's open conversation), and every message reaches every surface in its
@@ -309,21 +312,28 @@ func (s *Stream) Update(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-// handleKey routes a key while the surface is active: scrolling always, plus
-// compose when enabled. The bindings come from the keymap (keys are data), not
-// literal strings, so an operator's rebind is honoured here as it is in the
-// chrome and the inner widget. Back steps out (DoneMsg); Enter publishes the
-// composed line; the scroll bindings review the backlog; other keys edit the
-// compose buffer.
+// handleKey routes a key while the surface is active: scrolling, plus compose
+// when enabled. The bindings come from the keymap (keys are data), not literal
+// strings, so an operator's rebind is honoured here as it is in the chrome and
+// the inner widget. Enter publishes the composed line; the scroll bindings
+// review the backlog; other keys edit the compose buffer. Back is a no-op —
+// the stream is a single level (ADR-0026); a hosting browser consumes Esc to
+// pop it.
+//
+// While the compose is capturing, every printable key is TEXT before it is a
+// binding: j/k share the scroll bindings (and q is the host's quit key), so a
+// text key routes straight to the input — only control keys (arrows, Enter)
+// can match bindings mid-compose.
 func (s *Stream) handleKey(msg tea.KeyMsg) tea.Cmd {
 	if s.focus != widget.FocusActive {
 		return nil
 	}
+	if s.CapturingText() && isTextKey(msg) {
+		var cmd tea.Cmd
+		s.input, cmd = s.input.Update(msg)
+		return cmd
+	}
 	switch {
-	case key.Matches(msg, s.keys.Back):
-		s.input.SetValue("")
-		s.input.Blur()
-		return doneCmd(s.ID())
 	case key.Matches(msg, s.keys.Enter):
 		if !s.compose {
 			return nil

@@ -30,9 +30,9 @@ type ListItem struct {
 // List is a cursor-driven selectable list: a vertical column of rows with a
 // movable cursor. It is a Bubble Tea component (Update + View) and renders only
 // from a theme.Theme and its Focus. The cursor row is always visible: a
-// prominent filled accent bar when active (stepped in), and a muted dim bar
-// when selected or idle — so the operator can see what Enter will open before
-// stepping in.
+// prominent filled accent bar when active (the focused pane), and a muted dim
+// bar when selected or idle — so an unfocused pane still shows its place
+// (ADR-0026: panes hold their place; the cue is just muted).
 type List struct {
 	keys  theme.Keymap
 	items []ListItem

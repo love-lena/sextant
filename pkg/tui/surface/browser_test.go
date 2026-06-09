@@ -85,19 +85,39 @@ func TestBrowserEnterOpensDetailEscPops(t *testing.T) {
 	}
 }
 
-func TestBrowserEscAtListStepsOut(t *testing.T) {
+// TestBrowserEscAtListIsNoOp pins ADR-0026: the list is the pane's top level,
+// so Esc there does nothing — no command escapes, no state changes. Leaving the
+// pane is the host's focus move, never a key the browser acts on.
+func TestBrowserEscAtListIsNoOp(t *testing.T) {
 	b := newTestBrowser(func(int) (Surface, string) { return &fakeDetail{}, "x" })
-	cmd := b.Update(keyMsg(tea.KeyEsc)) // list level
-	if cmd == nil {
-		t.Fatal("Esc at the list should emit a step-out command")
+	if cmd := b.Update(keyMsg(tea.KeyEsc)); cmd != nil {
+		t.Fatalf("Esc at the list should be a no-op, got command %#v", cmd())
 	}
-	msg := cmd()
-	done, ok := msg.(DoneMsg)
-	if !ok {
-		t.Fatalf("list Esc should emit DoneMsg, got %T", msg)
+	if b.inDetail() {
+		t.Fatal("Esc at the list must not change the browser state")
 	}
-	if done.ID != "fake" {
-		t.Fatalf("DoneMsg.ID = %q, want the browser id %q", done.ID, "fake")
+	if got := b.Title(); got != "Fakes" {
+		t.Fatalf("Esc at the list changed the title: %q", got)
+	}
+}
+
+// TestBrowserCapturingTextDelegatesToDetail: the list never captures text; with
+// a detail open, CapturingText is the detail's answer (a conversation's live
+// compose makes the whole pane capturing, so the host's q types instead of
+// quitting).
+func TestBrowserCapturingTextDelegatesToDetail(t *testing.T) {
+	det := &fakeDetail{id: "d", capturing: true}
+	b := newTestBrowser(func(int) (Surface, string) { return det, "t" })
+	if b.CapturingText() {
+		t.Fatal("a list must not capture text")
+	}
+	b.Update(keyMsg(tea.KeyEnter))
+	if !b.CapturingText() {
+		t.Fatal("an open capturing detail must make the browser capturing")
+	}
+	det.capturing = false
+	if b.CapturingText() {
+		t.Fatal("the browser must track the detail's live capturing state")
 	}
 }
 

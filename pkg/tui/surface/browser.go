@@ -12,14 +12,16 @@ import (
 // browsers (clients, topics, artifacts) embed — each supplies only its data
 // (by calling setRows as rows arrive) and an openRow hook that builds the detail
 // Surface for a selected row. Browser owns the list ⇄ detail state, the focus,
-// and the step-in/step-out keys.
+// and the open/pop keys.
 //
-// Navigation nests under the layout's two-level focus (ADR-0023/0024):
+// Navigation is pane state (ADR-0024/0026):
 //   - At the list, Up/Down move the cursor; Enter opens the selected row's
-//     detail in place; Back (Esc) emits DoneMsg to step out to the layout.
+//     detail in place; Back (Esc) does nothing — there is no level above the
+//     list, and leaving the pane is the host's focus move, not a key here.
 //   - In the detail, every key but Back goes to the inner detail Surface; Back
-//     pops back to the list (consumed here, so the detail never sees it and no
-//     DoneMsg escapes to the layout). Each Back pops exactly one level.
+//     pops back to the list (consumed here, so the detail never sees it). Each
+//     Back pops exactly one level. An open detail is pane state: it persists
+//     until the operator pops it, regardless of where focus goes.
 //
 // A concrete browser embeds Browser, overrides Init (to load its rows) and
 // Update (to fold in its own data messages, then delegate to Browser.Update),
@@ -60,8 +62,8 @@ func newBrowser(id, base string, keys theme.Keymap, th theme.Theme, openRow func
 // ID is the stable pane id (e.g. "clients").
 func (b *Browser) ID() string { return b.id }
 
-// Title is the base name at the list level and the detail's title once stepped
-// in (e.g. "Topics" → "Topic · plan").
+// Title is the base name at the list level and the detail's title while one is
+// open (e.g. "Topics" → "Topic · plan").
 func (b *Browser) Title() string {
 	if b.detail != nil && b.detailTitle != "" {
 		return b.detailTitle
@@ -136,13 +138,15 @@ func (b *Browser) Update(msg tea.Msg) tea.Cmd {
 		}
 		return b.detail.Update(msg)
 	}
-	// At the list: Enter opens the selected row; Back steps out to the layout.
+	// At the list: Enter opens the selected row. Back is a no-op here — the list
+	// is the pane's top level (ADR-0026: Esc at the list does nothing; leaving
+	// the pane is a focus move, not a level).
 	if km, ok := msg.(tea.KeyMsg); ok {
 		switch {
 		case key.Matches(km, b.keys.Enter):
 			return b.openSelected()
 		case key.Matches(km, b.keys.Back):
-			return doneCmd(b.id)
+			return nil
 		}
 	}
 	var cmd tea.Cmd

@@ -8,14 +8,15 @@
 //
 // Run: go run ./cmd/dash-layoutgallery [--theme light|dark|auto]
 //
-// Keys (from the locked keymap + layout shortcuts):
+// Keys (from the locked keymap + layout shortcuts, ADR-0026: one pane is
+// always focused and keys go to it):
 //
-//	↑↓←→/hjkl  move the selected pane (accent border)
-//	enter      step into the selected pane (it goes active)
-//	esc        step out
-//	p          cycle the preset (cockpit → split)
-//	o          open the options menu (toggle panes, switch preset/theme, quit)
-//	q / ctrl+c quit
+//	tab / shift+tab  cycle focus through the panes
+//	ctrl+h/j/k/l     move focus spatially (left/down/up/right)
+//	↑↓←→/hjkl etc.   content keys, delivered to the focused pane
+//	p                cycle the preset (cockpit → split)
+//	o                open the options menu (toggle panes, switch preset/theme, quit)
+//	q / ctrl+c       quit
 //
 // It is a dev affordance, not part of the dash. The real dash binary wires the
 // domain surfaces and the identity; this gallery proves the layout mechanics.
@@ -89,6 +90,7 @@ type mockSurface struct {
 	body      string
 	w, h      int
 	focus     widget.Focus
+	lastKey   string
 }
 
 func newMock(id, title, body string) *mockSurface {
@@ -109,16 +111,12 @@ func (s *mockSurface) Stop()                   {}
 // around it regardless.
 func (s *mockSurface) SetTheme(theme.Theme) {}
 
-// Update emits DoneMsg on Esc while active — the surface-driven step-out the
-// layout honours.
+// Update records the last content key delivered to the mock, so the gallery
+// visibly shows that keys go to the focused pane — and that a focus move never
+// delivers anything (the readout does not change when focus passes through).
 func (s *mockSurface) Update(msg tea.Msg) tea.Cmd {
-	km, ok := msg.(tea.KeyMsg)
-	if !ok || s.focus != widget.FocusActive {
-		return nil
-	}
-	if km.String() == "esc" {
-		id := s.id
-		return func() tea.Msg { return surface.DoneMsg{ID: id} }
+	if km, ok := msg.(tea.KeyMsg); ok {
+		s.lastKey = km.String()
 	}
 	return nil
 }
@@ -128,16 +126,16 @@ func (s *mockSurface) View() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n\n", s.body)
 	fmt.Fprintf(&b, "[%s · %dx%d]\n", state, s.w, s.h)
-	if s.focus == widget.FocusActive {
-		b.WriteString("esc to step out")
+	if s.lastKey != "" {
+		fmt.Fprintf(&b, "last key: %s", s.lastKey)
 	}
 	return b.String()
 }
 
 const (
-	clientsBody   = "every issued identity\n● lena  ● coordinator-1  ○ agent-beta\nenter a row → its DM, in place"
-	topicsBody    = "every topic with messages\nplan · build · review\nenter a row → its conversation, in place"
-	artifactsBody = "every artifact in the bucket\ndash-plan rev 3 · notes rev 12\nenter a row → its reader, in place"
+	clientsBody   = "every issued identity\n● lena  ● coordinator-1  ○ agent-beta\nenter a row → its DM, in place\nthe pane holds it while you work elsewhere"
+	topicsBody    = "every topic with messages\nplan · build · review\nenter a row → its conversation, in place\nthe pane holds it while you work elsewhere"
+	artifactsBody = "every artifact in the bucket\ndash-plan rev 3 · notes rev 12\nenter a row → its reader, in place\nthe pane holds it while you work elsewhere"
 )
 
 var _ surface.Surface = (*mockSurface)(nil)

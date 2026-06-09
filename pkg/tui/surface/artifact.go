@@ -304,8 +304,8 @@ func (a *Artifact) nextChange() tea.Cmd {
 }
 
 // Update handles the loaded document, the error case, and — in review mode while
-// active — comment composition (Enter publishes a chat.message; Esc steps out).
-// Reader scrolling runs on up/down while active.
+// active — comment composition (Enter publishes a chat.message). Reader
+// scrolling runs on up/down while active.
 func (a *Artifact) Update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case ArtifactLoadedMsg:
@@ -353,16 +353,23 @@ func (a *Artifact) Update(msg tea.Msg) tea.Cmd {
 // handleKey routes a key while active: scroll the reader, and in review mode
 // edit/submit the comment. The bindings come from the keymap (keys are data),
 // not literal strings, so a rebind is honoured here as it is in the chrome and
-// the detail widget. Back steps out (DoneMsg).
+// the detail widget. Back is a no-op — the reader is a single level
+// (ADR-0026); a hosting browser consumes Esc to pop it.
+//
+// While the comment input is capturing, every printable key is TEXT before it
+// is a binding: j/k share the scroll bindings (and q is the host's quit key),
+// so a text key routes straight to the input — only control keys (arrows,
+// Enter) can match bindings mid-comment.
 func (a *Artifact) handleKey(msg tea.KeyMsg) tea.Cmd {
 	if a.focus != widget.FocusActive {
 		return nil
 	}
+	if a.CapturingText() && isTextKey(msg) {
+		var cmd tea.Cmd
+		a.input, cmd = a.input.Update(msg)
+		return cmd
+	}
 	switch {
-	case key.Matches(msg, a.keys.Back):
-		a.input.SetValue("")
-		a.input.Blur()
-		return doneCmd(a.ID())
 	case key.Matches(msg, a.keys.Up), key.Matches(msg, a.keys.Down):
 		a.detail, _ = a.detail.Update(msg)
 		return nil

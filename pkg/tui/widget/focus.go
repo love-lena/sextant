@@ -5,9 +5,10 @@
 // Sextant. By construction they import only lipgloss/bubbletea and the theme
 // package — no SDK, no internal/, no nats (an import test enforces this).
 //
-// Focus is three-state (ADR-0023): a widget is idle, selected (the layout has
-// landed on it), or active (the operator stepped in). Each widget renders a
-// visible distinction for all three, driven entirely by theme tokens.
+// Focus is three-state (ADR-0023, recast by ADR-0026): a widget is idle
+// (hidden/resting), selected (visible but unfocused — its place stays readable,
+// muted), or active (the focused pane; input is routed here). Each widget
+// renders a visible distinction for all three, driven entirely by theme tokens.
 package widget
 
 import (
@@ -15,20 +16,21 @@ import (
 	"github.com/love-lena/sextant/pkg/tui/theme"
 )
 
-// Focus is a widget's three-state focus, the cue ADR-0023 locks: idle (resting),
-// selected (the layout's selection has landed on this pane), and active (the
-// operator stepped in and input is routed here).
+// Focus is a widget's three-state focus (ADR-0023's cue, recast by ADR-0026):
+// idle (hidden/resting), selected (visible but unfocused), and active (the
+// focused pane — input is routed here).
 type Focus int
 
 // The three focus states.
 const (
 	// FocusIdle is the resting state: a dim border, no selection cue.
 	FocusIdle Focus = iota
-	// FocusSelected is the layout's current selection: an accent border and a
-	// muted cursor cue, but input has not stepped in yet.
+	// FocusSelected is the visible-but-unfocused state: an accent border and a
+	// muted cursor cue, so the pane's place stays readable while the operator
+	// works elsewhere.
 	FocusSelected
-	// FocusActive is the stepped-in state: an accent border and an active cursor
-	// / selection inside the widget.
+	// FocusActive is the focused state: an accent border and an active cursor
+	// / selection inside the widget; keys are delivered here.
 	FocusActive
 )
 

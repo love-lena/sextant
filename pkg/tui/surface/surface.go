@@ -1,16 +1,21 @@
-// Package surface is the dash's pane stratum (ADR-0023, refined by ADR-0024):
-// the three master-detail browsers — clients, topics, artifacts — and the two
-// detail surfaces they open in place (the message stream and the artifact
-// reader), built on the widget toolkit and the busfeed adapter against one
-// small contract.
+// Package surface is the dash's pane stratum (ADR-0023, refined by ADR-0024
+// and ADR-0026): the three master-detail browsers — clients, topics, artifacts
+// — and the two detail surfaces they open in place (the message stream and the
+// artifact reader), built on the widget toolkit and the busfeed adapter against
+// one small contract.
 //
 // A Surface is a Bubble Tea component that knows how to be a pane: it sizes to
-// the inner area the layout grants, takes one of three focus states, renders its
-// own content, and emits intents (DoneMsg) rather than quitting or addressing
-// another surface. It declares an id and a title so the layout can toggle it.
-// Each surface runs standalone as its own tea.Program AND mounts as a pane
-// unchanged — the layout wraps a surface's View in widget.Box, so the surface
-// renders inner content only and never owns its own chrome.
+// the inner area the layout grants, takes one of three focus states, renders
+// its own content, and never quits or addresses another surface. It declares an
+// id and a title so the layout can toggle it. Each surface runs standalone as
+// its own tea.Program AND mounts as a pane unchanged — the layout wraps a
+// surface's View in widget.Box, so the surface renders inner content only and
+// never owns its own chrome.
+//
+// Navigation is content state (ADR-0026): Enter opens the selected row's detail
+// in place, Esc pops one level back to the list, and Esc at a surface's top
+// level does nothing — leaving a pane is the host's focus move, not a level,
+// so an open detail holds its place while the operator works elsewhere.
 //
 // widget ⊂ surface ⊂ dash: this package touches only the layer below it — the
 // theme, the widgets, the busfeed adapter, and the public SDK (pkg/sextant and
@@ -38,14 +43,13 @@ import (
 // content cue — an active cursor, a live compose line — lives inside the body,
 // not on the border.
 //
-// Intents, not calls: a Surface never quits and never addresses another surface.
-// When it wants to hand focus back it emits a DoneMsg as a tea.Cmd from Update.
-// The dash interprets the intent; the surface stays ignorant of the layout.
+// A Surface never quits and never addresses another surface; the host owns
+// focus and quitting (ADR-0026: ctrl+c always quits, q quits unless the focused
+// surface is capturing text — the CapturingText method is how the host asks).
 // Opening a detail is a surface's OWN state (ADR-0024: a browser opens a row's
-// detail inside its own pane), never an intent to the host. Because active
-// state can be nested, the layout never steps out on Back itself — a surface at
-// its TOP active level must emit DoneMsg on the Back binding (every surface
-// here does), and an inner level consumes Back to pop one level.
+// detail inside its own pane), never an intent to the host; each Back (Esc)
+// pops exactly one level, and Back at the top level is a no-op — focus moves,
+// not Esc, are how the operator leaves a pane.
 type Surface interface {
 	// ID is the stable identifier the layout toggles a pane by. It is constant
 	// for the life of the surface (e.g. "clients", "topics", "artifacts").
@@ -59,10 +63,11 @@ type Surface interface {
 	// every reflow.
 	SetSize(w, h int)
 
-	// SetFocus sets the surface's three-state focus: idle (resting), selected
-	// (the layout landed on it), or active (the operator stepped in and input is
-	// routed here). The surface renders the inside-the-body cue for the state; the
-	// layout draws the border.
+	// SetFocus sets the surface's three-state focus: idle (hidden/unmounted),
+	// selected (visible but unfocused — the muted cue that keeps the pane's
+	// place readable), or active (the focused pane; input is routed here). The
+	// surface renders the inside-the-body cue for the state; the layout draws
+	// the border.
 	SetFocus(widget.Focus)
 
 	// CapturingText reports whether the surface is currently capturing typed
@@ -90,9 +95,9 @@ type Surface interface {
 	Init() tea.Cmd
 
 	// Update handles input and events, mutating the surface, and returns any
-	// follow-up commands — including the pump step that keeps a feed running and
-	// the DoneMsg intent the surface emits. A surface receives input only while
-	// it is active; the layout routes keys by focus.
+	// follow-up commands — including the pump step that keeps a feed running. A
+	// surface receives input only while it is the focused (active) pane; the
+	// layout routes keys by focus.
 	Update(tea.Msg) tea.Cmd
 
 	// View renders the surface's inner content, sized to the last SetSize. It does
@@ -124,18 +129,14 @@ var (
 	_ Surface = (*TopicsBrowser)(nil)
 )
 
-// DoneMsg is the "I've stepped out" intent: a surface emits it when the operator
-// leaves its active state (e.g. Esc out of a compose), so the layout returns
-// focus to the layout level. It carries the emitting surface's id so the layout
-// knows which pane stepped out without tracking it separately.
-type DoneMsg struct {
-	// ID is the id of the surface that stepped out.
-	ID string
-}
-
-// doneCmd is the tea.Cmd form of a DoneMsg for the surface with the given id.
-func doneCmd(id string) tea.Cmd {
-	return func() tea.Msg { return DoneMsg{ID: id} }
+// isTextKey reports whether a key is printable text destined for a compose
+// (runes or space), as opposed to a control or navigation key. While a surface
+// is capturing text, EVERY text key must reach the input — including letters
+// that happen to share a binding with a navigation action (j/k are bound
+// alongside the arrows, q is the host's quit) — so the key routing checks this
+// before any binding match.
+func isTextKey(msg tea.KeyMsg) bool {
+	return msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace
 }
 
 // errorFooter renders a one-line error footer in the alert hue (base08, the
