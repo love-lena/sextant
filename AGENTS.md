@@ -58,3 +58,11 @@ Five canonical roles under their default names (`needs-triage`, `needs-info`,
 ### Domain docs
 Single-context: one `CONTEXT.md` + `docs/adr/` at the root. See
 [`docs/agents/domain.md`](docs/agents/domain.md).
+
+### Go style
+Two layers: the **go-house-style skill** (`.claude/skills/go-house-style/`)
+carries the judgment-based conventions; the **static-checks gate** —
+`make check`, configured in `.golangci.yml` — enforces everything mechanical
+(see [`docs/agents/go-static-checks.md`](docs/agents/go-static-checks.md)).
+If a tool can decide it, the tool enforces it; consult the skill for
+everything it can't.
