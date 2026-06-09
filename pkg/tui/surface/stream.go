@@ -111,6 +111,7 @@ func NewStream(ctx context.Context, client *sextant.Client, subject string, th t
 		o(&cfg)
 	}
 	in := widget.NewCompose()
+	in.SetPlaceholder("message…")
 	in.SetWidth(1) // will be resized by SetSize; initialise to a safe default
 	s := &Stream{
 		client:  client,

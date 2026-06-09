@@ -142,6 +142,7 @@ func NewArtifact(ctx context.Context, client *sextant.Client, name string, th th
 		o(&cfg)
 	}
 	in := widget.NewCompose()
+	in.SetPlaceholder("leave a comment…")
 	in.SetWidth(1) // will be resized by SetSize
 	return &Artifact{
 		client:  client,

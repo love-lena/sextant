@@ -165,6 +165,11 @@ func (c *Compose) Height() int {
 	return h
 }
 
+// SetPlaceholder sets the hint shown while the compose is empty ("message…",
+// "leave a comment…"). The surfaces set it at construction; the textarea
+// renders it only when there is no draft.
+func (c *Compose) SetPlaceholder(s string) { c.ta.Placeholder = s }
+
 // Value returns the current text content.
 func (c *Compose) Value() string { return c.ta.Value() }
 
