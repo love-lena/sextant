@@ -95,6 +95,16 @@ func TestDefaultKeymapBindsArrowsAndHJKL(t *testing.T) {
 	if !key.Matches(keyMsg("esc"), km.Back) {
 		t.Error("Back should bind esc")
 	}
+	if !key.Matches(keyMsg("tab"), km.FocusNext) {
+		t.Error("FocusNext should bind tab")
+	}
+	if !key.Matches(keyMsg("shift+tab"), km.FocusPrev) {
+		t.Error("FocusPrev should bind shift+tab")
+	}
+	if !key.Matches(keyMsg("ctrl+h"), km.FocusLeft) || !key.Matches(keyMsg("ctrl+j"), km.FocusDown) ||
+		!key.Matches(keyMsg("ctrl+k"), km.FocusUp) || !key.Matches(keyMsg("ctrl+l"), km.FocusRight) {
+		t.Error("spatial focus should bind ctrl+h/j/k/l (left/down/up/right)")
+	}
 	if !key.Matches(keyMsg("o"), km.Options) {
 		t.Error("Options should bind o")
 	}

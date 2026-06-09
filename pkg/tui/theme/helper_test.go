@@ -21,6 +21,18 @@ func keyMsg(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyEsc}
 	case "ctrl+c":
 		return tea.KeyMsg{Type: tea.KeyCtrlC}
+	case "tab":
+		return tea.KeyMsg{Type: tea.KeyTab}
+	case "shift+tab":
+		return tea.KeyMsg{Type: tea.KeyShiftTab}
+	case "ctrl+h":
+		return tea.KeyMsg{Type: tea.KeyCtrlH}
+	case "ctrl+j":
+		return tea.KeyMsg{Type: tea.KeyCtrlJ}
+	case "ctrl+k":
+		return tea.KeyMsg{Type: tea.KeyCtrlK}
+	case "ctrl+l":
+		return tea.KeyMsg{Type: tea.KeyCtrlL}
 	default:
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 	}

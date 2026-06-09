@@ -104,6 +104,15 @@ func (b *Browser) SetFocus(f widget.Focus) {
 	}
 }
 
+// CapturingText delegates to the open detail (a conversation's compose, a
+// review's comment line); the list itself never captures text.
+func (b *Browser) CapturingText() bool {
+	if b.detail != nil {
+		return b.detail.CapturingText()
+	}
+	return false
+}
+
 // SetTheme re-themes the list (taken at View time) and the open detail.
 func (b *Browser) SetTheme(t theme.Theme) {
 	b.th = t

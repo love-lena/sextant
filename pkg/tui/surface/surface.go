@@ -65,6 +65,16 @@ type Surface interface {
 	// layout draws the border.
 	SetFocus(widget.Focus)
 
+	// CapturingText reports whether the surface is currently capturing typed
+	// text (a focused compose/comment input), so the host knows a printable key
+	// must be delivered here rather than acted on as a shortcut (ADR-0026: q
+	// quits only from a pane that is not capturing; while a compose is
+	// capturing, q types a q). The fail-safe is to return true when in doubt —
+	// delivering a key to the surface is recoverable, quitting underneath
+	// typing is not. A surface with no text input returns false; a browser
+	// delegates to its open detail.
+	CapturingText() bool
+
 	// SetTheme re-themes the surface in place: it re-resolves the hues the surface
 	// renders in (and rebuilds any palette-dependent renderer it holds, e.g. the
 	// artifact reader's Markdown renderer) against the new theme. The layout calls

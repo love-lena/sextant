@@ -3,30 +3,26 @@ package layout
 import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/love-lena/sextant/pkg/tui/surface"
 	"github.com/love-lena/sextant/pkg/tui/theme"
 	"github.com/love-lena/sextant/pkg/tui/widget"
 )
 
-// Update is the cockpit's Bubble Tea update. It is the single place the focus
-// machine, intent routing, and reflow triggers live:
+// Update is the cockpit's Bubble Tea update. It is the single place focus
+// movement, intent routing, and reflow triggers live:
 //
 //   - tea.WindowSizeMsg → record the size and reflow (re-fit every visible pane).
-//   - surface.DoneMsg → step focus back to the layout level.
-//   - tea.KeyMsg → routed by level: layout-level keys (nav, toggle, preset,
-//     options, quit) at levelLayout, the active surface's Update at levelPane.
+//   - tea.KeyMsg → the layout intercepts only the focus-movement keys, quit, and
+//     its own chrome keys (preset cycle, options menu); every other key goes to
+//     the focused surface (ADR-0026: keys always go to the focused pane).
 //
 // Any other message (a surface's feed/tick) is broadcast to every mounted
-// surface so a background pump keeps running even while another pane is active.
+// surface so a background pump keeps running regardless of focus.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 		m.reflow()
 		return m, nil
-
-	case surface.DoneMsg:
-		return m.handleDone(msg)
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -50,85 +46,118 @@ func (m Model) broadcast(msg tea.Msg) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// handleKey routes a key by focus level. The options menu, when open, consumes
-// keys first.
+// handleKey routes a key under the one-focused-pane model (ADR-0026). The
+// options menu, when open, consumes keys first. Then the layout claims only:
+//
+//   - ForceQuit (Ctrl-C) — always quits, from any state.
+//   - the focus-movement keys (cycle + spatial) — modifier/Tab keys a surface
+//     never claims, so they work mid-list, mid-conversation, mid-compose.
+//   - the chrome keys (Quit, Options, PresetCycle) — but ONLY while the focused
+//     surface is not capturing text. While a compose is capturing, a printable
+//     key types (q types a q); fail-safe is to deliver the key to the surface
+//     rather than act underneath typing.
+//
+// Everything else is delivered to the focused surface. Focus movement never
+// touches a surface's content state — an open detail stays open.
 func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	if m.menu != nil {
 		return m.handleMenuKey(msg)
 	}
-	if m.level == levelPane {
-		return m.handlePaneKey(msg)
-	}
-	return m.handleLayoutKey(msg)
-}
-
-// handleLayoutKey handles a key at the layout level: navigation moves the
-// selection, Enter steps into the selected pane, the layout keys (options,
-// preset cycle, quit) act on the cockpit. A key that matches nothing is ignored
-// (it does not fall through to a surface — surfaces only see input when
-// active).
-func (m Model) handleLayoutKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keys.ForceQuit):
 		m.Stop()
 		return m, tea.Quit
-	case key.Matches(msg, m.keys.Quit):
-		m.Stop()
-		return m, tea.Quit
-	case key.Matches(msg, m.keys.Options):
-		m.menu = newOptionsMenu(m)
+	case key.Matches(msg, m.keys.FocusNext):
+		m.cycleFocus(1)
 		return m, nil
-	case key.Matches(msg, m.keys.Enter):
-		if m.selected != "" {
-			m.level = levelPane
-			m.applyFocus()
-		}
+	case key.Matches(msg, m.keys.FocusPrev):
+		m.cycleFocus(-1)
 		return m, nil
-	case key.Matches(msg, m.keys.Up):
-		m.moveSpatial(dirUp)
-		return m, nil
-	case key.Matches(msg, m.keys.Down):
-		m.moveSpatial(dirDown)
-		return m, nil
-	case key.Matches(msg, m.keys.Left):
+	case key.Matches(msg, m.keys.FocusLeft):
 		m.moveSpatial(dirLeft)
 		return m, nil
-	case key.Matches(msg, m.keys.Right):
+	case key.Matches(msg, m.keys.FocusDown):
+		m.moveSpatial(dirDown)
+		return m, nil
+	case key.Matches(msg, m.keys.FocusUp):
+		m.moveSpatial(dirUp)
+		return m, nil
+	case key.Matches(msg, m.keys.FocusRight):
 		m.moveSpatial(dirRight)
 		return m, nil
-	case key.Matches(msg, m.keys.PresetCycle):
-		m.preset = nextPreset(m.preset)
-		m.reflow()
+	}
+
+	if !m.focusedCapturing() {
+		switch {
+		case key.Matches(msg, m.keys.Quit):
+			m.Stop()
+			return m, tea.Quit
+		case key.Matches(msg, m.keys.Options):
+			m.menu = newOptionsMenu(m)
+			return m, nil
+		case key.Matches(msg, m.keys.PresetCycle):
+			m.preset = nextPreset(m.preset)
+			m.reflow()
+			return m, nil
+		}
+	}
+
+	if m.focused == "" {
 		return m, nil
 	}
-	return m, nil
+	return m, m.surfaces[m.focused].Update(msg)
 }
 
-// handlePaneKey routes a key to the active surface. ForceQuit (Ctrl-C) still
-// quits from inside a pane — the root may quit even though a surface must not.
-//
-// The step-out binding (Esc) is DELIVERED to the surface, never acted on here:
-// a surface's active state can be nested (ADR-0024 — a browser's detail opens
-// inside its own pane, and each Esc pops exactly one level), so only the
-// surface knows whether an Esc pops an inner level or leaves the pane. Leaving
-// is the surface's DoneMsg (handleDone steps the layout out); a surface at its
-// top level emits one on Back — that is the Surface contract's step-out — and
-// ForceQuit stays the guaranteed hard escape.
-func (m Model) handlePaneKey(msg tea.KeyMsg) (Model, tea.Cmd) {
-	if key.Matches(msg, m.keys.ForceQuit) {
-		m.Stop()
-		return m, tea.Quit
+// focusedCapturing reports whether the focused surface is capturing text (the
+// Surface contract's CapturingText). With no focused pane it is false, so the
+// chrome keys still work at a degraded (too-small) terminal.
+func (m Model) focusedCapturing() bool {
+	if m.focused == "" {
+		return false
 	}
-	if m.selected == "" {
-		return m, nil
-	}
-	return m, m.surfaces[m.selected].Update(msg)
+	return m.surfaces[m.focused].CapturingText()
 }
 
-// direction is a spatial navigation direction at the layout level. Up/Down and
-// Left/Right are no longer aliases: each picks the nearest visible pane that lies
-// in that direction from the selected pane's rect, so navigation follows the
-// cockpit geometry rather than a flat forward/back order.
+// cycleFocus moves focus step panes forward (+1) or back (-1) through the
+// laid-out panes in registration order, wrapping at the ends. With nothing
+// laid out it is a no-op; with the focus somehow off a laid-out pane it lands
+// on the first one.
+func (m *Model) cycleFocus(step int) {
+	ids := m.laidOutOrder()
+	if len(ids) == 0 {
+		return
+	}
+	cur := -1
+	for i, id := range ids {
+		if id == m.focused {
+			cur = i
+		}
+	}
+	if cur < 0 {
+		m.focused = ids[0]
+	} else {
+		n := len(ids)
+		m.focused = ids[(cur+step+n)%n]
+	}
+	m.applyFocus()
+}
+
+// laidOutOrder returns the visible panes that actually got a rect from the last
+// reflow, in registration order — the panes focus can land on.
+func (m Model) laidOutOrder() []string {
+	var out []string
+	for _, id := range m.visibleOrder() {
+		if _, ok := m.rects[id]; ok {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// direction is a spatial focus-movement direction. Up/Down and Left/Right are
+// not aliases: each picks the nearest visible pane that lies in that direction
+// from the focused pane's rect, so movement follows the cockpit geometry rather
+// than a flat forward/back order.
 type direction int
 
 const (
@@ -138,24 +167,24 @@ const (
 	dirRight
 )
 
-// moveSpatial moves the selection to the nearest visible, laid-out pane in dir
-// from the selected pane's rect — directional, not a flat forward/back step. A
-// candidate qualifies when it lies on the dir side by edges (its near edge is at
-// or beyond the selected pane's far edge: the pane immediately to the right /
-// below / etc). Among qualifiers it picks the smallest travel-axis gap first,
-// then the smallest perpendicular non-overlap, then reading order — so in the
-// three-browser cockpit (clients · topics · artifacts side by side), Right from
-// clients lands on topics, Right again on artifacts, and Left reverses the walk.
-// With no pane in that direction the selection holds (no wrap). It only runs at
-// the layout level and never selects a pane without a rect (dropped at a tiny
-// terminal), keeping the existing selection guards.
+// moveSpatial moves focus to the nearest visible, laid-out pane in dir from the
+// focused pane's rect — directional, not a flat forward/back step. A candidate
+// qualifies when it lies on the dir side by edges (its near edge is at or beyond
+// the focused pane's far edge: the pane immediately to the right / below / etc).
+// Among qualifiers it picks the smallest travel-axis gap first, then the
+// smallest perpendicular non-overlap, then reading order — so in the
+// three-browser cockpit (clients · topics · artifacts side by side), Ctrl+l from
+// clients lands on topics, Ctrl+l again on artifacts, and Ctrl+h reverses the
+// walk. With no pane in that direction the focus holds (no wrap; the cycle keys
+// wrap instead). It never focuses a pane without a rect (dropped at a tiny
+// terminal). Moving focus never touches a surface's content state.
 func (m *Model) moveSpatial(dir direction) {
-	cur, ok := m.rects[m.selected]
+	cur, ok := m.rects[m.focused]
 	if !ok {
-		// The selection has no rect (none selected, or it was dropped): fall back to
-		// the first laid-out pane so a nav key still lands somewhere sensible.
+		// The focus has no rect (none focused, or it was dropped): fall back to
+		// the first laid-out pane so a focus key still lands somewhere sensible.
 		if first := m.firstLaidOut(); first != "" {
-			m.selected = first
+			m.focused = first
 			m.applyFocus()
 		}
 		return
@@ -164,12 +193,12 @@ func (m *Model) moveSpatial(dir direction) {
 	best := ""
 	var bestGap, bestPerp int
 	for _, id := range m.visibleOrder() {
-		if id == m.selected {
+		if id == m.focused {
 			continue
 		}
 		r, ok := m.rects[id]
 		if !ok {
-			continue // never select a pane with no rect
+			continue // never focus a pane with no rect
 		}
 		gap, ok := travelGap(dir, cur, r)
 		if !ok {
@@ -183,7 +212,7 @@ func (m *Model) moveSpatial(dir direction) {
 		}
 	}
 	if best != "" {
-		m.selected = best
+		m.focused = best
 		m.applyFocus()
 	}
 }
@@ -265,14 +294,6 @@ func cloneHidden(src map[string]bool) map[string]bool {
 	return dst
 }
 
-// handleDone responds to a surface's DoneMsg ("I stepped out"): it returns focus
-// to the layout level.
-func (m Model) handleDone(surface.DoneMsg) (Model, tea.Cmd) {
-	m.level = levelLayout
-	m.applyFocus()
-	return m, nil
-}
-
 // setTheme switches the cockpit theme (light/dark) in place. It re-themes the
 // chrome it owns (the Box border + title hues + canvas) AND every mounted
 // surface, by calling each surface's SetTheme — so the pane BODIES re-theme too,
@@ -293,17 +314,20 @@ func (m Model) setTheme(v theme.Variant) Model {
 // theme (e.g. to assert a theme toggle took effect).
 func (m Model) Theme() theme.Theme { return m.th }
 
-// Selected returns the id of the currently selected pane (or "" if none). It is
+// Focused returns the id of the currently focused pane (or "" if none). It is
 // exposed so a host/test can assert the focus state.
-func (m Model) Selected() string { return m.selected }
-
-// SteppedIn reports whether the operator has stepped into a pane (pane level).
-func (m Model) SteppedIn() bool { return m.level == levelPane }
+func (m Model) Focused() string { return m.focused }
 
 // VisibleIDs returns the ids currently laid out, in order — the visible set the
 // last reflow arranged. Exposed for tests/hosts that assert the layout.
 func (m Model) VisibleIDs() []string { return m.visibleOrder() }
 
 // FocusOf returns a pane's current three-state focus, for tests/hosts asserting
-// the focus borders.
-func (m Model) FocusOf(id string) widget.Focus { return m.focusOf(id) }
+// the focus borders: active for the focused pane, selected for other visible
+// panes, idle for hidden ones.
+func (m Model) FocusOf(id string) widget.Focus {
+	if !m.isVisible(id) {
+		return widget.FocusIdle
+	}
+	return m.focusOf(id)
+}

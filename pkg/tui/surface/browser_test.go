@@ -12,14 +12,16 @@ import (
 // fakeDetail is a minimal detail Surface that records teardown, so the browser
 // state-machine tests can assert the open/pop/Stop lifecycle without a real feed.
 type fakeDetail struct {
-	id      string
-	stopped bool
+	id        string
+	stopped   bool
+	capturing bool
 }
 
 func (f *fakeDetail) ID() string             { return f.id }
 func (f *fakeDetail) Title() string          { return f.id }
 func (f *fakeDetail) SetSize(int, int)       {}
 func (f *fakeDetail) SetFocus(widget.Focus)  {}
+func (f *fakeDetail) CapturingText() bool    { return f.capturing }
 func (f *fakeDetail) SetTheme(theme.Theme)   {}
 func (f *fakeDetail) Init() tea.Cmd          { return nil }
 func (f *fakeDetail) Update(tea.Msg) tea.Cmd { return nil }

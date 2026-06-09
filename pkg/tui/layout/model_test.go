@@ -9,7 +9,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/love-lena/sextant/pkg/tui/layout"
-	"github.com/love-lena/sextant/pkg/tui/surface"
 	"github.com/love-lena/sextant/pkg/tui/theme"
 	"github.com/love-lena/sextant/pkg/tui/widget"
 )
@@ -35,6 +34,20 @@ func key(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyLeft}
 	case "right":
 		return tea.KeyMsg{Type: tea.KeyRight}
+	case "tab":
+		return tea.KeyMsg{Type: tea.KeyTab}
+	case "shift+tab":
+		return tea.KeyMsg{Type: tea.KeyShiftTab}
+	case "ctrl+h":
+		return tea.KeyMsg{Type: tea.KeyCtrlH}
+	case "ctrl+j":
+		return tea.KeyMsg{Type: tea.KeyCtrlJ}
+	case "ctrl+k":
+		return tea.KeyMsg{Type: tea.KeyCtrlK}
+	case "ctrl+l":
+		return tea.KeyMsg{Type: tea.KeyCtrlL}
+	case "ctrl+c":
+		return tea.KeyMsg{Type: tea.KeyCtrlC}
 	default:
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 	}
@@ -56,46 +69,52 @@ func newCockpit(t *testing.T) (layout.Model, map[string]*mockSurface) {
 	return m, panes
 }
 
-// TestStartsAtLayoutLevel: a fresh cockpit selects the first visible pane and is
-// at the layout level (not stepped in).
-func TestStartsAtLayoutLevel(t *testing.T) {
-	m, _ := newCockpit(t)
-	if m.Selected() != "clients" {
-		t.Errorf("first selection = %q, want clients", m.Selected())
+// TestStartsFocused: a fresh cockpit focuses the first visible pane (ADR-0026:
+// one pane is always focused) — it is active, the other visible panes are
+// selected (the muted-cursor unfocused state), never idle.
+func TestStartsFocused(t *testing.T) {
+	m, panes := newCockpit(t)
+	if m.Focused() != "clients" {
+		t.Errorf("first focus = %q, want clients", m.Focused())
 	}
-	if m.SteppedIn() {
-		t.Error("should start at layout level, not stepped in")
+	if m.FocusOf("clients") != widget.FocusActive {
+		t.Errorf("focused pane = %v, want active", m.FocusOf("clients"))
+	}
+	for _, id := range []string{"topics", "artifacts"} {
+		if m.FocusOf(id) != widget.FocusSelected {
+			t.Errorf("unfocused visible pane %q = %v, want selected", id, m.FocusOf(id))
+		}
+		if panes[id].focus != widget.FocusSelected {
+			t.Errorf("surface %q was not told it is selected: %v", id, panes[id].focus)
+		}
 	}
 	if got := m.VisibleIDs(); !reflect.DeepEqual(got, []string{"clients", "topics", "artifacts"}) {
 		t.Errorf("visible = %v, want clients/topics/artifacts", got)
 	}
 }
 
-// TestNavMovesSelection: a nav key moves the selection to the spatially nearest
-// pane in that direction; the selected pane carries the accent (selected) border,
-// the others idle.
-func TestNavMovesSelection(t *testing.T) {
+// TestCycleFocusWraps: Tab cycles focus forward through the visible panes and
+// wraps; Shift+Tab cycles back and wraps the other way.
+func TestCycleFocusWraps(t *testing.T) {
 	m, _ := newCockpit(t)
-	if m.FocusOf("clients") != widget.FocusSelected {
-		t.Errorf("clients focus = %v, want selected", m.FocusOf("clients"))
+	for _, want := range []string{"topics", "artifacts", "clients"} {
+		m, _ = m.Update(key("tab"))
+		if m.Focused() != want {
+			t.Fatalf("tab: focus = %q, want %q", m.Focused(), want)
+		}
 	}
-	m, _ = m.Update(key("right"))
-	if m.Selected() != "topics" {
-		t.Errorf("after right, selected = %q, want topics", m.Selected())
-	}
-	if m.FocusOf("clients") != widget.FocusIdle {
-		t.Errorf("clients should be idle after moving off it, got %v", m.FocusOf("clients"))
-	}
-	if m.FocusOf("topics") != widget.FocusSelected {
-		t.Errorf("topics focus = %v, want selected", m.FocusOf("topics"))
+	// Shift+Tab from clients wraps backward to artifacts.
+	m, _ = m.Update(key("shift+tab"))
+	if m.Focused() != "artifacts" {
+		t.Fatalf("shift+tab from clients = %q, want artifacts (wrap)", m.Focused())
 	}
 }
 
-// TestSpatialNav: at the layout level the arrows move the selection by geometry,
-// not a flat forward/back order. The cockpit lays the three browsers as
-// full-height columns side by side, so Left/Right walk across them and Up/Down
-// hold (nothing above or below a full-height column).
-func TestSpatialNav(t *testing.T) {
+// TestSpatialFocus: Ctrl+h/j/k/l move focus by geometry, not a flat
+// forward/back order. The cockpit lays the three browsers as full-height
+// columns side by side, so left/right walk across them (no wrap at the ends)
+// and up/down hold (nothing above or below a full-height column).
+func TestSpatialFocus(t *testing.T) {
 	// Confirm the geometry the assertions navigate against, so a future preset
 	// change can't silently make the test pass for the wrong reason.
 	m, _ := newCockpit(t)
@@ -109,46 +128,45 @@ func TestSpatialNav(t *testing.T) {
 		t.Fatalf("precondition: full-height columns (clients h=%d)", ch)
 	}
 
-	sel := func(m layout.Model) string { return m.Selected() }
-
-	// Right walks across the columns: clients → topics → artifacts, then holds.
-	m, _ = m.Update(key("right"))
-	if sel(m) != "topics" {
-		t.Fatalf("right from clients = %q, want topics", sel(m))
+	// Ctrl+l walks right across the columns: clients → topics → artifacts, then
+	// holds (no wrap — the cycle keys wrap instead).
+	m, _ = m.Update(key("ctrl+l"))
+	if m.Focused() != "topics" {
+		t.Fatalf("ctrl+l from clients = %q, want topics", m.Focused())
 	}
-	m, _ = m.Update(key("right"))
-	if sel(m) != "artifacts" {
-		t.Fatalf("right from topics = %q, want artifacts", sel(m))
+	m, _ = m.Update(key("ctrl+l"))
+	if m.Focused() != "artifacts" {
+		t.Fatalf("ctrl+l from topics = %q, want artifacts", m.Focused())
 	}
-	m, _ = m.Update(key("right"))
-	if sel(m) != "artifacts" {
-		t.Fatalf("right from artifacts should hold (no wrap), got %q", sel(m))
+	m, _ = m.Update(key("ctrl+l"))
+	if m.Focused() != "artifacts" {
+		t.Fatalf("ctrl+l from artifacts should hold (no wrap), got %q", m.Focused())
 	}
-	// Left walks back.
-	m, _ = m.Update(key("left"))
-	if sel(m) != "topics" {
-		t.Fatalf("left from artifacts = %q, want topics", sel(m))
+	// Ctrl+h walks back.
+	m, _ = m.Update(key("ctrl+h"))
+	if m.Focused() != "topics" {
+		t.Fatalf("ctrl+h from artifacts = %q, want topics", m.Focused())
 	}
-	m, _ = m.Update(key("left"))
-	if sel(m) != "clients" {
-		t.Fatalf("left from topics = %q, want clients", sel(m))
+	m, _ = m.Update(key("ctrl+h"))
+	if m.Focused() != "clients" {
+		t.Fatalf("ctrl+h from topics = %q, want clients", m.Focused())
 	}
-	// Up/Down hold: nothing above or below a full-height column.
-	m, _ = m.Update(key("down"))
-	if sel(m) != "clients" {
-		t.Fatalf("down in a single-row cockpit should hold, got %q", sel(m))
+	// Ctrl+j/k hold: nothing above or below a full-height column.
+	m, _ = m.Update(key("ctrl+j"))
+	if m.Focused() != "clients" {
+		t.Fatalf("ctrl+j in a single-row cockpit should hold, got %q", m.Focused())
 	}
-	m, _ = m.Update(key("up"))
-	if sel(m) != "clients" {
-		t.Fatalf("up in a single-row cockpit should hold, got %q", sel(m))
+	m, _ = m.Update(key("ctrl+k"))
+	if m.Focused() != "clients" {
+		t.Fatalf("ctrl+k in a single-row cockpit should hold, got %q", m.Focused())
 	}
 }
 
-// TestSpatialNavSplitPreset covers a preset whose geometry differs from the
+// TestSpatialFocusSplitPreset covers a preset whose geometry differs from the
 // cockpit: the split grid lays clients top-left, topics top-right, and artifacts
-// across the full-width bottom row. Down from a top pane reaches the bottom row;
-// Up from the bottom returns to the top.
-func TestSpatialNavSplitPreset(t *testing.T) {
+// across the full-width bottom row. Ctrl+j from a top pane reaches the bottom
+// row; Ctrl+k from the bottom returns to the top.
+func TestSpatialFocusSplitPreset(t *testing.T) {
 	m, _ := newCockpit(t)
 	for m.Config().Preset != "split" {
 		m, _ = m.Update(key("p"))
@@ -160,99 +178,151 @@ func TestSpatialNavSplitPreset(t *testing.T) {
 	if !(cy == 0 && ty == 0 && tx > 0 && ay > 0) {
 		t.Fatalf("precondition: split should be clients/topics top, artifacts bottom (cy=%d tx=%d ty=%d ay=%d)", cy, tx, ty, ay)
 	}
-	if m.Selected() != "clients" {
-		t.Fatalf("precondition: clients should start selected, got %q", m.Selected())
+	if m.Focused() != "clients" {
+		t.Fatalf("precondition: clients should start focused, got %q", m.Focused())
 	}
 
-	// Right from clients → topics (top-right).
-	m, _ = m.Update(key("right"))
-	if m.Selected() != "topics" {
-		t.Fatalf("right from clients (split) = %q, want topics", m.Selected())
+	// Ctrl+l from clients → topics (top-right).
+	m, _ = m.Update(key("ctrl+l"))
+	if m.Focused() != "topics" {
+		t.Fatalf("ctrl+l from clients (split) = %q, want topics", m.Focused())
 	}
-	// Down from topics → artifacts (the full-width bottom row).
-	m, _ = m.Update(key("down"))
-	if m.Selected() != "artifacts" {
-		t.Fatalf("down from topics (split) = %q, want artifacts", m.Selected())
+	// Ctrl+j from topics → artifacts (the full-width bottom row).
+	m, _ = m.Update(key("ctrl+j"))
+	if m.Focused() != "artifacts" {
+		t.Fatalf("ctrl+j from topics (split) = %q, want artifacts", m.Focused())
 	}
-	// Up from artifacts → clients (reading-order first of the top row it spans).
-	m, _ = m.Update(key("up"))
-	if m.Selected() != "clients" {
-		t.Fatalf("up from artifacts (split) = %q, want clients", m.Selected())
+	// Ctrl+k from artifacts → clients (reading-order first of the top row it spans).
+	m, _ = m.Update(key("ctrl+k"))
+	if m.Focused() != "clients" {
+		t.Fatalf("ctrl+k from artifacts (split) = %q, want clients", m.Focused())
 	}
 }
 
-// TestStepInOutWithKeys: Enter steps into the selected pane (it goes active and
-// receives input); Esc is DELIVERED to the surface (never acted on by the
-// layout — an active surface can be nested, ADR-0024), whose DoneMsg steps back
-// out (selected). This is the locked two-level model with the surface-owned
-// step-out.
-func TestStepInOutWithKeys(t *testing.T) {
+// TestFocusMoveLeavesContentUntouched is ADR-0026's core guarantee: a focus
+// move is never delivered to any surface, so it cannot change what a pane
+// shows. The mock records every key it is delivered; after a tour of focus
+// moves, every pane's record is empty.
+func TestFocusMoveLeavesContentUntouched(t *testing.T) {
 	m, panes := newCockpit(t)
-	m, _ = m.Update(key("enter"))
-	if !m.SteppedIn() {
-		t.Fatal("Enter should step in")
+	for _, k := range []string{"tab", "ctrl+l", "ctrl+h", "shift+tab", "ctrl+j", "ctrl+k"} {
+		m, _ = m.Update(key(k))
 	}
-	if m.FocusOf("clients") != widget.FocusActive {
-		t.Errorf("stepped-in pane focus = %v, want active", m.FocusOf("clients"))
-	}
-	if panes["clients"].focus != widget.FocusActive {
-		t.Errorf("surface was not told it is active: %v", panes["clients"].focus)
-	}
-	// Esc routes to the surface and produces its DoneMsg; the layout itself has
-	// not stepped out yet (the surface owns its levels).
-	m, cmd := m.Update(key("esc"))
-	if !m.SteppedIn() {
-		t.Fatal("the layout must not step out on Esc itself — that is the surface's DoneMsg")
-	}
-	if cmd == nil {
-		t.Fatal("active Esc should route to the surface and produce its DoneMsg cmd")
-	}
-	done, ok := cmd().(surface.DoneMsg)
-	if !ok || done.ID != "clients" {
-		t.Fatalf("expected DoneMsg{clients}, got %#v", cmd())
-	}
-	// Feeding the DoneMsg back (as bubbletea would) lands at the layout level.
-	m, _ = m.Update(done)
-	if m.SteppedIn() {
-		t.Error("the surface's DoneMsg should step out")
-	}
-	if m.FocusOf("clients") != widget.FocusSelected {
-		t.Errorf("stepped-out pane focus = %v, want selected", m.FocusOf("clients"))
+	for id, p := range panes {
+		if len(p.keys) != 0 {
+			t.Errorf("focus moves were delivered to surface %q: %v", id, p.keys)
+		}
 	}
 }
 
-// TestStepInRoutesKeysToActiveSurface: while stepped in, a key reaches the active
-// surface's Update (and not the others).
-func TestStepInRoutesKeysToActiveSurface(t *testing.T) {
-	m, _ := newCockpit(t)
-	m, _ = m.Update(key("right")) // select topics
-	m, _ = m.Update(key("enter"))
-	if !m.SteppedIn() {
-		t.Fatal("should be stepped into topics")
+// TestContentKeysGoToFocusedPane: a non-focus key (arrows, Enter, Esc, runes)
+// is delivered to the focused surface and only to it — there is no layout
+// level claiming them (ADR-0026).
+func TestContentKeysGoToFocusedPane(t *testing.T) {
+	m, panes := newCockpit(t)
+	m, _ = m.Update(key("tab")) // focus topics
+	for _, k := range []string{"up", "down", "left", "right", "enter", "esc", "x"} {
+		m, _ = m.Update(key(k))
 	}
-	// Esc while active routes to the surface, which emits DoneMsg; feeding that back
-	// steps out.
-	_, cmd := m.Update(key("esc"))
-	if cmd == nil {
-		t.Fatal("active Esc should route to surface and produce its DoneMsg cmd")
+	want := []string{"up", "down", "left", "right", "enter", "esc", "x"}
+	if !reflect.DeepEqual(panes["topics"].keys, want) {
+		t.Errorf("focused pane keys = %v, want %v", panes["topics"].keys, want)
 	}
-	msg := cmd()
-	done, ok := msg.(surface.DoneMsg)
-	if !ok || done.ID != "topics" {
-		t.Fatalf("expected DoneMsg{topics}, got %#v", msg)
+	for _, id := range []string{"clients", "artifacts"} {
+		if len(panes[id].keys) != 0 {
+			t.Errorf("unfocused pane %q received keys: %v", id, panes[id].keys)
+		}
 	}
 }
 
-// TestDoneMsgStepsOut: a surface's own DoneMsg returns focus to the layout level.
-func TestDoneMsgStepsOut(t *testing.T) {
+// TestQuitVsCapturingText pins the ADR-0026 quit rule: q quits while the
+// focused surface is not capturing text; while it is capturing, q (and the
+// other printable chrome keys) are delivered to the surface; ctrl+c quits
+// either way.
+func TestQuitVsCapturingText(t *testing.T) {
+	t.Run("q_quits_at_a_list", func(t *testing.T) {
+		m, panes := newCockpit(t)
+		_, cmd := m.Update(key("q"))
+		if cmd == nil {
+			t.Fatal("q should return a quit cmd when the focused surface is not capturing")
+		}
+		if _, ok := cmd().(tea.QuitMsg); !ok {
+			t.Errorf("q cmd = %#v, want tea.QuitMsg", cmd())
+		}
+		for id, p := range panes {
+			if p.stopped == 0 {
+				t.Errorf("surface %q was not stopped on quit", id)
+			}
+		}
+	})
+
+	t.Run("q_types_while_composing", func(t *testing.T) {
+		m, panes := newCockpit(t)
+		panes["clients"].capturing = true // the focused pane holds a live compose
+		m, cmd := m.Update(key("q"))
+		if cmd != nil {
+			t.Fatalf("q while capturing must not quit; got cmd %#v", cmd())
+		}
+		if !reflect.DeepEqual(panes["clients"].keys, []string{"q"}) {
+			t.Errorf("q was not delivered to the capturing surface: %v", panes["clients"].keys)
+		}
+		// The other printable chrome keys type too — p and o reach the compose.
+		m, _ = m.Update(key("p"))
+		m, _ = m.Update(key("o"))
+		if got := panes["clients"].keys; !reflect.DeepEqual(got, []string{"q", "p", "o"}) {
+			t.Errorf("chrome keys not delivered while capturing: %v", got)
+		}
+		if m.Config().Preset != layout.PresetCockpit {
+			t.Error("p while capturing must not cycle the preset")
+		}
+	})
+
+	t.Run("ctrl_c_always_quits", func(t *testing.T) {
+		m, panes := newCockpit(t)
+		panes["clients"].capturing = true
+		_, cmd := m.Update(key("ctrl+c"))
+		if cmd == nil {
+			t.Fatal("ctrl+c should quit even while capturing")
+		}
+		if _, ok := cmd().(tea.QuitMsg); !ok {
+			t.Errorf("ctrl+c cmd = %#v, want tea.QuitMsg", cmd())
+		}
+	})
+
+	t.Run("focus_keys_work_while_composing", func(t *testing.T) {
+		m, panes := newCockpit(t)
+		panes["clients"].capturing = true
+		m, _ = m.Update(key("ctrl+l"))
+		if m.Focused() != "topics" {
+			t.Errorf("ctrl+l while capturing = %q, want topics (focus keys are never claimed by a surface)", m.Focused())
+		}
+		if len(panes["clients"].keys) != 0 {
+			t.Errorf("the focus key leaked into the capturing surface: %v", panes["clients"].keys)
+		}
+	})
+}
+
+// TestHideFocusedMovesFocusToNeighbour: toggling the focused pane off moves
+// focus to a remaining visible pane (never "", never a hidden pane).
+func TestHideFocusedMovesFocusToNeighbour(t *testing.T) {
 	m, _ := newCockpit(t)
-	m, _ = m.Update(key("enter"))
-	if !m.SteppedIn() {
-		t.Fatal("precondition: stepped in")
+	if m.Focused() != "clients" {
+		t.Fatalf("precondition: clients focused, got %q", m.Focused())
 	}
-	m, _ = m.Update(surface.DoneMsg{ID: "clients"})
-	if m.SteppedIn() {
-		t.Error("DoneMsg should step out to the layout level")
+	m, _ = m.Update(key("o"))     // open options; cursor row 0 is "pane clients"
+	m, _ = m.Update(key("enter")) // toggle clients off
+	m, _ = m.Update(key("esc"))   // close menu
+	if contains(m.VisibleIDs(), "clients") {
+		t.Fatalf("precondition: clients should be hidden, visible = %v", m.VisibleIDs())
+	}
+	if m.Focused() != "topics" {
+		t.Errorf("hiding the focused pane should move focus to a neighbour, got %q", m.Focused())
+	}
+	if m.FocusOf("topics") != widget.FocusActive {
+		t.Errorf("the new focused pane = %v, want active", m.FocusOf("topics"))
+	}
+	if m.FocusOf("clients") != widget.FocusIdle {
+		t.Errorf("the hidden pane = %v, want idle", m.FocusOf("clients"))
 	}
 }
 
@@ -379,29 +449,40 @@ func TestPresetCycleReflows(t *testing.T) {
 	}
 }
 
-// TestLayoutShortcutsAreOverridable proves the layout reads the preset-cycle key
-// from the keymap (keys are data, nothing hardcoded): a remapped keymap drives it
-// by the new key, and the default p no longer acts.
+// TestLayoutShortcutsAreOverridable proves the layout reads its keys from the
+// keymap (keys are data, nothing hardcoded): a remapped keymap drives the
+// preset cycle and the focus cycle by the new keys, and the defaults no longer
+// act.
 func TestLayoutShortcutsAreOverridable(t *testing.T) {
 	keys := theme.DefaultKeymap().Merge(
 		theme.Override{Action: "PresetCycle", Keys: []string{"f2"}},
+		theme.Override{Action: "FocusNext", Keys: []string{"f3"}},
 	)
 	m := layout.New(theme.Dark(), keys, layout.DefaultConfig(),
 		newMock("clients", "Clients"), newMock("topics", "Topics"),
 		newMock("artifacts", "Artifacts"))
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
-	// The old default key is inert now.
+	// The old default keys are inert now (p falls through to the focused surface;
+	// tab is delivered as content).
 	startPreset := m.Config().Preset
 	m, _ = m.Update(key("p"))
 	if m.Config().Preset != startPreset {
 		t.Error("p should be inert after remapping PresetCycle")
 	}
+	m, _ = m.Update(key("tab"))
+	if m.Focused() != "clients" {
+		t.Error("tab should be inert after remapping FocusNext")
+	}
 
-	// The remapped key acts.
+	// The remapped keys act.
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyF2})
 	if m.Config().Preset == startPreset {
 		t.Error("remapped PresetCycle (f2) should cycle the preset")
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyF3})
+	if m.Focused() != "topics" {
+		t.Error("remapped FocusNext (f3) should cycle the focus")
 	}
 }
 
@@ -425,24 +506,6 @@ func TestConfigApplyOnNew(t *testing.T) {
 	}
 	if m.Theme().Variant != theme.VariantLight {
 		t.Errorf("theme not applied: %q", m.Theme().Variant)
-	}
-}
-
-// TestQuitTearsDownSurfaces: the Quit binding stops every surface (the Surface
-// contract's teardown) and returns tea.Quit.
-func TestQuitTearsDownSurfaces(t *testing.T) {
-	m, panes := newCockpit(t)
-	_, cmd := m.Update(key("q"))
-	if cmd == nil {
-		t.Fatal("q should return a quit cmd")
-	}
-	if _, ok := cmd().(tea.QuitMsg); !ok {
-		t.Errorf("q cmd = %#v, want tea.QuitMsg", cmd())
-	}
-	for id, p := range panes {
-		if p.stopped == 0 {
-			t.Errorf("surface %q was not stopped on quit", id)
-		}
 	}
 }
 

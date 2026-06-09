@@ -24,8 +24,8 @@ func (m Model) visibleOrder() []string {
 }
 
 // firstVisible returns the first visible pane id in registration order, or "" if
-// none are visible. It is the fallback selection when the current selection is
-// hidden or the layout has just been built.
+// none are visible. It is the fallback focus when the focused pane is hidden or
+// the layout has just been built.
 func (m Model) firstVisible() string {
 	if v := m.visibleOrder(); len(v) > 0 {
 		return v[0]
@@ -46,7 +46,7 @@ func (m Model) isVisible(id string) bool {
 // firstLaidOut returns the first visible pane that actually got a rect from the
 // last reflow, in registration order — the panes the operator can really land
 // on. It differs from firstVisible only at a tiny terminal, where arrange drops
-// the visible panes that don't fit; the selection must follow what is rendered,
+// the visible panes that don't fit; the focus must follow what is rendered,
 // not the nominal visible set.
 func (m Model) firstLaidOut() string {
 	for _, id := range m.visibleOrder() {
@@ -61,11 +61,9 @@ func (m Model) firstLaidOut() string {
 // area. It is the one place geometry is applied: called on a resize, a pane
 // toggle, and a preset switch. It (1) computes the visible
 // set, (2) arranges it into outer Rects for the current size, (3) sizes each
-// visible surface to its box inner area, and (4) keeps the selection valid —
-// if the selected pane went hidden, the selection snaps to the first visible
-// pane and focus drops to the layout level. Hidden surfaces are sized to zero so
-// a later toggle-on re-sizes them on reflow (they hold no live geometry while
-// off).
+// visible surface to its box inner area, and (4) keeps the focus valid — if the
+// focused pane went hidden (or was dropped), focus moves to a neighbouring
+// laid-out pane, never touching any pane's content state (ADR-0026).
 func (m *Model) reflow() {
 	if m.w <= 0 || m.h <= 0 {
 		return
@@ -83,12 +81,11 @@ func (m *Model) reflow() {
 		s.SetSize(iw, ih)
 	}
 
-	// Keep the selection on a pane that was actually laid out. A pane can be in the
+	// Keep the focus on a pane that was actually laid out. A pane can be in the
 	// visible set yet dropped by arrange at a tiny terminal, so check the rects, not
 	// just visibility.
-	if _, ok := m.rects[m.selected]; !ok {
-		m.selected = m.firstLaidOut()
-		m.level = levelLayout
+	if _, ok := m.rects[m.focused]; !ok {
+		m.focused = m.firstLaidOut()
 	}
 	m.applyFocus()
 }
@@ -107,9 +104,9 @@ func innerSize(w, h int) (int, int) {
 	return iw, ih
 }
 
-// applyFocus pushes each surface's three-state focus from the layout state, so
-// only the selected pane shows an accent border and only the stepped-in pane
-// lights its inner cursor. A hidden surface is set idle.
+// applyFocus pushes each surface's three-state focus from the layout state
+// (ADR-0026): the focused pane is active, every other visible pane is selected
+// (its cursor and detail stay visible, muted), and a hidden surface is idle.
 func (m *Model) applyFocus() {
 	for _, id := range m.order {
 		f := widget.FocusIdle

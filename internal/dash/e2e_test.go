@@ -25,13 +25,16 @@ import (
 	"go.uber.org/goleak"
 )
 
-// TestDashE2E is the ADR-0024 narrative driven deterministically against a REAL
-// embedded bus, end to end: launch → the three browser lists populate (clients
-// · topics · artifacts) → Enter steps into the topics browser and opens a
-// topic's conversation IN THE SAME PANE → a composed message round-trips back
-// through the bus (no optimistic echo) → Esc pops back to the list → over to
-// the artifacts browser, Enter opens the document reader in place. It builds
-// the composed dash root model (the same build() Run uses) over a real
+// TestDashE2E is the ADR-0024/0026 narrative driven deterministically against a
+// REAL embedded bus, end to end: launch → the three browser lists populate
+// (clients · topics · artifacts) → Tab focuses the topics browser and Enter
+// opens a topic's conversation IN THE SAME PANE → a composed message (with a
+// literal q in it — q types while a compose is capturing) round-trips back
+// through the bus (no optimistic echo) → focus moves to artifacts WITH THE
+// CONVERSATION STILL OPEN and the reader opens in place → focus returns to the
+// topics pane, which held its place: a second compose round-trips through the
+// still-open conversation → q from a non-capturing pane quits. It builds the
+// composed dash root model (the same build() Run uses) over a real
 // *sextant.Client and drives it through teatest, asserting on the rendered
 // frames.
 //
@@ -93,9 +96,9 @@ func TestDashE2E(t *testing.T) {
 	waitForText(t, scr, "ops")         // topics: discovered from the replay
 	waitForText(t, scr, "the-plan")    // artifacts: listed via artifact.list
 
-	// --- topics: Enter opens the selected topic's conversation IN THE SAME PANE --
-	tm.Send(key(tea.KeyRight))         // layout selection: clients → topics
-	tm.Send(key(tea.KeyEnter))         // step into the topics browser (list active)
+	// --- topics: Tab moves focus (ADR-0026: keys go to the focused pane), Enter
+	//     opens the cursor row's conversation IN THE SAME PANE ------------------
+	tm.Send(key(tea.KeyTab))           // focus: clients → topics
 	tm.Send(key(tea.KeyEnter))         // open the cursor row ("ops") → its conversation
 	waitForText(t, scr, "Topic · ops") // the pane title tracks the open detail
 	waitForText(t, scr, "ops kickoff") // the conversation replays the seeded line
@@ -103,8 +106,10 @@ func TestDashE2E(t *testing.T) {
 	// --- compose → round-trip, no optimistic echo: type a line, Enter; it appears
 	//     only because the bus echoed it back on the subscription. A separate
 	//     verifier subscription proves the publish reached the bus, so the in-view
-	//     appearance is the genuine round-trip, not a compose-line echo.
-	const sent = "echo-hello"
+	//     appearance is the genuine round-trip, not a compose-line echo. The text
+	//     leads with a literal q: while the compose is capturing, q TYPES — it
+	//     must not quit the dash (ADR-0026's quit rule).
+	const sent = "q-echo-hello"
 	verifier := dial(t, b, "verifier", "agent")
 	gotOnBus := make(chan struct{}, 1)
 	vsub, err := verifier.Subscribe(t.Context(), sx.TopicSubject("ops"), func(m sextant.Message) {
@@ -130,26 +135,31 @@ func TestDashE2E(t *testing.T) {
 	}
 	waitForText(t, scr, sent) // and it shows in the conversation via the echo
 
-	// --- Esc pops the conversation back to the list (one level), then a second Esc
-	//     steps out of the pane; the artifacts browser then opens its reader in
-	//     place — proof navigation works after the pop. The step-out is a DoneMsg
-	//     round-trip (a tea.Cmd), so each motion waits on the status bar's novel
-	//     state token before the next key — deterministic, no sleeps.
-	tm.Send(key(tea.KeyEsc)) // pop: conversation → topics list (consumed in-pane)
-	tm.Send(key(tea.KeyEsc)) // step out: topics list → layout level (via DoneMsg)
-	waitForText(t, scr, "topics · selected")
-	tm.Send(key(tea.KeyRight)) // layout selection: topics → artifacts
-	waitForText(t, scr, "artifacts · selected")
-	tm.Send(key(tea.KeyEnter)) // step into the artifacts browser (list active)
-	waitForText(t, scr, "artifacts · active")
+	// --- move focus to artifacts WITH THE CONVERSATION STILL OPEN (ADR-0026:
+	//     moving focus never changes what a pane shows — no Esc unwind), and open
+	//     the document reader in place. Keys are delivered to the program in send
+	//     order, so no status-token waits are needed between motions; the waits
+	//     below sync on the rendered results before asserting further.
+	tm.Send(key(tea.KeyCtrlL))                 // focus: topics → artifacts (spatial right)
 	tm.Send(key(tea.KeyEnter))                 // open the cursor row ("the-plan") → the reader
 	waitForText(t, scr, "Artifact · the-plan") // the pane title tracks the reader
 	waitForText(t, scr, docMarker)             // the document body rendered
 
-	// --- quit cleanly (exercises the layout teardown path: ForceQuit stops every
-	//     surface, including the just-popped reader) ------------------------------
-	tm.Send(key(tea.KeyEsc)) // pop: reader → artifacts list (consumed in-pane)
-	tm.Send(key(tea.KeyCtrlC))
+	// --- back to the topics pane, which HELD ITS PLACE: the conversation is still
+	//     open, its compose still live — a second line round-trips through it
+	//     (the compose only exists in the open detail, so the echo is the proof).
+	tm.Send(key(tea.KeyShiftTab)) // cycle back: artifacts → topics
+	const sent2 = "pane-held-its-place"
+	tm.Type(sent2)
+	tm.Send(key(tea.KeyEnter))
+	waitForText(t, scr, sent2)
+
+	// --- q quits from a pane that is not capturing text: focus the clients list
+	//     (its browser holds no compose) and press q. This exercises the layout
+	//     teardown path: Quit stops every surface, including the open reader and
+	//     the open conversation.
+	tm.Send(key(tea.KeyCtrlH)) // focus: topics → clients (spatial left)
+	tm.Type("q")
 	tm.WaitFinished(t, teatest.WithFinalTimeout(5*time.Second))
 
 	// Wind down the program context so the drain watch goroutine exits before

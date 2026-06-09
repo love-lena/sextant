@@ -1,8 +1,10 @@
 // Package layout is the dash's customization stratum (ADR-0023, refined by
-// ADR-0024): the layer that composes pane-surfaces into the cockpit the
-// operator controls. It owns the btop model — built-in preset arrangements,
-// per-pane on/off toggling, reflow to fill the freed space, and a config file
-// that persists the choice — plus the two-level focus/navigation interaction.
+// ADR-0024 and ADR-0026): the layer that composes pane-surfaces into the
+// cockpit the operator controls. It owns the btop model — built-in preset
+// arrangements, per-pane on/off toggling, reflow to fill the freed space, and a
+// config file that persists the choice — plus the tmux-style focus model: one
+// pane is focused at all times, keys go to the focused pane, and moving focus
+// never changes what a pane shows.
 //
 // The layout composes plain panes only. Detail-on-demand is realized INSIDE
 // each pane (ADR-0024: a browser opens its detail in place and pops back with
@@ -11,11 +13,11 @@
 //
 // widget ⊂ surface ⊂ layout ⊂ dash: this package touches only the layer below —
 // the theme, the widgets (for the Box chrome and Focus), and the surface
-// contract (id/title/SetSize/SetFocus/Update/View/Stop, and the DoneMsg
-// intent). It is domain-free: it never constructs a surface, never reaches for
-// the SDK or NATS or any internal package (a go/parser import test enforces
-// this). The host builds the domain surfaces and hands them to the layout; the
-// layout arranges, toggles, focuses, and reflows them.
+// contract (id/title/SetSize/SetFocus/CapturingText/Update/View/Stop). It is
+// domain-free: it never constructs a surface, never reaches for the SDK or NATS
+// or any internal package (a go/parser import test enforces this). The host
+// builds the domain surfaces and hands them to the layout; the layout arranges,
+// toggles, focuses, and reflows them.
 package layout
 
 import (
@@ -28,28 +30,12 @@ import (
 	"github.com/love-lena/sextant/pkg/tui/widget"
 )
 
-// level is the two-level focus state (ADR-0023's locked interaction model). At
-// the layout level the operator moves the *selected* pane (accent border) with
-// the nav keys and acts on the layout (toggle, preset, options, quit). Stepping
-// in with Enter makes the selected pane *active* and routes keys to its Update;
-// stepping out with Esc (or the surface's own DoneMsg) returns to the layout
-// level. Exactly one pane is selected at the layout level; exactly one is active
-// when stepped in.
-type level int
-
-const (
-	// levelLayout is the resting level: nav moves the selection, layout keys act
-	// on the cockpit.
-	levelLayout level = iota
-	// levelPane is the stepped-in level: keys route to the active surface.
-	levelPane
-)
-
 // Model is the cockpit: a tea.Model-shaped root that arranges a set of surfaces
-// into a preset layout, toggles panes on and off, reflows to fill, and runs the
-// two-level focus machine. The host constructs it with a set of surfaces (it
-// never builds surfaces itself) and an initial Config, drives it as a Bubble Tea
-// model, and reads back the current Config (Config) to persist on quit.
+// into a preset layout, toggles panes on and off, reflows to fill, and holds
+// the one focused pane (ADR-0026). The host constructs it with a set of
+// surfaces (it never builds surfaces itself) and an initial Config, drives it
+// as a Bubble Tea model, and reads back the current Config (Config) to persist
+// on quit.
 type Model struct {
 	th   theme.Theme
 	keys theme.Keymap
@@ -69,11 +55,10 @@ type Model struct {
 	// on every reflow (toggle, preset switch, resize).
 	rects map[string]Rect
 
-	// level is the current focus level (layout vs stepped-in).
-	level level
-	// selected is the id of the pane the layout selection has landed on. It is
-	// always a currently-visible pane; reflow keeps it valid.
-	selected string
+	// focused is the id of the focused pane — the one pane keys are delivered to
+	// (ADR-0026: exactly one pane is focused at all times). It is always a
+	// currently-visible pane; reflow keeps it valid.
+	focused string
 
 	// w, h are the terminal size. statusH rows at the bottom are the hint bar.
 	w, h int
@@ -127,7 +112,9 @@ func (m *Model) apply(cfg Config) {
 			m.hidden[id] = true
 		}
 	}
-	m.selected = m.firstVisible()
+	// Focus starts on the first visible pane (ADR-0026: one pane is always
+	// focused; there is no resting layout level).
+	m.focused = m.firstVisible()
 }
 
 // Config snapshots the layout's current state as a Config the host can persist.
@@ -233,14 +220,13 @@ func (m Model) tooSmallNotice() string {
 		Render(msg)
 }
 
-// focusOf returns a pane's three-state focus from the layout state: idle unless
-// it is the selected pane, then selected at the layout level or active when
-// stepped in.
+// focusOf returns a visible pane's three-state focus from the layout state
+// (ADR-0026): the focused pane is active (keys are routed to it); every other
+// visible pane is selected — the muted-cursor state that keeps its place
+// readable while unfocused. applyFocus sets hidden/unmounted panes idle before
+// calling this.
 func (m Model) focusOf(id string) widget.Focus {
-	if id != m.selected {
-		return widget.FocusIdle
-	}
-	if m.level == levelPane {
+	if id == m.focused {
 		return widget.FocusActive
 	}
 	return widget.FocusSelected

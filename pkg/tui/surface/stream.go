@@ -245,6 +245,13 @@ func (s *Stream) SetFocus(f widget.Focus) {
 	}
 }
 
+// CapturingText reports whether the compose input is live (compose on and
+// focused — the surface is the focused pane), so a host delivers printable keys
+// here instead of acting on them as shortcuts.
+func (s *Stream) CapturingText() bool {
+	return s.compose && s.input.Focused()
+}
+
 // Init opens the feed. The pump runs from Update: every EventMsg and DroppedMsg
 // re-issues Next. A nil client (a seeded gallery / golden) skips the subscribe —
 // those feed events directly, the same convention the artifact surface follows.

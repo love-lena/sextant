@@ -7,32 +7,21 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// statusBar renders the one-row hint bar along the bottom: the current
-// selection + level on the left, the context-appropriate key hints on the right,
+// statusBar renders the one-row hint bar along the bottom: the focused pane
+// (its id and live title — ADR-0026: the bar names the focused pane, there is
+// no layout/pane mode to report) on the left, the key hints on the right,
 // painted on the panel background and clamped to the terminal width.
 func (m Model) statusBar() string {
-	left := m.selected
-	if left == "" {
-		left = "—"
+	left := "—"
+	if m.focused != "" {
+		left = m.focused
+		if title := m.surfaces[m.focused].Title(); title != "" {
+			left = fmt.Sprintf("%s — %s", m.focused, title)
+		}
 	}
-	state := "selected"
-	if m.level == levelPane {
-		state = "active"
-	}
-	leftSeg := lipgloss.NewStyle().Foreground(m.th.Fg).Render(
-		fmt.Sprintf(" %s · %s · %s ", m.preset, left, state),
-	)
+	leftSeg := lipgloss.NewStyle().Foreground(m.th.Fg).Render(" " + left + " ")
 
-	var hints string
-	switch {
-	case m.menu != nil:
-		hints = "↑/↓ move · enter select · esc close "
-	case m.level == levelPane:
-		hints = "esc back · ↑/↓ within · ^c quit "
-	default:
-		hints = "↑↓←→ move · enter step in · p preset · o options · q quit "
-	}
-	hint := lipgloss.NewStyle().Foreground(m.th.Dim).Render(hints)
+	hint := lipgloss.NewStyle().Foreground(m.th.Dim).Render(m.hints())
 
 	gap := m.w - lipgloss.Width(leftSeg) - lipgloss.Width(hint)
 	if gap < 1 {
@@ -40,4 +29,18 @@ func (m Model) statusBar() string {
 	}
 	bar := leftSeg + strings.Repeat(" ", gap) + hint
 	return lipgloss.NewStyle().Background(m.th.Panel).Width(m.w).MaxWidth(m.w).MaxHeight(1).Render(bar)
+}
+
+// hints returns the right-hand key hints for the current state. While the
+// focused surface is capturing text, q types rather than quits, so the quit
+// hint switches to the always-true ctrl+c (the hints stay honest).
+func (m Model) hints() string {
+	if m.menu != nil {
+		return "↑/↓ move · enter select · esc close "
+	}
+	quit := "q quit"
+	if m.focusedCapturing() {
+		quit = "^c quit"
+	}
+	return "tab/^hjkl focus · enter open · esc back · " + quit + " "
 }

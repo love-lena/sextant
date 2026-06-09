@@ -234,6 +234,13 @@ func (a *Artifact) SetFocus(f widget.Focus) {
 	}
 }
 
+// CapturingText reports whether the review comment input is live (review mode
+// and focused — the surface is the focused pane), so a host delivers printable
+// keys here instead of acting on them as shortcuts.
+func (a *Artifact) CapturingText() bool {
+	return a.mode == ModeReview && a.input.Focused()
+}
+
 // Init opens a live watch on the artifact. WatchArtifact delivers the current
 // value first (if the artifact exists), then every subsequent change, so the
 // reader live-updates without a restart: a document created or updated after

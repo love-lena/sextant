@@ -12,8 +12,9 @@ import (
 // The golden tests render the cockpit's View deterministically — fixed size,
 // fixed mock surfaces, no time or bus — and assert it against committed goldens
 // via teatest.RequireEqualOutput. They cover the layout motions (preset switch,
-// pane toggle + reflow, reflow on resize) plus the layout-level vs stepped-in
-// focus borders. Regenerate with:
+// pane toggle + reflow, reflow on resize) plus the focused/unfocused pane cues
+// (ADR-0026: the focused pane is active, other visible panes muted-selected).
+// Regenerate with:
 //
 //	go test ./pkg/tui/layout -update
 //
@@ -44,9 +45,9 @@ func golden(t *testing.T, m layout.Model) {
 	teatest.RequireEqualOutput(t, []byte(m.View()))
 }
 
-// TestPresetGolden covers preset-switch: the two built-in presets, each at the
-// layout level with clients selected, so the goldens show the distinct
-// arrangements the operator cycles through.
+// TestPresetGolden covers preset-switch: the two built-in presets, each with
+// clients focused, so the goldens show the distinct arrangements the operator
+// cycles through.
 func TestPresetGolden(t *testing.T) {
 	for _, name := range []string{"cockpit", "split"} {
 		t.Run(name, func(t *testing.T) {
@@ -60,22 +61,17 @@ func TestPresetGolden(t *testing.T) {
 	}
 }
 
-// TestFocusGolden covers the focus borders: idle (no selection on a pane),
-// selected (the layout landed on it), and active (stepped in). clients is the
-// selected/active pane.
+// TestFocusGolden covers the focus cues (ADR-0026): the focused pane is active
+// (accent border, lit cursor), every other visible pane is selected (accent
+// border, muted cursor) — never idle while visible.
 func TestFocusGolden(t *testing.T) {
-	t.Run("layout_level", func(t *testing.T) {
-		// clients selected (accent), the rest idle (dim).
+	t.Run("focused_first", func(t *testing.T) {
+		// clients focused (active), topics + artifacts unfocused (muted selected).
 		golden(t, cockpit(t))
 	})
-	t.Run("stepped_in", func(t *testing.T) {
+	t.Run("focus_moved", func(t *testing.T) {
 		m := cockpit(t)
-		m, _ = m.Update(key("enter")) // step into clients → active
-		golden(t, m)
-	})
-	t.Run("selection_moved", func(t *testing.T) {
-		m := cockpit(t)
-		m, _ = m.Update(key("right")) // select topics (spatially right of clients)
+		m, _ = m.Update(key("ctrl+l")) // move focus right: clients → topics
 		golden(t, m)
 	})
 }

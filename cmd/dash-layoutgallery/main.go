@@ -99,6 +99,7 @@ func (s *mockSurface) ID() string              { return s.id }
 func (s *mockSurface) Title() string           { return s.title }
 func (s *mockSurface) SetSize(w, h int)        { s.w, s.h = w, h }
 func (s *mockSurface) SetFocus(f widget.Focus) { s.focus = f }
+func (s *mockSurface) CapturingText() bool     { return false }
 func (s *mockSurface) Init() tea.Cmd           { return nil }
 func (s *mockSurface) Stop()                   {}
 
