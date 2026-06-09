@@ -19,6 +19,20 @@ import (
 	"github.com/love-lena/sextant/pkg/sextant"
 )
 
+// ErrContextExists is returned (wrapped) by Check when a context with the
+// requested name already exists and force is false. Callers that surface the
+// error to a user can errors.As to this type to provide advice that matches
+// THEIR command surface — the CLI caller adds --force; the dash caller adds
+// `sextant context use <name>` or `sextant clients register --self --force`.
+type ErrContextExists struct {
+	// Name is the context name that collided.
+	Name string
+}
+
+func (e *ErrContextExists) Error() string {
+	return fmt.Sprintf("context %q already exists (use --force to re-enroll, replacing it)", e.Name)
+}
+
 // enrollCredsPath is where the bus provisions the enrollment credential under
 // its store dir. It mirrors pkg/bus.EnrollCredsPath — the write side — but is
 // declared here so client-side callers (the dash) discover the file without
@@ -55,7 +69,7 @@ func Check(name, out string, force bool) error {
 	}
 	if !force {
 		if _, err := clictx.Load(name); err == nil {
-			return fmt.Errorf("context %q already exists (use --force to re-enroll, replacing it)", name)
+			return &ErrContextExists{Name: name}
 		}
 	}
 	return nil

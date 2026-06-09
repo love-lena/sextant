@@ -89,6 +89,14 @@ func (a *ArtifactsBrowser) Init() tea.Cmd {
 	return tea.Batch(a.fetch(), a.tick())
 }
 
+// SetSize sizes the inner area. It reserves the bottom row for the error footer
+// when one is showing (so a full list never clips it) and sizes the detail if
+// one is open.
+func (a *ArtifactsBrowser) SetSize(w, h int) {
+	a.Browser.SetSize(w, h)
+	a.relayoutList(a.err != nil)
+}
+
 // SetTheme re-themes the browser: the list rows bake in the kind hue at snapshot
 // time, so a runtime theme switch re-applies the last snapshot to re-resolve
 // them (the embedded Browser re-themes itself and any open detail).
@@ -110,6 +118,7 @@ func (a *ArtifactsBrowser) Update(msg tea.Msg) tea.Cmd {
 		// Surface the failure in the footer (fail-loud); the last good snapshot
 		// stays visible, and the next successful refresh clears the footer.
 		a.err = msg.err
+		a.relayoutList(a.err != nil)
 		return nil
 	case artifactsTickMsg:
 		// Re-fetch and re-arm. Both run even before the first snapshot, so a slow
@@ -154,6 +163,7 @@ func (a *ArtifactsBrowser) applySnapshot(infos []sextant.ArtifactInfo) {
 	}
 	a.last = infos
 	a.err = nil
+	a.relayoutList(false) // error cleared: restore full list height
 	a.setRows(items)
 }
 

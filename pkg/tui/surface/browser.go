@@ -79,6 +79,22 @@ func (b *Browser) SetSize(w, h int) {
 	}
 }
 
+// relayoutList resizes the list within the recorded inner area, reserving the
+// bottom row for an error footer when hasErr is true — so a full list never
+// clips the footer. A concrete browser calls this from SetSize (passing its
+// current error state) and from any Update path that changes the error state, so
+// the reserved row is always in step with visibility.
+func (b *Browser) relayoutList(hasErr bool) {
+	listH := b.h
+	if hasErr {
+		listH--
+	}
+	if listH < 1 {
+		listH = 1
+	}
+	b.list.SetSize(b.w, listH)
+}
+
 // SetFocus sets the three-state focus; the open detail tracks it so its in-body
 // cue (cursor, compose line) matches.
 func (b *Browser) SetFocus(f widget.Focus) {

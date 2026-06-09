@@ -105,6 +105,14 @@ func NewTopicsBrowser(ctx context.Context, client *sextant.Client, th theme.Them
 	return t
 }
 
+// SetSize sizes the inner area. It reserves the bottom row for the discovery
+// error footer when one is showing (so a full list never clips it) and sizes the
+// detail if one is open.
+func (t *TopicsBrowser) SetSize(w, h int) {
+	t.Browser.SetSize(w, h)
+	t.relayoutList(t.err != nil)
+}
+
 // SetTheme re-themes the browser: the list rows bake in the kind hue at rebuild
 // time, so a runtime theme switch rebuilds them from the discovered set (the
 // embedded Browser re-themes itself and any open detail).
@@ -150,6 +158,7 @@ func (t *TopicsBrowser) Update(msg tea.Msg) tea.Cmd {
 		case busfeed.ErrMsg:
 			// Terminal: the discovery feed stops reading. Surface the error.
 			t.err = msg.Err
+			t.relayoutList(t.err != nil)
 			return nil
 		}
 	}

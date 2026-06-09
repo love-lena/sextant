@@ -28,7 +28,7 @@ func (m Model) statusBar() string {
 	case m.menu != nil:
 		hints = "↑/↓ move · enter select · esc close "
 	case m.level == levelPane:
-		hints = "esc step out · ↑/↓ within · q/^c quit "
+		hints = "esc back · ↑/↓ within · ^c quit "
 	default:
 		hints = "↑↓←→ move · enter step in · p preset · o options · q quit "
 	}

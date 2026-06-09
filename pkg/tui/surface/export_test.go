@@ -35,6 +35,12 @@ func NewPublishedErrMsg(err error) any { return publishedMsg{err: err} }
 // a failed subscribe surfaces.
 func NewFeedErrMsg(err error) any { return busfeed.ErrMsg{Err: err} }
 
+// NewTopicsErrMsg builds the discovery feed-error message a terminal busfeed
+// error would produce on the topics browser, for driving the discovery error
+// footer in a golden. It reuses busfeed.ErrMsg directly (the topics browser
+// handles it via claims+ErrMsg), untagged so the browser claims it at the list.
+func NewTopicsErrMsg(err error) any { return busfeed.ErrMsg{Err: err} }
+
 // NextChangeCmd exposes the artifact watch pump step so an integration test can
 // resume reading watch changes after driving a first one to completion. It is the
 // same command the surface returns on each delivered change.

@@ -101,6 +101,14 @@ func (c *ClientsBrowser) Init() tea.Cmd {
 	return tea.Batch(c.fetch(), c.tick())
 }
 
+// SetSize sizes the inner area. It reserves the bottom row for the error footer
+// when one is showing (so a full list never clips it) and sizes the detail if
+// one is open.
+func (c *ClientsBrowser) SetSize(w, h int) {
+	c.Browser.SetSize(w, h)
+	c.relayoutList(c.err != nil)
+}
+
 // SetTheme re-themes the browser: the list rows bake in role/status hues at
 // snapshot time, so a runtime theme switch re-applies the last snapshot to
 // re-resolve them (the embedded Browser re-themes itself and any open detail).
@@ -122,6 +130,7 @@ func (c *ClientsBrowser) Update(msg tea.Msg) tea.Cmd {
 		// Surface the failure in the footer (fail-loud); the last good snapshot
 		// stays visible, and the next successful refresh clears the footer.
 		c.err = msg.err
+		c.relayoutList(c.err != nil)
 		return nil
 	case clientsTickMsg:
 		// Re-fetch and re-arm. Both run even before the first snapshot, so a slow
@@ -171,6 +180,7 @@ func (c *ClientsBrowser) applySnapshot(clients []sextant.ClientInfo) {
 	}
 	c.last = sorted
 	c.err = nil
+	c.relayoutList(false) // error cleared: restore full list height
 	c.setRows(items)
 }
 

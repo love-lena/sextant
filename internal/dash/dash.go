@@ -15,6 +15,7 @@ package dash
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -167,6 +168,10 @@ func ensureIdentity(ctx context.Context, opts *Options, notice io.Writer) error 
 	defer cancel()
 	res, err := selfenroll.Enroll(ectx, opts.Name, "human", info.URL, opts.Store, false)
 	if err != nil {
+		var ce *selfenroll.ErrContextExists
+		if errors.As(err, &ce) {
+			return fmt.Errorf("dash: context %q already exists — run `sextant context use %s` to adopt it, or `sextant clients register --self --force` to re-enroll", ce.Name, ce.Name)
+		}
 		return fmt.Errorf("dash: first-run self-enroll: %w", err)
 	}
 	opts.CredsPath = res.CredsPath
@@ -225,9 +230,13 @@ func build(ctx context.Context, client *sextant.Client, opts Options) (root, err
 // resolveAuthors builds the conversations' id → Author map from the clients
 // directory, so authors render as display names in their role hue rather than
 // raw ids. A directory read failure returns an empty map (the documented
-// fallback), keeping launch non-blocking.
+// fallback), keeping launch non-blocking. The fetch is bounded by a 5-second
+// deadline — matching the browsers' own fetch bound — so a connected-but-wedged
+// bus fails fast rather than hanging the alt-screen open.
 func resolveAuthors(ctx context.Context, client *sextant.Client) map[string]surface.Author {
-	infos, err := client.ListClients(ctx)
+	fctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	infos, err := client.ListClients(fctx)
 	if err != nil {
 		return map[string]surface.Author{}
 	}

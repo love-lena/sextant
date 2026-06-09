@@ -143,13 +143,12 @@ const (
 // candidate qualifies when it lies on the dir side by edges (its near edge is at
 // or beyond the selected pane's far edge: the pane immediately to the right /
 // below / etc). Among qualifiers it picks the smallest travel-axis gap first,
-// then the smallest perpendicular non-overlap, then reading order — so from a
-// tall left column (presence) spanning a stacked right column, Right lands on the
-// TOP right pane (reading order breaks the all-overlapping tie), Down from the
-// top right pane lands on the one below it, and Left from either returns to
-// presence. With no pane in that direction the selection holds (no wrap). It only
-// runs at the layout level and never selects a pane without a rect (dropped at a
-// tiny terminal), keeping the existing selection guards.
+// then the smallest perpendicular non-overlap, then reading order — so in the
+// three-browser cockpit (clients · topics · artifacts side by side), Right from
+// clients lands on topics, Right again on artifacts, and Left reverses the walk.
+// With no pane in that direction the selection holds (no wrap). It only runs at
+// the layout level and never selects a pane without a rect (dropped at a tiny
+// terminal), keeping the existing selection guards.
 func (m *Model) moveSpatial(dir direction) {
 	cur, ok := m.rects[m.selected]
 	if !ok {

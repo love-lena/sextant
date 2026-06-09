@@ -273,6 +273,44 @@ func TestErrorFootersGolden(t *testing.T) {
 	})
 }
 
+// TestBrowserErrorFooterFullListGolden pins that each browser's error footer is
+// visible even when the list fills the entire allocated height. The inner height
+// is set to exactly the number of rows in the snapshot — no spare rows — so
+// without the relayoutList fix the footer would be clipped. With it the list is
+// one row shorter and the footer appears below.
+func TestBrowserErrorFooterFullListGolden(t *testing.T) {
+	th := fixedDark()
+
+	t.Run("clients_full_list", func(t *testing.T) {
+		cb := surface.NewClientsBrowser(context.Background(), nil, th, theme.DefaultKeymap())
+		// 5 clients; size inner h to exactly 5 so the list is full
+		cb.Update(surface.ClientsLoadedMsg{Clients: sampleClients()})
+		cb.Update(surface.NewClientsErrMsg(errors.New("bus unreachable")))
+		out := box(th, cb, widget.FocusSelected, 30, 7) // innerOf(30,7) = (26,5)
+		teatest.RequireEqualOutput(t, []byte(out))
+	})
+
+	t.Run("artifacts_full_list", func(t *testing.T) {
+		ab := surface.NewArtifactsBrowser(context.Background(), nil, th, theme.DefaultKeymap())
+		// 3 artifacts; size inner h to exactly 3 so the list is full
+		ab.Update(surface.ArtifactsLoadedMsg{Artifacts: fixedArtifacts()})
+		ab.Update(surface.NewArtifactsErrMsg(errors.New("artifact.list failed")))
+		out := box(th, ab, widget.FocusSelected, 32, 5) // innerOf(32,5) = (28,3)
+		teatest.RequireEqualOutput(t, []byte(out))
+	})
+
+	t.Run("topics_full_list", func(t *testing.T) {
+		tb := surface.NewTopicsBrowser(context.Background(), nil, th, theme.DefaultKeymap())
+		// 3 topics; size inner h to exactly 3 so the list is full
+		for _, e := range fixedTopicEvents() {
+			tb.Update(e)
+		}
+		tb.Update(surface.NewTopicsErrMsg(errors.New("discovery feed dropped")))
+		out := box(th, tb, widget.FocusSelected, 28, 5) // innerOf(28,5) = (24,3)
+		teatest.RequireEqualOutput(t, []byte(out))
+	})
+}
+
 // typeInto feeds a string into a stream's active compose, key by key.
 func typeInto(s *surface.Stream, text string) {
 	for _, r := range text {
