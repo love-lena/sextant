@@ -101,6 +101,14 @@ var (
 	_ Surface = (*Presence)(nil)
 	_ Surface = (*Stream)(nil)
 	_ Surface = (*Artifact)(nil)
+
+	// The three ADR-0024 browsers are also surfaces (each embeds Browser, itself a
+	// Surface). The assertions keep the contract in the package independent of any
+	// host.
+	_ Surface = (*Browser)(nil)
+	_ Surface = (*ClientsBrowser)(nil)
+	_ Surface = (*ArtifactsBrowser)(nil)
+	_ Surface = (*TopicsBrowser)(nil)
 )
 
 // OpenKind classifies what an OpenMsg refers to, so the dash can route the open

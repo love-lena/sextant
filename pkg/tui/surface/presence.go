@@ -251,7 +251,7 @@ func (p *Presence) applySnapshot(clients []sextant.ClientInfo) {
 	items := make([]widget.ListItem, len(sorted))
 	p.ids = make([]string, len(sorted))
 	for i, ci := range sorted {
-		items[i] = p.rowFor(ci)
+		items[i] = clientRow(p.theme, ci)
 		p.ids[i] = ci.ID
 	}
 	p.list.SetItems(items)
@@ -261,24 +261,6 @@ func (p *Presence) applySnapshot(clients []sextant.ClientInfo) {
 	if hadErr {
 		// The footer just went away; give its row back to the list.
 		p.relayout()
-	}
-}
-
-// rowFor maps one ClientInfo to a list row: the display name in its role hue,
-// led by a status glyph whose shape and hue carry liveness. Offline is the
-// hollow ○ in the dim line colour; online is the filled ● in the connected hue.
-func (p *Presence) rowFor(ci sextant.ClientInfo) widget.ListItem {
-	glyph := theme.StatusGlyph("") // hollow ○ for offline
-	glyphHue := p.theme.Dim
-	if ci.Online {
-		glyph = theme.StatusGlyph(theme.StatusConnected) // filled ●
-		glyphHue = p.theme.StatusHue(theme.StatusConnected)
-	}
-	return widget.ListItem{
-		Title:    ci.DisplayName,
-		Glyph:    glyph,
-		Hue:      p.theme.RoleHue(ci.Kind),
-		GlyphHue: glyphHue,
 	}
 }
 
