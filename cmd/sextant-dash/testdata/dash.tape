@@ -9,7 +9,7 @@
 #   4. step out, then open the artifact in the detail-on-demand pane
 #
 # Render with (from the worktree root):
-#   vhs cmd/sextant-dash/testdata/gallery.tape
+#   vhs cmd/sextant-dash/testdata/dash.tape
 #
 # setup.sh builds the binaries, brings up a hermetic bus ($SEXTANT_HOME + --store
 # in a temp dir, ADR-0021), enrols the dash + presence identities, and seeds the

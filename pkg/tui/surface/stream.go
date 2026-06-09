@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -85,6 +86,12 @@ type Stream struct {
 	compose bool
 	authors map[string]Author
 
+	// entries is the ordered log of what the stream has shown — each a received
+	// frame or a coalesced drop-gap — kept so SetTheme can re-render the buffer
+	// with the new palette (a rendered line bakes in the author hue, so a runtime
+	// theme switch must replay the log to re-hue it).
+	entries []streamEntry
+
 	focus widget.Focus
 	// w, h is the inner area; the compose row, when shown, takes the last line.
 	w, h int
@@ -163,6 +170,38 @@ func (s *Stream) relayout() {
 	s.stream.SetSize(s.w, streamH)
 }
 
+// SetTheme re-themes the surface: it stores the new theme and re-renders the
+// whole stream buffer from the entry log. A rendered line bakes in the author's
+// role hue (resolved when the frame arrived), so a runtime theme switch must
+// replay the log to re-hue every line; the widget itself takes the theme at View
+// time for its own chrome (scroll cues), but the per-line hues live in the lines.
+func (s *Stream) SetTheme(th theme.Theme) {
+	s.theme = th
+	lines := make([]string, len(s.entries))
+	for i, e := range s.entries {
+		lines[i] = s.renderEntry(e)
+	}
+	s.stream.SetLines(lines)
+}
+
+// streamEntry is one logged item the stream has shown: a received frame, or a
+// coalesced drop-gap of n events. The log is kept so SetTheme can re-render the
+// buffer with a new palette.
+type streamEntry struct {
+	frame    sextant.Message
+	hasFrame bool
+	dropped  int
+}
+
+// renderEntry renders one logged entry to a stream line for the current theme: a
+// frame through renderFrame, a drop-gap through dropMarker.
+func (s *Stream) renderEntry(e streamEntry) string {
+	if e.hasFrame {
+		return s.renderFrame(e.frame)
+	}
+	return s.dropMarker(e.dropped)
+}
+
 // SetFocus sets the three-state focus. Stepping in (active) focuses the compose
 // input when compose is on; stepping out blurs it.
 func (s *Stream) SetFocus(f widget.Focus) {
@@ -191,10 +230,14 @@ func (s *Stream) Update(msg tea.Msg) tea.Cmd {
 		// Subscription is live; start the pump.
 		return s.feed.Next()
 	case busfeed.EventMsg:
-		s.stream.Append(s.renderFrame(msg.Message))
+		e := streamEntry{frame: msg.Message, hasFrame: true}
+		s.entries = append(s.entries, e)
+		s.stream.Append(s.renderEntry(e))
 		return s.feed.Next() // keep pumping
 	case busfeed.DroppedMsg:
-		s.stream.Append(s.dropMarker(msg.N))
+		e := streamEntry{dropped: msg.N}
+		s.entries = append(s.entries, e)
+		s.stream.Append(s.renderEntry(e))
 		return s.feed.Next() // DroppedMsg is not terminal; keep pumping
 	case busfeed.ErrMsg:
 		// Terminal: the feed stops reading. Surface the error in the footer.
@@ -214,18 +257,21 @@ func (s *Stream) Update(msg tea.Msg) tea.Cmd {
 }
 
 // handleKey routes a key while the surface is active: scrolling always, plus
-// compose when enabled. Esc steps out (DoneMsg); Enter publishes the composed
-// line; other keys edit the compose buffer.
+// compose when enabled. The bindings come from the keymap (keys are data), not
+// literal strings, so an operator's rebind is honoured here as it is in the
+// chrome and the inner widget. Back steps out (DoneMsg); Enter publishes the
+// composed line; the scroll bindings review the backlog; other keys edit the
+// compose buffer.
 func (s *Stream) handleKey(msg tea.KeyMsg) tea.Cmd {
 	if s.focus != widget.FocusActive {
 		return nil
 	}
-	switch msg.String() {
-	case "esc":
+	switch {
+	case key.Matches(msg, s.keys.Back):
 		s.input.SetValue("")
 		s.input.Blur()
 		return doneCmd(s.ID())
-	case "enter":
+	case key.Matches(msg, s.keys.Enter):
 		if !s.compose {
 			return nil
 		}
@@ -235,7 +281,7 @@ func (s *Stream) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		s.input.SetValue("")
 		return s.publish(text)
-	case "up", "down":
+	case key.Matches(msg, s.keys.Up), key.Matches(msg, s.keys.Down):
 		// Scrolling the stream takes precedence over compose history (which the
 		// textinput does not implement anyway), so up/down review the backlog.
 		s.stream, _ = s.stream.Update(msg)

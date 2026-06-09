@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/love-lena/sextant/pkg/tui/surface"
+	"github.com/love-lena/sextant/pkg/tui/theme"
 	"github.com/love-lena/sextant/pkg/tui/widget"
 )
 
@@ -20,6 +21,9 @@ type mockSurface struct {
 	w, h      int
 	focus     widget.Focus
 	stopped   int
+	// themed records the variant of the last theme the layout pushed in via
+	// SetTheme, so a test can assert a runtime theme switch reaches the surface.
+	themed theme.Variant
 
 	// onEsc, when set, makes the surface emit a DoneMsg on Esc while active (the
 	// "a surface steps itself out" path the layout must honour). Default off: the
@@ -38,6 +42,7 @@ func (s *mockSurface) Title() string { return s.title }
 
 func (s *mockSurface) SetSize(w, h int)        { s.w, s.h = w, h }
 func (s *mockSurface) SetFocus(f widget.Focus) { s.focus = f }
+func (s *mockSurface) SetTheme(t theme.Theme)  { s.themed = t.Variant }
 func (s *mockSurface) Init() tea.Cmd           { return nil }
 func (s *mockSurface) Stop()                   { s.stopped++ }
 

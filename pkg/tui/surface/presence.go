@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/love-lena/sextant/pkg/sextant"
@@ -57,6 +58,10 @@ type Presence struct {
 	// rows. Selection resolves through it by cursor index, so two clients sharing
 	// a display name (unique only by convention, clients.go) never collide.
 	ids []string
+	// last is the most recent snapshot, kept so SetTheme can rebuild the rows with
+	// re-resolved hues without waiting for the next poll (the row hues are baked in
+	// at snapshot time, so a runtime theme switch must re-apply the snapshot).
+	last []sextant.ClientInfo
 	// loaded is false until the first snapshot arrives, so View distinguishes
 	// "still loading" from "genuinely empty".
 	loaded bool
@@ -107,6 +112,18 @@ func (p *Presence) relayout() {
 	p.list.SetSize(p.w, listH)
 }
 
+// SetTheme re-themes the surface: it stores the new theme and rebuilds the list
+// rows from the last snapshot. The rows are list items carrying baked-in role and
+// status hues (resolved at snapshot time), so a runtime theme switch must
+// re-apply the snapshot to re-resolve those hues — the next render then shows the
+// new palette.
+func (p *Presence) SetTheme(th theme.Theme) {
+	p.theme = th
+	if p.loaded {
+		p.applySnapshot(p.last)
+	}
+}
+
 // SetFocus sets the three-state focus; the cursor bar lights only when active.
 func (p *Presence) SetFocus(f widget.Focus) { p.focus = f }
 
@@ -136,11 +153,13 @@ func (p *Presence) Update(msg tea.Msg) tea.Cmd {
 		if p.focus != widget.FocusActive {
 			return nil
 		}
-		switch msg.String() {
-		case "esc":
+		// Bindings come from the keymap (keys are data), not literal strings, so a
+		// rebind is honoured here as it is in the chrome and the list widget.
+		switch {
+		case key.Matches(msg, p.keys.Back):
 			// Step out: hand focus back to the layout level (uniform across surfaces).
 			return doneCmd(p.ID())
-		case "enter":
+		case key.Matches(msg, p.keys.Enter):
 			// Open a direct view of the selected client, resolved by cursor index
 			// (display names are not unique, so never reverse-map the label).
 			if id := p.selectedID(); id != "" {
@@ -148,7 +167,7 @@ func (p *Presence) Update(msg tea.Msg) tea.Cmd {
 			}
 			return nil
 		}
-		// Arrows move the cursor.
+		// The nav bindings move the cursor (the list reads them from the keymap too).
 		p.list, _ = p.list.Update(msg)
 		return nil
 	}
@@ -215,6 +234,7 @@ func (p *Presence) tick() tea.Cmd {
 // footer (a successful fetch means the bus is reachable again).
 func (p *Presence) applySnapshot(clients []sextant.ClientInfo) {
 	p.loaded = true
+	p.last = clients
 	hadErr := p.err != nil
 	p.err = nil
 	sorted := make([]sextant.ClientInfo, len(clients))

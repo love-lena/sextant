@@ -3,7 +3,7 @@
 # binaries into a temp dir, brings up an embedded bus, enrols the dash identity +
 # a couple more for presence, seeds the stream and an artifact, and starts a
 # background publisher so the stream is visibly live during the recording. It is
-# driven by gallery.tape (which sources it, then launches `sextant dash`), and is
+# driven by dash.tape (which sources it, then launches `sextant dash`), and is
 # fully self-contained via $SEXTANT_HOME + --store in a temp dir (the ADR-0021
 # hermetic pattern), so a recording never touches the operator's real config.
 #

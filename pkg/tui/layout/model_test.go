@@ -528,9 +528,11 @@ func TestQuitTearsDownSurfaces(t *testing.T) {
 }
 
 // TestOptionsMenuTogglesTheme: switching the theme from the options menu changes
-// the persisted theme variant. The menu stays open so the operator can flip more.
+// the persisted theme variant AND re-themes every mounted surface (so the pane
+// bodies follow, not just the chrome the layout owns). The menu stays open so
+// the operator can flip more.
 func TestOptionsMenuTogglesTheme(t *testing.T) {
-	m, _ := newCockpit(t)
+	m, panes := newCockpit(t)
 	if m.Theme().Variant != theme.VariantDark {
 		t.Fatalf("precondition: dark theme, got %q", m.Theme().Variant)
 	}
@@ -546,6 +548,13 @@ func TestOptionsMenuTogglesTheme(t *testing.T) {
 	}
 	if m.Config().Theme != theme.VariantLight {
 		t.Errorf("theme switch not persisted in config: %q", m.Config().Theme)
+	}
+	// Every mounted surface saw the new theme through SetTheme — the wiring that
+	// makes the toggle re-theme pane bodies, not just the layout chrome.
+	for id, p := range panes {
+		if p.themed != theme.VariantLight {
+			t.Errorf("surface %q not re-themed via SetTheme (themed=%q)", id, p.themed)
+		}
 	}
 }
 

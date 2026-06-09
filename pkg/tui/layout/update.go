@@ -291,20 +291,24 @@ func (m Model) handleDone(msg surface.DoneMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
-// setTheme switches the cockpit theme (light/dark) in place. Surfaces resolve
-// their hues at construction, so the layout cannot re-theme a mounted surface;
-// it switches the chrome it owns (the Box border + title hues + canvas) and
-// records the variant in the persisted config. The host re-themes surfaces on
-// the next build; in the gallery a fresh build is taken on toggle. This keeps
-// the layout domain-free (it never reconstructs a surface).
+// setTheme switches the cockpit theme (light/dark) in place. It re-themes the
+// chrome it owns (the Box border + title hues + canvas) AND every mounted
+// surface, by calling each surface's SetTheme — so the pane BODIES re-theme too,
+// not just the chrome. SetTheme is in the Surface contract precisely so the
+// layout can re-theme without reconstructing a surface (it stays domain-free —
+// it never builds a surface). The variant is recorded in the persisted config so
+// the choice survives a relaunch.
 func (m Model) setTheme(v theme.Variant) Model {
 	m.th = theme.New(v)
+	for _, id := range m.order {
+		m.surfaces[id].SetTheme(m.th)
+	}
 	m.reflow()
 	return m
 }
 
-// Theme returns the cockpit's current theme, so a host can rebuild surfaces
-// against it after a setTheme (surfaces resolve hues at construction).
+// Theme returns the cockpit's current theme, so a host/test can read the active
+// theme (e.g. to assert a theme toggle took effect).
 func (m Model) Theme() theme.Theme { return m.th }
 
 // Selected returns the id of the currently selected pane (or "" if none). It is

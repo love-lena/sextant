@@ -95,6 +95,14 @@ func (d *detailSurface) SetFocus(f widget.Focus) {
 	d.inner.SetFocus(f)
 }
 
+// SetTheme records the theme (so a later Retarget rebuilds the inner reader on
+// the current theme) and forwards it to the inner reader, so a runtime theme
+// switch re-themes the detail pane body too.
+func (d *detailSurface) SetTheme(th theme.Theme) {
+	d.theme = th
+	d.inner.SetTheme(th)
+}
+
 // Init starts the inner reader and records that the pane is live, so a later
 // Retarget knows to Init the rebuilt reader too.
 func (d *detailSurface) Init() tea.Cmd {

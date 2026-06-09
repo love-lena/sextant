@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
@@ -156,6 +157,16 @@ func (a *Artifact) relayout() {
 	a.detail.SetSize(a.w, readerH)
 }
 
+// SetTheme re-themes the surface: it stores the new theme and rebuilds the
+// rendered body, because the Markdown reader's glamour style is chosen from the
+// theme variant (light/dark) at render time. The detail widget itself takes the
+// theme at View time, so the title/hue follow on the next render; rerender keeps
+// the body's glamour styling in step with the variant.
+func (a *Artifact) SetTheme(th theme.Theme) {
+	a.theme = th
+	a.rerender()
+}
+
 // SetFocus sets the three-state focus; in review mode, active focuses the
 // comment input.
 func (a *Artifact) SetFocus(f widget.Focus) {
@@ -201,20 +212,22 @@ func (a *Artifact) Update(msg tea.Msg) tea.Cmd {
 }
 
 // handleKey routes a key while active: scroll the reader, and in review mode
-// edit/submit the comment. Esc steps out (DoneMsg).
+// edit/submit the comment. The bindings come from the keymap (keys are data),
+// not literal strings, so a rebind is honoured here as it is in the chrome and
+// the detail widget. Back steps out (DoneMsg).
 func (a *Artifact) handleKey(msg tea.KeyMsg) tea.Cmd {
 	if a.focus != widget.FocusActive {
 		return nil
 	}
-	switch msg.String() {
-	case "esc":
+	switch {
+	case key.Matches(msg, a.keys.Back):
 		a.input.SetValue("")
 		a.input.Blur()
 		return doneCmd(a.ID())
-	case "up", "down":
+	case key.Matches(msg, a.keys.Up), key.Matches(msg, a.keys.Down):
 		a.detail, _ = a.detail.Update(msg)
 		return nil
-	case "enter":
+	case key.Matches(msg, a.keys.Enter):
 		if a.mode != ModeReview {
 			return nil
 		}

@@ -115,6 +115,12 @@ func (s *mockSurface) SetFocus(f widget.Focus) { s.focus = f }
 func (s *mockSurface) Init() tea.Cmd           { return nil }
 func (s *mockSurface) Stop()                   {}
 
+// SetTheme satisfies the Surface contract's re-theme hook. The mock renders only
+// plain text (no hues of its own — the Box chrome carries the theme), so there is
+// nothing for it to re-resolve; the layout's theme toggle re-themes the chrome
+// around it regardless.
+func (s *mockSurface) SetTheme(theme.Theme) {}
+
 // Update emits the OpenMsg intent when the operator presses "x" while this pane
 // is active, so the gallery can demonstrate detail-on-demand opening from a
 // surface intent (the stream "opens an artifact in detail"). Esc emits DoneMsg,

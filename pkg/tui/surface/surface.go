@@ -60,6 +60,15 @@ type Surface interface {
 	// layout draws the border.
 	SetFocus(widget.Focus)
 
+	// SetTheme re-themes the surface in place: it re-resolves the hues the surface
+	// renders in (and rebuilds any palette-dependent renderer it holds, e.g. the
+	// artifact reader's Markdown renderer) against the new theme. The layout calls
+	// it on every mounted surface when the operator switches theme, so a runtime
+	// theme toggle re-themes the pane bodies, not just the chrome the layout owns.
+	// The widgets a surface holds take the theme at render time, so re-theming is
+	// just storing the new theme and re-rendering any cached output.
+	SetTheme(theme.Theme)
+
 	// Init starts the surface's work: opening a feed, kicking off an initial
 	// fetch, or arming a refresh tick. It is called once when the surface is
 	// mounted (or when run standalone, by the host program).
