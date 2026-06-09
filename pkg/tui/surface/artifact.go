@@ -71,8 +71,8 @@ const (
 	// ModeReader renders the document title + body, scrollable.
 	ModeReader ArtifactMode = iota
 	// ModeReview is the reader plus a one-line comment compose. A comment reuses
-	// the chat.message primitive (no review record type) and is emitted as an
-	// OpenMsg/published reference — see the comment-publish convention below.
+	// the chat.message primitive (no review record type) — see the
+	// comment-publish convention below.
 	ModeReview
 )
 
