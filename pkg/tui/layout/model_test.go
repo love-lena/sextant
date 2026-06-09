@@ -302,6 +302,36 @@ func TestQuitVsCapturingText(t *testing.T) {
 	})
 }
 
+// TestPastedTextNeverMatchesBindings pins the burst/paste guard: an unbracketed
+// paste (or fast input burst) arrives as ONE multi-rune KeyRunes message whose
+// String() is the literal text — which can spell a binding name. Pasting the
+// text "ctrl+c" must not quit, "tab" must not move focus, "q lands" must not
+// quit; every chunk is content, delivered to the focused surface. (Found live:
+// a tmux send-keys burst containing the words "ctrl+c" force-quit the dash.)
+func TestPastedTextNeverMatchesBindings(t *testing.T) {
+	m, panes := newCockpit(t)
+	chunk := func(s string) tea.KeyMsg {
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+	}
+	var cmd tea.Cmd
+	for _, text := range []string{"ctrl+c", "tab", "shift+tab", "ctrl+l", "q lands", "esc", "p"} {
+		m, cmd = m.Update(chunk(text))
+		if cmd != nil {
+			t.Fatalf("pasted %q produced a command (quit?): %#v", text, cmd())
+		}
+	}
+	if m.Focused() != "clients" {
+		t.Errorf("pasted text moved focus to %q", m.Focused())
+	}
+	// Every chunk was delivered to the focused surface as content — except the
+	// single-rune "p", which IS the preset key when not capturing (a one-rune
+	// chunk is indistinguishable from the keystroke, correctly).
+	want := []string{"ctrl+c", "tab", "shift+tab", "ctrl+l", "q lands", "esc"}
+	if !reflect.DeepEqual(panes["clients"].keys, want) {
+		t.Errorf("focused pane received %v, want %v", panes["clients"].keys, want)
+	}
+}
+
 // TestHideFocusedMovesFocusToNeighbour: toggling the focused pane off moves
 // focus to a remaining visible pane (never "", never a hidden pane).
 func TestHideFocusedMovesFocusToNeighbour(t *testing.T) {

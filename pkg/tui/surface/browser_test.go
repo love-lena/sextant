@@ -101,6 +101,31 @@ func TestBrowserEscAtListIsNoOp(t *testing.T) {
 	}
 }
 
+// TestBrowserPastedTextNeverMatchesBindings pins the burst/paste guard at the
+// browser level: a multi-rune KeyRunes chunk can spell a binding name ("esc",
+// "enter"), but it is content — it must not open a row at the list nor pop an
+// open detail; in a detail it flows through to the inner surface (a compose).
+func TestBrowserPastedTextNeverMatchesBindings(t *testing.T) {
+	chunk := func(s string) tea.KeyMsg {
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+	}
+	det := &fakeDetail{id: "d"}
+	b := newTestBrowser(func(int) (Surface, string) { return det, "t" })
+
+	b.Update(chunk("enter"))
+	if b.inDetail() {
+		t.Fatal("pasted \"enter\" must not open a detail")
+	}
+	b.Update(keyMsg(tea.KeyEnter))
+	if !b.inDetail() {
+		t.Fatal("precondition: detail open")
+	}
+	b.Update(chunk("esc"))
+	if !b.inDetail() {
+		t.Fatal("pasted \"esc\" must not pop the open detail")
+	}
+}
+
 // TestBrowserCapturingTextDelegatesToDetail: the list never captures text; with
 // a detail open, CapturingText is the detail's answer (a conversation's live
 // compose makes the whole pane capturing, so the host's q types instead of

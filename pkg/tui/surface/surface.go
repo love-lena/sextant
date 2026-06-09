@@ -139,6 +139,15 @@ func isTextKey(msg tea.KeyMsg) bool {
 	return msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace
 }
 
+// isTextChunk reports whether a key message is burst/pasted text rather than a
+// single keystroke: a multi-rune KeyRunes (an unbracketed paste or a fast input
+// burst arrives as one chunk). Its String() can spell a binding name ("esc",
+// "enter", "ctrl+c") and binding matches compare strings, so a chunk must never
+// be matched against bindings — it is content, period.
+func isTextChunk(msg tea.KeyMsg) bool {
+	return msg.Type == tea.KeyRunes && len(msg.Runes) > 1
+}
+
 // errorFooter renders a one-line error footer in the alert hue (base08, the
 // drain/alert slot), clamped to width and truncated to one row. Every surface
 // renders it from its captured error so a failure is visible, never swallowed

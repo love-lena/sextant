@@ -63,6 +63,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	if m.menu != nil {
 		return m.handleMenuKey(msg)
 	}
+	// A multi-rune KeyRunes message is burst/pasted TEXT (an unbracketed paste,
+	// a fast input burst), never a chord — but its String() can spell a binding
+	// name ("ctrl+c", "tab"), and binding matches compare strings, so matching
+	// it against the bindings would let pasted text quit the dash or move
+	// focus. Text is content: deliver it straight to the focused surface.
+	if msg.Type == tea.KeyRunes && len(msg.Runes) > 1 {
+		if m.focused == "" {
+			return m, nil
+		}
+		return m, m.surfaces[m.focused].Update(msg)
+	}
 	switch {
 	case key.Matches(msg, m.keys.ForceQuit):
 		m.Stop()
