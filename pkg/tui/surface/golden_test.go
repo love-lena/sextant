@@ -282,6 +282,22 @@ func TestErrorFootersGolden(t *testing.T) {
 		teatest.RequireEqualOutput(t, []byte(out))
 	})
 
+	t.Run("clients_browser_fetch_error", func(t *testing.T) {
+		cb := surface.NewClientsBrowser(context.Background(), nil, th, theme.DefaultKeymap())
+		cb.Update(surface.ClientsLoadedMsg{Clients: sampleClients()}) // last good snapshot stays
+		cb.Update(surface.NewClientsErrMsg(errors.New("bus unreachable")))
+		out := box(th, cb, widget.FocusSelected, 30, 9)
+		teatest.RequireEqualOutput(t, []byte(out))
+	})
+
+	t.Run("artifacts_browser_fetch_error", func(t *testing.T) {
+		ab := surface.NewArtifactsBrowser(context.Background(), nil, th, theme.DefaultKeymap())
+		ab.Update(surface.ArtifactsLoadedMsg{Artifacts: fixedArtifacts()}) // last good snapshot stays
+		ab.Update(surface.NewArtifactsErrMsg(errors.New("artifact.list failed")))
+		out := box(th, ab, widget.FocusSelected, 32, 9)
+		teatest.RequireEqualOutput(t, []byte(out))
+	})
+
 	t.Run("artifact_fetch_error", func(t *testing.T) {
 		a := surface.NewArtifact(context.Background(), nil, "dash-plan", th, theme.DefaultKeymap())
 		iw, ih := innerOf(48, 14)

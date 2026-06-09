@@ -53,8 +53,14 @@ type artifactWatchingMsg struct {
 
 // artifactErrMsg reports that opening the watch failed. The surface keeps the
 // last good document (if any) and records the error for its footer.
+//
+// owner addresses the failure to the surface whose watch failed, for the same
+// broadcast reason as artifactChangeMsg: without the tag one pane's watch
+// failure would footer every artifact reader. A nil owner is an untagged,
+// test-synthesized message, claimed by whichever surface it is fed to.
 type artifactErrMsg struct {
-	err error
+	owner *Artifact
+	err   error
 }
 
 // ArtifactMode is the artifact surface's mode: reader (render only) or review
@@ -243,7 +249,7 @@ func (a *Artifact) Init() tea.Cmd {
 	return func() tea.Msg {
 		w, err := a.client.WatchArtifact(a.ctx, a.name, a.handle)
 		if err != nil {
-			return artifactErrMsg{err: err}
+			return artifactErrMsg{owner: a, err: err}
 		}
 		a.mu.Lock()
 		// If Stop already ran (or ctx is gone), don't hold a live watch.
@@ -313,11 +319,20 @@ func (a *Artifact) Update(msg tea.Msg) tea.Cmd {
 		a.applyChange(msg.change)
 		return a.nextChange() // keep pumping
 	case artifactErrMsg:
+		// Broadcast to every surface: ignore another artifact pane's watch failure
+		// (an untagged one — nil owner, test-synthesized — counts as this pane's).
+		if msg.owner != nil && msg.owner != a {
+			return nil
+		}
 		// Surface a watch failure in the footer; keep the last good document.
 		a.err = msg.err
 		a.relayout()
 		return nil
 	case publishedMsg:
+		// Broadcast to every surface: claim only this pane's own comment result.
+		if !msg.ownedBy(a) {
+			return nil
+		}
 		// A failed comment publish surfaces in the footer; a success clears it.
 		a.err = msg.err
 		a.relayout()
@@ -433,14 +448,14 @@ func (a *Artifact) comment(text string) tea.Cmd {
 	return func() tea.Msg {
 		record, err := marshalChatMessage(text, name)
 		if err != nil {
-			return publishedMsg{err: err}
+			return publishedMsg{owner: a, err: err}
 		}
 		ctx, cancel := context.WithTimeout(a.ctx, 5*time.Second)
 		defer cancel()
 		if err := a.client.Publish(ctx, subject, record); err != nil {
-			return publishedMsg{err: err}
+			return publishedMsg{owner: a, err: err}
 		}
-		return publishedMsg{}
+		return publishedMsg{owner: a}
 	}
 }
 

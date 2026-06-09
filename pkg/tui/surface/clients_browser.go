@@ -30,7 +30,7 @@ const clientsRefreshInterval = presenceRefreshInterval
 //
 // It embeds Browser and supplies the data: Init fetches the directory and arms a
 // refresh tick; each ClientsLoadedMsg rebuilds the rows (via setRows) and the
-// parallel ids slice so Enter resolves the selected client by cursor index
+// parallel last slice so Enter resolves the selected client by cursor index
 // (display names are unique only by convention, so never reverse-map the label).
 type ClientsBrowser struct {
 	Browser
@@ -38,12 +38,12 @@ type ClientsBrowser struct {
 	client *sextant.Client
 	ctx    context.Context
 
-	// ids holds the client id for each list row, in the same sorted order as the
-	// rows, so openRow resolves the selected client by cursor index.
-	ids []string
-	// last is the most recent snapshot, kept so a refresh preserves nothing extra
-	// but a future re-theme could rebuild from it; the rows already bake in hues.
+	// last is the most recent snapshot, sorted in row order, so openRow resolves
+	// the selected client by cursor index (and a re-theme could rebuild from it).
 	last []sextant.ClientInfo
+	// err holds the most recent fetch failure for the footer (fail-loud); the next
+	// successful refresh clears it. The last good snapshot stays either way.
+	err error
 	// stopped gates the fetch and tick so teardown ends the refresh loop cleanly.
 	stopped bool
 }
@@ -54,14 +54,15 @@ type ClientsBrowser struct {
 func NewClientsBrowser(ctx context.Context, client *sextant.Client, th theme.Theme, keys theme.Keymap) *ClientsBrowser {
 	c := &ClientsBrowser{client: client, ctx: ctx}
 	c.Browser = newBrowser("clients", "Clients", keys, th, func(cursor int) (Surface, string) {
-		if cursor < 0 || cursor >= len(c.ids) {
+		if cursor < 0 || cursor >= len(c.last) {
 			return nil, ""
 		}
 		ci := c.last[cursor]
 		// Enter opens a direct conversation on the client's direct subject. A DM is
-		// the same conversation surface as a topic, over a different subject.
+		// the same conversation surface as a topic, over a different subject; the
+		// title names the mode, matching "Topic · x" / "Artifact · x".
 		s := NewStream(c.ctx, c.client, sx.ClientSubject(ci.ID), c.th, c.keys, WithCompose())
-		return s, ci.DisplayName
+		return s, "DM · " + ci.DisplayName
 	})
 	return c
 }
@@ -80,11 +81,9 @@ func (c *ClientsBrowser) Update(msg tea.Msg) tea.Cmd {
 		c.applySnapshot(msg.Clients)
 		return nil
 	case clientsErrMsg:
-		// A transient fetch failure does not blank the list; the last good snapshot
-		// stays. The browser has no error footer of its own, so the failure is kept
-		// for the next successful refresh to clear (fail-loud is the standalone
-		// Presence surface's footer; the browser's list stays honest by keeping the
-		// last snapshot rather than going blank).
+		// Surface the failure in the footer (fail-loud); the last good snapshot
+		// stays visible, and the next successful refresh clears the footer.
+		c.err = msg.err
 		return nil
 	case clientsTickMsg:
 		// Re-fetch and re-arm. Both run even before the first snapshot, so a slow
@@ -92,6 +91,18 @@ func (c *ClientsBrowser) Update(msg tea.Msg) tea.Cmd {
 		return tea.Batch(c.fetch(), c.tick())
 	}
 	return c.Browser.Update(msg)
+}
+
+// View renders the list (or the open detail) with a fetch-error footer below it
+// when one is showing — kept visible rather than swallowed (fail-loud). At the
+// detail level the inner surface owns its own footer, so the fetch error only
+// shows at the list.
+func (c *ClientsBrowser) View() string {
+	body := c.Browser.View()
+	if c.err != nil && !c.inDetail() {
+		return body + "\n" + errorFooter(c.th, c.err, c.w)
+	}
+	return body
 }
 
 // Stop ends the refresh loop (fetch and tick no-op after it) and tears down any
@@ -102,10 +113,11 @@ func (c *ClientsBrowser) Stop() {
 	c.stopDetail()
 }
 
-// applySnapshot stores a directory snapshot and rebuilds the list rows from it,
-// recording each row's client id in the parallel ids slice so Enter resolves by
-// index. Rows are sorted by display name then id, the same order the standalone
-// Presence surface uses, so the two read identically.
+// applySnapshot stores a directory snapshot (sorted into row order, so openRow
+// resolves the selected client by cursor index) and rebuilds the list rows from
+// it. Rows are sorted by display name then id, the same order the standalone
+// Presence surface uses, so the two read identically. A successful snapshot
+// clears any fetch-error footer (the bus is reachable again).
 func (c *ClientsBrowser) applySnapshot(clients []sextant.ClientInfo) {
 	sorted := make([]sextant.ClientInfo, len(clients))
 	copy(sorted, clients)
@@ -117,12 +129,11 @@ func (c *ClientsBrowser) applySnapshot(clients []sextant.ClientInfo) {
 	})
 
 	items := make([]widget.ListItem, len(sorted))
-	c.ids = make([]string, len(sorted))
 	for i, ci := range sorted {
 		items[i] = clientRow(c.th, ci)
-		c.ids[i] = ci.ID
 	}
 	c.last = sorted
+	c.err = nil
 	c.setRows(items)
 }
 

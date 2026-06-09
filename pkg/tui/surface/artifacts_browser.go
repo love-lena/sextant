@@ -55,6 +55,9 @@ type ArtifactsBrowser struct {
 	// names holds the artifact name for each list row, in the same sorted order as
 	// the rows, so openRow resolves the selected artifact by cursor index.
 	names []string
+	// err holds the most recent fetch failure for the footer (fail-loud); the next
+	// successful refresh clears it. The last good snapshot stays either way.
+	err error
 	// stopped gates the fetch and tick so teardown ends the refresh loop cleanly.
 	stopped bool
 }
@@ -91,8 +94,9 @@ func (a *ArtifactsBrowser) Update(msg tea.Msg) tea.Cmd {
 		a.applySnapshot(msg.Artifacts)
 		return nil
 	case artifactsErrMsg:
-		// A transient fetch failure does not blank the list; the last good snapshot
-		// stays and the next successful refresh recovers.
+		// Surface the failure in the footer (fail-loud); the last good snapshot
+		// stays visible, and the next successful refresh clears the footer.
+		a.err = msg.err
 		return nil
 	case artifactsTickMsg:
 		// Re-fetch and re-arm. Both run even before the first snapshot, so a slow
@@ -100,6 +104,18 @@ func (a *ArtifactsBrowser) Update(msg tea.Msg) tea.Cmd {
 		return tea.Batch(a.fetch(), a.tick())
 	}
 	return a.Browser.Update(msg)
+}
+
+// View renders the list (or the open detail) with a fetch-error footer below it
+// when one is showing — kept visible rather than swallowed (fail-loud). At the
+// detail level the inner surface owns its own footer, so the fetch error only
+// shows at the list.
+func (a *ArtifactsBrowser) View() string {
+	body := a.Browser.View()
+	if a.err != nil && !a.inDetail() {
+		return body + "\n" + errorFooter(a.th, a.err, a.w)
+	}
+	return body
 }
 
 // Stop ends the refresh loop (fetch and tick no-op after it) and tears down any
@@ -114,7 +130,8 @@ func (a *ArtifactsBrowser) Stop() {
 // applySnapshot stores a directory snapshot and rebuilds the list rows from it,
 // recording each row's artifact name in the parallel names slice so Enter resolves
 // by index. ListArtifacts already returns the directory sorted by name, so the
-// rows are taken in order.
+// rows are taken in order. A successful snapshot clears any fetch-error footer
+// (the bus is reachable again).
 func (a *ArtifactsBrowser) applySnapshot(infos []sextant.ArtifactInfo) {
 	items := make([]widget.ListItem, len(infos))
 	a.names = make([]string, len(infos))
@@ -122,6 +139,7 @@ func (a *ArtifactsBrowser) applySnapshot(infos []sextant.ArtifactInfo) {
 		items[i] = artifactRow(a.th, info)
 		a.names[i] = info.Name
 	}
+	a.err = nil
 	a.setRows(items)
 }
 

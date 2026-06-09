@@ -216,7 +216,6 @@ func topicOf(subject string) string {
 	return subject[len(topicSubjectPrefix):]
 }
 
-// width returns the inner width for the error footer. Browser keeps its size
-// privately, so the footer reads it back through the list, which Browser sizes on
-// every SetSize.
+// width returns the inner width for the error footer: the width the embedded
+// Browser recorded on the last SetSize.
 func (t *TopicsBrowser) width() int { return t.w }

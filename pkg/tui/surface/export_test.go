@@ -16,8 +16,14 @@ import (
 func NewClientsErrMsg(err error) any { return clientsErrMsg{err: err} }
 
 // NewArtifactErrMsg builds the artifact fetch-error message a failed GetArtifact
-// would produce, for driving the artifact error footer in a golden.
+// would produce, for driving the artifact error footer in a golden. It is
+// untagged (nil owner), which a surface treats as its own.
 func NewArtifactErrMsg(err error) any { return artifactErrMsg{err: err} }
+
+// NewArtifactsErrMsg builds the artifacts-browser fetch-error message a failed
+// ListArtifacts would produce, for driving the browser's error footer in a
+// golden.
+func NewArtifactsErrMsg(err error) any { return artifactsErrMsg{err: err} }
 
 // NewPublishedErrMsg builds the publish-result message a failed compose/comment
 // publish would produce, for driving the stream/artifact error footer in a

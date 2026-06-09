@@ -282,6 +282,11 @@ func (s *Stream) Update(msg tea.Msg) tea.Cmd {
 		s.relayout()
 		return nil
 	case publishedMsg:
+		// Broadcast to every surface: claim only this stream's own publish result
+		// (an untagged one — nil owner, test-synthesized — counts as its own).
+		if !msg.ownedBy(s) {
+			return nil
+		}
 		// A failed publish surfaces in the footer; a success clears any prior one.
 		// Either way the sent line appears via the round-trip echo, not here.
 		s.err = msg.err
@@ -368,21 +373,36 @@ func (s *Stream) publish(text string) tea.Cmd {
 	return func() tea.Msg {
 		record, err := marshalChatMessage(text, "")
 		if err != nil {
-			return publishedMsg{err: err}
+			return publishedMsg{owner: s, err: err}
 		}
 		ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 		defer cancel()
 		if err := s.client.Publish(ctx, s.subject, record); err != nil {
-			return publishedMsg{err: err}
+			return publishedMsg{owner: s, err: err}
 		}
-		return publishedMsg{}
+		return publishedMsg{owner: s}
 	}
 }
 
-// publishedMsg reports the outcome of a compose publish. Success carries no data
-// (the line round-trips back through the feed); a failure carries the error.
+// publishedMsg reports the outcome of a compose/comment publish. Success carries
+// no data (the line round-trips back through the feed); a failure carries the
+// error.
+//
+// owner addresses the result to the surface that issued the publish. The layout
+// broadcasts every non-key message to ALL mounted panes, and several publishing
+// surfaces can be live at once (a DM, a topic conversation, an artifact review),
+// so without the tag one pane's publish failure would footer every conversation
+// — and one pane's success would clear another pane's real error. It is `any`
+// because both *Stream and *Artifact publish; each claims only its own.
 type publishedMsg struct {
-	err error
+	owner any
+	err   error
+}
+
+// ownedBy reports whether the publish result belongs to s: tagged by it, or
+// untagged (nil owner — test-synthesized; a real publish always tags).
+func (m publishedMsg) ownedBy(s any) bool {
+	return m.owner == nil || m.owner == s
 }
 
 // renderFrame turns one received frame into one or more stream lines: a
