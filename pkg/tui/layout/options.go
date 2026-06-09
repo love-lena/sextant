@@ -32,28 +32,28 @@ const (
 	optQuit
 )
 
-// optionItem is one row in the menu: a label, a kind, and a target (the pane id
-// for a toggle row; unused otherwise).
+// optionItem is one row in the menu: a label, a kind, a target (the pane id
+// for a toggle row; unused otherwise), and — for toggle rows — the current
+// on/off state so the overlay can colour the state tag.
 type optionItem struct {
 	kind   optionKind
 	label  string
 	paneID string
+	on     bool // true when the pane is visible; only meaningful for optTogglePane
 }
 
 // newOptionsMenu builds the menu for the current layout state: one toggle row
-// per pane, a preset-switch row, a theme-switch row, and quit. Labels show the
-// current state so the menu reads as a status as well as a control.
+// per pane, a preset-switch row, a theme-switch row, and quit. Toggle rows
+// carry the on/off state separately so the overlay can colour the state tag.
 func newOptionsMenu(m Model) *optionsMenu {
 	var items []optionItem
 	for _, id := range m.order {
-		mark := "on "
-		if m.hidden[id] {
-			mark = "off"
-		}
+		visible := !m.hidden[id]
 		items = append(items, optionItem{
 			kind:   optTogglePane,
-			label:  "pane " + id + " [" + mark + "]",
+			label:  "pane " + id,
 			paneID: id,
+			on:     visible,
 		})
 	}
 	items = append(
@@ -124,24 +124,60 @@ func (m Model) activateOption() (Model, tea.Cmd) {
 // panel is a widget.Box titled "options" holding the selectable rows, centred on
 // the cockpit area; it is spliced onto a canvas of the behind render so the
 // background panes show around it.
+//
+// Toggle rows render the [on]/[off] state tag in a state-bearing hue: green
+// (affirmative) for on, dim for off — so the flip is unmissable in both themes.
 func (o *optionsMenu) overlay(t theme.Theme, behind string, w, h int) string {
+	// affirmativeHue is the "on" colour: green (base0B), the connected/active slot.
+	affirmativeHue := lipgloss.Color(t.Palette.Base0B)
+
 	var b strings.Builder
 	for i, it := range o.items {
-		row := it.label
-		style := lipgloss.NewStyle().Foreground(t.Fg)
-		if i == o.cursor {
-			style = lipgloss.NewStyle().Background(t.Accent).Foreground(t.OnAccent).Bold(true)
+		isCursor := i == o.cursor
+		rowStyle := lipgloss.NewStyle().Foreground(t.Fg)
+		if isCursor {
+			rowStyle = lipgloss.NewStyle().Background(t.Accent).Foreground(t.OnAccent).Bold(true)
 		}
-		b.WriteString(style.Render(" " + row + " "))
+
+		if it.kind == optTogglePane {
+			// Render the state tag in a state-bearing hue, outside the cursor bar
+			// style, so it reads clearly in both cursor and resting states.
+			var tagStyle lipgloss.Style
+			var tag string
+			if it.on {
+				tag = "[on ]"
+				tagStyle = lipgloss.NewStyle().Foreground(affirmativeHue)
+			} else {
+				tag = "[off]"
+				tagStyle = lipgloss.NewStyle().Foreground(t.Dim)
+			}
+			if isCursor {
+				// On the cursor row the entire background is the accent bar; keep
+				// the tag colours readable against that background.
+				tagStyle = tagStyle.Background(t.Accent)
+			}
+			b.WriteString(rowStyle.Render(" " + it.label + " "))
+			b.WriteString(tagStyle.Render(tag + " "))
+		} else {
+			b.WriteString(rowStyle.Render(" " + it.label + " "))
+		}
 		if i < len(o.items)-1 {
 			b.WriteByte('\n')
 		}
 	}
 
+	// Row width: for toggle rows label + " " + tag (5) + 2 padding spaces = label+8;
+	// for other rows label + 2 padding spaces.
 	innerW := 0
 	for _, it := range o.items {
-		if l := lipgloss.Width(it.label) + 2; l > innerW {
-			innerW = l
+		var rowW int
+		if it.kind == optTogglePane {
+			rowW = lipgloss.Width(it.label) + 8 // " " + label + " " + "[on ]" + " "
+		} else {
+			rowW = lipgloss.Width(it.label) + 2 // " " + label + " "
+		}
+		if rowW > innerW {
+			innerW = rowW
 		}
 	}
 	if innerW < 16 {

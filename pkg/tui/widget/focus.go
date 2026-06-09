@@ -24,8 +24,8 @@ type Focus int
 const (
 	// FocusIdle is the resting state: a dim border, no selection cue.
 	FocusIdle Focus = iota
-	// FocusSelected is the layout's current selection: an accent border, but
-	// input has not stepped in yet.
+	// FocusSelected is the layout's current selection: an accent border and a
+	// muted cursor cue, but input has not stepped in yet.
 	FocusSelected
 	// FocusActive is the stepped-in state: an accent border and an active cursor
 	// / selection inside the widget.

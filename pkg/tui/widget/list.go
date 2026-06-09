@@ -29,9 +29,10 @@ type ListItem struct {
 
 // List is a cursor-driven selectable list: a vertical column of rows with a
 // movable cursor. It is a Bubble Tea component (Update + View) and renders only
-// from a theme.Theme and its Focus. The cursor row is highlighted only when the
-// list is active (stepped in); a selected-but-not-active list shows an accent
-// border with no cursor bar, the middle of the three focus states.
+// from a theme.Theme and its Focus. The cursor row is always visible: a
+// prominent filled accent bar when active (stepped in), and a muted dim bar
+// when selected or idle — so the operator can see what Enter will open before
+// stepping in.
 type List struct {
 	keys  theme.Keymap
 	items []ListItem
@@ -156,10 +157,10 @@ func (l *List) clampOffset() {
 	}
 }
 
-// View renders the visible rows for the given focus. The cursor row is
-// highlighted with a filled bar only when focus is FocusActive — that is the
-// active-vs-selected distinction inside the widget. An empty list renders a
-// dim placeholder.
+// View renders the visible rows for the given focus. The cursor row is always
+// visible: a prominent filled accent bar when active, a dim filled bar when
+// selected or idle — so the operator can see what Enter will open before
+// stepping in. An empty list renders a dim placeholder.
 func (l List) View(t theme.Theme, focus Focus) string {
 	w := l.width
 	if w <= 0 {
@@ -181,8 +182,8 @@ func (l List) View(t theme.Theme, focus Focus) string {
 	for i := l.offset; i < end; i++ {
 		it := l.items[i]
 		var line string
-		if i == l.cursor && focus == FocusActive {
-			line = l.renderCursorRow(t, it, w)
+		if i == l.cursor {
+			line = l.renderCursorRow(t, it, w, focus)
 		} else {
 			line = l.renderRow(t, it, w)
 		}
@@ -217,22 +218,30 @@ func (l List) renderRow(t theme.Theme, it ListItem, w int) string {
 	return lipgloss.NewStyle().Width(w).MaxWidth(w).MaxHeight(1).Render(row.String())
 }
 
-// renderCursorRow paints the active cursor row as one filled accent bar. It
-// builds the row from UNSTYLED content (no embedded hue spans) so the single
-// background/foreground/bold style applies cleanly across the whole row — the
-// bar owns all colour. Splicing a style over already-styled text would let an
-// inner reset code blank the bar mid-row.
-func (l List) renderCursorRow(t theme.Theme, it ListItem, w int) string {
+// renderCursorRow paints the cursor row as a filled bar. When active the bar
+// uses the accent hue (prominent); when selected or idle it uses the dim hue
+// (muted) so the operator sees what Enter will open before stepping in. In
+// both cases the row is built from UNSTYLED content so the single background
+// style applies cleanly — no inner reset codes to splice through.
+func (l List) renderCursorRow(t theme.Theme, it ListItem, w int, focus Focus) string {
 	var plain strings.Builder
 	if it.Glyph != "" {
 		plain.WriteString(it.Glyph)
 		plain.WriteByte(' ')
 	}
 	plain.WriteString(it.Title)
+	bg := t.Dim
+	fg := t.Bg
+	bold := false
+	if focus == FocusActive {
+		bg = t.Accent
+		fg = t.OnAccent
+		bold = true
+	}
 	return lipgloss.NewStyle().
-		Background(t.Accent).
-		Foreground(t.OnAccent).
-		Bold(true).
+		Background(bg).
+		Foreground(fg).
+		Bold(bold).
 		Width(w).
 		MaxWidth(w).
 		MaxHeight(1).
