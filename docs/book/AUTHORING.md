@@ -3,9 +3,9 @@
 This book is built two ways, and the split is deliberate:
 
 - **Generated, factual, don't hand-edit.** Operation tables, lexicon field tables,
-  the Go SDK API reference, the backend interface — all rendered from canon by
-  `cmd/docgen` (`make book`), with a CI drift-check. These state only mechanical
-  fact and never make a conceptual claim.
+  and the Go SDK API reference — all rendered from canon by `cmd/docgen`
+  (`make book`), with a CI drift-check. These state only mechanical fact and never
+  make a conceptual claim.
 - **Prose, hand-written, yours.** The conceptual framing — what the pieces *are*
   and how they relate — lives in the pages below. Each ships as a stub with a
   `🚧 Claude outline — TODO for Lena` banner and a bullet list of suggested
@@ -29,9 +29,8 @@ checklist. Delete each page's banner when it's done.
 | `src/protocol/connection.md` | Connect handshake, the two credential tiers + `sx` guardrail, issuance, retire vs disconnect vs drain. | A reader understands how identity, auth, and creds work end to end. |
 | `src/protocol/epoch.md` | What the epoch is; checked on connect + per frame; what bumps it; what a client does on mismatch. | Short and correct — a reference note, not an essay. |
 | `src/sdk-go/overview.md` | What the SDK is; the Connect→Client shape; how the surface maps to operations; lifecycle. (Per-area pages + API reference are generated.) | Orients a Go developer before the generated reference. |
-| `src/implementers/wire-api.md` | The backend-neutral call contract a second SDK implements. **When written, factor the neutral material out of `protocol/nats-binding.md` into canon and trim that file to NATS specifics.** | A second SDK could be built from this page + the operation index. |
 
 ## Not on the list (generated — leave them)
 
 `src/protocol/operations.md`, `src/sdk-go/{reference,messages,artifacts,clients}.md`,
-`src/implementers/backend.md`, and everything under `docs/book/generated/`.
+and everything under `docs/book/generated/`.
