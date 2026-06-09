@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/love-lena/sextant/pkg/tui/theme"
 	"github.com/love-lena/sextant/pkg/tui/widget"
@@ -165,5 +166,78 @@ func TestEmptyWidgetsShowPlaceholders(t *testing.T) {
 	d.SetSize(20, 4)
 	if !strings.Contains(plain(d.View(th, widget.FocusSelected)), "(nothing selected)") {
 		t.Error("empty detail should show a placeholder")
+	}
+}
+
+// --- compose widget ---
+
+// typeCompose feeds a string into a Compose widget key by key, returning the
+// updated Compose after all keystrokes. The compose must be focused before
+// calling this.
+func typeCompose(c widget.Compose, text string) widget.Compose {
+	for _, r := range text {
+		c, _ = c.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	return c
+}
+
+// TestComposeWrapsAndShrinkBody pins the core wrap requirement: a line longer
+// than the compose width renders on multiple rows (all text visible, none
+// horizontally clipped), and the compose height grows accordingly so the body
+// shrinks.
+//
+// The compose is given width=20. The prompt is "> " (2 chars), leaving 18 chars
+// of text body per row. Typing 36 chars (2× bodyW) must produce height=2.
+// The View must contain all the typed text (nothing lost to horizontal clipping).
+func TestComposeWrapsAndShrinkBody(t *testing.T) {
+	const width = 20
+	c := widget.NewCompose()
+	c.SetWidth(width)
+	_ = c.Focus() // Focus returns a cursor-blink cmd; irrelevant in tests
+
+	// 36 printable chars: exactly 2× the body width (18). At wrap boundary.
+	const text = "abcdefghijklmnopqrstuvwxyz0123456789"
+	c = typeCompose(c, text)
+
+	h := c.Height()
+	if h < 2 {
+		t.Errorf("compose should be ≥2 rows after typing %d chars at width %d; got height %d", len(text), width, h)
+	}
+
+	// All typed text must appear in the rendered view (no horizontal clipping).
+	view := plain(c.View(theme.Dark(), widget.FocusActive))
+	if !strings.Contains(view, "abcdefghijklmnopqr") {
+		t.Errorf("first 18 chars missing from compose view (horizontally clipped?):\n%s", view)
+	}
+	if !strings.Contains(view, "stuvwxyz0123456789") {
+		t.Errorf("last 18 chars missing from compose view (not wrapped to next row?):\n%s", view)
+	}
+}
+
+// TestComposeCapAtMaxRows pins that a compose taller than ComposeMaxRows is
+// capped: typing more text than fits in ComposeMaxRows rows returns exactly
+// ComposeMaxRows from Height() (never more), and the view stays at the cap.
+func TestComposeCapAtMaxRows(t *testing.T) {
+	const width = 20 // bodyW = 18
+	c := widget.NewCompose()
+	c.SetWidth(width)
+	_ = c.Focus()
+
+	// Type (ComposeMaxRows+2) × bodyW chars: should overflow the cap.
+	bodyW := width - 2 // prompt is "> " = 2 chars
+	overflow := (widget.ComposeMaxRows + 2) * bodyW
+	text := strings.Repeat("x", overflow)
+	c = typeCompose(c, text)
+
+	h := c.Height()
+	if h != widget.ComposeMaxRows {
+		t.Errorf("compose height = %d, want exactly ComposeMaxRows = %d (text taller than cap should scroll, not grow)", h, widget.ComposeMaxRows)
+	}
+
+	// All characters must be in the buffer (not truncated — just scrolled within
+	// the capped viewport). Check value length, not the rendered view (the view
+	// only shows ComposeMaxRows rows).
+	if got := c.Value(); len([]rune(got)) < overflow {
+		t.Errorf("compose truncated input: got %d runes, want ≥ %d", len([]rune(got)), overflow)
 	}
 }

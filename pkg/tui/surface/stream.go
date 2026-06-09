@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/reflow/wordwrap"
@@ -86,7 +85,7 @@ type Stream struct {
 
 	feed    *busfeed.Feed
 	stream  widget.Stream
-	input   textinput.Model
+	input   widget.Compose
 	compose bool
 	authors map[string]Author
 
@@ -111,9 +110,8 @@ func NewStream(ctx context.Context, client *sextant.Client, subject string, th t
 	for _, o := range opts {
 		o(&cfg)
 	}
-	in := textinput.New()
-	in.Prompt = "> "
-	in.Placeholder = "message…"
+	in := widget.NewCompose()
+	in.SetWidth(1) // will be resized by SetSize; initialise to a safe default
 	s := &Stream{
 		client:  client,
 		ctx:     ctx,
@@ -153,18 +151,16 @@ func (s *Stream) topic() string {
 	return s.subject
 }
 
-// SetSize sizes the inner area, reserving the bottom row for the compose line
-// when compose is on and another for the error footer when an error is showing.
-// A width change reflows the buffer: message lines soft-wrap to the content
-// width (renderEntry), so a narrow/wide resize must re-wrap every logged entry.
+// SetSize sizes the inner area. The compose width is set to w so it wraps at
+// the pane's inner width; height is dynamic (compose height is subtracted in
+// relayout). A width change reflows the buffer: message lines soft-wrap to the
+// content width (renderEntry), so a narrow/wide resize must re-wrap every
+// logged entry.
 func (s *Stream) SetSize(w, h int) {
 	widthChanged := w != s.w
 	s.w, s.h = w, h
 	if w > 0 {
-		s.input.Width = w - lipgloss.Width(s.input.Prompt) - 1
-		if s.input.Width < 1 {
-			s.input.Width = 1
-		}
+		s.input.SetWidth(w)
 	}
 	if widthChanged {
 		s.replay()
@@ -172,13 +168,14 @@ func (s *Stream) SetSize(w, h int) {
 	s.relayout()
 }
 
-// relayout sizes the stream viewport to the inner area minus the compose row (if
-// any) and the error-footer row (if an error is showing), so neither overlaps the
-// stream.
+// relayout sizes the stream viewport to the inner area minus the compose's
+// current height (if compose is on — the compose grows as the operator types,
+// so the stream body shrinks to match) and the error-footer row (if an error is
+// showing), so neither overlaps the stream.
 func (s *Stream) relayout() {
 	streamH := s.h
 	if s.compose {
-		streamH--
+		streamH -= s.input.Height()
 	}
 	if s.err != nil {
 		streamH--
@@ -242,7 +239,7 @@ func (s *Stream) SetFocus(f widget.Focus) {
 		return
 	}
 	if f == widget.FocusActive {
-		s.input.Focus()
+		_ = s.input.Focus() // returns a cursor-blink cmd; irrelevant for surface routing
 	} else {
 		s.input.Blur()
 	}
@@ -331,6 +328,7 @@ func (s *Stream) handleKey(msg tea.KeyMsg) tea.Cmd {
 	if s.CapturingText() && isTextKey(msg) {
 		var cmd tea.Cmd
 		s.input, cmd = s.input.Update(msg)
+		s.relayout() // compose may have grown or shrunk
 		return cmd
 	}
 	switch {
@@ -343,16 +341,18 @@ func (s *Stream) handleKey(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 		s.input.SetValue("")
+		s.relayout() // compose shrank back to 1 row on clear
 		return s.publish(text)
 	case key.Matches(msg, s.keys.Up), key.Matches(msg, s.keys.Down):
-		// Scrolling the stream takes precedence over compose history (which the
-		// textinput does not implement anyway), so up/down review the backlog.
+		// Scrolling the stream takes precedence over compose history, so up/down
+		// review the backlog.
 		s.stream, _ = s.stream.Update(msg)
 		return nil
 	}
 	if s.compose {
 		var cmd tea.Cmd
 		s.input, cmd = s.input.Update(msg)
+		s.relayout() // compose may have grown or shrunk
 		return cmd
 	}
 	return nil
@@ -372,19 +372,11 @@ func (s *Stream) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
-// composeLine renders the bottom compose row. When active it shows the live
-// textinput; when not, a dim hint that focusing the pane composes (the typed
-// text is held, not shown, while unfocused — the input renders it on refocus).
+// composeLine renders the compose input. The Compose widget handles both the
+// live input (active focus) and the dim placeholder (unfocused), so this is a
+// straight delegation. Height is dynamic — Height() rows are rendered.
 func (s *Stream) composeLine() string {
-	if s.focus == widget.FocusActive {
-		return s.input.View()
-	}
-	hint := "focus pane to compose"
-	w := s.w
-	if w <= 0 {
-		w = 1
-	}
-	return lipgloss.NewStyle().Foreground(s.theme.Dim).Width(w).MaxWidth(w).Render("> " + hint)
+	return s.input.View(s.theme, s.focus)
 }
 
 // publish marshals the typed text as a chat.message and publishes it to the

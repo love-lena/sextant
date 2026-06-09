@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
@@ -99,7 +98,7 @@ type Artifact struct {
 	mode   ArtifactMode
 
 	detail widget.Detail
-	input  textinput.Model
+	input  widget.Compose
 	focus  widget.Focus
 
 	doc      document
@@ -142,9 +141,8 @@ func NewArtifact(ctx context.Context, client *sextant.Client, name string, th th
 	for _, o := range opts {
 		o(&cfg)
 	}
-	in := textinput.New()
-	in.Prompt = "comment> "
-	in.Placeholder = "leave a comment…"
+	in := widget.NewCompose()
+	in.SetWidth(1) // will be resized by SetSize
 	return &Artifact{
 		client:  client,
 		ctx:     ctx,
@@ -177,29 +175,25 @@ func (a *Artifact) Title() string {
 	return "Artifact"
 }
 
-// SetSize sizes the inner reader area, reserving the bottom row for the comment
-// line in review mode and another for the error footer when one is showing. It
-// re-renders the body to the new width.
+// SetSize sizes the inner reader area. The compose width is set to w so it
+// wraps at the pane's inner width; height is dynamic (compose height is
+// subtracted in relayout). It re-renders the body to the new width.
 func (a *Artifact) SetSize(w, h int) {
 	a.w, a.h = w, h
 	if a.mode == ModeReview && w > 0 {
-		a.input.Width = w - lipgloss.Width(a.input.Prompt) - 1
-		if a.input.Width < 1 {
-			a.input.Width = 1
-		}
+		a.input.SetWidth(w)
 	}
 	a.relayout()
 	a.rerender()
 }
 
-// relayout sizes the reader to the inner area minus the comment row (review mode)
-// and the error-footer row (when an error is showing). It re-renders the body
-// because the glamour wrap depends on the reader width, which is unchanged here —
-// only the height moves — so it does not re-run the markdown render.
+// relayout sizes the reader to the inner area minus the compose's current
+// height (review mode — the compose grows as the operator types, so the reader
+// shrinks to match) and the error-footer row (when an error is showing).
 func (a *Artifact) relayout() {
 	readerH := a.h
 	if a.mode == ModeReview {
-		readerH--
+		readerH -= a.input.Height()
 	}
 	if a.err != nil {
 		readerH--
@@ -228,7 +222,7 @@ func (a *Artifact) SetFocus(f widget.Focus) {
 		return
 	}
 	if f == widget.FocusActive {
-		a.input.Focus()
+		_ = a.input.Focus() // returns a cursor-blink cmd; irrelevant for surface routing
 	} else {
 		a.input.Blur()
 	}
@@ -367,6 +361,7 @@ func (a *Artifact) handleKey(msg tea.KeyMsg) tea.Cmd {
 	if a.CapturingText() && isTextKey(msg) {
 		var cmd tea.Cmd
 		a.input, cmd = a.input.Update(msg)
+		a.relayout() // compose may have grown or shrunk
 		return cmd
 	}
 	switch {
@@ -382,11 +377,13 @@ func (a *Artifact) handleKey(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 		a.input.SetValue("")
+		a.relayout() // compose shrank back to 1 row on clear
 		return a.comment(text)
 	}
 	if a.mode == ModeReview {
 		var cmd tea.Cmd
 		a.input, cmd = a.input.Update(msg)
+		a.relayout() // compose may have grown or shrunk
 		return cmd
 	}
 	return nil
@@ -429,17 +426,11 @@ func (a *Artifact) Stop() {
 	close(a.changes)
 }
 
-// commentLine renders the review comment row: the live input when active, a dim
-// hint otherwise.
+// commentLine renders the compose input used for review comments. The Compose
+// widget handles both the live input (active focus) and the dim placeholder
+// (unfocused), so this is a straight delegation. Height is dynamic.
 func (a *Artifact) commentLine() string {
-	if a.focus == widget.FocusActive {
-		return a.input.View()
-	}
-	w := a.w
-	if w <= 0 {
-		w = 1
-	}
-	return lipgloss.NewStyle().Foreground(a.theme.Dim).Width(w).MaxWidth(w).Render("comment> focus pane to review")
+	return a.input.View(a.theme, a.focus)
 }
 
 // applyChange applies one watch change: a write renders the new value (and clears
