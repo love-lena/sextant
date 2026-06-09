@@ -40,6 +40,19 @@ const (
 	ThemeDark ThemeChoice = "dark"
 )
 
+// Valid reports whether c is one of the three known theme choices. The empty
+// string is also valid (it resolves to auto), so an unset Options.Theme is
+// accepted. Resolve uses this to fail loud on a bad --theme rather than silently
+// falling back to auto (fail-loud over a surprising silent default).
+func (c ThemeChoice) Valid() bool {
+	switch c {
+	case "", ThemeAuto, ThemeLight, ThemeDark:
+		return true
+	default:
+		return false
+	}
+}
+
 // Options carries the resolved inputs Run needs: the identity (creds + URL +
 // bus store for discovery), the theme choice, the layout config path, and the
 // default topic the cockpit's stream participates in. The caller (the binary or
@@ -76,7 +89,7 @@ const (
 
 // ErrNoIdentity is the "you didn't say who to connect as" error, mirroring the
 // CLI's errNoIdentity so a missing identity fails loud with the same guidance.
-var ErrNoIdentity = errors.New("dash: no credentials (pass --creds, set $SEXTANT_CREDS, or select a context with `sextant context use <name>`)")
+var ErrNoIdentity = errors.New("dash: no credentials: pass --creds, set $SEXTANT_CREDS, or select a context with `sextant context use <name>` (create one with `sextant context add`)")
 
 // Run connects under the resolved identity, assembles the cockpit, and runs the
 // dash to completion. It is the shared entry point both faces call. The ctx
@@ -100,14 +113,23 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("dash: connect: %w", err)
 	}
 
-	r, err := build(ctx, client, opts)
+	// A child context that Run cancels the moment the program exits, by ANY quit
+	// path. A bare `q`/options-menu quit ends the tea program without cancelling the
+	// parent ctx, so the drain-watch goroutine (parked on Drained() ⊕ ctx.Done())
+	// would otherwise leak. Cancelling progCtx on return unblocks it on every path;
+	// the same ctx drives tea.WithContext so an external cancel still stops the loop.
+	progCtx, cancelProg := context.WithCancel(ctx)
+	defer cancelProg()
+
+	r, err := build(progCtx, client, opts)
 	if err != nil {
 		_ = client.Close()
 		return err
 	}
 
-	program := tea.NewProgram(r, tea.WithAltScreen(), tea.WithContext(ctx))
+	program := tea.NewProgram(r, tea.WithAltScreen(), tea.WithContext(progCtx))
 	final, runErr := program.Run()
+	cancelProg() // wind down the drain watch immediately, before teardown/Close
 
 	// Host teardown runs once, after the program exits, regardless of which quit
 	// path fired (operator quit, ctrl+c, options-menu quit, or a bus drain): the
@@ -176,7 +198,7 @@ func build(ctx context.Context, client *sextant.Client, opts Options) (root, err
 	detail := newDetail(ctx, client, artifactName, th, keys)
 
 	m := layout.New(th, keys, cfg, presence, stream, artifact, detail)
-	return newRoot(m, client, detail), nil
+	return newRoot(ctx, m, client, detail), nil
 }
 
 // resolveAuthors builds the stream's id → Author map from the clients directory,

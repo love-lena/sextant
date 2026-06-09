@@ -1,6 +1,8 @@
 package dash
 
 import (
+	"context"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/love-lena/sextant/pkg/sextant"
 	"github.com/love-lena/sextant/pkg/tui/layout"
@@ -31,6 +33,12 @@ import (
 // layout config and closing the client — run in Run after the program exits, so
 // they happen exactly once regardless of which quit path fired.
 type root struct {
+	// ctx is the program context (the one Run hands to tea.WithContext). The drain
+	// watch selects on it so the watch goroutine exits on ANY quit, not only a bus
+	// drain — Client.Drained() closes solely on a cooperative drain, so without the
+	// ctx leg the watch would park forever on the common quit paths (q, ctrl+c, the
+	// options-menu quit). A goleak TestMain guards this against regression.
+	ctx    context.Context
 	m      layout.Model
 	client *sextant.Client
 	detail *detailSurface // the retargetable detail pane (nil if none mounted)
@@ -41,10 +49,11 @@ type root struct {
 type drainedMsg struct{}
 
 // newRoot builds the root over an assembled cockpit, the held client, and the
-// detail pane (so the host can retarget it). The configPath is not held here —
-// Run owns config persistence after the program exits.
-func newRoot(m layout.Model, client *sextant.Client, detail *detailSurface) root {
-	return root{m: m, client: client, detail: detail}
+// detail pane (so the host can retarget it). ctx is the program context, threaded
+// into the drain watch so it cancels on any quit. The configPath is not held here
+// — Run owns config persistence after the program exits.
+func newRoot(ctx context.Context, m layout.Model, client *sextant.Client, detail *detailSurface) root {
+	return root{ctx: ctx, m: m, client: client, detail: detail}
 }
 
 // Init starts the layout (which mounts and Inits every surface) and arms the
@@ -54,15 +63,22 @@ func (r root) Init() tea.Cmd {
 	return tea.Batch(r.m.Init(), r.watchDrain())
 }
 
-// watchDrain blocks on the client's Drained channel off the main loop and
-// returns a drainedMsg when the bus drains. It never busy-waits — the channel
-// close is the only wakeup — so an idle dash holds one parked goroutine, no
-// poll.
+// watchDrain blocks off the main loop until either the bus drains (Drained
+// closes → a drainedMsg quits the dash) or the program context is cancelled (any
+// quit path → the watch returns nil and exits). It never busy-waits — both legs
+// are blocking — so an idle dash holds one parked goroutine, no poll, and that
+// goroutine always unwinds on exit (no leak). Client.Drained() closes only on a
+// cooperative drain, so the ctx leg is what frees the watch on q/ctrl+c/menu-quit.
 func (r root) watchDrain() tea.Cmd {
 	ch := r.client.Drained()
+	ctx := r.ctx
 	return func() tea.Msg {
-		<-ch
-		return drainedMsg{}
+		select {
+		case <-ch:
+			return drainedMsg{}
+		case <-ctx.Done():
+			return nil
+		}
 	}
 }
 

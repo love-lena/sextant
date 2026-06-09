@@ -50,6 +50,11 @@ func AddFlags(fs *flag.FlagSet) *Flags {
 // supplies creds + URL. An explicit --url still overrides a context's URL.
 // It fails loud with ErrNoIdentity when nothing names who to connect as.
 func (f *Flags) Resolve() (Options, error) {
+	th := ThemeChoice(*f.theme)
+	if !th.Valid() {
+		return Options{}, fmt.Errorf("dash: invalid --theme %q (want light, dark, or auto)", *f.theme)
+	}
+
 	creds, url := *f.creds, *f.url
 	if creds == "" {
 		name := *f.context
@@ -72,7 +77,7 @@ func (f *Flags) Resolve() (Options, error) {
 		CredsPath:  creds,
 		URL:        url,
 		Store:      *f.store,
-		Theme:      ThemeChoice(*f.theme),
+		Theme:      th,
 		ConfigPath: *f.config,
 		Topic:      *f.topic,
 		Artifact:   *f.artifact,
