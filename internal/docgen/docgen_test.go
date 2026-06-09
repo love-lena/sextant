@@ -34,26 +34,30 @@ func TestOperationsPage(t *testing.T) {
 	}
 }
 
-func TestLexiconPages(t *testing.T) {
+func TestLexiconFragment(t *testing.T) {
 	root := repoRoot(t)
-	frame, err := genFrame(root)
+
+	// The frame fragment is a table only — no conceptual prose, no H1 — so a
+	// prose page can include it. It carries the field rows + knownValues.
+	frame, err := lexiconFragment("frame.json")(root)
 	if err != nil {
-		t.Fatalf("genFrame: %v", err)
+		t.Fatalf("frame fragment: %v", err)
 	}
-	// The frame's author field carries the unforgeable-identity note.
-	if !strings.Contains(frame, "`author`") || !strings.Contains(frame, "not forgeable") {
-		t.Errorf("frame page missing the author field / its note:\n%s", frame)
+	if strings.Contains(frame, "# ") {
+		t.Errorf("fragment must not contain a heading (it is included into a prose page):\n%s", frame)
 	}
-	if !strings.Contains(frame, "one of: message, artifact") {
-		t.Errorf("frame page missing the kind knownValues")
+	for _, want := range []string{"| Field | Type | Required | Description |", "`author`", "one of: message, artifact"} {
+		if !strings.Contains(frame, want) {
+			t.Errorf("frame fragment missing %q", want)
+		}
 	}
 
-	recs, err := genRecordLexicons(root)
+	doc, err := lexiconFragment("document.json")(root)
 	if err != nil {
-		t.Fatalf("genRecordLexicons: %v", err)
+		t.Fatalf("document fragment: %v", err)
 	}
-	if !strings.Contains(recs, "## `chat.message`") || !strings.Contains(recs, "## `document`") {
-		t.Errorf("records page missing a record lexicon section")
+	if !strings.Contains(doc, "`title`") || !strings.Contains(doc, "`body`") {
+		t.Errorf("document fragment missing its fields")
 	}
 }
 
@@ -79,10 +83,13 @@ func TestSDKPages(t *testing.T) {
 // TestDeterministic guards the drift-check: regenerating must be byte-stable.
 func TestDeterministic(t *testing.T) {
 	root := repoRoot(t)
-	for _, gen := range []func(string) (string, error){
-		genOperations, genRecordLexicons, genFrame, genRegistry,
+	gens := []func(string) (string, error){
+		genOperations, genBackend,
 		genSDKReference, genSDKMessages, genSDKArtifacts, genSDKClients,
-	} {
+		lexiconFragment("chat.message.json"), lexiconFragment("document.json"),
+		lexiconFragment("frame.json"), lexiconFragment("client.json"),
+	}
+	for _, gen := range gens {
 		a, err := gen(root)
 		if err != nil {
 			t.Fatalf("gen: %v", err)

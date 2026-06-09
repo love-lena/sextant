@@ -6,10 +6,6 @@ can serve its operations. It is not user-facing: clients never speak NATS — th
 call the bus over the Wire API, and the bus runs on this module. NATS is named
 freely here because this is the NATS module's own document.
 
-The backend-neutral **call protocol** an SDK implements — the connect handshake's
-shape, the delivery shapes, and frame stamping — is in `wire-api.md`. This page
-covers only how the NATS module *realizes* it.
-
 NATS provides three facilities the module uses:
 
 - JetStream streams for the durable message log;
@@ -58,29 +54,29 @@ tier — its credential, also provisioned at `up`, may publish *only*
 issuance path and nothing else). Both are minted credentials, not signing keys;
 locality is the trust (a process that can read the store is on the operator's box).
 
-## Connect handshake — NATS specifics
+## Connect handshake
 
-The handshake's shape is backend-neutral and defined in `wire-api.md`; this is how
-the NATS module realizes each step. A client connects with a credential it was
-already issued (it does not register on connect — register *issues*, it is not a
-connect step).
+A client connects with a credential it was already issued (it does not register
+on connect — register *issues*, it is not a connect step). The bus drives this
+module as follows:
 
 1. Resolve the NATS URL.
-2. Read the client id from the credentials JWT user-name claim — this is the
-   authenticated identity the Wire API handshake relies on.
-3. Connect with the credentials and client name, using the per-client inbox prefix
-   `_INBOX.<id>` that matches the credential's allow-list.
-4. `clients.hello` confirms `sx_clients/<id>` exists (issued, not retired) and
-   returns `{bus_epoch, server_time}` for the epoch hard-gate and the soft
-   clock-skew check.
+2. Read the client id from the credentials JWT user-name claim.
+3. Connect with the credentials and client name (per-client inbox prefix
+   `_INBOX.<id>`, matching the credential's allow-list).
+4. Call `clients.hello`: the bus confirms the id is a known (issued, not retired)
+   identity and returns `{bus_epoch, server_time}`. Refuse to proceed unless the
+   bus epoch exactly matches the protocol epoch; clock-skew-check against the
+   server time (a soft announce).
 5. Subscribe to `sx.deliver.<id>.drain` and flush before reporting the connection
    ready.
 
-Presence is read from the embedded server's connection table (`Connz`, with
-`Username` set so the authenticated subject is populated): a client is `online` iff
-an authenticated connection for its subject exists. On clean close the module just
-closes the connection — the identity persists in the directory as `offline`;
-removal is `clients.retire`, a deliberate decommission.
+No registry write happens on connect: **presence is derived from the live
+connection**. The bus reads the embedded server's connection table (`Connz`, with
+`Username` set so the authenticated subject is populated) and a client is `online`
+iff an authenticated connection for its subject exists. On clean close the module
+just closes the connection — the identity persists in the directory as `offline`;
+it is not removed. Removal is `clients.retire`, a deliberate decommission.
 
 ## Operation binding
 

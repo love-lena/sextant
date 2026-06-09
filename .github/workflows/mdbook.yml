@@ -48,7 +48,7 @@ jobs:
       - name: docgen (no drift)
         run: |
           go run ./cmd/docgen
-          git diff --exit-code -- docs/book/src \
+          git diff --exit-code -- docs/book/src docs/book/generated \
             || { echo "::error::generated docs are stale — run 'make book' and commit"; exit 1; }
 
       - name: mdbook build

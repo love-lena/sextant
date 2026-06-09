@@ -12,6 +12,10 @@
   **frame = bus space** (the bus stamps id · kind · epoch · author).
 - The two primitives: **Messages** (in flight, on subjects/topics) vs **Artifacts**
   (at rest, named + versioned, one author at a time).
+- **A record is any valid lexicon; the primitive is the container, not the lexicon.**
+  An artifact is a named/versioned slot whose record can be *any* lexicon — `document`
+  is just one example, not "the artifact type." Likewise a message carries any record
+  lexicon (`chat.message` is one). Worth stating plainly — it's an easy conflation.
 - A **call** (client↔bus) vs **request/reply** (client↔client) — name the
   distinction once, clearly.
 - Identity is **bus-enforced**: `author` is taken from the authenticated request
