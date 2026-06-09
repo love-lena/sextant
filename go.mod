@@ -1,6 +1,6 @@
 module github.com/love-lena/sextant
 
-go 1.26.3
+go 1.26.4
 
 require (
 	github.com/nats-io/jwt/v2 v2.8.2
@@ -17,6 +17,18 @@ require (
 	github.com/minio/highwayhash v1.0.4 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	golang.org/x/crypto v0.52.0 // indirect
+	golang.org/x/mod v0.35.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/telemetry v0.0.0-20260409153401-be6f6cb8b1fa // indirect
 	golang.org/x/time v0.15.0 // indirect
+	golang.org/x/tools v0.44.0 // indirect
+	golang.org/x/tools/go/packages/packagestest v0.1.1-deprecated // indirect
+	golang.org/x/vuln v1.1.4 // indirect
+	mvdan.cc/gofumpt v0.10.0 // indirect
+)
+
+tool (
+	golang.org/x/vuln/cmd/govulncheck
+	mvdan.cc/gofumpt
 )

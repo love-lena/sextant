@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -47,7 +48,7 @@ func Run(t *testing.T, newHarness func(t *testing.T) Harness) {
 	t.Run("log: read from cursor has no gaps and no duplicates", func(t *testing.T) {
 		ctx := t.Context()
 		subj := h.SubjectBase + ".cursor"
-		for i := 0; i < 3; i++ {
+		for range 3 {
 			_, err := h.Backend.Append(ctx, subj, []byte(`{"x":1}`))
 			mustNil(t, err)
 		}
@@ -221,10 +222,5 @@ func mustNil(t *testing.T, err error) {
 }
 
 func contains(s []string, v string) bool {
-	for _, x := range s {
-		if x == v {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(s, v)
 }

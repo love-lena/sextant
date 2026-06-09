@@ -7,6 +7,26 @@ import (
 	"testing"
 )
 
+// cliOperations maps each protocol operation (protocol/methods.json) to its CLI
+// command. It is the source of truth the conformance test checks both ways:
+// every operation has exactly one command, and the CLI invents no command that
+// isn't an operation — making "one surface, many faces" mechanical, not
+// disciplinary (TASK-28). The MCP server (TASK-22) extends the same test with
+// its tool table.
+var cliOperations = map[string]string{
+	"message.publish":   "publish",
+	"message.read":      "read",
+	"message.subscribe": "subscribe",
+	"artifact.create":   "artifact create",
+	"artifact.update":   "artifact update",
+	"artifact.get":      "artifact get",
+	"artifact.delete":   "artifact delete",
+	"artifact.watch":    "artifact watch",
+	"clients.list":      "clients list",
+	"clients.register":  "clients register",
+	"clients.retire":    "clients retire",
+}
+
 // TestCLIMatchesOperations is the "one surface, many faces" guarantee (TASK-28):
 // it reads protocol/methods.json — the source of truth — and asserts the CLI
 // exposes exactly one command per operation, and no command that isn't an

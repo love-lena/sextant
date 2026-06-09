@@ -50,7 +50,7 @@ func TestReplayDeliverAll(t *testing.T) {
 	c := dialClient(t, b, "replay")
 	ctx := t.Context()
 	subj := sx.TopicSubject("log")
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if err := c.Publish(ctx, subj, json.RawMessage(`{"n":1}`)); err != nil {
 			t.Fatalf("Publish: %v", err)
 		}
@@ -89,7 +89,7 @@ func TestFetchMessages(t *testing.T) {
 	c := dialClient(t, b, "fetcher")
 	ctx := t.Context()
 	subj := sx.TopicSubject("pull")
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if err := c.Publish(ctx, subj, json.RawMessage(`{"n":1}`)); err != nil {
 			t.Fatalf("Publish: %v", err)
 		}

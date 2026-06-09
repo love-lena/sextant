@@ -57,14 +57,13 @@ type Bus struct {
 
 	// Push-stream relays (ADR-0019 subscribe/watch): a per-(clientID, subID)
 	// registry of running relays from the backend into sx.deliver.<id>.<subID>.
-	// All relay goroutines are rooted at relayCtx, so stopServing cancels them en
-	// masse; a single relay is cancelled (and removed) on an explicit
-	// subscription.stop. Crash-driven teardown (a client that never stops) is
-	// TASK-20 liveness, the same gap the clients registry has.
-	relayCtx    context.Context
-	relayCancel context.CancelFunc
-	relaysMu    sync.Mutex
-	relays      map[string]map[string]*relay
+	// Every relay's cancel lives in the registry, so stopServing cancels them en
+	// masse by walking it; a single relay is cancelled (and removed) on an
+	// explicit subscription.stop. Crash-driven teardown (a client that never
+	// stops) is TASK-20 liveness, the same gap the clients registry has.
+	relaysMu      sync.Mutex
+	relays        map[string]map[string]*relay
+	relaysStopped bool // set by stopServing; no new relays after shutdown begins
 }
 
 // Start launches the embedded bus under JWT auth and bootstraps the reserved

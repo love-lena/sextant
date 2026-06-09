@@ -49,7 +49,6 @@ func (b *Bus) startServing() error {
 	}
 	b.backend = natsbackend.New(js, sx.StreamMessages)
 	b.apiSem = make(chan struct{}, apiMaxConcurrent)
-	b.relayCtx, b.relayCancel = context.WithCancel(context.Background())
 	b.relays = make(map[string]map[string]*relay)
 	sub, err := b.opConn.Subscribe(wireapi.WildcardSubject, func(msg *nats.Msg) {
 		// Spawn immediately so the NATS dispatcher never blocks (no head-of-line
@@ -68,14 +67,20 @@ func (b *Bus) startServing() error {
 }
 
 // stopServing tears the API subscription down and cancels every running relay
-// (called on Shutdown). Cancelling relayCtx cascades to all per-subscription
-// relay contexts, so their backend streams close and their goroutines exit.
+// (called on Shutdown). It walks the relay registry cancelling each relay's
+// context, so their backend streams close and their goroutines exit; the
+// stopped flag keeps in-flight calls from registering new relays afterwards.
 func (b *Bus) stopServing() {
 	if b.apiSub != nil {
 		_ = b.apiSub.Unsubscribe()
 	}
-	if b.relayCancel != nil {
-		b.relayCancel()
+	b.relaysMu.Lock()
+	defer b.relaysMu.Unlock()
+	b.relaysStopped = true
+	for _, subs := range b.relays {
+		for _, r := range subs {
+			r.cancel()
+		}
 	}
 }
 

@@ -31,17 +31,20 @@ type relay struct {
 	cancel context.CancelFunc
 }
 
-// registerRelay reserves (clientID, subID) and returns a context rooted at the
-// bus relay context, so the relay dies on either an explicit stop or bus
-// shutdown. It rejects a duplicate subID (the SDK generates a fresh ULID per
+// registerRelay reserves (clientID, subID) and returns a context the relay dies
+// on: cancelled on an explicit stop, or by stopServing walking the registry at
+// bus shutdown. It rejects a duplicate subID (the SDK generates a fresh ULID per
 // subscription, so a collision is a client bug, not a race).
 func (b *Bus) registerRelay(clientID, subID string) (context.Context, error) {
 	b.relaysMu.Lock()
 	defer b.relaysMu.Unlock()
+	if b.relaysStopped {
+		return nil, errors.New("bus: shutting down")
+	}
 	if b.relays[clientID][subID] != nil {
 		return nil, fmt.Errorf("subscription %q already exists", subID)
 	}
-	ctx, cancel := context.WithCancel(b.relayCtx)
+	ctx, cancel := context.WithCancel(context.Background())
 	subs := b.relays[clientID]
 	if subs == nil {
 		subs = make(map[string]*relay)

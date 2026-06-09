@@ -14,6 +14,7 @@ package e2e
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"os"
 	"os/exec"
@@ -271,7 +272,8 @@ func (h *harness) run(env map[string]string, args ...string) (string, int) {
 	if err == nil {
 		return buf.String(), 0
 	}
-	if ee, ok := err.(*exec.ExitError); ok {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
 		return buf.String(), ee.ExitCode()
 	}
 	h.t.Fatalf("run %v: %v", args, err)
@@ -299,10 +301,6 @@ func (h *harness) waitPresence(t *testing.T, creds, id string, online bool) {
 	var last string
 	for time.Now().Before(deadline) {
 		last = h.listClients(t, creds)
-		if lineFor(last, id) == "" && !online {
-			// not present yet is not what we want for offline; keep waiting only if
-			// the record should exist (it always does here)
-		}
 		if presenceOf(last, id) == want {
 			return
 		}

@@ -1,0 +1,82 @@
+# Sextant's enforced lint layer. The full gate (and what each linter backs)
+# is documented in docs/agents/go-static-checks.md; the judgment-based style
+# lives in .claude/skills/go-house-style. Principle: if a tool can decide it,
+# a tool enforces it.
+version: "2"
+
+run:
+  # Lint tag-gated files too (the e2e suite), or they rot silently.
+  build-tags:
+    - e2e
+
+linters:
+  default: none
+  enable:
+    # Correctness & safety
+    - govet # includes printf-wrapper checks and copylocks
+    - staticcheck
+    - errcheck # unchecked errors + unchecked type assertions (see settings)
+    - forcetypeassert # second guard for comma-ok type assertions
+    - ineffassign
+    - bodyclose
+    - gosec
+    - unconvert
+    - copyloopvar
+    # House-style rules that happen to be mechanizable
+    - gochecknoinits # no init()
+    - gochecknoglobals # no mutable package-level state (allowances below)
+    - errorlint # %w mechanics, errors.Is/As over == and type switches
+    - containedctx # ctx never stored in a struct
+    - noctx # outbound HTTP carries a context
+    - revive # subset: see settings
+    - godot # doc comments end in a period
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+    gosec:
+      excludes:
+        # Sextant is a local-first CLI + embedded bus: every file path is
+        # operator input by design, so the path-taint rules are pure noise here.
+        - G304
+        - G703
+      config:
+        # Non-secret outputs (docs, discovery files) are world-readable on
+        # purpose; secret material (seeds, creds) is written 0600 and that is
+        # asserted by tests (pkg/bus/auth_perms_test.go).
+        G301: "0755"
+        G306: "0644"
+    revive:
+      rules:
+        - name: receiver-naming # consistent short receiver names
+        - name: exported # doc comments on exported symbols
+        - name: package-comments # package doc comment present
+        - name: early-return # keep the happy path left-aligned
+        - name: indent-error-flow
+        - name: bare-return # naked returns banned entirely
+
+  exclusions:
+    rules:
+      # Test files: table-driven test fixtures are idiomatically package-level,
+      # asserting on a known concrete type is the point of many tests, and
+      # tests legitimately exec binaries and write fixtures with fake secrets.
+      - path: _test\.go
+        linters:
+          - gochecknoglobals
+          - forcetypeassert
+          - gosec
+          - noctx # tests drive subprocesses synchronously; the harness owns their lifetime
+      - path: _test\.go
+        linters:
+          - errcheck
+        text: "type assertion"
+
+issues:
+  # A gate reports everything; the default same-issue/per-linter caps hide
+  # findings and make local runs disagree with what is actually in the tree.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofumpt

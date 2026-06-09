@@ -50,7 +50,7 @@ func (c *Client) CreateArtifact(ctx context.Context, name string, record wire.Le
 		return 0, err
 	}
 	var out wireapi.ArtifactWriteOutput
-	if err := c.call(ctx, wireapi.OpArtifactCreate, wireapi.ArtifactCreateInput{Name: name, Record: json.RawMessage(record)}, &out); err != nil {
+	if err := c.call(ctx, wireapi.OpArtifactCreate, wireapi.ArtifactCreateInput{Name: name, Record: record}, &out); err != nil {
 		return 0, err
 	}
 	return out.Revision, nil
@@ -65,7 +65,7 @@ func (c *Client) UpdateArtifact(ctx context.Context, name string, record wire.Le
 		return 0, err
 	}
 	var out wireapi.ArtifactWriteOutput
-	if err := c.call(ctx, wireapi.OpArtifactUpdate, wireapi.ArtifactUpdateInput{Name: name, Record: json.RawMessage(record), ExpectedRev: expectedRev}, &out); err != nil {
+	if err := c.call(ctx, wireapi.OpArtifactUpdate, wireapi.ArtifactUpdateInput{Name: name, Record: record, ExpectedRev: expectedRev}, &out); err != nil {
 		return 0, err
 	}
 	return out.Revision, nil
@@ -80,7 +80,7 @@ func (c *Client) GetArtifact(ctx context.Context, name string) (Artifact, error)
 	}
 	return Artifact{
 		Name:     out.Name,
-		Record:   wire.Lexicon(out.Record),
+		Record:   out.Record,
 		Revision: out.Revision,
 		Created:  parseArtifactTime(out.CreatedAt),
 	}, nil
@@ -121,7 +121,7 @@ func (c *Client) WatchArtifact(ctx context.Context, name string, h func(Artifact
 			Deleted:  d.Deleted,
 		}
 		if !d.Deleted {
-			ch.Record = wire.Lexicon(d.Record)
+			ch.Record = d.Record
 			ch.Created = parseArtifactTime(d.CreatedAt)
 		}
 		h(ch)

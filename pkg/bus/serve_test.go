@@ -76,7 +76,7 @@ func TestServeReadCursorResumes(t *testing.T) {
 	b := startTestBus(t)
 	nc, id := connectClient(t, b, "reader")
 	subj := sx.TopicSubject("log")
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		resp := call(t, nc, id, wireapi.OpMessagePublish, wireapi.PublishInput{Subject: subj, Record: json.RawMessage(`{"n":1}`)})
 		if resp.Error != "" {
 			t.Fatalf("publish: %s", resp.Error)

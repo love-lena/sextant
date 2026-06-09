@@ -1,0 +1,4 @@
+#!/bin/sh
+# The static-checks gate, fail-fast (docs/agents/go-static-checks.md).
+# Opt in with `make hooks`; CI runs the same targets and is authoritative.
+exec make check

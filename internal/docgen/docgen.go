@@ -358,17 +358,29 @@ func commentRenderer(d *doc.Package) func(string) string {
 func loadSDKDoc(root string) (*doc.Package, *token.FileSet, error) {
 	fset := token.NewFileSet()
 	dir := filepath.Join(root, "pkg", "sextant")
-	pkgs, err := parser.ParseDir(fset, dir, func(fi os.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, parser.ParseComments)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, nil, err
 	}
-	astPkg, ok := pkgs["sextant"]
-	if !ok {
+	var files []*ast.File
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, parser.ParseComments)
+		if err != nil {
+			return nil, nil, err
+		}
+		files = append(files, f)
+	}
+	if len(files) == 0 {
 		return nil, nil, fmt.Errorf("package sextant not found in %s", dir)
 	}
-	d := doc.New(astPkg, "github.com/love-lena/sextant/pkg/sextant", 0)
+	d, err := doc.NewFromFiles(fset, files, "github.com/love-lena/sextant/pkg/sextant")
+	if err != nil {
+		return nil, nil, err
+	}
 	return d, fset, nil
 }
 

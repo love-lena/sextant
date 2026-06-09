@@ -7,25 +7,29 @@ on:
 
 jobs:
   go:
-    name: lint + test (Go)
+    name: static checks + tests (Go)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: go vet
-        run: go vet ./...
+      # The static-checks gate (docs/agents/go-static-checks.md), one step per
+      # layer so the failing layer is visible at a glance. Cheapest first; the
+      # race suite and e2e never run on a tree that fails formatting or lint.
       - name: gofumpt
-        run: |
-          go install mvdan.cc/gofumpt@latest
-          files=$(gofumpt -l .)
-          if [ -n "$files" ]; then
-            echo "gofumpt: the following files need formatting:"
-            echo "$files"
-            exit 1
-          fi
-      - name: test
-        run: go test ./... -race
+        run: make fmt-check
+      - name: go mod tidy
+        run: make tidy-check
+      - name: build
+        run: make build
+      - name: golangci-lint
+        run: make lint
+      - name: go fix (modernizer)
+        run: make fix-check
+      - name: govulncheck
+        run: make vuln
+      - name: test (-race)
+        run: make test
       - name: e2e (M2 DoD — tests/e2e/m2-acceptance.md)
-        run: go test -tags e2e -count=1 ./tests/e2e/
+        run: make e2e
