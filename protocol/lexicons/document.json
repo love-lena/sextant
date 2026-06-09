@@ -4,7 +4,7 @@
   "defs": {
     "main": {
       "type": "record",
-      "description": "A titled Markdown document artifact.",
+      "description": "A titled Markdown document. One record lexicon among others — like any record, it can be carried by a frame; stored as an artifact it becomes that artifact's record.",
       "record": {
         "type": "object",
         "required": ["title", "body"],
