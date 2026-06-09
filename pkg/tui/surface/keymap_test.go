@@ -117,6 +117,36 @@ func TestComposeCapturesEveryPrintableKey(t *testing.T) {
 	})
 }
 
+// TestComposeDraftSurvivesBlur pins the focus-move guarantee behind ADR-0026's
+// "panes hold their place": a half-typed compose line survives the pane losing
+// and regaining focus. The host moves focus freely under the one-focused-pane
+// model, so a blur must never clear the draft (the retired Esc handler used to).
+// While blurred the draft is held, not rendered (the unfocused pane shows the
+// focus hint), and the surface stops reporting CapturingText — so q quits from
+// elsewhere; regaining focus shows the draft again, intact, and captures again.
+func TestComposeDraftSurvivesBlur(t *testing.T) {
+	s := surface.NewStream(context.Background(), nil, "msg.topic.plan", theme.Dark(), theme.DefaultKeymap(), surface.WithCompose())
+	s.SetSize(60, 8)
+	s.SetFocus(widget.FocusActive)
+	typeInto(s, "draft in flight")
+	if !s.CapturingText() {
+		t.Fatal("precondition: a focused compose with a draft should capture")
+	}
+
+	s.SetFocus(widget.FocusSelected) // the host moved focus away
+	if s.CapturingText() {
+		t.Error("a blurred compose must not report capturing (q could never quit)")
+	}
+
+	s.SetFocus(widget.FocusActive) // the host moved focus back
+	if !s.CapturingText() {
+		t.Error("a refocused compose must capture again")
+	}
+	if !strings.Contains(stripANSI(s.View()), "draft in flight") {
+		t.Errorf("compose draft lost across blur/refocus; view:\n%s", stripANSI(s.View()))
+	}
+}
+
 // TestSurfaceSendIsOverridable proves the stream's send/confirm action is read
 // from the keymap too: rebinding Enter drives the publish by the new key. With a
 // nil client a real publish would panic, so the test asserts only that the

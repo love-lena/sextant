@@ -21,3 +21,8 @@ func (m Model) RectXYWH(id string) (x, y, w, h int, ok bool) {
 	r, ok := m.rects[id]
 	return r.X, r.Y, r.W, r.H, ok
 }
+
+// MenuOpen reports whether the options menu overlay is open — the input state
+// behind which the paste guard must still hold (a pasted chunk must not match
+// the menu's bindings either).
+func (m Model) MenuOpen() bool { return m.menu != nil }

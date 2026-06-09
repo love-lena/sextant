@@ -332,6 +332,40 @@ func TestPastedTextNeverMatchesBindings(t *testing.T) {
 	}
 }
 
+// TestMenuPastedTextNeverMatchesBindings pins the same guard BEHIND the options
+// menu: the menu matches bindings too, so the chunk guard must run before menu
+// dispatch. Pasting the text "ctrl+c" over an open menu must not quit, "enter"
+// must not activate the highlighted row, "esc" must not close the menu; with no
+// text consumer under the menu the chunk is dropped, never delivered behind it.
+// (The R5 review proved the unguarded menu path quit the dash live.)
+func TestMenuPastedTextNeverMatchesBindings(t *testing.T) {
+	m, panes := newCockpit(t)
+	m, _ = m.Update(key("o")) // open the options menu
+	if !m.MenuOpen() {
+		t.Fatal("precondition: options menu should be open")
+	}
+	visibleBefore := m.VisibleIDs()
+	chunk := func(s string) tea.KeyMsg {
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+	}
+	var cmd tea.Cmd
+	for _, text := range []string{"ctrl+c", "enter", "esc", "up", "tab"} {
+		m, cmd = m.Update(chunk(text))
+		if cmd != nil {
+			t.Fatalf("pasted %q over the menu produced a command (quit?): %#v", text, cmd())
+		}
+	}
+	if !m.MenuOpen() {
+		t.Error("pasted text closed the options menu")
+	}
+	if !reflect.DeepEqual(m.VisibleIDs(), visibleBefore) {
+		t.Errorf("pasted text toggled a pane: visible %v, want %v", m.VisibleIDs(), visibleBefore)
+	}
+	if got := panes["clients"].keys; len(got) != 0 {
+		t.Errorf("chunks leaked behind the menu to the focused surface: %v", got)
+	}
+}
+
 // TestHideFocusedMovesFocusToNeighbour: toggling the focused pane off moves
 // focus to a remaining visible pane (never "", never a hidden pane).
 func TestHideFocusedMovesFocusToNeighbour(t *testing.T) {
