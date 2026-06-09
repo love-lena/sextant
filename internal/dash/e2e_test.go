@@ -117,7 +117,7 @@ func TestDashE2E(t *testing.T) {
 	}
 	t.Cleanup(func() { vsub.Stop() })
 
-	tm.Send(key(tea.KeyDown))  // layout selection: presence → stream
+	tm.Send(key(tea.KeyRight)) // layout selection: presence → stream (spatially right)
 	tm.Send(key(tea.KeyEnter)) // step into the stream (compose active)
 	tm.Type(sent)
 	tm.Send(key(tea.KeyEnter)) // publish → round-trips back through the feed

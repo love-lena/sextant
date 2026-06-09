@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -18,16 +19,40 @@ import (
 )
 
 // ArtifactLoadedMsg carries a fetched artifact to the artifact surface. It is the
-// result of the surface's own GetArtifact (or a watch change) and the seam a test
-// or seeded gallery feeds a synthetic document through — the surface renders only
-// from the most recent ArtifactLoadedMsg.
+// seam a test or seeded gallery feeds a synthetic document through — the surface
+// renders the most recent applied value. Live updates arrive as artifactChangeMsg
+// off the watch; ArtifactLoadedMsg stays the test/gallery injection point.
 type ArtifactLoadedMsg struct {
 	// Artifact is the fetched artifact, as returned by client.GetArtifact.
 	Artifact sextant.Artifact
 }
 
-// artifactErrMsg reports that a fetch failed. The surface keeps the last good
-// document and records the error for its footer.
+// artifactChangeMsg carries one change off the live watch: a write (the artifact
+// at this revision) or a delete (Deleted set, empty record). The surface applies
+// it by re-rendering, so an artifact created or updated after launch shows
+// without a restart, and one absent at launch is picked up the moment it is
+// created (clearing the not-found footer).
+//
+// owner addresses the change to the surface that opened the watch. The layout
+// broadcasts every non-key message to ALL mounted surfaces (a host may run two
+// artifact-backed panes — the always-on reader and the detail pane), and these
+// messages carry no other identity, so each surface ignores a change whose owner
+// is not itself. Without the tag one pane's change would re-render the other and
+// multiply the pump.
+type artifactChangeMsg struct {
+	owner  *Artifact
+	change sextant.ArtifactChange
+}
+
+// artifactWatchingMsg reports that the watch is open and live. The surface issues
+// the first pump step on receiving it, mirroring the stream's SubscribedMsg. It
+// is owner-tagged for the same broadcast reason as artifactChangeMsg.
+type artifactWatchingMsg struct {
+	owner *Artifact
+}
+
+// artifactErrMsg reports that opening the watch failed. The surface keeps the
+// last good document (if any) and records the error for its footer.
 type artifactErrMsg struct {
 	err error
 }
@@ -54,8 +79,11 @@ const (
 // name)); the surface keeps no threaded-comment model of its own (primitives,
 // not policy).
 //
-// The surface renders only from the last ArtifactLoadedMsg, so a test feeds it a
-// synthetic document without a bus.
+// The reader live-updates over client.WatchArtifact: Init opens a watch that
+// delivers the current value (if present) then every subsequent change, so a
+// document created or updated after launch refreshes without a restart and a
+// delete shows a removed state. A test feeds it a synthetic document through
+// ArtifactLoadedMsg without a bus.
 type Artifact struct {
 	client *sextant.Client
 	ctx    context.Context
@@ -72,9 +100,19 @@ type Artifact struct {
 	hasDoc   bool
 	rawBody  string // the artifact's record when it is not a document
 	loaded   bool
+	deleted  bool // the watched artifact was removed (a delivered delete)
 	revision uint64
 	w, h     int
 	err      error
+
+	// changes bridges the WatchArtifact handler (a bus delivery goroutine) into
+	// the Bubble Tea loop: the handler does a non-blocking send, the pump reads one
+	// change per step. mu guards the watch handle and the stopped flag, the same
+	// teardown discipline busfeed uses, so Stop is goleak-clean and idempotent.
+	changes chan sextant.ArtifactChange
+	mu      sync.Mutex
+	watch   sextant.Watch
+	stopped bool
 }
 
 // ArtifactOption configures an Artifact surface.
@@ -102,26 +140,35 @@ func NewArtifact(ctx context.Context, client *sextant.Client, name string, th th
 	in.Prompt = "comment> "
 	in.Placeholder = "leave a comment…"
 	return &Artifact{
-		client: client,
-		ctx:    ctx,
-		name:   name,
-		theme:  th,
-		keys:   keys,
-		mode:   cfg.mode,
-		detail: widget.NewDetail(keys),
-		input:  in,
+		client:  client,
+		ctx:     ctx,
+		name:    name,
+		theme:   th,
+		keys:    keys,
+		mode:    cfg.mode,
+		detail:  widget.NewDetail(keys),
+		input:   in,
+		changes: make(chan sextant.ArtifactChange, watchBuffer),
 	}
 }
+
+// watchBuffer is the capacity of the channel between the WatchArtifact handler
+// and the pump. An artifact watch is low-volume (one change per write), so a
+// small buffer absorbs a burst without blocking the delivery goroutine.
+const watchBuffer = 16
 
 // ID returns the stable layout id.
 func (a *Artifact) ID() string { return "artifact" }
 
-// Title returns the pane label: the artifact name, falling back to "artifact".
+// Title returns the pane label: the surface type plus its target name, e.g.
+// "Artifact · the-plan", so the chrome reads as a document and is distinguishable
+// from a same-named stream pane. With no name the label is the bare type. The Box
+// title chip truncates it in a narrow pane.
 func (a *Artifact) Title() string {
 	if a.name != "" {
-		return a.name
+		return "Artifact · " + a.name
 	}
-	return "artifact"
+	return "Artifact"
 }
 
 // SetSize sizes the inner reader area, reserving the bottom row for the comment
@@ -181,10 +228,66 @@ func (a *Artifact) SetFocus(f widget.Focus) {
 	}
 }
 
-// Init fetches the artifact once. A change-tracking watch is left out of scope
-// (M4 documents are read on open); the dash can re-fetch on demand.
+// Init opens a live watch on the artifact. WatchArtifact delivers the current
+// value first (if the artifact exists), then every subsequent change, so the
+// reader live-updates without a restart: a document created or updated after
+// launch refreshes, and one absent at launch is picked up the moment it is
+// created. The watch runs on a bus delivery goroutine that does a non-blocking
+// send onto the change buffer; the pump (nextChange) reads one change per step
+// off the main loop, mirroring the stream feed. A nil client (the goldens) skips
+// the watch — those feed state through ArtifactLoadedMsg directly.
 func (a *Artifact) Init() tea.Cmd {
-	return a.fetch()
+	if a.client == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		w, err := a.client.WatchArtifact(a.ctx, a.name, a.handle)
+		if err != nil {
+			return artifactErrMsg{err: err}
+		}
+		a.mu.Lock()
+		// If Stop already ran (or ctx is gone), don't hold a live watch.
+		if a.stopped {
+			a.mu.Unlock()
+			_ = w.Stop()
+			return nil
+		}
+		a.watch = w
+		a.mu.Unlock()
+		return artifactWatchingMsg{owner: a}
+	}
+}
+
+// handle is the WatchArtifact handler. It runs on a bus delivery goroutine and
+// must never block, so it sends non-blocking: a full buffer drops the change (the
+// next delivered change still reflects the live value, so a dropped intermediate
+// revision is harmless for a reader). The send is gated by stopped under the
+// mutex so a delivery racing Stop never reaches a closed channel.
+func (a *Artifact) handle(ch sextant.ArtifactChange) {
+	a.mu.Lock()
+	if a.stopped {
+		a.mu.Unlock()
+		return
+	}
+	select {
+	case a.changes <- ch:
+	default:
+	}
+	a.mu.Unlock()
+}
+
+// nextChange is the pump step: it reads one change off the buffer, off the main
+// loop, and returns it as an artifactChangeMsg. The surface returns it again on
+// every artifactChangeMsg to keep the pump running. It returns nil when the watch
+// is stopped and the buffer is drained, ending the pump cleanly.
+func (a *Artifact) nextChange() tea.Cmd {
+	return func() tea.Msg {
+		ch, ok := <-a.changes
+		if !ok {
+			return nil
+		}
+		return artifactChangeMsg{owner: a, change: ch}
+	}
 }
 
 // Update handles the loaded document, the error case, and — in review mode while
@@ -195,8 +298,22 @@ func (a *Artifact) Update(msg tea.Msg) tea.Cmd {
 	case ArtifactLoadedMsg:
 		a.applyArtifact(msg.Artifact)
 		return nil
+	case artifactWatchingMsg:
+		// Broadcast to every surface: ignore another artifact pane's watch.
+		if msg.owner != a {
+			return nil
+		}
+		// Watch is open and live; start the pump.
+		return a.nextChange()
+	case artifactChangeMsg:
+		// Broadcast to every surface: ignore another artifact pane's change.
+		if msg.owner != a {
+			return nil
+		}
+		a.applyChange(msg.change)
+		return a.nextChange() // keep pumping
 	case artifactErrMsg:
-		// Surface a fetch failure in the footer; keep the last good document.
+		// Surface a watch failure in the footer; keep the last good document.
 		a.err = msg.err
 		a.relayout()
 		return nil
@@ -260,11 +377,28 @@ func (a *Artifact) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
-// Stop tears the artifact surface down (the Surface contract's teardown). The
-// reader fetches on open and holds no live subscription today, so this no-ops; it
-// is the seam a future WatchArtifact lives behind, and keeps teardown uniform
-// across surfaces. It is safe to call more than once.
-func (a *Artifact) Stop() {}
+// Stop tears the artifact watch down (the Surface contract's teardown): it stops
+// the SDK watch and closes the change buffer so a blocked pump unblocks and
+// returns nil, ending the pump. The layout calls it when unmounting the surface;
+// a standalone host calls it on quit. It is safe to call more than once and safe
+// to call before the watch finishes opening; after Stop no goroutine or
+// subscription survives (goleak-clean).
+func (a *Artifact) Stop() {
+	a.mu.Lock()
+	if a.stopped {
+		a.mu.Unlock()
+		return
+	}
+	a.stopped = true
+	w := a.watch
+	a.watch = nil
+	a.mu.Unlock()
+
+	if w != nil {
+		_ = w.Stop()
+	}
+	close(a.changes)
+}
 
 // commentLine renders the review comment row: the live input when active, a dim
 // hint otherwise.
@@ -279,17 +413,15 @@ func (a *Artifact) commentLine() string {
 	return lipgloss.NewStyle().Foreground(a.theme.Dim).Width(w).MaxWidth(w).Render("comment> enter to review")
 }
 
-// fetch reads the artifact off the main loop, bounded by a short deadline.
-func (a *Artifact) fetch() tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(a.ctx, 5*time.Second)
-		defer cancel()
-		art, err := a.client.GetArtifact(ctx, a.name)
-		if err != nil {
-			return artifactErrMsg{err: err}
-		}
-		return ArtifactLoadedMsg{Artifact: art}
+// applyChange applies one watch change: a write renders the new value (and clears
+// any not-found footer the absent-at-launch case left), a delete shows a removed
+// state so the reader sees the artifact go rather than freezing on the last value.
+func (a *Artifact) applyChange(ch sextant.ArtifactChange) {
+	if ch.Deleted {
+		a.applyDeleted()
+		return
 	}
+	a.applyArtifact(ch.Artifact)
 }
 
 // comment publishes a review comment as a chat.message referencing the artifact:
@@ -313,9 +445,12 @@ func (a *Artifact) comment(text string) tea.Cmd {
 }
 
 // applyArtifact stores a fetched artifact and re-renders its body. A successful
-// fetch clears any error footer (and gives its row back to the reader).
+// fetch clears any error footer (and gives its row back to the reader) — so an
+// artifact absent at launch (which left a not-found footer) recovers cleanly the
+// moment it is created.
 func (a *Artifact) applyArtifact(art sextant.Artifact) {
 	a.loaded = true
+	a.deleted = false
 	hadErr := a.err != nil
 	a.err = nil
 	a.revision = art.Revision
@@ -333,12 +468,28 @@ func (a *Artifact) applyArtifact(art sextant.Artifact) {
 	a.rerender()
 }
 
+// applyDeleted records that the watched artifact was removed and re-renders a
+// removed state, so the reader sees the artifact go rather than freezing on its
+// last value. A later re-create flows back through applyArtifact.
+func (a *Artifact) applyDeleted() {
+	a.loaded = true
+	a.deleted = true
+	a.hasDoc = false
+	a.rawBody = ""
+	a.revision = 0
+	a.rerender()
+}
+
 // rerender re-lays the document body for the current width and feeds it to the
 // Detail widget. A document is rendered as Markdown via glamour (matching the
 // prototype); a non-document record is shown raw so nothing is hidden.
 func (a *Artifact) rerender() {
 	if !a.loaded {
 		a.detail.SetText("")
+		return
+	}
+	if a.deleted {
+		a.detail.SetText(lipgloss.NewStyle().Foreground(a.theme.Dim).Render("(artifact deleted)"))
 		return
 	}
 	if !a.hasDoc {

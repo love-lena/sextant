@@ -42,8 +42,10 @@ Show
 # settle so the stream is visibly live.
 Sleep 2s
 
-# Move the selection down to the stream pane and step in.
-Down@400ms 1
+# Move the selection right to the stream pane (the top-right pane) and step in.
+# Arrows navigate spatially now, so Right (not Down) crosses from the presence
+# column to the stream.
+Right@400ms 1
 Sleep 700ms
 Enter
 Sleep 700ms

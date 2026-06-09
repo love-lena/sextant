@@ -13,3 +13,11 @@ func (m Model) LaidOut(id string) bool {
 	_, ok := m.rects[id]
 	return ok
 }
+
+// RectXYWH returns a laid-out pane's outer rect (origin + size), so a spatial-nav
+// test can assert the geometry it navigates against rather than hardcoding it.
+// The bool is false when the pane has no rect.
+func (m Model) RectXYWH(id string) (x, y, w, h int, ok bool) {
+	r, ok := m.rects[id]
+	return r.X, r.Y, r.W, r.H, ok
+}

@@ -74,22 +74,120 @@ func TestStartsAtLayoutLevel(t *testing.T) {
 	}
 }
 
-// TestNavMovesSelection: nav keys move the selected pane through the visible set,
-// the selected pane carries the accent (selected) border, the others idle.
+// TestNavMovesSelection: a nav key moves the selection to the spatially nearest
+// pane in that direction; the selected pane carries the accent (selected) border,
+// the others idle. In the cockpit (presence left, stream top-right, artifact
+// bottom-right) Right from presence lands on stream — the right-hand pane —
+// proving the selection follows geometry, not a flat order.
 func TestNavMovesSelection(t *testing.T) {
 	m, _ := newCockpit(t)
 	if m.FocusOf("presence") != widget.FocusSelected {
 		t.Errorf("presence focus = %v, want selected", m.FocusOf("presence"))
 	}
-	m, _ = m.Update(key("down"))
+	m, _ = m.Update(key("right"))
 	if m.Selected() != "stream" {
-		t.Errorf("after down, selected = %q, want stream", m.Selected())
+		t.Errorf("after right, selected = %q, want stream", m.Selected())
 	}
 	if m.FocusOf("presence") != widget.FocusIdle {
 		t.Errorf("presence should be idle after moving off it, got %v", m.FocusOf("presence"))
 	}
 	if m.FocusOf("stream") != widget.FocusSelected {
 		t.Errorf("stream focus = %v, want selected", m.FocusOf("stream"))
+	}
+}
+
+// TestSpatialNav pins Fix 3: at the layout level the arrows move the selection by
+// geometry, not a flat forward/back order. Left/Right and Up/Down are no longer
+// aliases. The cockpit lays presence in a full-height left column beside a right
+// column stacked stream (top) / artifact (bottom), so the four arrows trace the
+// real arrangement.
+func TestSpatialNav(t *testing.T) {
+	// Confirm the geometry the assertions navigate against, so a future preset
+	// change can't silently make the test pass for the wrong reason.
+	m, _ := newCockpit(t)
+	_, py, _, ph, _ := m.RectXYWH("presence")
+	_, sy, _, _, _ := m.RectXYWH("stream")
+	_, ay, _, _, _ := m.RectXYWH("artifact")
+	if !(sy < ay) {
+		t.Fatalf("precondition: stream (y=%d) should sit above artifact (y=%d)", sy, ay)
+	}
+	if !(py == 0 && ph > ay) {
+		t.Fatalf("precondition: presence should be a full-height left column (y=%d h=%d, artifact y=%d)", py, ph, ay)
+	}
+
+	sel := func(m layout.Model) string { return m.Selected() }
+
+	// Right from presence → stream (the TOP right pane; reading order breaks the
+	// all-overlapping tie against artifact).
+	m, _ = m.Update(key("right"))
+	if sel(m) != "stream" {
+		t.Fatalf("right from presence = %q, want stream", sel(m))
+	}
+	// Down from stream → artifact (directly below it).
+	m, _ = m.Update(key("down"))
+	if sel(m) != "artifact" {
+		t.Fatalf("down from stream = %q, want artifact", sel(m))
+	}
+	// Up from artifact → stream (back up the right column, not over to presence).
+	m, _ = m.Update(key("up"))
+	if sel(m) != "stream" {
+		t.Fatalf("up from artifact = %q, want stream", sel(m))
+	}
+	// Left from stream → presence (the only pane to the left).
+	m, _ = m.Update(key("left"))
+	if sel(m) != "presence" {
+		t.Fatalf("left from stream = %q, want presence", sel(m))
+	}
+	// Left from the lower right pane also returns to presence.
+	m, _ = m.Update(key("right")) // → stream
+	m, _ = m.Update(key("down"))  // → artifact
+	m, _ = m.Update(key("left"))  // → presence
+	if sel(m) != "presence" {
+		t.Fatalf("left from artifact = %q, want presence", sel(m))
+	}
+	// No pane above the top-right pane in its column, and presence is to the left,
+	// not above: Up from stream holds (no spurious cross-column jump, no wrap).
+	m, _ = m.Update(key("right")) // → stream
+	m, _ = m.Update(key("up"))
+	if sel(m) != "stream" {
+		t.Fatalf("up from stream should hold (nothing above in column), got %q", sel(m))
+	}
+}
+
+// TestSpatialNavSplitPreset covers a preset whose geometry differs from the
+// cockpit: the split grid lays presence top-left, stream top-right, and artifact
+// across the full-width bottom row. Down from a top pane reaches the bottom row;
+// Up from the bottom returns to the top.
+func TestSpatialNavSplitPreset(t *testing.T) {
+	m, _ := newCockpit(t)
+	for m.Config().Preset != "split" {
+		m, _ = m.Update(key("p"))
+	}
+	// Geometry precondition: presence top-left, stream top-right, artifact bottom.
+	_, py, _, _, _ := m.RectXYWH("presence")
+	sx, sxy, _, _, _ := m.RectXYWH("stream")
+	_, ay, _, _, _ := m.RectXYWH("artifact")
+	if !(py == 0 && sxy == 0 && sx > 0 && ay > 0) {
+		t.Fatalf("precondition: split should be presence/stream top, artifact bottom (py=%d sx=%d sxy=%d ay=%d)", py, sx, sxy, ay)
+	}
+	if m.Selected() != "presence" {
+		t.Fatalf("precondition: presence should start selected, got %q", m.Selected())
+	}
+
+	// Right from presence → stream (top-right).
+	m, _ = m.Update(key("right"))
+	if m.Selected() != "stream" {
+		t.Fatalf("right from presence (split) = %q, want stream", m.Selected())
+	}
+	// Down from stream → artifact (the full-width bottom row).
+	m, _ = m.Update(key("down"))
+	if m.Selected() != "artifact" {
+		t.Fatalf("down from stream (split) = %q, want artifact", m.Selected())
+	}
+	// Up from artifact → presence (reading-order first of the top row it spans).
+	m, _ = m.Update(key("up"))
+	if m.Selected() != "presence" {
+		t.Fatalf("up from artifact (split) = %q, want presence", m.Selected())
 	}
 }
 
@@ -123,7 +221,7 @@ func TestStepInRoutesKeysToActiveSurface(t *testing.T) {
 	m, panes := newCockpit(t)
 	// Make the stream emit DoneMsg on Esc so we can observe a routed key.
 	panes["stream"].onEsc = true
-	m, _ = m.Update(key("down")) // select stream
+	m, _ = m.Update(key("right")) // select stream (the top-right pane)
 	m, _ = m.Update(key("enter"))
 	if !m.SteppedIn() {
 		t.Fatal("should be stepped into stream")

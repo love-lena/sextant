@@ -249,6 +249,136 @@ func TestArtifactReaderLive(t *testing.T) {
 	}
 }
 
+// TestArtifactWatchLiveUpdates pins Fix 2: the artifact reader live-updates over
+// WatchArtifact without a restart. It mounts the surface on a name that does NOT
+// exist yet (so there is no content and no spurious error), then creates the
+// artifact and confirms the surface renders it WITHOUT a re-Init, then updates it
+// and confirms the reader refreshes. Every wait is deadline-bound; the watch is
+// torn down via Stop so the package goleak check proves the teardown is clean.
+func TestArtifactWatchLiveUpdates(t *testing.T) {
+	b := startBus(t)
+	c := connect(t, b, "lena", "human")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	const name = "live-doc"
+	a := surface.NewArtifact(ctx, c, name, theme.Dark(), theme.DefaultKeymap())
+	defer a.Stop()
+	a.SetSize(50, 12)
+	a.SetFocus(widget.FocusSelected)
+
+	// Open the watch on an artifact that does not exist yet. WatchArtifact reports
+	// it is live (artifactWatchingMsg) with no current value, so the pump is in
+	// flight but the reader has no content and — crucially — no error footer.
+	open := runStep(t, a.Init())
+	pump := a.Update(open) // artifactWatchingMsg → first nextChange (blocking)
+
+	view := stripANSI(a.View())
+	if strings.Contains(view, "not found") || strings.Contains(view, "error") {
+		t.Fatalf("absent-at-launch artifact should show no error, got:\n%s", view)
+	}
+	if strings.Contains(view, "First title") {
+		t.Fatalf("artifact shown before it was created:\n%s", view)
+	}
+
+	// Create the artifact AFTER launch. The live watch must deliver it and the
+	// surface must render it — without any re-Init (we keep driving the same pump).
+	createCtx, ccancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer ccancel()
+	if _, err := c.CreateArtifact(createCtx, name, wire.Lexicon(mustDoc(t, "First title", "the **first** body"))); err != nil {
+		t.Fatalf("CreateArtifact: %v", err)
+	}
+	driveUntil(t, a, pump, func() bool {
+		return strings.Contains(stripANSI(a.View()), "First title")
+	})
+
+	// Update the artifact. The same live watch refreshes the reader to the new
+	// revision's content.
+	getCtx, gcancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer gcancel()
+	cur, err := c.GetArtifact(getCtx, name)
+	if err != nil {
+		t.Fatalf("GetArtifact: %v", err)
+	}
+	updCtx, ucancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer ucancel()
+	if _, err := c.UpdateArtifact(updCtx, name, wire.Lexicon(mustDoc(t, "Second title", "the revised body")), cur.Revision); err != nil {
+		t.Fatalf("UpdateArtifact: %v", err)
+	}
+	driveUntil(t, a, a.NextChangeCmd(), func() bool {
+		return strings.Contains(stripANSI(a.View()), "Second title")
+	})
+}
+
+// TestArtifactWatchNotCrossApplied pins the owner-tag guard: the dash mounts two
+// artifact-backed panes (the always-on reader and the detail pane), and the
+// layout broadcasts every watch message to ALL surfaces. A change addressed to
+// one pane must NOT re-render the other. Two surfaces watch DIFFERENT artifacts;
+// feeding one surface the other's change message (the broadcast) leaves it
+// unchanged.
+func TestArtifactWatchNotCrossApplied(t *testing.T) {
+	b := startBus(t)
+	c := connect(t, b, "lena", "human")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	// Two existing artifacts with distinct content.
+	for _, d := range []struct{ name, title, body string }{
+		{"doc-a", "Title A", "body of A"},
+		{"doc-b", "Title B", "body of B"},
+	} {
+		cctx, ccancel := context.WithTimeout(t.Context(), 5*time.Second)
+		if _, err := c.CreateArtifact(cctx, d.name, wire.Lexicon(mustDoc(t, d.title, d.body))); err != nil {
+			ccancel()
+			t.Fatalf("CreateArtifact(%s): %v", d.name, err)
+		}
+		ccancel()
+	}
+
+	a := surface.NewArtifact(ctx, c, "doc-a", theme.Dark(), theme.DefaultKeymap())
+	defer a.Stop()
+	a.SetSize(50, 12)
+	a.SetFocus(widget.FocusSelected)
+	other := surface.NewArtifact(ctx, c, "doc-b", theme.Dark(), theme.DefaultKeymap())
+	defer other.Stop()
+	other.SetSize(50, 12)
+	other.SetFocus(widget.FocusSelected)
+
+	// Drive each surface's own watch to its starting value.
+	driveUntil(t, a, a.Init(), func() bool { return strings.Contains(stripANSI(a.View()), "Title A") })
+	driveUntil(t, other, other.Init(), func() bool { return strings.Contains(stripANSI(other.View()), "Title B") })
+
+	// Update doc-b so `other`'s watch delivers a change.
+	gctx, gcancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer gcancel()
+	curB, err := c.GetArtifact(gctx, "doc-b")
+	if err != nil {
+		t.Fatalf("GetArtifact(doc-b): %v", err)
+	}
+	uctx, ucancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer ucancel()
+	if _, err := c.UpdateArtifact(uctx, "doc-b", wire.Lexicon(mustDoc(t, "Title B2", "revised B")), curB.Revision); err != nil {
+		t.Fatalf("UpdateArtifact(doc-b): %v", err)
+	}
+
+	// Read `other`'s change off its pump, then feed that SAME message to BOTH
+	// surfaces — exactly the layout's broadcast. The change is owned by `other`,
+	// so `other` applies it (Title B2) and `a` ignores it (stays Title A).
+	msg := runStep(t, other.NextChangeCmd())
+	if msg == nil {
+		t.Fatal("other's watch produced no change after the update")
+	}
+	a.Update(msg)
+	other.Update(msg)
+
+	if got := stripANSI(a.View()); !strings.Contains(got, "Title A") || strings.Contains(got, "Title B") {
+		t.Fatalf("a applied another pane's change (cross-talk); view:\n%s", got)
+	}
+	if got := stripANSI(other.View()); !strings.Contains(got, "Title B2") {
+		t.Fatalf("other did not apply its own change; view:\n%s", got)
+	}
+}
+
 // mustChat marshals a chat.message record for a test publish.
 func mustChat(t *testing.T, text string) json.RawMessage {
 	t.Helper()

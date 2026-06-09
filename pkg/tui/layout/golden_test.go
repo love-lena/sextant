@@ -77,7 +77,7 @@ func TestFocusGolden(t *testing.T) {
 	})
 	t.Run("selection_moved", func(t *testing.T) {
 		m := cockpit(t)
-		m, _ = m.Update(key("down")) // select stream
+		m, _ = m.Update(key("right")) // select stream (spatially right of presence)
 		golden(t, m)
 	})
 }

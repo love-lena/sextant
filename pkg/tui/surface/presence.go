@@ -89,8 +89,9 @@ func NewPresence(ctx context.Context, client *sextant.Client, th theme.Theme, ke
 // ID returns the stable layout id.
 func (p *Presence) ID() string { return "presence" }
 
-// Title returns the pane label.
-func (p *Presence) Title() string { return "presence" }
+// Title returns the pane label: the surface type, so the chrome names what the
+// pane is rather than carrying a bare id.
+func (p *Presence) Title() string { return "Presence" }
 
 // SetSize sizes the inner list area, reserving the bottom row for the error
 // footer when an error is present.

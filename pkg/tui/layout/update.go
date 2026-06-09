@@ -94,11 +94,17 @@ func (m Model) handleLayoutKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			m.applyFocus()
 		}
 		return m, nil
-	case key.Matches(msg, m.keys.Up), key.Matches(msg, m.keys.Left):
-		m.moveSelection(-1)
+	case key.Matches(msg, m.keys.Up):
+		m.moveSpatial(dirUp)
 		return m, nil
-	case key.Matches(msg, m.keys.Down), key.Matches(msg, m.keys.Right):
-		m.moveSelection(+1)
+	case key.Matches(msg, m.keys.Down):
+		m.moveSpatial(dirDown)
+		return m, nil
+	case key.Matches(msg, m.keys.Left):
+		m.moveSpatial(dirLeft)
+		return m, nil
+	case key.Matches(msg, m.keys.Right):
+		m.moveSpatial(dirRight)
 		return m, nil
 	case key.Matches(msg, m.keys.DetailToggle):
 		return m.toggleDetail()
@@ -134,24 +140,113 @@ func (m Model) handlePaneKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	return m, cmd
 }
 
-// moveSelection moves the layout selection by delta through the visible panes in
-// registration order, wrapping at the ends. It only runs at the layout level;
-// the selected pane gets the accent border.
-func (m *Model) moveSelection(delta int) {
-	visible := m.visibleOrder()
-	if len(visible) == 0 {
+// direction is a spatial navigation direction at the layout level. Up/Down and
+// Left/Right are no longer aliases: each picks the nearest visible pane that lies
+// in that direction from the selected pane's rect, so navigation follows the
+// cockpit geometry rather than a flat forward/back order.
+type direction int
+
+const (
+	dirUp direction = iota
+	dirDown
+	dirLeft
+	dirRight
+)
+
+// moveSpatial moves the selection to the nearest visible, laid-out pane in dir
+// from the selected pane's rect — directional, not a flat forward/back step. A
+// candidate qualifies when it lies on the dir side by edges (its near edge is at
+// or beyond the selected pane's far edge: the pane immediately to the right /
+// below / etc). Among qualifiers it picks the smallest travel-axis gap first,
+// then the smallest perpendicular non-overlap, then reading order — so from a
+// tall left column (presence) spanning a stacked right column, Right lands on the
+// TOP right pane (reading order breaks the all-overlapping tie), Down from the
+// top right pane lands on the one below it, and Left from either returns to
+// presence. With no pane in that direction the selection holds (no wrap). It only
+// runs at the layout level and never selects a pane without a rect (dropped at a
+// tiny terminal), keeping the existing selection guards.
+func (m *Model) moveSpatial(dir direction) {
+	cur, ok := m.rects[m.selected]
+	if !ok {
+		// The selection has no rect (none selected, or it was dropped): fall back to
+		// the first laid-out pane so a nav key still lands somewhere sensible.
+		if first := m.firstLaidOut(); first != "" {
+			m.selected = first
+			m.applyFocus()
+		}
 		return
 	}
-	idx := 0
-	for i, id := range visible {
+
+	best := ""
+	var bestGap, bestPerp int
+	for _, id := range m.visibleOrder() {
 		if id == m.selected {
-			idx = i
-			break
+			continue
+		}
+		r, ok := m.rects[id]
+		if !ok {
+			continue // never select a pane with no rect
+		}
+		gap, ok := travelGap(dir, cur, r)
+		if !ok {
+			continue // not on the dir side
+		}
+		perp := perpGap(dir, cur, r)
+		// visibleOrder is reading order, so the FIRST qualifier at a given
+		// (gap, perp) wins the tie — the topmost/leftmost pane among equals.
+		if best == "" || gap < bestGap || (gap == bestGap && perp < bestPerp) {
+			best, bestGap, bestPerp = id, gap, perp
 		}
 	}
-	idx = (idx + delta + len(visible)) % len(visible)
-	m.selected = visible[idx]
-	m.applyFocus()
+	if best != "" {
+		m.selected = best
+		m.applyFocus()
+	}
+}
+
+// travelGap returns the gap along the travel axis from cur's far edge to r's near
+// edge, and whether r lies on the dir side at all. r qualifies when its near edge
+// is at or beyond cur's far edge (so a directly adjacent pane has gap 0). A pane
+// behind or overlapping cur on the travel axis does not qualify.
+func travelGap(dir direction, cur, r Rect) (int, bool) {
+	switch dir {
+	case dirUp:
+		gap := cur.Y - (r.Y + r.H)
+		return gap, r.Y+r.H <= cur.Y
+	case dirDown:
+		gap := r.Y - (cur.Y + cur.H)
+		return gap, r.Y >= cur.Y+cur.H
+	case dirLeft:
+		gap := cur.X - (r.X + r.W)
+		return gap, r.X+r.W <= cur.X
+	default: // dirRight
+		gap := r.X - (cur.X + cur.W)
+		return gap, r.X >= cur.X+cur.W
+	}
+}
+
+// perpGap returns how far r sits off the travel axis from cur: the distance
+// between their spans on the perpendicular axis, 0 when they overlap. It is the
+// tie-break after the travel gap, so the most-aligned pane in dir wins.
+func perpGap(dir direction, cur, r Rect) int {
+	switch dir {
+	case dirUp, dirDown:
+		return spanGap(cur.X, cur.X+cur.W, r.X, r.X+r.W)
+	default: // dirLeft, dirRight
+		return spanGap(cur.Y, cur.Y+cur.H, r.Y, r.Y+r.H)
+	}
+}
+
+// spanGap returns the gap between two 1-D spans [a0,a1) and [b0,b1): 0 when they
+// overlap, otherwise the distance between the nearer edges.
+func spanGap(a0, a1, b0, b1 int) int {
+	if b0 >= a1 {
+		return b0 - a1
+	}
+	if a0 >= b1 {
+		return a0 - b1
+	}
+	return 0
 }
 
 // stepOut returns focus to the layout level (active pane → selected). Stepping

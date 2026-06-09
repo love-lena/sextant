@@ -10,6 +10,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/reflow/wordwrap"
+
 	"github.com/love-lena/sextant/pkg/sextant"
 	"github.com/love-lena/sextant/pkg/tui/busfeed"
 	"github.com/love-lena/sextant/pkg/tui/theme"
@@ -128,27 +130,42 @@ func NewStream(ctx context.Context, client *sextant.Client, subject string, th t
 // ID returns the stable layout id.
 func (s *Stream) ID() string { return "stream" }
 
-// Title returns the pane label: the subject's trailing segment (the topic name)
-// so several streams are distinguishable, falling back to "stream".
+// Title returns the pane label: the surface type plus its target topic, e.g.
+// "Stream · plan", so the chrome reads as a chat stream and is distinguishable
+// from a same-named document pane. The topic is the subject's trailing segment;
+// with no subject the label is the bare type. The Box title chip truncates it in
+// a narrow pane.
 func (s *Stream) Title() string {
+	if topic := s.topic(); topic != "" {
+		return "Stream · " + topic
+	}
+	return "Stream"
+}
+
+// topic returns the subject's trailing segment (the topic name), or "" when there
+// is no subject.
+func (s *Stream) topic() string {
 	if i := strings.LastIndex(s.subject, "."); i >= 0 && i < len(s.subject)-1 {
 		return s.subject[i+1:]
 	}
-	if s.subject != "" {
-		return s.subject
-	}
-	return "stream"
+	return s.subject
 }
 
 // SetSize sizes the inner area, reserving the bottom row for the compose line
 // when compose is on and another for the error footer when an error is showing.
+// A width change reflows the buffer: message lines soft-wrap to the content
+// width (renderEntry), so a narrow/wide resize must re-wrap every logged entry.
 func (s *Stream) SetSize(w, h int) {
+	widthChanged := w != s.w
 	s.w, s.h = w, h
 	if w > 0 {
 		s.input.Width = w - lipgloss.Width(s.input.Prompt) - 1
 		if s.input.Width < 1 {
 			s.input.Width = 1
 		}
+	}
+	if widthChanged {
+		s.replay()
 	}
 	s.relayout()
 }
@@ -177,9 +194,18 @@ func (s *Stream) relayout() {
 // time for its own chrome (scroll cues), but the per-line hues live in the lines.
 func (s *Stream) SetTheme(th theme.Theme) {
 	s.theme = th
-	lines := make([]string, len(s.entries))
-	for i, e := range s.entries {
-		lines[i] = s.renderEntry(e)
+	s.replay()
+}
+
+// replay re-renders the whole entry log to stream lines for the current theme and
+// width. It is called when the palette OR the inner width changes (a theme switch,
+// a reflow), since both the per-line hues and the soft-wrap depend on the current
+// state: a wrapped line wraps to the current content width, and a narrower width
+// must reflow the buffer to fewer columns.
+func (s *Stream) replay() {
+	var lines []string
+	for _, e := range s.entries {
+		lines = append(lines, s.renderEntry(e)...)
 	}
 	s.stream.SetLines(lines)
 }
@@ -193,13 +219,16 @@ type streamEntry struct {
 	dropped  int
 }
 
-// renderEntry renders one logged entry to a stream line for the current theme: a
-// frame through renderFrame, a drop-gap through dropMarker.
-func (s *Stream) renderEntry(e streamEntry) string {
+// renderEntry renders one logged entry to one OR MORE stream lines for the
+// current theme and width: a frame through renderFrame (soft-wrapped, so a long
+// message spans several lines rather than clipping), a drop-gap through
+// dropMarker. The widget still truncates each line as a safety net, but a normal
+// message now wraps to the content width instead of running off the right edge.
+func (s *Stream) renderEntry(e streamEntry) []string {
 	if e.hasFrame {
 		return s.renderFrame(e.frame)
 	}
-	return s.dropMarker(e.dropped)
+	return []string{s.dropMarker(e.dropped)}
 }
 
 // SetFocus sets the three-state focus. Stepping in (active) focuses the compose
@@ -232,12 +261,12 @@ func (s *Stream) Update(msg tea.Msg) tea.Cmd {
 	case busfeed.EventMsg:
 		e := streamEntry{frame: msg.Message, hasFrame: true}
 		s.entries = append(s.entries, e)
-		s.stream.Append(s.renderEntry(e))
+		s.stream.Append(s.renderEntry(e)...)
 		return s.feed.Next() // keep pumping
 	case busfeed.DroppedMsg:
 		e := streamEntry{dropped: msg.N}
 		s.entries = append(s.entries, e)
-		s.stream.Append(s.renderEntry(e))
+		s.stream.Append(s.renderEntry(e)...)
 		return s.feed.Next() // DroppedMsg is not terminal; keep pumping
 	case busfeed.ErrMsg:
 		// Terminal: the feed stops reading. Surface the error in the footer.
@@ -348,10 +377,15 @@ type publishedMsg struct {
 	err error
 }
 
-// renderFrame turns one received frame into a stream line: a fixed-width author
-// column hued by the author's role, then the chat.message text. A non-chat
-// record renders its kind and a compact form so nothing is silently dropped.
-func (s *Stream) renderFrame(m sextant.Message) string {
+// renderFrame turns one received frame into one or more stream lines: a
+// fixed-width author column hued by the author's role, then the chat.message text
+// soft-wrapped to the remaining content width. The first line carries the author
+// label + the first wrapped segment; continuation lines indent past the author
+// column (no repeated label) in the same author hue, so a long message reads as a
+// single paragraph aligned under its author rather than clipping at the right
+// edge. A non-chat record renders its kind compactly so nothing is silently
+// dropped.
+func (s *Stream) renderFrame(m sextant.Message) []string {
 	author, hue := s.authorLabel(m.Frame.Author)
 	authorCol := lipgloss.NewStyle().
 		Foreground(hue).
@@ -360,16 +394,96 @@ func (s *Stream) renderFrame(m sextant.Message) string {
 		Render(author)
 
 	cm, ok := parseChatMessage(m.Frame.Record)
+	var text string
+	var bodyStyle lipgloss.Style
 	if !ok {
 		// Unknown record: show its kind so the line is honest, not blank.
 		kind := m.Frame.Kind
 		if kind == "" {
 			kind = "record"
 		}
-		body := lipgloss.NewStyle().Foreground(s.theme.Dim).Render("(" + kind + ")")
-		return authorCol + " " + body
+		text = "(" + kind + ")"
+		bodyStyle = lipgloss.NewStyle().Foreground(s.theme.Dim)
+	} else {
+		text = cm.Text
+		bodyStyle = lipgloss.NewStyle().Foreground(hue)
 	}
-	return authorCol + " " + cm.Text
+
+	// The text body starts one space after the author column; continuation lines
+	// indent to the same offset. Wrap to whatever width remains (a sane floor when
+	// the pane is too narrow to leave room — the widget then truncates).
+	indent := authorWidth + 1
+	bodyW := s.w - indent
+	if bodyW < minBodyWidth {
+		bodyW = minBodyWidth
+	}
+	segments := wrapText(text, bodyW)
+	if len(segments) == 0 {
+		segments = []string{""}
+	}
+
+	lines := make([]string, 0, len(segments))
+	pad := strings.Repeat(" ", indent)
+	for i, seg := range segments {
+		body := bodyStyle.Render(seg)
+		if i == 0 {
+			lines = append(lines, authorCol+" "+body)
+		} else {
+			lines = append(lines, pad+body)
+		}
+	}
+	return lines
+}
+
+// minBodyWidth is the floor the message body wraps to when the pane is too narrow
+// to leave room past the author column. At or below it the widget's own truncate
+// is the safety net; wrapping never produces zero-width segments.
+const minBodyWidth = 8
+
+// wrapText soft-wraps s to width, breaking on word boundaries and hard-breaking a
+// single token longer than width (so a long unbroken string — a URL, a hash —
+// still folds rather than running off the edge). It splits on existing newlines
+// first so an embedded newline stays a line break. A width below 1 collapses to 1.
+func wrapText(s string, width int) []string {
+	if width < 1 {
+		width = 1
+	}
+	var out []string
+	for _, para := range strings.Split(s, "\n") {
+		wrapped := wordwrap.String(para, width)
+		// wordwrap leaves words longer than width intact, so hard-break any line
+		// that still exceeds width into width-cell chunks.
+		for _, line := range strings.Split(wrapped, "\n") {
+			out = append(out, hardBreak(line, width)...)
+		}
+	}
+	return out
+}
+
+// hardBreak splits a single line into chunks no wider than width, by display
+// cells (so multi-cell runes are not split mid-glyph). A line already within
+// width is returned unchanged.
+func hardBreak(line string, width int) []string {
+	if lipgloss.Width(line) <= width {
+		return []string{line}
+	}
+	var out []string
+	var cur strings.Builder
+	curW := 0
+	for _, r := range line {
+		rw := lipgloss.Width(string(r))
+		if curW+rw > width && curW > 0 {
+			out = append(out, cur.String())
+			cur.Reset()
+			curW = 0
+		}
+		cur.WriteRune(r)
+		curW += rw
+	}
+	if cur.Len() > 0 {
+		out = append(out, cur.String())
+	}
+	return out
 }
 
 // authorLabel resolves a frame author id to a display label and a role hue. With
