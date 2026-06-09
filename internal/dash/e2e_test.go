@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"flag"
 	"io"
 	"os"
 	"path/filepath"
@@ -15,30 +16,34 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/exp/teatest"
+	"github.com/love-lena/sextant/internal/clictx"
 	"github.com/love-lena/sextant/pkg/bus"
+	"github.com/love-lena/sextant/pkg/conninfo"
 	"github.com/love-lena/sextant/pkg/sextant"
 	"github.com/love-lena/sextant/pkg/sx"
 	"github.com/love-lena/sextant/pkg/tui/layout"
 	"go.uber.org/goleak"
 )
 
-// TestDashE2E is TASK-7.5's goal (AC#3, part A): the dash narrative driven
-// deterministically against a REAL embedded bus, end to end —
-// launch → see presence + a live stream → send a message that round-trips back
-// (no optimistic echo) → open an artifact. It builds the composed dash root model
-// (the same build() Run uses) over a real *sextant.Client and drives it through
-// teatest, asserting on the rendered frames.
+// TestDashE2E is the ADR-0024 narrative driven deterministically against a REAL
+// embedded bus, end to end: launch → the three browser lists populate (clients
+// · topics · artifacts) → Enter steps into the topics browser and opens a
+// topic's conversation IN THE SAME PANE → a composed message round-trips back
+// through the bus (no optimistic echo) → Esc pops back to the list → over to
+// the artifacts browser, Enter opens the document reader in place. It builds
+// the composed dash root model (the same build() Run uses) over a real
+// *sextant.Client and drives it through teatest, asserting on the rendered
+// frames.
 //
 // Every wait is deadline-bounded (fail-loud, never hang). It runs in the default
 // gate (no build tag): the embedded bus starts in-process the same way the SDK's
 // own tests start it, so it is CI-safe.
 func TestDashE2E(t *testing.T) {
 	const (
-		topic        = "plan"
 		artifactName = "the-plan"
 		docTitle     = "The dash plan"
+		docMarker    = "marker-XYZ"
 	)
-	subject := sx.TopicSubject(topic)
 
 	// --- a real embedded bus + seeded identities/messages/artifact ---------------
 	b, err := bus.Start(t.Context(), bus.Config{StoreDir: t.TempDir()})
@@ -47,26 +52,23 @@ func TestDashE2E(t *testing.T) {
 	}
 	t.Cleanup(b.Shutdown)
 
-	// The dash's own identity (the one client it holds), plus two more connected so
-	// presence shows them online, and an offline-but-registered third so the
-	// directory has a mix. A connected client shows online; a minted-only one shows
-	// offline (durable directory, ADR-0020).
+	// The dash's own identity (the one client it holds), plus a connected agent so
+	// the clients browser shows it online, and an offline-but-registered third so
+	// the directory has a mix (durable directory, ADR-0020).
 	dashClient := dial(t, b, "lena", "human")
-	dial(t, b, "coordinator-1", "coordinator") // online in presence
-	mintOnly(t, b, "agent-beta", "agent")      // registered, offline
+	dial(t, b, "agent-alpha", "agent")    // online in the clients browser
+	mintOnly(t, b, "agent-beta", "agent") // registered, offline
 
-	// Seed the stream: a few chat.messages on the topic, published by a separate
-	// connection, so the dash's DeliverAll backlog shows them on launch.
-	// Lines are kept short of the pane's wrap width so a substring assertion never
-	// straddles a soft-wrap boundary.
+	// Seed two topics so the topics browser discovers them client-side from its
+	// msg.topic.> replay. Names and lines are short of the pane's wrap width so a
+	// substring assertion never straddles a soft-wrap boundary; "ops" sorts before
+	// "plan", so the cursor rests on it.
 	pub := dial(t, b, "seeder", "agent")
-	seedLines := []string{"dash kickoff", "panes mount"}
-	for _, line := range seedLines {
-		publishChat(t, pub, subject, line)
-	}
+	publishChat(t, pub, sx.TopicSubject("ops"), "ops kickoff")
+	publishChat(t, pub, sx.TopicSubject("plan"), "plan kickoff")
 
-	// Seed the artifact: a document the artifact + detail panes read.
-	docBody := "## The M4 panes\n\n- presence\n- message stream\n- artifact reader\n"
+	// Seed the artifact the artifacts browser lists and its reader opens.
+	docBody := "## The three browsers\n\n- clients\n- topics\n- artifacts\n\n" + docMarker + "\n"
 	rec := mustMarshal(t, map[string]string{"$type": "document", "title": docTitle, "body": docBody})
 	if _, err := dashClient.CreateArtifact(t.Context(), artifactName, rec); err != nil {
 		t.Fatalf("CreateArtifact: %v", err)
@@ -76,9 +78,7 @@ func TestDashE2E(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	r, err := build(ctx, dashClient, Options{
-		Theme:    ThemeDark, // deterministic palette (no terminal-background probe)
-		Topic:    topic,
-		Artifact: artifactName,
+		Theme: ThemeDark, // deterministic palette (no terminal-background probe)
 		// No ConfigPath: a fresh DefaultConfig (cockpit preset), no persistence.
 	})
 	if err != nil {
@@ -88,24 +88,26 @@ func TestDashE2E(t *testing.T) {
 	tm := teatest.NewTestModel(t, r, teatest.WithInitialTermSize(120, 40))
 	scr := capture(t, tm)
 
-	// --- launch → presence: a seeded client's display name appears ---------------
-	waitForText(t, scr, "coordinator-1")
+	// --- launch → all three lists populate ----------------------------------------
+	waitForText(t, scr, "agent-alpha") // clients: a seeded identity
+	waitForText(t, scr, "ops")         // topics: discovered from the replay
+	waitForText(t, scr, "the-plan")    // artifacts: listed via artifact.list
 
-	// --- live stream: the seeded messages show, AND one published AFTER launch
-	//     arrives live (round-trip on the subscription, not a re-fetch) -----------
-	waitForText(t, scr, "dash kickoff")
-	publishChat(t, pub, subject, "live-now")
-	waitForText(t, scr, "live-now")
+	// --- topics: Enter opens the selected topic's conversation IN THE SAME PANE --
+	tm.Send(key(tea.KeyRight))         // layout selection: clients → topics
+	tm.Send(key(tea.KeyEnter))         // step into the topics browser (list active)
+	tm.Send(key(tea.KeyEnter))         // open the cursor row ("ops") → its conversation
+	waitForText(t, scr, "Topic · ops") // the pane title tracks the open detail
+	waitForText(t, scr, "ops kickoff") // the conversation replays the seeded line
 
-	// --- send → round-trip, no optimistic echo: step into the stream, type a line,
-	//     Enter; it appears in the stream only because the bus echoed it back on the
-	//     subscription (the dash holds the publishing identity, so the echo IS the
-	//     merge). A separate verifier subscription proves the publish reached the bus,
-	//     so the in-view appearance is the genuine round-trip, not a compose-line echo.
+	// --- compose → round-trip, no optimistic echo: type a line, Enter; it appears
+	//     only because the bus echoed it back on the subscription. A separate
+	//     verifier subscription proves the publish reached the bus, so the in-view
+	//     appearance is the genuine round-trip, not a compose-line echo.
 	const sent = "echo-hello"
 	verifier := dial(t, b, "verifier", "agent")
 	gotOnBus := make(chan struct{}, 1)
-	vsub, err := verifier.Subscribe(t.Context(), subject, func(m sextant.Message) {
+	vsub, err := verifier.Subscribe(t.Context(), sx.TopicSubject("ops"), func(m sextant.Message) {
 		if strings.Contains(string(m.Frame.Record), sent) {
 			select {
 			case gotOnBus <- struct{}{}:
@@ -118,8 +120,6 @@ func TestDashE2E(t *testing.T) {
 	}
 	t.Cleanup(func() { vsub.Stop() })
 
-	tm.Send(key(tea.KeyRight)) // layout selection: presence → stream (spatially right)
-	tm.Send(key(tea.KeyEnter)) // step into the stream (compose active)
 	tm.Type(sent)
 	tm.Send(key(tea.KeyEnter)) // publish → round-trips back through the feed
 
@@ -128,18 +128,131 @@ func TestDashE2E(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("sent message never reached the bus (no round-trip)")
 	}
-	waitForText(t, scr, sent) // and it shows in the stream via the echo
+	waitForText(t, scr, sent) // and it shows in the conversation via the echo
 
-	// Step out of the stream so the next key lands at the layout level.
-	tm.Send(key(tea.KeyEsc))
+	// --- Esc pops the conversation back to the list (one level), then a second Esc
+	//     steps out of the pane; the artifacts browser then opens its reader in
+	//     place — proof navigation works after the pop. The step-out is a DoneMsg
+	//     round-trip (a tea.Cmd), so each motion waits on the status bar's novel
+	//     state token before the next key — deterministic, no sleeps.
+	tm.Send(key(tea.KeyEsc)) // pop: conversation → topics list (consumed in-pane)
+	tm.Send(key(tea.KeyEsc)) // step out: topics list → layout level (via DoneMsg)
+	waitForText(t, scr, "topics · selected")
+	tm.Send(key(tea.KeyRight)) // layout selection: topics → artifacts
+	waitForText(t, scr, "artifacts · selected")
+	tm.Send(key(tea.KeyEnter)) // step into the artifacts browser (list active)
+	waitForText(t, scr, "artifacts · active")
+	tm.Send(key(tea.KeyEnter))                 // open the cursor row ("the-plan") → the reader
+	waitForText(t, scr, "Artifact · the-plan") // the pane title tracks the reader
+	waitForText(t, scr, docMarker)             // the document body rendered
 
-	// --- quit cleanly (exercises the layout teardown path) -----------------------
-	tm.Send(runeKey('q')) // quit at the layout level
+	// --- quit cleanly (exercises the layout teardown path: ForceQuit stops every
+	//     surface, including the just-popped reader) ------------------------------
+	tm.Send(key(tea.KeyEsc)) // pop: reader → artifacts list (consumed in-pane)
+	tm.Send(key(tea.KeyCtrlC))
 	tm.WaitFinished(t, teatest.WithFinalTimeout(5*time.Second))
 
 	// Wind down the program context so the drain watch goroutine exits before
 	// goleak runs (Run does this in production; the test owns progCtx via build).
 	cancel()
+}
+
+// TestDashZeroConfigFirstRun pins the locked first-run design (ADR-0024) against
+// a real embedded bus, hermetically ($SEXTANT_HOME pinned to a temp dir): with
+// NO identity resolved and a discoverable local bus (the bus.json discovery
+// file `sextant up` writes under the store), ensureIdentity self-enrolls — same
+// semantics as `sextant clients register --self` — printing exactly one notice
+// line, creating + activating a context, and leaving Options connectable. A
+// second resolve then finds the saved context silently (no second notice, no
+// second enrollment).
+func TestDashZeroConfigFirstRun(t *testing.T) {
+	store := t.TempDir()
+	b, err := bus.Start(t.Context(), bus.Config{StoreDir: store})
+	if err != nil {
+		t.Fatalf("bus.Start: %v", err)
+	}
+	t.Cleanup(b.Shutdown)
+	// Mirror `sextant up`: write the discovery file the dash probes.
+	if err := conninfo.Write(filepath.Join(store, conninfo.DefaultFile), conninfo.Info{URL: b.ClientURL()}); err != nil {
+		t.Fatalf("write discovery: %v", err)
+	}
+
+	t.Setenv("SEXTANT_HOME", t.TempDir()) // hermetic context store
+	t.Setenv("SEXTANT_CREDS", "")
+	t.Setenv("SEXTANT_CONTEXT", "")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	opts := Options{Store: store, Name: "zeroconf-lena"}
+	var notice bytes.Buffer
+	if err := ensureIdentity(ctx, &opts, &notice); err != nil {
+		t.Fatalf("ensureIdentity: %v", err)
+	}
+	if got, want := notice.String(), "first run — enrolled as zeroconf-lena\n"; got != want {
+		t.Errorf("notice = %q, want %q", got, want)
+	}
+	if opts.CredsPath == "" {
+		t.Fatal("ensureIdentity did not resolve a creds path")
+	}
+	if _, err := os.Stat(opts.CredsPath); err != nil {
+		t.Fatalf("enrolled creds not on disk: %v", err)
+	}
+	if got := clictx.Active(); got != "zeroconf-lena" {
+		t.Errorf("active context = %q, want zeroconf-lena", got)
+	}
+
+	// The minted identity actually connects (the enrollment is real, not just
+	// files on disk).
+	c, err := sextant.Connect(ctx, sextant.Options{
+		CredsPath: opts.CredsPath,
+		URL:       opts.URL,
+		Logf:      func(string, ...any) {},
+	})
+	if err != nil {
+		t.Fatalf("Connect with enrolled creds: %v", err)
+	}
+	_ = c.Close()
+
+	// Next run: the flag resolver finds the saved (active) context silently, so
+	// ensureIdentity is a no-op — no second notice, no second enrollment.
+	fs := flag.NewFlagSet("dash-test", flag.ContinueOnError)
+	f := AddFlags(fs)
+	if err := fs.Parse([]string{"--store", store}); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	opts2, err := f.Resolve()
+	if err != nil {
+		t.Fatalf("second Resolve: %v", err)
+	}
+	if opts2.CredsPath != opts.CredsPath {
+		t.Errorf("second run creds = %q, want the enrolled %q", opts2.CredsPath, opts.CredsPath)
+	}
+	var notice2 bytes.Buffer
+	if err := ensureIdentity(ctx, &opts2, &notice2); err != nil {
+		t.Fatalf("second ensureIdentity: %v", err)
+	}
+	if notice2.Len() != 0 {
+		t.Errorf("second run printed a notice: %q", notice2.String())
+	}
+}
+
+// TestDashZeroConfigNoBusFailsLoud: with no identity AND no discoverable bus,
+// the first run fails loud with guidance to run `sextant up` — it never hangs
+// and never silently proceeds.
+func TestDashZeroConfigNoBusFailsLoud(t *testing.T) {
+	t.Setenv("SEXTANT_HOME", t.TempDir())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	opts := Options{Store: t.TempDir()} // empty store: no discovery file
+	err := ensureIdentity(ctx, &opts, io.Discard)
+	if err == nil {
+		t.Fatal("ensureIdentity with no bus should fail loud")
+	}
+	if !strings.Contains(err.Error(), "sextant up") {
+		t.Errorf("error %q should guide to `sextant up`", err)
+	}
 }
 
 // TestWatchDrainExitsOnCtxCancel is the focused, teatest-free regression guard
@@ -353,6 +466,3 @@ func waitForText(t *testing.T, s *screen, substr string) {
 
 // key builds a tea.KeyMsg for a named key, the way bubbletea delivers it.
 func key(t tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: t} }
-
-// runeKey builds a tea.KeyMsg for a single rune (e.g. 'q').
-func runeKey(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }

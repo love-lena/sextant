@@ -1,20 +1,25 @@
-// Command sextant-dash is the dash: a human-UI client that assembles the M4
-// pane-surfaces — presence, the message stream, and an artifact reader — through
-// the layout engine into a cockpit, holding one bus identity (ADR-0023). It is
-// its own client binary, just another client over the SDK with no special
-// privilege (ADR-0014, ADR-0008); `sextant dash` is a thin alias that delegates
-// to the same shared dash.Run.
+// Command sextant-dash is the dash: a human-UI client that assembles the three
+// master-detail browsers — clients, topics, artifacts — through the layout
+// engine into a cockpit, holding one bus identity (ADR-0023/0024). It is its
+// own client binary, just another client over the SDK with no special privilege
+// (ADR-0014, ADR-0008); `sextant dash` is a thin alias that delegates to the
+// same shared dash.Run.
 //
-// Run it under an identity the bus minted:
+// Launching is `sextant up` then `sextant dash` (ADR-0024): with no identity
+// resolved and a local bus discoverable, the dash enrolls itself (named from
+// $USER; --name overrides) and announces it in one line. An existing context is
+// used as-is:
 //
+//	sextant-dash                             # first run self-enrolls; later runs reuse the context
 //	sextant-dash --creds path/to.creds --store path/to/bus-store
 //	sextant-dash --context my-context        # resolve creds + URL from a saved context
 //	sextant dash                             # the alias, same flags
 //
 // Flags mirror the operator CLI's connection flags (--creds/--store/--url/
-// --context, $SEXTANT_*) plus the dash's own (--theme, --config, --topic,
-// --artifact). The cockpit is the default assembly; panes toggle and swap and
-// detail opens on demand from the layout (the keymap's o/d/p, arrows, enter/esc).
+// --context, $SEXTANT_*) plus the dash's own (--theme, --config, --name). Each
+// browser is a list you step into: Enter opens the selected row's detail in the
+// same pane (a DM, a topic conversation, a document reader); Esc pops one level
+// back out. The layout keys (o/p, arrows, enter/esc, q) arrange the panes.
 package main
 
 import (

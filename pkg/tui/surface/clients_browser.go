@@ -14,9 +14,24 @@ import (
 
 // clientsRefreshInterval is how often the clients browser re-fetches the
 // directory. Presence is connection-derived with no watch API (ADR-0020), so the
-// browser polls: an initial fetch in Init, then a tick. It matches the standalone
-// Presence surface's interval — the data source is the same (clients.list).
-const clientsRefreshInterval = presenceRefreshInterval
+// browser polls: an initial fetch in Init, then a tick.
+const clientsRefreshInterval = 2 * time.Second
+
+// ClientsLoadedMsg carries a clients-directory snapshot to the clients browser.
+// It is the result of the browser's own ListClients fetch and the seam a test
+// (or a seeded gallery) feeds synthetic clients through — the browser renders
+// entirely from the most recent snapshot, never from a live call inside View.
+type ClientsLoadedMsg struct {
+	// Clients is the directory snapshot, as returned by client.ListClients.
+	Clients []sextant.ClientInfo
+}
+
+// clientsErrMsg reports that a directory fetch failed. The browser keeps the
+// last good snapshot (the list does not blank) and a successful refresh
+// recovers.
+type clientsErrMsg struct {
+	err error
+}
 
 // ClientsBrowser is the clients browser (ADR-0024): a list of every issued
 // identity that opens a direct conversation (a DM) with the selected client in
@@ -60,17 +75,40 @@ func NewClientsBrowser(ctx context.Context, client *sextant.Client, th theme.The
 		ci := c.last[cursor]
 		// Enter opens a direct conversation on the client's direct subject. A DM is
 		// the same conversation surface as a topic, over a different subject; the
-		// title names the mode, matching "Topic · x" / "Artifact · x".
-		s := NewStream(c.ctx, c.client, sx.ClientSubject(ci.ID), c.th, c.keys, WithCompose())
+		// title names the mode, matching "Topic · x" / "Artifact · x". The browser
+		// already holds the directory, so it resolves the conversation's authors
+		// from its own latest snapshot — names in role hues, not raw ids.
+		s := NewStream(c.ctx, c.client, sx.ClientSubject(ci.ID), c.th, c.keys,
+			WithCompose(), WithAuthors(c.authors()))
 		return s, "DM · " + ci.DisplayName
 	})
 	return c
+}
+
+// authors maps the latest directory snapshot to the id → Author resolution an
+// opened conversation renders with (display name + role hue).
+func (c *ClientsBrowser) authors() map[string]Author {
+	out := make(map[string]Author, len(c.last))
+	for _, ci := range c.last {
+		out[ci.ID] = Author{Name: ci.DisplayName, Role: ci.Kind}
+	}
+	return out
 }
 
 // Init fetches the directory once and arms the refresh tick. The first
 // ClientsLoadedMsg populates the list; the tick re-fetches on the interval.
 func (c *ClientsBrowser) Init() tea.Cmd {
 	return tea.Batch(c.fetch(), c.tick())
+}
+
+// SetTheme re-themes the browser: the list rows bake in role/status hues at
+// snapshot time, so a runtime theme switch re-applies the last snapshot to
+// re-resolve them (the embedded Browser re-themes itself and any open detail).
+func (c *ClientsBrowser) SetTheme(th theme.Theme) {
+	c.Browser.SetTheme(th)
+	err := c.err // re-applying the snapshot is not a successful fetch
+	c.applySnapshot(c.last)
+	c.err = err
 }
 
 // Update folds in the directory snapshots, the refresh tick, and the fetch error,
@@ -115,9 +153,8 @@ func (c *ClientsBrowser) Stop() {
 
 // applySnapshot stores a directory snapshot (sorted into row order, so openRow
 // resolves the selected client by cursor index) and rebuilds the list rows from
-// it. Rows are sorted by display name then id, the same order the standalone
-// Presence surface uses, so the two read identically. A successful snapshot
-// clears any fetch-error footer (the bus is reachable again).
+// it. Rows are sorted by display name then id. A successful snapshot clears any
+// fetch-error footer (the bus is reachable again).
 func (c *ClientsBrowser) applySnapshot(clients []sextant.ClientInfo) {
 	sorted := make([]sextant.ClientInfo, len(clients))
 	copy(sorted, clients)
@@ -165,17 +202,13 @@ func (c *ClientsBrowser) tick() tea.Cmd {
 	return tea.Tick(clientsRefreshInterval, func(time.Time) tea.Msg { return clientsTickMsg{} })
 }
 
-// clientsTickMsg fires on the refresh interval to trigger the next fetch. It is
-// distinct from the standalone Presence surface's presenceTickMsg so the two
-// refresh loops never cross when both are mounted (R3 retires Presence).
+// clientsTickMsg fires on the refresh interval to trigger the next fetch.
 type clientsTickMsg struct{}
 
 // clientRow maps one ClientInfo to a list row: the display name in its role hue,
 // led by a status glyph whose shape and hue carry liveness. Offline is the hollow
-// ○ in the dim line colour; online is the filled ● in the connected hue. It is the
-// shared row-builder both the standalone Presence surface and the clients browser
-// render through, so the two read identically (ADR-0024 folds presence into the
-// browser).
+// ○ in the dim line colour; online is the filled ● in the connected hue (ADR-0024
+// folds the old presence directory into this browser).
 func clientRow(th theme.Theme, ci sextant.ClientInfo) widget.ListItem {
 	glyph := theme.StatusGlyph("") // hollow ○ for offline
 	glyphHue := th.Dim

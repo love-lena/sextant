@@ -12,8 +12,8 @@ import (
 // Flags are the dash's command-line flags: the bus-connection flags (mirroring
 // the operator CLI's connFlags shape — --creds/--store/--url/--context with the
 // $SEXTANT_* defaults, ADR-0021) plus the dash-specific flags (--theme,
-// --config, --topic, --artifact). Both faces of the dash — cmd/sextant-dash and
-// the `sextant dash` alias — register and resolve these the same way so they
+// --config, --name). Both faces of the dash — cmd/sextant-dash and the
+// `sextant dash` alias — register and resolve these the same way so they
 // behave identically.
 type Flags struct {
 	creds   *string
@@ -21,10 +21,9 @@ type Flags struct {
 	url     *string
 	context *string
 
-	theme    *string
-	config   *string
-	topic    *string
-	artifact *string
+	theme  *string
+	config *string
+	name   *string
 }
 
 // AddFlags registers the dash flags on fs, defaulting from the environment the
@@ -36,10 +35,9 @@ func AddFlags(fs *flag.FlagSet) *Flags {
 		url:     fs.String("url", "", "bus URL (default: discovery file under --store)"),
 		context: fs.String("context", os.Getenv("SEXTANT_CONTEXT"), "saved context to connect as (default: the active one; see `sextant context`)"),
 
-		theme:    fs.String("theme", "auto", "cockpit theme: light, dark, or auto"),
-		config:   fs.String("config", defaultConfigPath(), "layout config file (preset, hidden panes, theme); persisted on quit"),
-		topic:    fs.String("topic", DefaultTopic, "the message topic the cockpit's stream observes and participates in"),
-		artifact: fs.String("artifact", DefaultArtifact, "the document the artifact panes open on"),
+		theme:  fs.String("theme", "auto", "cockpit theme: light, dark, or auto"),
+		config: fs.String("config", defaultConfigPath(), "layout config file (preset, hidden panes, theme); persisted on quit"),
+		name:   fs.String("name", "", "display name a first-run self-enrollment registers under (default: $USER)"),
 	}
 }
 
@@ -48,7 +46,10 @@ func AddFlags(fs *flag.FlagSet) *Flags {
 // $SEXTANT_CREDS wins (URL then from --url or --store discovery); otherwise a
 // context — named by --context / $SEXTANT_CONTEXT, else the active one —
 // supplies creds + URL. An explicit --url still overrides a context's URL.
-// It fails loud with ErrNoIdentity when nothing names who to connect as.
+// With NOTHING naming an identity it does not fail: it returns Options with an
+// empty CredsPath, and Run handles the zero-config first run (self-enroll
+// against a discoverable local bus, or fail loud with guidance — ADR-0024). A
+// context named explicitly but unloadable is still a loud error.
 func (f *Flags) Resolve() (Options, error) {
 	th := ThemeChoice(*f.theme)
 	if !th.Valid() {
@@ -61,26 +62,24 @@ func (f *Flags) Resolve() (Options, error) {
 		if name == "" {
 			name = clictx.Active()
 		}
-		if name == "" {
-			return Options{}, ErrNoIdentity
-		}
-		c, err := clictx.Load(name)
-		if err != nil {
-			return Options{}, fmt.Errorf("dash: context %q: %w", name, err)
-		}
-		creds = c.Creds
-		if url == "" {
-			url = c.URL
+		if name != "" {
+			c, err := clictx.Load(name)
+			if err != nil {
+				return Options{}, fmt.Errorf("dash: context %q: %w", name, err)
+			}
+			creds = c.Creds
+			if url == "" {
+				url = c.URL
+			}
 		}
 	}
 	return Options{
 		CredsPath:  creds,
 		URL:        url,
 		Store:      *f.store,
+		Name:       *f.name,
 		Theme:      th,
 		ConfigPath: *f.config,
-		Topic:      *f.topic,
-		Artifact:   *f.artifact,
 	}, nil
 }
 

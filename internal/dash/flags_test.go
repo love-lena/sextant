@@ -1,7 +1,6 @@
 package dash
 
 import (
-	"errors"
 	"flag"
 	"strings"
 	"testing"
@@ -67,17 +66,36 @@ func TestResolveAcceptsKnownThemes(t *testing.T) {
 	}
 }
 
-// TestResolveNoIdentity is review item 4: with no creds, no context env, and no
-// active context, Resolve returns ErrNoIdentity, and the message carries the same
-// guidance tail as the operator CLI's errNoIdentity (the "(create one with
-// `sextant context add`)" hint the doc comment claims).
-func TestResolveNoIdentity(t *testing.T) {
+// TestResolveNoIdentityDefersToFirstRun: with no creds, no context env, and no
+// active context, Resolve does NOT fail — it returns Options with an empty
+// CredsPath so Run can attempt the zero-config first run (self-enroll against a
+// discoverable local bus, ADR-0024). A context named EXPLICITLY but missing is
+// still a loud error (the operator asked for something that isn't there).
+func TestResolveNoIdentityDefersToFirstRun(t *testing.T) {
 	hermeticEnv(t)
-	_, err := parseFlags(t) // no --creds, no context
-	if !errors.Is(err, ErrNoIdentity) {
-		t.Fatalf("Resolve with no identity = %v, want ErrNoIdentity", err)
+	opts, err := parseFlags(t) // no --creds, no context
+	if err != nil {
+		t.Fatalf("Resolve with no identity should defer to the first-run path, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "sextant context add") {
-		t.Fatalf("ErrNoIdentity %q dropped the `sextant context add` guidance tail", err)
+	if opts.CredsPath != "" {
+		t.Fatalf("CredsPath = %q, want empty (no identity resolved)", opts.CredsPath)
+	}
+
+	// An explicit --context that doesn't exist fails loud.
+	if _, err := parseFlags(t, "--context", "nope"); err == nil {
+		t.Fatal("an explicitly named missing context should be a loud error")
+	}
+}
+
+// TestResolveNameFlag: --name threads through to Options.Name (the first-run
+// enrollment display-name override).
+func TestResolveNameFlag(t *testing.T) {
+	hermeticEnv(t)
+	opts, err := parseFlags(t, "--name", "captain")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if opts.Name != "captain" {
+		t.Fatalf("Options.Name = %q, want captain", opts.Name)
 	}
 }

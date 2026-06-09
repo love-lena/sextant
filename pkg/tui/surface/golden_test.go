@@ -57,35 +57,6 @@ func sampleClients() []sextant.ClientInfo {
 	}
 }
 
-// --- presence ---
-
-func TestPresenceGolden(t *testing.T) {
-	th := fixedDark()
-	for _, tc := range []struct {
-		name    string
-		focus   widget.Focus
-		clients []sextant.ClientInfo
-		feed    bool // whether a snapshot was delivered at all
-	}{
-		// loading: no snapshot yet → "loading…" placeholder (not "empty").
-		{"loading", widget.FocusSelected, nil, false},
-		// empty: a snapshot arrived with zero clients → genuinely empty.
-		{"empty", widget.FocusSelected, nil, true},
-		{"idle", widget.FocusIdle, sampleClients(), true},
-		{"selected", widget.FocusSelected, sampleClients(), true},
-		{"active", widget.FocusActive, sampleClients(), true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			p := surface.NewPresence(context.Background(), nil, th, theme.DefaultKeymap())
-			if tc.feed {
-				p.Update(surface.ClientsLoadedMsg{Clients: tc.clients})
-			}
-			out := box(th, p, tc.focus, 28, 9)
-			teatest.RequireEqualOutput(t, []byte(out))
-		})
-	}
-}
-
 // --- message stream ---
 
 // chatEvent builds a synthetic received chat.message from author, as the bus
@@ -251,14 +222,6 @@ func TestArtifactReviewGolden(t *testing.T) {
 // swallowed.
 func TestErrorFootersGolden(t *testing.T) {
 	th := fixedDark()
-
-	t.Run("presence_fetch_error", func(t *testing.T) {
-		p := surface.NewPresence(context.Background(), nil, th, theme.DefaultKeymap())
-		p.Update(surface.ClientsLoadedMsg{Clients: sampleClients()}) // last good snapshot stays
-		p.Update(surface.NewClientsErrMsg(errors.New("bus unreachable")))
-		out := box(th, p, widget.FocusSelected, 30, 9)
-		teatest.RequireEqualOutput(t, []byte(out))
-	})
 
 	t.Run("stream_subscribe_error", func(t *testing.T) {
 		s := surface.NewStream(context.Background(), nil, "msg.topic.plan", th, theme.DefaultKeymap(), surface.WithAuthors(sampleAuthors()))

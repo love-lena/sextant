@@ -59,13 +59,29 @@ type TopicsBrowser struct {
 	// err holds a discovery-feed error for the footer (fail-loud), kept honest
 	// rather than swallowed.
 	err error
+	// authors resolves frame author ids in every conversation the browser opens
+	// (WithConversationAuthors); nil renders the documented short-id fallback.
+	authors map[string]Author
+}
+
+// TopicsOption configures a TopicsBrowser.
+type TopicsOption func(*TopicsBrowser)
+
+// WithConversationAuthors supplies the id → Author map every conversation the
+// browser opens renders authors with (display name in role hue instead of a raw
+// id). The topics browser has no directory of its own — topics are discovered
+// from subjects, which carry no author identities — so the host resolves the map
+// (from clients.list) and threads it in here; the same seam ADR-0023 leaves the
+// standalone Stream (WithAuthors).
+func WithConversationAuthors(authors map[string]Author) TopicsOption {
+	return func(t *TopicsBrowser) { t.authors = authors }
 }
 
 // NewTopicsBrowser builds a topics browser over client. Pass a context that lives
 // as long as the browser (it scopes the discovery subscription and each opened
 // conversation's feed) and the resolved theme/keymap. The browser does no I/O
 // until Init.
-func NewTopicsBrowser(ctx context.Context, client *sextant.Client, th theme.Theme, keys theme.Keymap) *TopicsBrowser {
+func NewTopicsBrowser(ctx context.Context, client *sextant.Client, th theme.Theme, keys theme.Keymap, opts ...TopicsOption) *TopicsBrowser {
 	t := &TopicsBrowser{
 		client: client,
 		ctx:    ctx,
@@ -79,10 +95,22 @@ func NewTopicsBrowser(ctx context.Context, client *sextant.Client, th theme.Them
 		name := t.names[cursor]
 		// Enter opens the topic's conversation — the same Stream surface a DM opens,
 		// over the topic subject rather than a client subject.
-		s := NewStream(t.ctx, t.client, sx.TopicSubject(name), t.th, t.keys, WithCompose())
+		s := NewStream(t.ctx, t.client, sx.TopicSubject(name), t.th, t.keys,
+			WithCompose(), WithAuthors(t.authors))
 		return s, "Topic · " + name
 	})
+	for _, o := range opts {
+		o(t)
+	}
 	return t
+}
+
+// SetTheme re-themes the browser: the list rows bake in the kind hue at rebuild
+// time, so a runtime theme switch rebuilds them from the discovered set (the
+// embedded Browser re-themes itself and any open detail).
+func (t *TopicsBrowser) SetTheme(th theme.Theme) {
+	t.Browser.SetTheme(th)
+	t.rebuild()
 }
 
 // Init opens the discovery feed. The pump runs from Update: every EventMsg and

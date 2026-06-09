@@ -107,12 +107,13 @@ func (m Model) handleLayoutKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 // handlePaneKey routes a key to the active surface. ForceQuit (Ctrl-C) still
 // quits from inside a pane — the root may quit even though a surface must not.
 //
-// The step-out binding (Esc) is delivered to the surface AND steps out at the
-// layout level. Surfaces consume Esc to tear down their own active state (clear
-// a compose buffer) and emit a DoneMsg, the surface-driven step-out path; the
-// layout's own step-out is the guaranteed escape for a surface that does not
-// consume Esc (e.g. a plain list pane). Both paths land at the layout level, so
-// running both is idempotent — the surface's later DoneMsg re-steps-out a no-op.
+// The step-out binding (Esc) is DELIVERED to the surface, never acted on here:
+// a surface's active state can be nested (ADR-0024 — a browser's detail opens
+// inside its own pane, and each Esc pops exactly one level), so only the
+// surface knows whether an Esc pops an inner level or leaves the pane. Leaving
+// is the surface's DoneMsg (handleDone steps the layout out); a surface at its
+// top level emits one on Back — that is the Surface contract's step-out — and
+// ForceQuit stays the guaranteed hard escape.
 func (m Model) handlePaneKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	if key.Matches(msg, m.keys.ForceQuit) {
 		m.Stop()
@@ -121,11 +122,7 @@ func (m Model) handlePaneKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	if m.selected == "" {
 		return m, nil
 	}
-	cmd := m.surfaces[m.selected].Update(msg)
-	if key.Matches(msg, m.keys.Back) {
-		m.stepOut()
-	}
-	return m, cmd
+	return m, m.surfaces[m.selected].Update(msg)
 }
 
 // direction is a spatial navigation direction at the layout level. Up/Down and
@@ -235,12 +232,6 @@ func spanGap(a0, a1, b0, b1 int) int {
 		return a0 - b1
 	}
 	return 0
-}
-
-// stepOut returns focus to the layout level (active pane → selected).
-func (m *Model) stepOut() {
-	m.level = levelLayout
-	m.applyFocus()
 }
 
 // toggleVisible turns a pane on or off and reflows so the grid fills the freed

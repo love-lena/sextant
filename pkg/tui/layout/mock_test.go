@@ -25,10 +25,6 @@ type mockSurface struct {
 	// SetTheme, so a test can assert a runtime theme switch reaches the surface.
 	themed theme.Variant
 
-	// onEsc, when set, makes the surface emit a DoneMsg on Esc while active (the
-	// "a surface steps itself out" path the layout must honour). Default off: the
-	// layout's own Back binding steps out.
-	onEsc bool
 	// done records the surface's chosen done id (defaults to its own id).
 	doneID string
 }
@@ -46,8 +42,10 @@ func (s *mockSurface) SetTheme(t theme.Theme)  { s.themed = t.Variant }
 func (s *mockSurface) Init() tea.Cmd           { return nil }
 func (s *mockSurface) Stop()                   { s.stopped++ }
 
+// Update emits DoneMsg on Esc while active — the Surface contract's step-out
+// (the layout never steps out on Back itself; it honours the surface's intent).
 func (s *mockSurface) Update(msg tea.Msg) tea.Cmd {
-	if km, ok := msg.(tea.KeyMsg); ok && s.onEsc && km.String() == "esc" {
+	if km, ok := msg.(tea.KeyMsg); ok && s.focus == widget.FocusActive && km.String() == "esc" {
 		id := s.doneID
 		return func() tea.Msg { return surface.DoneMsg{ID: id} }
 	}

@@ -74,9 +74,10 @@ operations (creds from --creds, $SEXTANT_CREDS, or the active context):
   sextant subscribe <subject> [--all] [--json]
   sextant artifact  create|update|get|list|delete|watch [<name>] [<record-json>] [--rev N] [--json]
 
-the dash (a cockpit of pane-surfaces over the same SDK — ADR-0023):
-  sextant dash      [--theme light|dark|auto] [--config F] [--topic NAME]
-                    (alias for the sextant-dash binary; same connection flags)
+the dash (a cockpit of three master-detail browsers over the same SDK — ADR-0024):
+  sextant dash      [--theme light|dark|auto] [--config F] [--name N]
+                    (alias for the sextant-dash binary; same connection flags;
+                    first run with no identity self-enrolls against a local bus)
 
 environment (avoids repeating the flags):
   SEXTANT_STORE   default for --store (the bus store dir; discovery + creds)

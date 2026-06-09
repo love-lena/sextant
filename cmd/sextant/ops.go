@@ -8,13 +8,13 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"os/user"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/love-lena/sextant/internal/clictx"
+	"github.com/love-lena/sextant/internal/selfenroll"
 	"github.com/love-lena/sextant/pkg/bus"
 	"github.com/love-lena/sextant/pkg/conninfo"
 	"github.com/love-lena/sextant/pkg/sextant"
@@ -285,28 +285,40 @@ func clientsRegister(args []string) {
 		name = *nameFlag
 	}
 
-	var credsPath string
+	ctx := context.Background()
+
+	// Self-enrollment is "I am now this identity": the shared selfenroll package
+	// pre-flights (before the bus mints anything, so a bad request — a name that
+	// can't be a context handle, --out, or an un-forced clobber — never strands a
+	// fresh identity), mints over the enrollment credential, saves the identity as
+	// a local context (creds in the context store, separate from the bus --store),
+	// and makes it active, so subsequent commands need no connection flags
+	// (ADR-0021). The dash's zero-config first run uses the same implementation.
 	if *self {
-		credsPath = bus.EnrollCredsPath(*store)
 		if name == "" {
-			name = selfName()
+			name = selfenroll.SelfName()
 		}
-		// Pre-flight before the bus mints anything, so a bad request (a name that
-		// can't be a context handle, --out, or an un-forced clobber) fails before
-		// an identity is created rather than stranding it after.
-		if err := checkSelfEnroll(name, *out, *force); err != nil {
+		if err := selfenroll.Check(name, *out, *force); err != nil {
 			fatal("%v", err)
 		}
-	} else {
-		credsPath = bus.OperatorCredsPath(*store)
-		if name == "" {
-			fatal("register needs a <name> (or use --self to enroll this process)")
+		if selfenroll.ResolveBusURL(*url, *store) == "" {
+			fmt.Fprintln(os.Stderr, "warning: no bus URL recorded (no --url and no discovery file under --store)")
 		}
+		res, err := selfenroll.Enroll(ctx, name, *kind, *url, *store, *force)
+		if err != nil {
+			fatal("%v", err)
+		}
+		fmt.Printf("enrolled as %s\n  creds:   %s\n  context: %s (now active)\n", res.ID, res.CredsPath, res.Name)
+		return
 	}
 
-	ctx := context.Background()
+	// Held-identity mode mints creds to hand to someone else, so it just writes
+	// the creds file (to --out or the store) and creates no context.
+	if name == "" {
+		fatal("register needs a <name> (or use --self to enroll this process)")
+	}
 	iss, err := sextant.ConnectIssuer(ctx, sextant.Options{
-		CredsPath:    credsPath,
+		CredsPath:    bus.OperatorCredsPath(*store),
 		URL:          *url,
 		ConnInfoPath: filepath.Join(*store, conninfo.DefaultFile),
 	})
@@ -317,24 +329,6 @@ func clientsRegister(args []string) {
 	res, err := iss.Register(ctx, name, *kind)
 	if err != nil {
 		fatal("%v", err)
-	}
-
-	// Self-enrollment is "I am now this identity": save it as a local context
-	// (creds in the context store, separate from the bus --store) and make it
-	// active, so subsequent commands need no connection flags (ADR-0021). The
-	// held-identity mode mints creds to hand to someone else, so it just writes the
-	// creds file (to --out or the store) and creates no context.
-	if *self {
-		busURL := resolveBusURL(*url, *store)
-		if busURL == "" {
-			fmt.Fprintln(os.Stderr, "warning: no bus URL recorded (no --url and no discovery file under --store)")
-		}
-		newCreds, err := saveSelfContext(name, *kind, busURL, res)
-		if err != nil {
-			fatal("%v", err)
-		}
-		fmt.Printf("enrolled as %s\n  creds:   %s\n  context: %s (now active)\n", res.ID, newCreds, name)
-		return
 	}
 
 	path := *out
@@ -376,25 +370,6 @@ func clientsRetire(args []string) {
 		fatal("%v", err)
 	}
 	fmt.Printf("retired %s\n", id)
-}
-
-// selfName resolves the display name for `clients register --self`. It prefers an
-// explicit env override, then the login name ($USER/$LOGNAME — the natural "who
-// enrolled" on a real shell, and what a test harness can set per process), then
-// the OS user, then the hostname.
-func selfName() string {
-	for _, env := range []string{"SEXTANT_SELF_NAME", "USER", "LOGNAME"} {
-		if v := os.Getenv(env); v != "" {
-			return v
-		}
-	}
-	if u, err := user.Current(); err == nil && u.Username != "" {
-		return u.Username
-	}
-	if h, err := os.Hostname(); err == nil && h != "" {
-		return h
-	}
-	return "self"
 }
 
 func cmdArtifact(args []string) {

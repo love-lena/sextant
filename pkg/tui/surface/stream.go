@@ -246,8 +246,12 @@ func (s *Stream) SetFocus(f widget.Focus) {
 }
 
 // Init opens the feed. The pump runs from Update: every EventMsg and DroppedMsg
-// re-issues Next.
+// re-issues Next. A nil client (a seeded gallery / golden) skips the subscribe —
+// those feed events directly, the same convention the artifact surface follows.
 func (s *Stream) Init() tea.Cmd {
+	if s.client == nil {
+		return nil
+	}
 	return s.feed.Subscribe(s.ctx)
 }
 

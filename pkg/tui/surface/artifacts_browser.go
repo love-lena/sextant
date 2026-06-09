@@ -55,6 +55,9 @@ type ArtifactsBrowser struct {
 	// names holds the artifact name for each list row, in the same sorted order as
 	// the rows, so openRow resolves the selected artifact by cursor index.
 	names []string
+	// last is the most recent snapshot, kept so SetTheme can rebuild the rows with
+	// re-resolved hues without waiting for the next poll.
+	last []sextant.ArtifactInfo
 	// err holds the most recent fetch failure for the footer (fail-loud); the next
 	// successful refresh clears it. The last good snapshot stays either way.
 	err error
@@ -84,6 +87,16 @@ func NewArtifactsBrowser(ctx context.Context, client *sextant.Client, th theme.T
 // ArtifactsLoadedMsg populates the list; the tick re-fetches on the interval.
 func (a *ArtifactsBrowser) Init() tea.Cmd {
 	return tea.Batch(a.fetch(), a.tick())
+}
+
+// SetTheme re-themes the browser: the list rows bake in the kind hue at snapshot
+// time, so a runtime theme switch re-applies the last snapshot to re-resolve
+// them (the embedded Browser re-themes itself and any open detail).
+func (a *ArtifactsBrowser) SetTheme(th theme.Theme) {
+	a.Browser.SetTheme(th)
+	err := a.err // re-applying the snapshot is not a successful fetch
+	a.applySnapshot(a.last)
+	a.err = err
 }
 
 // Update folds in the directory snapshots, the refresh tick, and the fetch error,
@@ -139,6 +152,7 @@ func (a *ArtifactsBrowser) applySnapshot(infos []sextant.ArtifactInfo) {
 		items[i] = artifactRow(a.th, info)
 		a.names[i] = info.Name
 	}
+	a.last = infos
 	a.err = nil
 	a.setRows(items)
 }

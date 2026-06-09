@@ -182,8 +182,10 @@ func TestSpatialNavSplitPreset(t *testing.T) {
 }
 
 // TestStepInOutWithKeys: Enter steps into the selected pane (it goes active and
-// receives input), Esc steps back out (selected). This is the locked two-level
-// model.
+// receives input); Esc is DELIVERED to the surface (never acted on by the
+// layout — an active surface can be nested, ADR-0024), whose DoneMsg steps back
+// out (selected). This is the locked two-level model with the surface-owned
+// step-out.
 func TestStepInOutWithKeys(t *testing.T) {
 	m, panes := newCockpit(t)
 	m, _ = m.Update(key("enter"))
@@ -196,9 +198,23 @@ func TestStepInOutWithKeys(t *testing.T) {
 	if panes["clients"].focus != widget.FocusActive {
 		t.Errorf("surface was not told it is active: %v", panes["clients"].focus)
 	}
-	m, _ = m.Update(key("esc"))
+	// Esc routes to the surface and produces its DoneMsg; the layout itself has
+	// not stepped out yet (the surface owns its levels).
+	m, cmd := m.Update(key("esc"))
+	if !m.SteppedIn() {
+		t.Fatal("the layout must not step out on Esc itself — that is the surface's DoneMsg")
+	}
+	if cmd == nil {
+		t.Fatal("active Esc should route to the surface and produce its DoneMsg cmd")
+	}
+	done, ok := cmd().(surface.DoneMsg)
+	if !ok || done.ID != "clients" {
+		t.Fatalf("expected DoneMsg{clients}, got %#v", cmd())
+	}
+	// Feeding the DoneMsg back (as bubbletea would) lands at the layout level.
+	m, _ = m.Update(done)
 	if m.SteppedIn() {
-		t.Error("Esc should step out")
+		t.Error("the surface's DoneMsg should step out")
 	}
 	if m.FocusOf("clients") != widget.FocusSelected {
 		t.Errorf("stepped-out pane focus = %v, want selected", m.FocusOf("clients"))
@@ -208,9 +224,7 @@ func TestStepInOutWithKeys(t *testing.T) {
 // TestStepInRoutesKeysToActiveSurface: while stepped in, a key reaches the active
 // surface's Update (and not the others).
 func TestStepInRoutesKeysToActiveSurface(t *testing.T) {
-	m, panes := newCockpit(t)
-	// Make the topics pane emit DoneMsg on Esc so we can observe a routed key.
-	panes["topics"].onEsc = true
+	m, _ := newCockpit(t)
 	m, _ = m.Update(key("right")) // select topics
 	m, _ = m.Update(key("enter"))
 	if !m.SteppedIn() {

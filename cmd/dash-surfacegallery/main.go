@@ -1,18 +1,26 @@
 // Command dash-surfacegallery is a preview binary for the dash's pane-surfaces.
-// It runs each surface — presence, the message stream (with compose), and the
-// artifact reader/review — standalone, against SEEDED mock data so the demo is
+// It runs each surface — the three ADR-0024 browsers (clients, topics,
+// artifacts) plus the two detail surfaces they open (the message stream and the
+// artifact reader/review) — standalone, against SEEDED mock data so the demo is
 // deterministic and needs no bus. It proves the Surface contract works in
 // isolation (a surface is its own tea.Program) AND that the same surface type
 // mounts as a pane unchanged: the host wraps the surface's inner View in the
 // shared widget.Box, exactly as the dash's layout will.
 //
-// Run: go run ./cmd/dash-surfacegallery [--surface presence|stream|artifact]
+// Run: go run ./cmd/dash-surfacegallery
 //
+//	[--surface clients|topics|artifacts|stream|artifact]
 //	[--theme light|dark|auto]
 //
-// Keys: tab cycles surfaces · enter steps into the focused surface · esc steps
-// out · ↑/↓ move within an active surface · (stream/artifact, when active) type
-// to compose · t toggles theme · q / ctrl+c quits.
+// Keys: tab cycles surfaces · enter steps into the focused surface (in a
+// browser, Enter then opens the selected row's detail IN PLACE and esc pops
+// back to the list) · ↑/↓ move within an active surface · (stream/artifact,
+// when active) type to compose · t toggles theme · q / ctrl+c quits.
+//
+// A browser's opened detail runs with a nil client, so its conversation/reader
+// starts empty (no live feed) — the master⇄detail motion is what this gallery
+// shows; the seeded standalone stream/artifact entries show the detail surfaces
+// with content.
 //
 // It is a dev affordance, not part of the dash.
 package main
@@ -24,6 +32,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -36,7 +45,7 @@ import (
 )
 
 func main() {
-	surfaceFlag := flag.String("surface", "", "show only one surface: presence, stream, or artifact (default: all, tab to cycle)")
+	surfaceFlag := flag.String("surface", "", "show only one surface: clients, topics, artifacts, stream, or artifact (default: all, tab to cycle)")
 	themeFlag := flag.String("theme", "auto", "theme: light, dark, or auto")
 	flag.Parse()
 
@@ -82,36 +91,38 @@ type model struct {
 	w, h   int
 }
 
+// galleryOrder is the --surface names in pane order.
+var galleryOrder = []string{"clients", "topics", "artifacts", "stream", "artifact"}
+
 func newModel(th theme.Theme, only string) model {
 	keys := theme.DefaultKeymap()
 	all := []pane{
-		{s: presenceSurface(th, keys), seed: seedPresence},
+		{s: clientsBrowser(th, keys), seed: seedClients},
+		{s: topicsBrowser(th, keys), seed: seedTopics},
+		{s: artifactsBrowser(th, keys), seed: seedArtifacts},
 		{s: streamSurface(th, keys), seed: seedStream},
 		{s: artifactSurface(th, keys), seed: seedArtifact},
 	}
 
 	m := model{th: th, keys: keys}
-	switch only {
-	case "presence":
-		m.panes, m.only = all[:1], true
-	case "stream":
-		m.panes, m.only = all[1:2], true
-	case "artifact":
-		m.panes, m.only = all[2:3], true
-	default:
-		m.panes = all
+	m.panes = all
+	for i, name := range galleryOrder {
+		if only == name {
+			m.panes, m.only = all[i:i+1], true
+			break
+		}
 	}
 	return m
 }
 
 // --- surface builders + seeds (mock data, nil client: the gallery never calls a
-// fetch/publish path, only feeds the surfaces their own load/event messages) ---
+// live fetch/publish path, only feeds the surfaces their own load/event messages) ---
 
-func presenceSurface(th theme.Theme, keys theme.Keymap) surface.Surface {
-	return surface.NewPresence(context.Background(), nil, th, keys)
+func clientsBrowser(th theme.Theme, keys theme.Keymap) surface.Surface {
+	return surface.NewClientsBrowser(context.Background(), nil, th, keys)
 }
 
-func seedPresence(s surface.Surface) {
+func seedClients(s surface.Surface) {
 	s.Update(surface.ClientsLoadedMsg{Clients: []sextant.ClientInfo{
 		{ID: "01HUMAN", DisplayName: "lena", Kind: theme.RoleHuman, Online: true},
 		{ID: "01COORD", DisplayName: "coordinator-1", Kind: theme.RoleCoordinator, Online: true},
@@ -119,6 +130,34 @@ func seedPresence(s surface.Surface) {
 		{ID: "01ALPHA", DisplayName: "agent-alpha", Kind: theme.RoleAgent, Online: true},
 		{ID: "01BETA", DisplayName: "agent-beta", Kind: theme.RoleAgent, Online: false},
 		{ID: "01BUS", DisplayName: "bus", Kind: theme.RoleSystem, Online: true},
+	}})
+}
+
+func topicsBrowser(th theme.Theme, keys theme.Keymap) surface.Surface {
+	return surface.NewTopicsBrowser(context.Background(), nil, th, keys)
+}
+
+// seedTopics teaches the topics browser its names the way the live discovery
+// feed would: one replayed frame per topic, the name carried by the subject.
+func seedTopics(s surface.Surface) {
+	for _, topic := range []string{"plan", "build", "review"} {
+		rec, _ := json.Marshal(map[string]string{"$type": "chat.message", "text": "hello " + topic})
+		s.Update(busfeed.EventMsg{Message: sextant.Message{
+			Frame:   wire.Frame{ID: "01" + topic, Author: "01HUMAN", Kind: wire.KindMessage, Epoch: wire.Epoch, Record: rec},
+			Subject: "msg.topic." + topic,
+		}})
+	}
+}
+
+func artifactsBrowser(th theme.Theme, keys theme.Keymap) surface.Surface {
+	return surface.NewArtifactsBrowser(context.Background(), nil, th, keys)
+}
+
+func seedArtifacts(s surface.Surface) {
+	s.Update(surface.ArtifactsLoadedMsg{Artifacts: []sextant.ArtifactInfo{
+		{Name: "dash-plan", Revision: 3, Updated: time.Unix(0, 0)},
+		{Name: "protocol-notes", Revision: 12, Updated: time.Unix(0, 0)},
+		{Name: "scratch", Revision: 0, Updated: time.Unix(0, 0)},
 	}})
 }
 
@@ -139,7 +178,7 @@ func seedStream(s surface.Surface) {
 		{"01ALPHA", "accepted — starting on theme + widgets"},
 		{"01ALPHA", "palette resolved, goldens green"},
 		{"01HUMAN", "nice — eyeball the gallery"},
-		{"01COORD", "presence + stream + artifact all mount"},
+		{"01COORD", "the three browsers all mount"},
 	}
 	for _, l := range lines {
 		rec, _ := json.Marshal(map[string]string{"$type": "chat.message", "text": l.text})
@@ -155,14 +194,14 @@ func artifactSurface(th theme.Theme, keys theme.Keymap) surface.Surface {
 }
 
 func seedArtifact(s surface.Surface) {
-	body := "The dash assembles **pane-surfaces** into a layout the operator " +
-		"controls, and ships a **cockpit** as the default assembly.\n\n" +
-		"## The M4 panes\n\n" +
-		"- **presence** — the clients directory\n" +
-		"- **message stream** — one read-stream plus an optional compose\n" +
-		"- **artifact** — a `document` reader, with a thin review affordance\n\n" +
-		"Detail-on-demand is toggled, never an always-on column."
-	rec, _ := json.Marshal(map[string]string{"$type": "document", "title": "Dash build plan", "body": body})
+	body := "The dash is a cockpit of three **browsers** — `clients`, `topics`, and " +
+		"`artifacts` — each a list of what exists that you step into.\n\n" +
+		"## The three browsers\n\n" +
+		"- **clients** — the directory; Enter opens a direct conversation\n" +
+		"- **topics** — every topic with messages; Enter opens its conversation\n" +
+		"- **artifacts** — the bucket's documents; Enter opens the live reader\n\n" +
+		"A detail opens inside the same pane; Esc pops back to the list."
+	rec, _ := json.Marshal(map[string]string{"$type": "document", "title": "The three browsers", "body": body})
 	s.Update(surface.ArtifactLoadedMsg{Artifact: sextant.Artifact{
 		Name: "dash-plan", Record: wire.Lexicon(rec), Revision: 3,
 	}})
@@ -189,10 +228,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A surface stepped out: return focus to the layout level.
 		m.active = false
 		m.applyFocus()
-		return m, nil
-	case surface.OpenMsg:
-		// The dash would route this; the gallery has no detail pane, so it is a
-		// no-op here (the intent is proven by the surface emitting it).
 		return m, nil
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -265,7 +300,7 @@ func (m model) statusBar() string {
 	left := lipgloss.NewStyle().Foreground(m.th.Fg).Render(
 		fmt.Sprintf(" %s · %s ", m.panes[m.sel].s.ID(), state),
 	)
-	hints := "enter step in · esc out · ↑/↓ move · t theme · q quit "
+	hints := "enter step in/open · esc pop/out · ↑/↓ move · t theme · q quit "
 	if !m.only {
 		hints = "tab cycle · " + hints
 	}
@@ -278,13 +313,14 @@ func (m model) statusBar() string {
 	return lipgloss.NewStyle().Background(m.th.Panel).Width(m.w).MaxWidth(m.w).Render(bar)
 }
 
-// titleHue tints the pane chrome by what the pane is, the same convention the
-// widget gallery uses.
+// titleHue tints the pane chrome by what the pane is — keyed off the STABLE id,
+// the same convention the dash's layout uses, so a browser's frame keeps its hue
+// while its title tracks an open detail.
 func (m model) titleHue(id string) lipgloss.Color {
 	switch id {
-	case "presence":
+	case "clients":
 		return m.th.RoleHue(theme.RoleHuman)
-	case "artifact":
+	case "artifacts", "artifact":
 		return m.th.KindHue(theme.KindArtifactUpdate)
 	default:
 		return m.th.KindHue(theme.KindChat)

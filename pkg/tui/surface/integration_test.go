@@ -190,36 +190,6 @@ func TestStreamNoOptimisticEcho(t *testing.T) {
 	driveUntil(t, s, pump, func() bool { return strings.Contains(stripANSI(s.View()), typed) })
 }
 
-// TestPresenceListLive pins that presence reflects ListClients: mint a few
-// clients, fetch through the surface's own fetch path, and confirm each display
-// name appears in the rendered list.
-func TestPresenceListLive(t *testing.T) {
-	b := startBus(t)
-	c := connect(t, b, "lena", "human")
-	connect(t, b, "agent-alpha", "agent")
-	connect(t, b, "coordinator-1", "coordinator")
-
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	p := surface.NewPresence(ctx, c, theme.Dark(), theme.DefaultKeymap())
-	p.SetSize(30, 8)
-	p.SetFocus(widget.FocusSelected)
-
-	// Init batches the first fetch and a refresh tick; walk until the snapshot
-	// populates the list. The tick is a long timer that will not fire in-test, so
-	// the first fetch is what we drive.
-	driveUntil(t, p, p.Init(), func() bool {
-		return strings.Contains(stripANSI(p.View()), "agent-alpha")
-	})
-
-	view := stripANSI(p.View())
-	for _, name := range []string{"lena", "agent-alpha", "coordinator-1"} {
-		if !strings.Contains(view, name) {
-			t.Errorf("presence view missing %q; got:\n%s", name, view)
-		}
-	}
-}
-
 // TestArtifactReaderLive pins that the artifact reader renders a created
 // document: create a document artifact, fetch it through the surface, and confirm
 // its title and body show in the rendered reader.

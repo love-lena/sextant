@@ -35,8 +35,8 @@ func TestSurfaceStepOutIsOverridable(t *testing.T) {
 		{"stream", func() surface.Surface {
 			return surface.NewStream(context.Background(), nil, "msg.topic.plan", theme.Dark(), keys, surface.WithCompose())
 		}},
-		{"presence", func() surface.Surface {
-			return surface.NewPresence(context.Background(), nil, theme.Dark(), keys)
+		{"clients_browser", func() surface.Surface {
+			return surface.NewClientsBrowser(context.Background(), nil, theme.Dark(), keys)
 		}},
 		{"artifact", func() surface.Surface {
 			return surface.NewArtifact(context.Background(), nil, "dash-plan", theme.Dark(), keys, surface.WithReview())
@@ -114,11 +114,18 @@ func TestSurfaceSetThemeRetheme(t *testing.T) {
 		seed func(surface.Surface)
 	}{
 		{
-			"presence",
+			"clients_browser",
 			func() surface.Surface {
-				return surface.NewPresence(context.Background(), nil, theme.Dark(), theme.DefaultKeymap())
+				return surface.NewClientsBrowser(context.Background(), nil, theme.Dark(), theme.DefaultKeymap())
 			},
 			func(s surface.Surface) { s.Update(surface.ClientsLoadedMsg{Clients: sampleClients()}) },
+		},
+		{
+			"artifacts_browser",
+			func() surface.Surface {
+				return surface.NewArtifactsBrowser(context.Background(), nil, theme.Dark(), theme.DefaultKeymap())
+			},
+			func(s surface.Surface) { s.Update(surface.ArtifactsLoadedMsg{Artifacts: fixedArtifacts()}) },
 		},
 		{
 			"stream",
