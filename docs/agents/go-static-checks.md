@@ -119,10 +119,10 @@ gopls MCP server for compiler-grade diagnostics. Not yet specced.
 | ctx never stored in a struct (Concurrency) | containedctx *(rest → skill)* |
 | ctx on outbound calls (Concurrency) | noctx *(judgment → skill)* |
 | No copying locks (Concurrency) | govet copylocks *(aliasing judgment → skill)* |
-| No init() / no global state (Construction & State) | gochecknoinits, gochecknoglobals |
+| No init() / no global state (APIs & Interfaces) | gochecknoinits, gochecknoglobals |
 | Consistent receiver names (Naming) | revive *(judgment → skill)* |
-| Early return / low nesting (Control Flow) | revive early-return, indent-error-flow *(judgment → skill)* |
-| No naked returns (Control Flow) | revive bare-return |
+| Early return / low nesting (Errors) | revive early-return, indent-error-flow *(judgment → skill)* |
+| No naked returns (Errors) | revive bare-return |
 | Printf wrappers end in `f` (APIs) | govet |
 | Doc comments on exported syms (Comments & Docs) | revive, godot *(quality → skill)* |
 | Package doc comment present (Comments & Docs) | revive *(content → skill)* |

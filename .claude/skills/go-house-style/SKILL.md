@@ -1,6 +1,6 @@
 ---
 name: go-house-style
-description: Authoritative house style and design conventions for writing Go in sextant. Use whenever writing, reviewing, refactoring, or designing Go code, APIs, or packages in this repo — it covers API and interface design, package layout, error-handling policy, concurrency and goroutine discipline, naming, comments, and core engineering philosophy. Consult it before writing any non-trivial Go, even when the task doesn't explicitly mention "style." Mechanical, lint-enforced rules live in the static-checks gate (make check), not here; this skill is the judgment layer for decisions a linter can't make.
+description: Authoritative house style for writing Go in sextant. Use whenever writing, reviewing, refactoring, or designing Go code, APIs, or packages — API and interface design, package layout, error-handling policy, concurrency discipline, naming, comments, testing internals. Consult it before any non-trivial Go, even when the task doesn't mention "style." Mechanical, lint-enforced rules live in the static-checks gate (make check), not here; this is the judgment layer for decisions a linter can't make.
 ---
 
 # Go House Style — the judgment layer
@@ -11,8 +11,6 @@ Printf wrappers) is enforced by the **static-checks gate** — `make check`, des
 [docs/agents/go-static-checks.md](../../../docs/agents/go-static-checks.md) — and is
 **not restated here**: don't spend judgment re-deriving what the gate already decides.
 
-Baseline: **single Go module**, version pinned in `go.mod` (currently `go 1.26`).
-
 ## Philosophy
 
 - **Priority order: clarity > simplicity > concision > maintainability > consistency.**
@@ -21,10 +19,9 @@ Baseline: **single Go module**, version pinned in `go.mod` (currently `go 1.26`)
 - **Optimize for the reader, not the author.**
 - **Anti-pattern — gratuitous inconsistency:** don't introduce a novel way to do something
   the codebase already does a standard way.
-- **Scout's rule:** improve code you pass while working. Refactoring is fine — the risk
-  isn't size, it's a change that's actually *worse* (a regression in clarity or correctness
-  dressed up as a refactor). The test is the priority order: when you can't reasonably argue
-  the existing code is better, fix it up; when the existing code might be better, leave it.
+- **Scout's rule:** improve code you pass while working. The risk isn't the size of a
+  refactor, it's one that's actually *worse* — judged by the priority order: when you can't
+  reasonably argue the existing code is better, fix it up; when it might be, leave it.
 - **A little copying is better than a little dependency.**
 - **Least mechanism:** reach for the simplest construct that works; stdlib over a framework.
   (This is the style-layer face of the repo's bright lines — primitives not policy, thin
@@ -35,14 +32,11 @@ Baseline: **single Go module**, version pinned in `go.mod` (currently `go 1.26`)
 > Guiding principle: **the easy way to use an API should be the correct way.** If the
 > obvious call is also the safe call, most of the rest follows.
 
-- **Escalate new or changed interfaces to Lena.** A new or modified interface — especially
-  an exported one in `pkg/` — is among the hardest things to reverse once it has callers,
-  so it's the line where autonomy stops. An agent can make most decisions on its own, but
-  here it must deliberately consider the design, weigh the alternatives and choose the best
-  one, and then ask for review *before* committing. In this repo that's the existing loop —
-  committed ⇔ human-signed-off — applied early: flag the interface in the PR description
-  (or the ticket) rather than letting it ride in silently. A new or changed interface is
-  never shipped on autonomous judgment alone.
+- **Escalate new or changed interfaces to Lena.** An interface — especially an exported
+  one — is among the hardest things to reverse once it has callers, so it's where autonomy
+  stops: weigh the alternatives, choose the best design, then flag it in the PR description
+  (or the ticket) for review rather than letting it ride in silently. A new or changed
+  interface never ships on autonomous judgment alone.
 - **Accept interfaces, return concrete structs.** Producers return the concrete type so
   callers get the full API and you can add methods without breaking them. Exception: return
   an interface when genuinely yielding multiple types, or to hide impl in a library.
@@ -55,6 +49,7 @@ Baseline: **single Go module**, version pinned in `go.mod` (currently `go 1.26`)
 - **Make the zero value useful** — usable with no constructor where you can manage it.
 - **One obvious constructor; functional options for optional config** — so adding a knob
   isn't a breaking signature change.
+- **Dependency injection via explicit constructor params; no DI frameworks.**
 - **Field names in struct literals.**
 - **Avoid boolean parameters**, especially multiple — use options, distinct functions, or a
   config struct.
@@ -66,8 +61,6 @@ Baseline: **single Go module**, version pinned in `go.mod` (currently `go 1.26`)
 - **Design so the type can't be held wrong** — invalid states unrepresentable; the zero
   value is either safe or fails loudly.
 - **Minimal exported surface; unexport by default.**
-
-*(Comma-ok type assertions are required but gate-enforced.)*
 
 ## Packages, Layout & Modules
 
@@ -83,17 +76,12 @@ Baseline: **single Go module**, version pinned in `go.mod` (currently `go 1.26`)
   layer ruleset is settled by [[feat-layout-no-pkg]]; depguard then enforces it
   mechanically.)*
 - **A package is about one thing** — a cohesive API, not a junk drawer.
-- **Flags as the self-documenting config surface.**
-
-## Deep Modules
-
-- **Prefer deep modules:** a small exported surface hiding substantial complexity
-  (`net/http`). A good package hides more than it shows.
-- **Review question:** *how much does this package's API hide?* Lots of surface exposing
-  little is a shallow module — suspect it.
-- **Avoid shallow / pass-through packages** that add a layer without adding abstraction;
-  prefer fewer, deeper packages. An abstraction should pay for its complexity. (Same
-  instinct as the repo's "abstract only against a second implementation" bright line.)
+- **Prefer deep modules** — a small exported surface hiding substantial complexity
+  (`net/http`); a good package hides more than it shows. Review question: *how much does
+  this package's API hide?* A shallow, pass-through layer doesn't pay for its complexity —
+  fold it in. (Same instinct as "abstract only against a second implementation".)
+- **Flags as the self-documenting config surface** — layered with `SEXTANT_*` env defaults
+  and saved client contexts per ADR-0021; no config frameworks.
 
 ## Errors
 
@@ -108,6 +96,10 @@ Baseline: **single Go module**, version pinned in `go.mod` (currently `go 1.26`)
 - **Assert on behavior, not concrete error type, where practical.**
 - **Eliminate error handling by eliminating errors** where you can (Scanner-style memoized
   error so the loop body has none).
+- **Handle errors and special cases early and return** — reduce nesting; keep the happy
+  path left-aligned.
+- **Never panic across package boundaries or in library code;** `os.Exit`/`log.Fatal` only
+  in `main`.
 
 ## Concurrency & Safety
 
@@ -124,46 +116,24 @@ Baseline: **single Go module**, version pinned in `go.mod` (currently `go 1.26`)
   backing array.
 - **Typed atomics (`atomic.Bool`/`Int64`) over raw int flags.**
 
-## Construction & State
-
-- **Dependency injection via explicit constructor params; no DI frameworks.**
-
-*(No `init()` and no package-level global state are gate-enforced.)*
-
-## Panics
-
-- **Never panic across package boundaries or in library code;** `os.Exit`/`log.Fatal` only
-  in `main`.
-
 ## Naming
 
 - **Short names scoped to distance from use** — `i`/`r`/`err` in tight scopes; descriptive
-  across distance.
+  across distance. Exported identifiers are maximum distance: spelled-out names, never
+  abbreviations.
 - **Consistent short receiver names; never `this`/`self`.**
 - **Avoid stutter** — `bytes.Buffer`, not `bytes.BytesBuffer`.
 - **Name for role, not representation** — no type encoded in the name.
-- **No short/abbreviated names in exported API** — exported identifiers (package APIs,
-  exported types/functions/methods/fields) get descriptive, spelled-out names. Short names
-  are confined to small local scopes.
 - **Domain vocabulary is CONTEXT.md's** — when a name carries protocol meaning (message,
   artifact, client, lexicon, enroll/retire), use the shared language, not a synonym.
-
-## Control Flow
-
-- **Reduce nesting; handle errors/special cases early and return** — keep the happy path
-  left-aligned.
-
-*(Naked returns are banned and gate-enforced.)*
 
 ## Comments & Docs
 
 - **Comment the why, not the what** — intent, rationale, non-obvious decisions, not a
   restatement of the code.
-- **Doc comments on exported identifiers** as complete sentences starting with the
-  identifier's name. *(Presence is gate-enforced; quality is on you.)*
-- **Package doc comment** — `// Package x ...` in one file, or `doc.go` for larger packages.
 - **Document the contract, not the signature** — preconditions, invariants, what returned
-  errors mean, ownership of returned values, concurrency-safety.
+  errors mean, ownership of returned values, concurrency-safety. *(Doc-comment presence and
+  format are gate-enforced; the content is on you.)*
 - **No commented-out code** — delete it; git has the history.
 - **Explain "why-not" decisions and gotchas inline** where a future reader would otherwise
   re-litigate them. Decisions of ADR weight go in `docs/adr/` and get a pointer from the
@@ -190,7 +160,6 @@ default; naming the lower rungs is what keeps it rare.
   still ship the code; reflect/unsafe is brittle). Reserve it for this rung.
 - **Bare `go test ./...` must always compile and stay green.** Don't gate via compile
   failure — a compile error reads as "package broken," not "test red," and breaks
-  editors/gopls/vet. Sextant already carries one tag — `e2e`, an opt-in *suite* (not an
-  internals-exposure hatch) — and the gate keeps it honest: `make e2e` and CI run it, and
-  golangci-lint lints with `build-tags: [e2e]` so tagged files can't rot. Any future tag
-  must carry the same three (test run, lint run, editor config).
+  editors/gopls/vet. Sextant's one existing tag, `e2e`, is an opt-in *suite*, not an
+  internals hatch; the tag-carrying discipline that keeps tagged files from rotting lives
+  in the static-checks doc and applies to any new tag.
