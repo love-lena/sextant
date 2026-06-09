@@ -1,15 +1,23 @@
-# VHS tape for the dash surface gallery (TASK-7.3).
+# VHS tape for the dash surface gallery (ADR-0024, R3).
 #
-# Walks the three M4 pane-surfaces against seeded mock data (no bus): presence
-# with its status glyphs, the message stream with role-hued authors and a live
-# compose, and the artifact document reader + review comment. Each surface mounts
-# unchanged inside the shared widget.Box chrome, proving the Surface contract.
+# Tours the five surfaces the gallery hosts — the three master-detail browsers
+# (clients, topics, artifacts) plus the two standalone detail surfaces (stream
+# and artifact reader) — against seeded mock data, no bus. Each browser
+# demonstrates the signature ADR-0024 interaction: Enter steps into the surface,
+# a second Enter opens the selected row's detail IN THE SAME PANE (title tracks
+# the open detail), and Esc pops back to the list.
 #
-# Render with:  vhs cmd/dash-surfacegallery/testdata/gallery.tape
-# (run from the worktree root; the binary is built into /tmp first — see below).
+# Surfaces visited in order:
+#   1. clients browser → Enter (step in) → Enter (open DM · bus) → Esc (pop to list) → Esc (deselect)
+#   2. topics browser → Enter → Enter (open Topic · build) → Esc → Esc
+#   3. artifacts browser → Enter → Enter (open Artifact · dash-plan) → Esc → Esc
+#   4. stream (standalone, seeded messages) → Enter → type a line → Esc
+#   5. artifact reader (standalone, seeded document) → Enter → scroll → Esc
+#   theme toggle (light ↔ dark) between steps
 #
-# The tape runs a prebuilt binary so recording is not gated on a compile. Build
-# it first:  go build -o /tmp/dash-surfacegallery ./cmd/dash-surfacegallery
+# Render with (from the worktree root):
+#   vhs cmd/dash-surfacegallery/testdata/gallery.tape
+# Build first:  go build -o /tmp/dash-surfacegallery ./cmd/dash-surfacegallery
 
 Output cmd/dash-surfacegallery/testdata/gallery.gif
 
@@ -25,53 +33,80 @@ Enter
 Sleep 1.5s
 Show
 
-# presence: the clients directory. Step in and move the cursor through the roles
-# (online ● vs offline ○; display names in role hue).
+# 1 — clients browser. The list shows every registered identity with online (●)
+# / offline (○) glyphs. Enter steps in; a second Enter opens the first row's DM
+# detail in the same pane ("DM · bus" title); Esc pops back to the list.
 Sleep 900ms
 Enter
+Sleep 600ms
+Down@350ms 2
 Sleep 500ms
-Down@350ms 4
+Enter
+Sleep 1.2s
+Escape
 Sleep 700ms
 Escape
 Sleep 500ms
 
-# message stream: one read-stream of chat.messages, authors hued by role. Step
-# in and compose a line (it would publish + round-trip on a live bus; here the
-# demo shows the compose affordance).
+# 2 — topics browser. Enter steps in; Enter on the focused row opens its
+# conversation detail in the same pane ("Topic · build" title); Esc pops back.
 Tab
 Sleep 700ms
 Enter
-Sleep 500ms
-Type@70ms "ship the surfaces"
-Sleep 900ms
+Sleep 600ms
+Enter
+Sleep 1.2s
+Escape
+Sleep 700ms
 Escape
 Sleep 500ms
 
-# artifact: the document reader (markdown via glamour) with a thin review
-# affordance. Step in, scroll the body, and leave a review comment.
+# 3 — artifacts browser. Enter steps in; Enter on the focused row opens the
+# artifact reader in the same pane ("Artifact · dash-plan" title, "(nothing
+# selected)" — nil client in the gallery, the master↔detail motion is what this
+# shows). Esc pops back.
 Tab
 Sleep 700ms
 Enter
-Sleep 500ms
-Down@300ms 3
+Sleep 600ms
+Enter
+Sleep 1.2s
+Escape
 Sleep 700ms
-Type@70ms "tighten the intro"
-Sleep 900ms
 Escape
 Sleep 500ms
 
-# Toggle to the light palette (the surfaces re-theme), then back to dark, and
-# walk back across all three surfaces.
+# Theme toggle to light: the browser chrome and status bar re-theme.
 Type "t"
 Sleep 1.2s
-Tab
-Sleep 600ms
-Tab
-Sleep 600ms
-Type "t"
-Sleep 900ms
+
+# 4 — stream surface (standalone, seeded). This surface starts with 6 seeded
+# messages from three role-hued authors. Enter steps in and activates the compose
+# field; type a line (it would publish on a live bus — here the compose affordance
+# is shown). Esc steps out.
 Tab
 Sleep 700ms
+Enter
+Sleep 600ms
+Type@70ms "ship the three browsers"
+Sleep 900ms
+Escape
+Sleep 500ms
 
+# 5 — artifact reader (standalone, seeded). Shows "The three browsers" document
+# rendered with the review comment affordance. Enter steps in; scroll the body;
+# Esc steps out.
+Tab
+Sleep 700ms
+Enter
+Sleep 600ms
+Down@300ms 3
+Sleep 700ms
+Escape
+Sleep 500ms
+
+# Toggle back to dark, then quit.
+Type "t"
+Sleep 900ms
 Type "q"
 Sleep 500ms
