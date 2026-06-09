@@ -4,7 +4,7 @@ title: Protocol reference pages + the connection/auth/creds page
 status: In Progress
 assignee: []
 created_date: '2026-06-08 22:42'
-updated_date: '2026-06-08 23:11'
+updated_date: '2026-06-09 00:06'
 labels:
   - docs
   - 'slug:docs-mdbook-protocol-reference'
@@ -40,4 +40,6 @@ Mostly AFK generation; connection.md is new canon prose (technical, agent-drafta
 PROSE/AGENT SPLIT: this ticket fills only the generated draft slots (Operations, Records & lexicons, The frame, Clients registry & presence, Epoch) from protocol/ canon via 32.1's pipeline. The Overview + Connection pages are Lena's prose stubs (branch docs-mdbook-scope). OPEN (agent+Lena): whether Lena's Connection prose also becomes language-neutral canon protocol/connection.md for the TS SDK — decide when 32.2 lands. Refs ADR-0006 (frame), ADR-0020 (registry), ADR-0012 (auth).
 
 IMPLEMENTED in PR #97 (commit 05c01e6), CI green. Agent portion complete; remaining work is Lena's prose pages. Verified: docgen deterministic + CI drift-check, mdbook builds clean, quickstart compiles + runs against a live bus. Generated pages done (operations/lexicons/frame/registry); Epoch + Overview + Connection remain Lena's prose.
+
+RESTRUCTURED (fragments-in-prose, commit 736760b): the lexicon field tables are now generated *fragments* under docs/book/generated/, embedded by prose stub pages via {{#include}}. The frame/registry/records prose is Lena's; only the tables are generated. operations.md stays a full generated page.
 <!-- SECTION:NOTES:END -->
