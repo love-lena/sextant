@@ -29,7 +29,8 @@ human has signed off — see
 | [0020](0020-clients-are-bus-issued-identities.md) | Clients are bus-issued identities | accepted |
 | [0021](0021-saved-client-contexts.md) | Saved client contexts | accepted |
 | [0022](0022-modules-over-a-locked-core.md) | A locked core lets modules build in parallel | accepted |
-| [0023](0023-the-dash-is-a-composable-pane-cockpit.md) | The dash is a composable pane cockpit | accepted |
+| [0023](0023-the-dash-is-a-composable-pane-cockpit.md) | The dash is a composable pane cockpit | accepted (refined by 0024) |
+| [0024](0024-the-dash-is-three-master-detail-browsers.md) | The dash is three master-detail browsers | proposed |
 
 ## Review batches
 - **Batch 1 — substrate:** 0004–0007 — *accepted*
@@ -39,3 +40,4 @@ human has signed off — see
 - **0015 — operator-only state in its own account** — *accepted* (refines 0012; from the #71 review)
 - **0016 — artifacts are Lexicon records** — *accepted* (the #70 JSON-vs-CBOR decision; signed off in-session 2026-06-03)
 - **0023 — the dash is a composable pane cockpit** — *accepted* (sharpens 0014; grilled in-session prototype-grounded, signed off 2026-06-05)
+- **0024 — the dash is three master-detail browsers** — *proposed* (refines 0023's composition after M4 dogfooding; grilled in-session 2026-06-08)
