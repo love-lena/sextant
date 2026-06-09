@@ -34,11 +34,22 @@ const DefaultBuffer = 256
 // first (blocking) read keeps "subscribed" observable, so a live-only
 // subscription does not miss a message published in the gap between issuing
 // Subscribe and the first read.
-type SubscribedMsg struct{}
+type SubscribedMsg struct {
+	// From identifies the emitting feed (see EventMsg.From).
+	From *Feed
+}
 
 // EventMsg carries one bus event the pump read off the subscription. It wraps
 // only the public SDK Message; no NATS or internal type is exposed.
 type EventMsg struct {
+	// From identifies the emitting feed. A model holding several live feeds (a
+	// discovery wildcard plus an opened conversation, say) demultiplexes on it:
+	// claim a message when From is your feed, route or ignore it otherwise. The
+	// tag matters because a Bubble Tea program delivers every message to every
+	// model in its path — without it, one feed's events bleed into another's
+	// surface. A nil From is an untagged, test-synthesized message; a real feed
+	// always tags.
+	From    *Feed
 	Message sextant.Message
 }
 
@@ -47,22 +58,44 @@ type EventMsg struct {
 // as a single message when the pump next runs, so the UI can show one gap marker
 // instead of one message per drop. Overflow is fail-loud, never silent.
 type DroppedMsg struct {
-	N int
+	// From identifies the emitting feed (see EventMsg.From).
+	From *Feed
+	N    int
 }
 
 // ErrMsg reports a subscribe error. The SDK already reconnects the underlying
 // bus connection, so the feed adds no reconnect layer of its own; a surfaced
 // error is for the UI to show, not for the feed to retry.
 type ErrMsg struct {
-	Err error
+	// From identifies the emitting feed (see EventMsg.From).
+	From *Feed
+	Err  error
+}
+
+// From returns the feed a busfeed message was emitted by, or nil when msg is not
+// a busfeed message (or is an untagged, test-synthesized one). Consumers holding
+// several feeds use it to demultiplex.
+func From(msg tea.Msg) *Feed {
+	switch m := msg.(type) {
+	case SubscribedMsg:
+		return m.From
+	case EventMsg:
+		return m.From
+	case DroppedMsg:
+		return m.From
+	case ErrMsg:
+		return m.From
+	}
+	return nil
 }
 
 // Feed wraps a public SDK subscription as a Bubble Tea stream source. Construct
 // it with New, start it from a model's Init with Subscribe, pump it by returning
 // Next on every EventMsg and DroppedMsg, and tear it down with Stop. A Feed is
 // single-consumer: exactly one Next command is in flight at a time, following the
-// pump loop. Use one Feed per surface; a model embedding several feeds must
-// distinguish their messages itself (the messages carry no feed identity).
+// pump loop. Use one Feed per surface; a model embedding several feeds
+// demultiplexes their messages on the From tag each one carries (see
+// EventMsg.From and the package From helper).
 type Feed struct {
 	client  *sextant.Client
 	subject string
@@ -106,7 +139,7 @@ func (f *Feed) Subscribe(ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
 		sub, err := f.client.Subscribe(ctx, f.subject, f.handle, f.opts...)
 		if err != nil {
-			return ErrMsg{Err: err}
+			return ErrMsg{From: f, Err: err}
 		}
 		f.mu.Lock()
 		// If Stop already ran (or ctx is gone), don't hold a live subscription.
@@ -117,7 +150,7 @@ func (f *Feed) Subscribe(ctx context.Context) tea.Cmd {
 		}
 		f.sub = sub
 		f.mu.Unlock()
-		return SubscribedMsg{}
+		return SubscribedMsg{From: f}
 	}
 }
 
@@ -163,7 +196,7 @@ func (f *Feed) next() tea.Msg {
 	if n := f.dropped; n > 0 {
 		f.dropped = 0
 		f.mu.Unlock()
-		return DroppedMsg{N: n}
+		return DroppedMsg{From: f, N: n}
 	}
 	f.mu.Unlock()
 
@@ -172,7 +205,7 @@ func (f *Feed) next() tea.Msg {
 		// Channel closed by Stop and fully drained: the pump ends here.
 		return nil
 	}
-	return EventMsg{Message: m}
+	return EventMsg{From: f, Message: m}
 }
 
 // Stop tears the feed down: it stops the SDK subscription and closes the buffer

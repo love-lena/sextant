@@ -253,7 +253,15 @@ func (s *Stream) Init() tea.Cmd {
 
 // Update drives the feed pump, renders incoming frames, and — when active and
 // composing — handles typing, Enter (publish), and Esc (step out → DoneMsg).
+//
+// Several feeds can be live in one program (a topics-discovery wildcard, another
+// pane's open conversation), and every message reaches every surface in its
+// path, so the stream claims only busfeed messages tagged by ITS feed. An
+// untagged message (nil From — test-synthesized) is treated as its own.
 func (s *Stream) Update(msg tea.Msg) tea.Cmd {
+	if from := busfeed.From(msg); from != nil && from != s.feed {
+		return nil // another feed's traffic; not this conversation's
+	}
 	switch msg := msg.(type) {
 	case busfeed.SubscribedMsg:
 		// Subscription is live; start the pump.
