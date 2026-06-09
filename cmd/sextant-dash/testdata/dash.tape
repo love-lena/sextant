@@ -1,16 +1,22 @@
-# VHS tape for the dash (ADR-0024): the three-master-detail-browsers story
-# driven against the ACTUAL built `sextant dash` over a REAL embedded bus. It is
-# the human-review surface for the PR — the motions the dash is for:
+# VHS tape for the dash (ADR-0024 + ADR-0026): the three browsers, one focused
+# pane, and panes that hold their place — driven against the ACTUAL built
+# `sextant dash` over a REAL embedded bus. It is the human-review surface for
+# the PR — the motions the dash is for:
 #
 #   1. zero-config launch: `sextant dash` with no identity self-enrolls against
 #      the discoverable local bus ("first run — enrolled as lena") and opens the
-#      cockpit — three browsers side by side, every list populated
-#   2. step into topics, Enter on a row → its conversation opens IN THE SAME
-#      PANE (the pane title becomes "Topic · plan")
+#      cockpit — three browsers side by side, every list populated, the first
+#      pane focused
+#   2. Tab focuses the topics browser; Enter on a row opens its conversation IN
+#      THE SAME PANE (the pane title becomes "Topic · plan")
 #   3. compose a message, Enter → it round-trips back through the bus (no
 #      optimistic echo — visible means durably on the bus)
-#   4. Esc pops back to the topics list (one level per Esc)
-#   5. over to artifacts, Enter on a row → the document reader opens in place
+#   4. Ctrl+L moves focus to artifacts WITH THE CONVERSATION STILL OPEN — no
+#      Esc unwind; the topic pane keeps holding it (THE ADR-0026 point) — and
+#      Enter opens the document reader in place
+#   5. Ctrl+H returns to the conversation exactly where it was; a second line
+#      round-trips through the still-open compose
+#   6. Esc pops one level (conversation → list); q quits from the list
 #
 # Render with (from the worktree root):
 #   vhs cmd/sextant-dash/testdata/dash.tape
@@ -38,7 +44,8 @@ Enter
 Show
 
 # 1 — zero-config launch: no creds, no context. The dash discovers the local
-# bus, enrolls itself, prints its one notice line, and opens the cockpit.
+# bus, enrolls itself, prints its one notice line, and opens the cockpit with
+# the first pane focused (one pane is ALWAYS focused — no layout level).
 Type "sextant dash --theme dark"
 Sleep 1s
 Enter
@@ -47,42 +54,42 @@ Sleep 4s
 # The cockpit: clients · topics · artifacts, side by side, lists populated.
 Sleep 2s
 
-# 2 — into the topics browser: select it (Right), step in (Enter), and open the
-# selected topic's conversation in the same pane (Enter on "plan").
-Right@400ms 1
-Sleep 700ms
-Enter
+# 2 — Tab moves focus to the topics browser (the status bar names the focused
+# pane); Enter opens the cursor row's conversation in the same pane.
+Tab
 Sleep 700ms
 Enter
 Sleep 2s
 
-# 3 — compose a line and send it. It does NOT echo optimistically; it appears in
-# the conversation only when the bus round-trips it back on the subscription.
-Type@80ms "ship the three browsers"
+# 3 — compose a line and send it. It does NOT echo optimistically; it appears
+# in the conversation only when the bus round-trips it back. (While the compose
+# is capturing, letters like q/j/k just type — quitting is ctrl+c here.)
+Type@80ms "ship it - panes hold their place"
 Sleep 900ms
 Enter
 Sleep 2.5s
 
-# 4 — Esc pops ONE level: conversation → the topics list (same pane).
-Escape
+# 4 — THE POINT (ADR-0026): Ctrl+L moves focus to artifacts WITH THE
+# CONVERSATION STILL OPEN. Nothing unwinds — the topic pane keeps holding its
+# place (watch it keep ticking) while the reader opens in place on the right.
+Ctrl+L
 Sleep 1.5s
-
-# 5 — over to artifacts: step out (Esc), Right, step in, Enter opens the
-# document reader in place ("Artifact · the-plan", markdown via glamour).
-Escape
-Sleep 700ms
-Right@400ms 1
-Sleep 700ms
-Enter
-Sleep 700ms
 Enter
 Sleep 3s
 
-# Pop the reader, step out, and quit cleanly.
-Escape
+# 5 — Ctrl+H moves focus back onto the conversation, exactly where it was. The
+# compose is still live: a second line round-trips through the held-open pane.
+Ctrl+H
+Sleep 1.2s
+Type@80ms "still here - nothing unwound"
 Sleep 700ms
+Enter
+Sleep 2.5s
+
+# 6 — Esc pops exactly one level: conversation → the topics list. From the
+# list (no compose capturing), q quits cleanly.
 Escape
-Sleep 700ms
+Sleep 1.5s
 Type "q"
 Sleep 800ms
 

@@ -439,7 +439,7 @@ func (a *Artifact) commentLine() string {
 	if w <= 0 {
 		w = 1
 	}
-	return lipgloss.NewStyle().Foreground(a.theme.Dim).Width(w).MaxWidth(w).Render("comment> enter to review")
+	return lipgloss.NewStyle().Foreground(a.theme.Dim).Width(w).MaxWidth(w).Render("comment> focus pane to review")
 }
 
 // applyChange applies one watch change: a write renders the new value (and clears

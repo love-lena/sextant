@@ -373,12 +373,13 @@ func (s *Stream) View() string {
 }
 
 // composeLine renders the bottom compose row. When active it shows the live
-// textinput; when not, a dim hint that Enter steps in to type.
+// textinput; when not, a dim hint that focusing the pane composes (the typed
+// text is held, not shown, while unfocused — the input renders it on refocus).
 func (s *Stream) composeLine() string {
 	if s.focus == widget.FocusActive {
 		return s.input.View()
 	}
-	hint := "enter to compose"
+	hint := "focus pane to compose"
 	w := s.w
 	if w <= 0 {
 		w = 1
