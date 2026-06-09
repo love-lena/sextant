@@ -41,16 +41,11 @@ type optionItem struct {
 }
 
 // newOptionsMenu builds the menu for the current layout state: one toggle row
-// per toggleable pane (every pane except the detail pane, which has its own
-// detail-on-demand row), a detail-on-demand row when a detail surface exists, a
-// preset-switch row, a theme-switch row, and quit. Labels show the current state
-// so the menu reads as a status as well as a control.
+// per pane, a preset-switch row, a theme-switch row, and quit. Labels show the
+// current state so the menu reads as a status as well as a control.
 func newOptionsMenu(m Model) *optionsMenu {
 	var items []optionItem
 	for _, id := range m.order {
-		if id == detailPaneID {
-			continue
-		}
 		mark := "on "
 		if m.hidden[id] {
 			mark = "off"
@@ -59,17 +54,6 @@ func newOptionsMenu(m Model) *optionsMenu {
 			kind:   optTogglePane,
 			label:  "pane " + id + " [" + mark + "]",
 			paneID: id,
-		})
-	}
-	if m.hasDetail {
-		mark := "off"
-		if m.detailShown {
-			mark = "on "
-		}
-		items = append(items, optionItem{
-			kind:   optTogglePane,
-			label:  "detail pane [" + mark + "]",
-			paneID: detailPaneID,
 		})
 	}
 	items = append(
@@ -113,11 +97,7 @@ func (m Model) activateOption() (Model, tea.Cmd) {
 	cursor := m.menu.cursor
 	switch it.kind {
 	case optTogglePane:
-		if it.paneID == detailPaneID {
-			m, _ = m.toggleDetail()
-		} else {
-			m = m.toggleVisible(it.paneID)
-		}
+		m = m.toggleVisible(it.paneID)
 	case optSwitchPreset:
 		m.preset = nextPreset(m.preset)
 		m.reflow()

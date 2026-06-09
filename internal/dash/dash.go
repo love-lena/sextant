@@ -195,10 +195,9 @@ func build(ctx context.Context, client *sextant.Client, opts Options) (root, err
 	stream := surface.NewStream(ctx, client, subject, th, keys,
 		surface.WithCompose(), surface.WithAuthors(authors))
 	artifact := surface.NewArtifact(ctx, client, artifactName, th, keys)
-	detail := newDetail(ctx, client, artifactName, th, keys)
 
-	m := layout.New(th, keys, cfg, presence, stream, artifact, detail)
-	return newRoot(ctx, m, client, detail), nil
+	m := layout.New(th, keys, cfg, presence, stream, artifact)
+	return newRoot(ctx, m, client), nil
 }
 
 // resolveAuthors builds the stream's id → Author map from the clients directory,

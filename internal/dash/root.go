@@ -6,23 +6,17 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/love-lena/sextant/pkg/sextant"
 	"github.com/love-lena/sextant/pkg/tui/layout"
-	"github.com/love-lena/sextant/pkg/tui/surface"
 )
 
 // root is the dash's Bubble Tea root model: it wraps the layout.Model (the
 // cockpit) and is the HOST end of the contracts the layer below leaves to the
-// dash (ADR-0023, 7.5). It owns only the few things a host owns; the pane
+// dash (ADR-0023/0024). It owns only the few things a host owns; the pane
 // mechanics (focus machine, reflow, toggling, the surface routing) all live in
-// the layout:
+// the layout, and detail-on-demand lives inside each browser pane (ADR-0024) —
+// the host retargets nothing:
 //
 //   - resize: a tea.WindowSizeMsg is forwarded into the layout, which reflows
 //     every visible pane.
-//   - detail-on-demand retarget: it CONSUMES layout.DetailOpenedMsg to point the
-//     detail reader at the named artifact, and does NOT feed that message back
-//     into the layout — the loop contract. DetailOpenedMsg is a distinct type the
-//     layout would re-open on if it were the raw OpenMsg; the host never re-emits
-//     one, so forwarding every other message into the layout is safe (the layout
-//     ignores DetailOpenedMsg).
 //   - drain: a watch on client.Drained() winds the dash down cleanly when the bus
 //     drains under it (the standard-client contract — a cooperative bus drain
 //     becomes a clean quit).
@@ -41,19 +35,18 @@ type root struct {
 	ctx    context.Context
 	m      layout.Model
 	client *sextant.Client
-	detail *detailSurface // the retargetable detail pane (nil if none mounted)
 }
 
 // drainedMsg is the internal quit trigger the Drained watch emits, distinct so
 // the root can tell a cooperative bus drain apart from an operator quit.
 type drainedMsg struct{}
 
-// newRoot builds the root over an assembled cockpit, the held client, and the
-// detail pane (so the host can retarget it). ctx is the program context, threaded
-// into the drain watch so it cancels on any quit. The configPath is not held here
-// — Run owns config persistence after the program exits.
-func newRoot(ctx context.Context, m layout.Model, client *sextant.Client, detail *detailSurface) root {
-	return root{ctx: ctx, m: m, client: client, detail: detail}
+// newRoot builds the root over an assembled cockpit and the held client. ctx is
+// the program context, threaded into the drain watch so it cancels on any quit.
+// The configPath is not held here — Run owns config persistence after the
+// program exits.
+func newRoot(ctx context.Context, m layout.Model, client *sextant.Client) root {
+	return root{ctx: ctx, m: m, client: client}
 }
 
 // Init starts the layout (which mounts and Inits every surface) and arms the
@@ -83,22 +76,9 @@ func (r root) watchDrain() tea.Cmd {
 }
 
 // Update routes the host-owned messages and forwards everything else into the
-// layout. It honours the detail-on-demand loop contract: DetailOpenedMsg is
-// consumed here and never forwarded back into the layout.
+// layout.
 func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case layout.DetailOpenedMsg:
-		// The layout has already shown + focused the detail pane; the host resolves
-		// the ref. An artifact ref retargets the detail reader onto it. A client ref
-		// has no M4 direct-stream surface (that is M5), so it is acknowledged and the
-		// detail pane the layout opened keeps its current artifact.
-		// CRITICAL: do NOT feed this message back into the layout (the loop contract).
-		if r.detail != nil && msg.Kind == surface.OpenArtifact {
-			return r, r.detail.Retarget(msg.Ref)
-		}
-		return r, nil
-
-	case drainedMsg:
+	if _, ok := msg.(drainedMsg); ok {
 		// The bus drained under us: tear the surfaces down and quit. Config + client
 		// close run in Run after the program exits.
 		r.m.Stop()

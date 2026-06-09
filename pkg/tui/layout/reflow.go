@@ -12,22 +12,13 @@ const (
 )
 
 // visibleOrder returns the ids to lay out, in the host's registration order: the
-// panes that are not hidden, plus the detail pane only when it is shown (and a
-// detail surface exists). The detail pane is appended last so a preset puts it
-// in a trailing slot (the cockpit/stream secondary stack), never an always-on
-// leading column.
+// panes that are not hidden.
 func (m Model) visibleOrder() []string {
 	var out []string
 	for _, id := range m.order {
-		if id == detailPaneID {
-			continue // detail is governed by detailShown, handled below
-		}
 		if !m.hidden[id] {
 			out = append(out, id)
 		}
-	}
-	if m.hasDetail && m.detailShown {
-		out = append(out, detailPaneID)
 	}
 	return out
 }
@@ -68,7 +59,7 @@ func (m Model) firstLaidOut() string {
 
 // reflow recomputes the arrangement and resizes every surface to its box inner
 // area. It is the one place geometry is applied: called on a resize, a pane
-// toggle, a preset switch, and a detail show/hide. It (1) computes the visible
+// toggle, and a preset switch. It (1) computes the visible
 // set, (2) arranges it into outer Rects for the current size, (3) sizes each
 // visible surface to its box inner area, and (4) keeps the selection valid —
 // if the selected pane went hidden, the selection snaps to the first visible

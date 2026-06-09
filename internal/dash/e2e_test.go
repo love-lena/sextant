@@ -19,7 +19,6 @@ import (
 	"github.com/love-lena/sextant/pkg/sextant"
 	"github.com/love-lena/sextant/pkg/sx"
 	"github.com/love-lena/sextant/pkg/tui/layout"
-	"github.com/love-lena/sextant/pkg/tui/surface"
 	"go.uber.org/goleak"
 )
 
@@ -58,8 +57,10 @@ func TestDashE2E(t *testing.T) {
 
 	// Seed the stream: a few chat.messages on the topic, published by a separate
 	// connection, so the dash's DeliverAll backlog shows them on launch.
+	// Lines are kept short of the pane's wrap width so a substring assertion never
+	// straddles a soft-wrap boundary.
 	pub := dial(t, b, "seeder", "agent")
-	seedLines := []string{"let's get the dash building", "presence + stream + artifact all mount"}
+	seedLines := []string{"dash kickoff", "panes mount"}
 	for _, line := range seedLines {
 		publishChat(t, pub, subject, line)
 	}
@@ -92,16 +93,16 @@ func TestDashE2E(t *testing.T) {
 
 	// --- live stream: the seeded messages show, AND one published AFTER launch
 	//     arrives live (round-trip on the subscription, not a re-fetch) -----------
-	waitForText(t, scr, "let's get the dash building")
-	publishChat(t, pub, subject, "live after launch")
-	waitForText(t, scr, "live after launch")
+	waitForText(t, scr, "dash kickoff")
+	publishChat(t, pub, subject, "live-now")
+	waitForText(t, scr, "live-now")
 
 	// --- send → round-trip, no optimistic echo: step into the stream, type a line,
 	//     Enter; it appears in the stream only because the bus echoed it back on the
 	//     subscription (the dash holds the publishing identity, so the echo IS the
 	//     merge). A separate verifier subscription proves the publish reached the bus,
 	//     so the in-view appearance is the genuine round-trip, not a compose-line echo.
-	const sent = "round-tripped hello"
+	const sent = "echo-hello"
 	verifier := dial(t, b, "verifier", "agent")
 	gotOnBus := make(chan struct{}, 1)
 	vsub, err := verifier.Subscribe(t.Context(), subject, func(m sextant.Message) {
@@ -132,77 +133,8 @@ func TestDashE2E(t *testing.T) {
 	// Step out of the stream so the next key lands at the layout level.
 	tm.Send(key(tea.KeyEsc))
 
-	// --- open an artifact in detail-on-demand: toggle the detail pane in (the
-	//     layout's `d`), then retarget it onto a DISTINCT document via a surface
-	//     OpenMsg (the real presence-select path) and assert on text that exists
-	//     ONLY in that detail document. The always-on artifact pane renders the
-	//     default doc from launch, so asserting on shared text would pass even if
-	//     the open did nothing (the screen accumulates frames) — these assertions
-	//     instead guard the open motion itself:
-	//       1. the status bar shows the detail pane stepped into ("detail · active"),
-	//          a token the always-on artifact pane never produces — proof `d` opened
-	//          and focused detail-on-demand;
-	//       2. the detail-only document's unique marker appears — proof the open
-	//          surfaced the right content, not the always-on pane's default doc.
-	seedDoc(t, dashClient, "detail-doc", "Detail-only document", "unique-detail-marker-XYZ body")
-	tm.Send(runeKey('d'))
-	waitForText(t, scr, "detail · active") // the toggle opened + stepped into detail
-	tm.Send(surfaceOpenArtifact("detail-doc"))
-	waitForText(t, scr, "Detail-only document")     // the detail title
-	waitForText(t, scr, "unique-detail-marker-XYZ") // body unique to the detail doc
-
 	// --- quit cleanly (exercises the layout teardown path) -----------------------
-	tm.Send(key(tea.KeyEsc)) // step out of the detail pane (closes it)
-	tm.Send(runeKey('q'))    // quit at the layout level
-	tm.WaitFinished(t, teatest.WithFinalTimeout(5*time.Second))
-
-	// Wind down the program context so the drain watch goroutine exits before
-	// goleak runs (Run does this in production; the test owns progCtx via build).
-	cancel()
-}
-
-// TestDashDetailRetargetLoopContract proves the host honours the detail-on-demand
-// loop contract (7.5): a layout.DetailOpenedMsg{OpenArtifact} retargets the
-// detail reader onto the named artifact, and the host never feeds that message
-// back into the layout (which would re-open forever). It drives a surface OpenMsg
-// — the path presence's select uses — and asserts the detail pane shows the
-// retargeted document, with the program staying responsive (no spin).
-func TestDashDetailRetargetLoopContract(t *testing.T) {
-	b, err := bus.Start(t.Context(), bus.Config{StoreDir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("bus.Start: %v", err)
-	}
-	t.Cleanup(b.Shutdown)
-
-	dashClient := dial(t, b, "lena", "human")
-
-	// Two documents: the default the cockpit opens on, and a second the host
-	// retargets the detail reader onto.
-	seedDoc(t, dashClient, "the-plan", "The first plan", "first body")
-	seedDoc(t, dashClient, "other-doc", "The other doc", "other body")
-
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	r, err := build(ctx, dashClient, Options{Theme: ThemeDark, Topic: "plan", Artifact: "the-plan"})
-	if err != nil {
-		t.Fatalf("build: %v", err)
-	}
-
-	tm := teatest.NewTestModel(t, r, teatest.WithInitialTermSize(120, 40))
-	scr := capture(t, tm)
-	waitForText(t, scr, "presence") // launched
-
-	// Drive a surface OpenMsg{OpenArtifact, other-doc}: the layout opens + focuses
-	// the detail pane and emits DetailOpenedMsg, which the host consumes to retarget
-	// the detail reader onto "other-doc". Feeding the OpenMsg here is exactly what a
-	// surface's intent does.
-	tm.Send(surfaceOpenArtifact("other-doc"))
-	waitForText(t, scr, "The other doc")
-
-	// The program is still responsive (the loop contract held — no re-open spin):
-	// quit lands and finishes.
-	tm.Send(key(tea.KeyEsc))
-	tm.Send(runeKey('q'))
+	tm.Send(runeKey('q')) // quit at the layout level
 	tm.WaitFinished(t, teatest.WithFinalTimeout(5*time.Second))
 
 	// Wind down the program context so the drain watch goroutine exits before
@@ -250,7 +182,7 @@ func TestWatchDrainExitsOnCtxCancel(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	r := newRoot(ctx, layout.Model{}, client, nil)
+	r := newRoot(ctx, layout.Model{}, client)
 
 	// Run the watch command the way bubbletea would — in its own goroutine — and
 	// confirm it returns once the context cancels (a non-drain quit).
@@ -330,14 +262,6 @@ func publishChat(t *testing.T, c *sextant.Client, subject, text string) {
 	defer cancel()
 	if err := c.Publish(ctx, subject, rec); err != nil {
 		t.Fatalf("Publish(%q): %v", text, err)
-	}
-}
-
-func seedDoc(t *testing.T, c *sextant.Client, name, title, body string) {
-	t.Helper()
-	rec := mustMarshal(t, map[string]string{"$type": "document", "title": title, "body": body})
-	if _, err := c.CreateArtifact(t.Context(), name, rec); err != nil {
-		t.Fatalf("CreateArtifact(%s): %v", name, err)
 	}
 }
 
@@ -430,12 +354,5 @@ func waitForText(t *testing.T, s *screen, substr string) {
 // key builds a tea.KeyMsg for a named key, the way bubbletea delivers it.
 func key(t tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: t} }
 
-// runeKey builds a tea.KeyMsg for a single rune (e.g. 'd', 'q').
+// runeKey builds a tea.KeyMsg for a single rune (e.g. 'q').
 func runeKey(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }
-
-// surfaceOpenArtifact is the OpenMsg a surface emits to ask the dash to open a
-// named artifact in detail. Driving it directly stands in for the surface intent
-// (the path presence's select uses).
-func surfaceOpenArtifact(name string) tea.Msg {
-	return surface.OpenMsg{Kind: surface.OpenArtifact, Ref: name}
-}

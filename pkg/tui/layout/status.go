@@ -30,7 +30,7 @@ func (m Model) statusBar() string {
 	case m.level == levelPane:
 		hints = "esc step out · ↑/↓ within · q/^c quit "
 	default:
-		hints = "↑↓←→ move · enter step in · p preset · d detail · o options · q quit "
+		hints = "↑↓←→ move · enter step in · p preset · o options · q quit "
 	}
 	hint := lipgloss.NewStyle().Foreground(m.th.Dim).Render(hints)
 

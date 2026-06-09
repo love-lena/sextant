@@ -1,9 +1,10 @@
-// Command dash-layoutgallery is a preview binary for the dash's layout engine
-// (TASK-7.4). It wires trivial MOCK surfaces — fixed-text panes with an id and a
-// title, no SDK and no bus — into the layout.Model, so the cockpit can be driven
-// (preset switch, pane toggle, reflow, detail-on-demand) without a running bus.
-// This also proves the layout composes against the Surface contract alone: the
-// mocks satisfy the interface and the layout never knows the difference.
+// Command dash-layoutgallery is a preview binary for the dash's layout engine.
+// It wires trivial MOCK surfaces — fixed-text panes with an id and a title, no
+// SDK and no bus — into the layout.Model, so the cockpit can be driven (preset
+// switch, pane toggle, reflow) without a running bus. The mocks stand in for the
+// three browsers (ADR-0024: clients · topics · artifacts, side by side); this
+// also proves the layout composes against the Surface contract alone: the mocks
+// satisfy the interface and the layout never knows the difference.
 //
 // Run: go run ./cmd/dash-layoutgallery [--theme light|dark|auto]
 //
@@ -11,14 +12,13 @@
 //
 //	↑↓←→/hjkl  move the selected pane (accent border)
 //	enter      step into the selected pane (it goes active)
-//	esc        step out (and close the detail pane)
-//	p          cycle the preset (cockpit → stream → split)
-//	d          toggle the detail-on-demand pane in/out
+//	esc        step out
+//	p          cycle the preset (cockpit → split)
 //	o          open the options menu (toggle panes, switch preset/theme, quit)
 //	q / ctrl+c quit
 //
-// It is a dev affordance, not part of the dash. The real dash binary (7.5) wires
-// the domain surfaces and the identity; this gallery proves the layout mechanics.
+// It is a dev affordance, not part of the dash. The real dash binary wires the
+// domain surfaces and the identity; this gallery proves the layout mechanics.
 package main
 
 import (
@@ -42,10 +42,9 @@ func main() {
 	cfg.Theme = resolveTheme(*themeFlag).Variant
 
 	m := layout.New(resolveTheme(*themeFlag), theme.DefaultKeymap(), cfg,
-		newMock("presence", "presence", presenceBody),
-		newMock("stream", "stream", streamBody),
-		newMock("artifact", "artifact", artifactBody),
-		newMock("detail", "detail", detailBody))
+		newMock("clients", "Clients", clientsBody),
+		newMock("topics", "Topics", topicsBody),
+		newMock("artifacts", "Artifacts", artifactsBody))
 
 	p := tea.NewProgram(root{m: m}, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
@@ -66,25 +65,13 @@ func resolveTheme(name string) theme.Theme {
 }
 
 // root adapts the layout.Model (which has a value-receiver Update returning a
-// Model) to the tea.Model interface (Update returns a tea.Model). It is also the
-// HOST end of the detail-on-demand contract: a surface's OpenMsg flows into the
-// layout, which opens detail and emits a layout.DetailOpenedMsg for the host to
-// retarget the detail content. The gallery reads that notification (a no-op,
-// since its detail mock is static) and otherwise forwards every message into the
-// layout — safe because DetailOpenedMsg is a distinct type the layout ignores, so
-// there is no re-trigger loop.
+// Model) to the tea.Model interface (Update returns a tea.Model). It forwards
+// every message into the layout — the gallery host owns nothing else.
 type root struct{ m layout.Model }
 
 func (r root) Init() tea.Cmd { return r.m.Init() }
 
 func (r root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if opened, ok := msg.(layout.DetailOpenedMsg); ok {
-		// The real dash (7.5) retargets its detail surface onto opened.Ref here. The
-		// gallery's detail mock is static, so this is a no-op acknowledgement; the
-		// layout has already shown + focused the detail pane.
-		_ = opened
-		return r, nil
-	}
 	var cmd tea.Cmd
 	r.m, cmd = r.m.Update(msg)
 	return r, cmd
@@ -121,19 +108,14 @@ func (s *mockSurface) Stop()                   {}
 // around it regardless.
 func (s *mockSurface) SetTheme(theme.Theme) {}
 
-// Update emits the OpenMsg intent when the operator presses "x" while this pane
-// is active, so the gallery can demonstrate detail-on-demand opening from a
-// surface intent (the stream "opens an artifact in detail"). Esc emits DoneMsg,
-// the surface-driven step-out the layout honours.
+// Update emits DoneMsg on Esc while active — the surface-driven step-out the
+// layout honours.
 func (s *mockSurface) Update(msg tea.Msg) tea.Cmd {
 	km, ok := msg.(tea.KeyMsg)
 	if !ok || s.focus != widget.FocusActive {
 		return nil
 	}
-	switch km.String() {
-	case "x":
-		return func() tea.Msg { return surface.OpenMsg{Kind: surface.OpenArtifact, Ref: "design-doc"} }
-	case "esc":
+	if km.String() == "esc" {
 		id := s.id
 		return func() tea.Msg { return surface.DoneMsg{ID: id} }
 	}
@@ -145,17 +127,16 @@ func (s *mockSurface) View() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n\n", s.body)
 	fmt.Fprintf(&b, "[%s · %dx%d]\n", state, s.w, s.h)
-	if s.focus == widget.FocusActive && s.id != "detail" {
-		b.WriteString("press x to open detail · esc to step out")
+	if s.focus == widget.FocusActive {
+		b.WriteString("esc to step out")
 	}
 	return b.String()
 }
 
 const (
-	presenceBody = "the clients directory\n● lena  ● coordinator-1  ○ agent-beta"
-	streamBody   = "one read-stream + an optional compose\nlena: let's get the dash building"
-	artifactBody = "a document reader/review\n# Dash build plan"
-	detailBody   = "detail-on-demand: hidden + toggled,\nnever an always-on column"
+	clientsBody   = "every issued identity\n● lena  ● coordinator-1  ○ agent-beta\nenter a row → its DM, in place"
+	topicsBody    = "every topic with messages\nplan · build · review\nenter a row → its conversation, in place"
+	artifactsBody = "every artifact in the bucket\ndash-plan rev 3 · notes rev 12\nenter a row → its reader, in place"
 )
 
 var _ surface.Surface = (*mockSurface)(nil)

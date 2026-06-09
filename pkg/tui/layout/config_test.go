@@ -12,15 +12,14 @@ import (
 )
 
 // TestConfigRoundTrip is AC#1: a config saved then loaded comes back equal. It
-// covers the active preset, the hidden set, the theme, and the detail target.
+// covers the active preset, the hidden set, and the theme.
 func TestConfigRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "layout.json")
 	want := layout.Config{
-		Version:      layout.ConfigVersion,
-		Preset:       layout.PresetStream,
-		Hidden:       []string{"artifact"},
-		Theme:        theme.VariantLight,
-		DetailTarget: "dash-plan",
+		Version: layout.ConfigVersion,
+		Preset:  layout.PresetSplit,
+		Hidden:  []string{"artifacts"},
+		Theme:   theme.VariantLight,
 	}
 	if err := layout.SaveConfig(path, want); err != nil {
 		t.Fatalf("save: %v", err)
@@ -44,8 +43,8 @@ func TestConfigPlacementsRoundTrip(t *testing.T) {
 		Preset:  layout.PresetCockpit,
 		Theme:   theme.VariantDark,
 		Placements: []layout.Placement{
-			{PaneID: "presence", X: 0, Y: 0, W: 30, H: 100},
-			{PaneID: "stream", X: 30, Y: 0, W: 70, H: 60},
+			{PaneID: "clients", X: 0, Y: 0, W: 30, H: 100},
+			{PaneID: "topics", X: 30, Y: 0, W: 70, H: 60},
 		},
 	}
 	if err := layout.SaveConfig(path, want); err != nil {
@@ -79,7 +78,7 @@ func TestLoadMissingFallsBackToDefault(t *testing.T) {
 func TestLoadOldConfigFillsDefaults(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "old.json")
 	// A pre-versioning file: just a hidden list, no version/preset/theme.
-	if err := os.WriteFile(path, []byte(`{"hidden":["stream"]}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"hidden":["topics"]}`), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	got, err := layout.LoadConfig(path)
@@ -95,7 +94,7 @@ func TestLoadOldConfigFillsDefaults(t *testing.T) {
 	if got.Theme != theme.VariantDark {
 		t.Errorf("theme not defaulted: %q", got.Theme)
 	}
-	if len(got.Hidden) != 1 || got.Hidden[0] != "stream" {
+	if len(got.Hidden) != 1 || got.Hidden[0] != "topics" {
 		t.Errorf("hidden lost: %v", got.Hidden)
 	}
 }

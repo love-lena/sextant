@@ -36,13 +36,9 @@ type Keymap struct {
 	// Options opens the universal options menu.
 	Options key.Binding
 
-	// DetailToggle shows or hides the detail-on-demand pane at the layout level
-	// (ADR-0023: detail is hidden and toggled, never an always-on column). It is a
-	// layout-only action — surfaces never see it — but lives here so it is an
-	// overridable default like every other binding, not a hardcoded key.
-	DetailToggle key.Binding
 	// PresetCycle advances to the next built-in preset layout at the layout level.
-	// Like DetailToggle it is layout-only, kept here so nothing hardcodes a key.
+	// It is layout-only — surfaces never see it — but lives here so it is an
+	// overridable default like every other binding, not a hardcoded key.
 	PresetCycle key.Binding
 
 	// Quit leaves the dash cleanly.
@@ -52,9 +48,9 @@ type Keymap struct {
 }
 
 // DefaultKeymap returns the locked default binding set (ADR-0023). Arrows and
-// hjkl both navigate; Enter steps in; Esc steps out; o opens options; d toggles
-// the detail pane; p cycles the preset; q quits and Ctrl-C hard-quits. These are
-// defaults, not a contract — call Merge to override.
+// hjkl both navigate; Enter steps in; Esc steps out; o opens options; p cycles
+// the preset; q quits and Ctrl-C hard-quits. These are defaults, not a contract
+// — call Merge to override.
 func DefaultKeymap() Keymap {
 	return Keymap{
 		Up: key.NewBinding(
@@ -85,10 +81,6 @@ func DefaultKeymap() Keymap {
 			key.WithKeys("o"),
 			key.WithHelp("o", "options"),
 		),
-		DetailToggle: key.NewBinding(
-			key.WithKeys("d"),
-			key.WithHelp("d", "toggle detail"),
-		),
 		PresetCycle: key.NewBinding(
 			key.WithKeys("p"),
 			key.WithHelp("p", "cycle preset"),
@@ -109,8 +101,8 @@ func DefaultKeymap() Keymap {
 // field name (e.g. "Up", "Options"); an unknown name is ignored by Merge.
 type Override struct {
 	// Action is the Keymap field to rebind, by its Go field name (case-sensitive:
-	// "Up", "Down", "Left", "Right", "Enter", "Back", "Options", "DetailToggle",
-	// "PresetCycle", "Quit", "ForceQuit").
+	// "Up", "Down", "Left", "Right", "Enter", "Back", "Options", "PresetCycle",
+	// "Quit", "ForceQuit").
 	Action string
 	// Keys are the new key strings for the action (Bubble Tea key names, e.g.
 	// "ctrl+n", "g"). The binding keeps its help description.
@@ -152,8 +144,6 @@ func (k *Keymap) binding(action string) *key.Binding {
 		return &k.Back
 	case "Options":
 		return &k.Options
-	case "DetailToggle":
-		return &k.DetailToggle
 	case "PresetCycle":
 		return &k.PresetCycle
 	case "Quit":

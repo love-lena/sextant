@@ -18,9 +18,9 @@ import (
 const ConfigVersion = 1
 
 // Config is the persisted layout choice (ADR-0023): which preset is active,
-// which panes the operator has hidden, the theme variant, and the detail
-// target. It is serialised as JSON and round-trips through SaveConfig/LoadConfig
-// so the cockpit reopens the way the operator left it.
+// which panes the operator has hidden, and the theme variant. It is serialised
+// as JSON and round-trips through SaveConfig/LoadConfig so the cockpit reopens
+// the way the operator left it.
 //
 // The schema carries an explicit seam for the deferred free-placement mode
 // (ADR-0023: "shaped so they can arrive later without a rewrite"). Today the
@@ -49,13 +49,6 @@ type Config struct {
 	// value resolves to the dash default when applied.
 	Theme theme.Variant `json:"theme"`
 
-	// DetailTarget records the last thing the detail pane was opened on (an
-	// artifact name or client id), so reopening the cockpit can restore it. Empty
-	// when the detail pane has never been targeted. The layout stays domain-free:
-	// it stores the opaque reference but never resolves it (the host does that via
-	// the re-emitted OpenMsg).
-	DetailTarget string `json:"detailTarget,omitempty"`
-
 	// Placements is the free-placement seam (deferred, ADR-0023). Empty in
 	// preset-mode (today's only mode); a future build writes explicit rectangles
 	// here. Preset-mode is the default whenever Placements is empty. The layout
@@ -81,8 +74,8 @@ type Placement struct {
 }
 
 // DefaultConfig returns the cockpit default: the cockpit preset, nothing hidden,
-// the dark theme, no detail target, preset-mode (no placements). It is what a
-// fresh dash starts from and what LoadConfig falls back to when no file exists.
+// the dark theme, preset-mode (no placements). It is what a fresh dash starts
+// from and what LoadConfig falls back to when no file exists.
 func DefaultConfig() Config {
 	return Config{
 		Version: ConfigVersion,

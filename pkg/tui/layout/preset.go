@@ -1,31 +1,27 @@
 package layout
 
-// The built-in preset names (ADR-0023: "a few built-in preset layouts"). A
+// The built-in preset names (ADR-0023: "a few built-in preset layouts",
+// ADR-0024: the cockpit is the three master-detail browsers side by side). A
 // preset is a named arrangement that maps the set of *visible* pane ids onto
-// rectangles for a given terminal size. The dash ships three:
+// rectangles for a given terminal size. The dash ships two:
 //
-//   - cockpit: the default. A narrow left column (presence) beside a tall right
-//     column split into the stream (top) and artifact (bottom) — the working
-//     cockpit. When the detail pane is shown it takes the bottom of the right
-//     column and artifact moves up to share the top row.
-//   - stream: stream-focused. The message stream fills the main area; presence
-//     keeps its left column; artifact and detail tuck into a short bottom row.
+//   - cockpit: the default. Every visible pane gets a full-height column, side
+//     by side in registration order — the three browsers (clients · topics ·
+//     artifacts) standing as equals, each a list you step into (ADR-0024).
 //   - split: an even grid. Every visible pane gets an equal cell in a balanced
 //     grid that reflows as panes toggle — the most btop-like arrangement.
 //
 // A preset never invents panes: it lays out exactly the ids it is given (the
-// visible set), and reflows to fill the whole area among them. The detail pane,
-// when visible, is just another id in the set; the preset gives it a slot.
+// visible set), and reflows to fill the whole area among them.
 const (
 	PresetCockpit = "cockpit"
-	PresetStream  = "stream"
 	PresetSplit   = "split"
 )
 
 // presetOrder is the cycle order for "switch preset" — the order the options
 // menu and a preset-cycle key step through. It is also the list of valid preset
 // names.
-var presetOrder = []string{PresetCockpit, PresetStream, PresetSplit}
+var presetOrder = []string{PresetCockpit, PresetSplit}
 
 // Rect is an outer pane rectangle in terminal cells: the box's top-left origin
 // and its full width and height (border included). The layout computes a Rect
@@ -34,12 +30,6 @@ var presetOrder = []string{PresetCockpit, PresetStream, PresetSplit}
 type Rect struct {
 	X, Y, W, H int
 }
-
-// detailPaneID is the id the layout reserves for the detail-on-demand pane. The
-// host mounts a surface under this id; presets give it a slot only when it is in
-// the visible set. It is a layout-level convention, not a domain concept — the
-// detail surface is supplied by the host like any other.
-const detailPaneID = "detail"
 
 // minPaneW and minPaneH are the smallest outer pane rectangle that renders
 // cleanly: widget.Box clamps anything below 4×3 up to 4×3 and draws three rows
@@ -99,8 +89,6 @@ func arrangeExactly(preset string, visible []string, w, h int) map[string]Rect {
 		return out
 	}
 	switch preset {
-	case PresetStream:
-		arrangeStream(out, visible, w, h)
 	case PresetSplit:
 		arrangeGrid(out, visible, w, h)
 	default:
@@ -119,36 +107,12 @@ func fitsMin(rects map[string]Rect) bool {
 	return true
 }
 
-// arrangeCockpit lays out the default cockpit: a left column for the first pane
-// (presence) and a right column holding the rest stacked. With the detail pane
-// visible it stacks into the right column too — never an always-on extra column.
-// This keeps presence as a steady directory beside the working stack.
+// arrangeCockpit lays out the default cockpit (ADR-0024): every visible pane a
+// full-height column, side by side in registration order. The three browsers
+// stand as equals — a browser's detail opens INSIDE its own pane, so no pane is
+// a secondary slot and no column is privileged.
 func arrangeCockpit(out map[string]Rect, visible []string, w, h int) {
-	leftW := columnWidth(w)
-	left, right := visible[0], visible[1:]
-	out[left] = Rect{0, 0, leftW, h}
-	stackColumn(out, right, leftW, 0, w-leftW, h)
-}
-
-// arrangeStream is the stream-focused preset: presence keeps a left column, the
-// message stream fills the main right area, and any remaining panes (artifact,
-// detail) share a short bottom strip across the right area. With only two panes
-// it degrades to a left column + a filled right pane.
-func arrangeStream(out map[string]Rect, visible []string, w, h int) {
-	leftW := columnWidth(w)
-	left, right := visible[0], visible[1:]
-	out[left] = Rect{0, 0, leftW, h}
-
-	rightX, rightW := leftW, w-leftW
-	if len(right) == 1 {
-		out[right[0]] = Rect{rightX, 0, rightW, h}
-		return
-	}
-	// The first right pane (the stream) takes the top band; the rest tile the
-	// bottom band as a row.
-	topH := bandHeight(h)
-	out[right[0]] = Rect{rightX, 0, rightW, topH}
-	tileRow(out, right[1:], rightX, topH, rightW, h-topH)
+	tileRow(out, visible, 0, 0, w, h)
 }
 
 // arrangeGrid lays the visible panes into the most balanced grid that holds them
@@ -179,19 +143,6 @@ func arrangeGrid(out map[string]Rect, visible []string, w, h int) {
 			W: cEnd - colBounds[c],
 			H: rowBounds[r+1] - rowBounds[r],
 		}
-	}
-}
-
-// stackColumn tiles ids vertically inside the column rect (x,y,w,h), each pane
-// taking an equal-ish height; the last absorbs the remainder so the column fills
-// exactly to the bottom.
-func stackColumn(out map[string]Rect, ids []string, x, y, w, h int) {
-	if len(ids) == 0 {
-		return
-	}
-	bounds := splitInto(h, len(ids))
-	for i, id := range ids {
-		out[id] = Rect{X: x, Y: y + bounds[i], W: w, H: bounds[i+1] - bounds[i]}
 	}
 }
 
@@ -234,37 +185,6 @@ func splitInto(total, n int) []int {
 		bounds[i+1] = acc
 	}
 	return bounds
-}
-
-// columnWidth returns the width of the cockpit/stream left column: a third of
-// the terminal, clamped to a sane minimum so presence stays usable and the right
-// area keeps room. Below the clamp it takes a fixed share rather than vanishing.
-func columnWidth(w int) int {
-	cw := w / 3
-	const minCol = 18
-	if cw < minCol {
-		cw = minCol
-	}
-	if cw > w-minCol {
-		cw = w / 2
-	}
-	if cw < 1 {
-		cw = 1
-	}
-	return cw
-}
-
-// bandHeight returns the height of the stream preset's top band: most of the
-// height, leaving a short bottom strip for the secondary panes.
-func bandHeight(h int) int {
-	top := h * 2 / 3
-	if top < 1 {
-		top = 1
-	}
-	if top > h-1 {
-		top = h - 1
-	}
-	return top
 }
 
 // validPreset reports whether name is a known built-in preset.

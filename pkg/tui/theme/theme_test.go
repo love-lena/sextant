@@ -98,9 +98,6 @@ func TestDefaultKeymapBindsArrowsAndHJKL(t *testing.T) {
 	if !key.Matches(keyMsg("o"), km.Options) {
 		t.Error("Options should bind o")
 	}
-	if !key.Matches(keyMsg("d"), km.DetailToggle) {
-		t.Error("DetailToggle should bind d")
-	}
 	if !key.Matches(keyMsg("p"), km.PresetCycle) {
 		t.Error("PresetCycle should bind p")
 	}
@@ -112,25 +109,21 @@ func TestDefaultKeymapBindsArrowsAndHJKL(t *testing.T) {
 func TestKeymapMergeOverridesLayoutShortcuts(t *testing.T) {
 	base := theme.DefaultKeymap()
 	merged := base.Merge(
-		theme.Override{Action: "DetailToggle", Keys: []string{"ctrl+d"}},
 		theme.Override{Action: "PresetCycle", Keys: []string{"tab"}},
 	)
-	if !key.Matches(keyMsg("ctrl+d"), merged.DetailToggle) {
-		t.Error("merged DetailToggle should bind the override key ctrl+d")
-	}
-	if key.Matches(keyMsg("d"), merged.DetailToggle) {
-		t.Error("merged DetailToggle should no longer bind d")
-	}
 	if !key.Matches(keyMsg("tab"), merged.PresetCycle) {
 		t.Error("merged PresetCycle should bind the override key tab")
 	}
+	if key.Matches(keyMsg("p"), merged.PresetCycle) {
+		t.Error("merged PresetCycle should no longer bind p")
+	}
 	// The original is unchanged (Merge returns a copy).
-	if !key.Matches(keyMsg("d"), base.DetailToggle) {
-		t.Error("Merge mutated the receiver; original DetailToggle lost its d binding")
+	if !key.Matches(keyMsg("p"), base.PresetCycle) {
+		t.Error("Merge mutated the receiver; original PresetCycle lost its p binding")
 	}
 	// Help text survives the override.
-	if merged.DetailToggle.Help().Desc != base.DetailToggle.Help().Desc {
-		t.Errorf("override changed help desc: %q vs %q", merged.DetailToggle.Help().Desc, base.DetailToggle.Help().Desc)
+	if merged.PresetCycle.Help().Desc != base.PresetCycle.Help().Desc {
+		t.Errorf("override changed help desc: %q vs %q", merged.PresetCycle.Help().Desc, base.PresetCycle.Help().Desc)
 	}
 }
 

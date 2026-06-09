@@ -1,19 +1,21 @@
-// Package layout is the dash's customization stratum (ADR-0023): the layer that
-// composes pane-surfaces into the cockpit the operator controls. It owns the
-// btop model — built-in preset arrangements, per-pane on/off toggling, reflow to
-// fill the freed space, and a config file that persists the choice — plus
-// detail-on-demand (a hidden pane toggled in and out) and the two-level
-// focus/navigation interaction.
+// Package layout is the dash's customization stratum (ADR-0023, refined by
+// ADR-0024): the layer that composes pane-surfaces into the cockpit the
+// operator controls. It owns the btop model — built-in preset arrangements,
+// per-pane on/off toggling, reflow to fill the freed space, and a config file
+// that persists the choice — plus the two-level focus/navigation interaction.
+//
+// The layout composes plain panes only. Detail-on-demand is realized INSIDE
+// each pane (ADR-0024: a browser opens its detail in place and pops back with
+// Esc — list-versus-detail is a surface's own state), so the layout has no
+// detail pane, no retarget flow, and no detail toggle.
 //
 // widget ⊂ surface ⊂ layout ⊂ dash: this package touches only the layer below —
 // the theme, the widgets (for the Box chrome and Focus), and the surface
-// contract (id/title/SetSize/SetFocus/Update/View/Stop, and the OpenMsg/DoneMsg
-// intents). It is domain-free: it never constructs a surface, never reaches for
+// contract (id/title/SetSize/SetFocus/Update/View/Stop, and the DoneMsg
+// intent). It is domain-free: it never constructs a surface, never reaches for
 // the SDK or NATS or any internal package (a go/parser import test enforces
-// this). The host (7.5) builds the domain surfaces and hands them to the layout;
-// the layout arranges, toggles, focuses, and reflows them, and re-emits a
-// surface's OpenMsg so the host can retarget detail content without the layout
-// learning what an artifact is.
+// this). The host builds the domain surfaces and hands them to the layout; the
+// layout arranges, toggles, focuses, and reflows them.
 package layout
 
 import (
@@ -53,31 +55,18 @@ type Model struct {
 	keys theme.Keymap
 
 	// order is the host's pane order (registration order), the stable order presets
-	// fill slots in and the selection cycles through. It includes the detail pane
-	// id if a detail surface was supplied.
+	// fill slots in and the selection cycles through.
 	order []string
-	// surfaces maps pane id → surface. The detail surface (if any) lives here too,
-	// keyed by detailPaneID.
+	// surfaces maps pane id → surface.
 	surfaces map[string]surface.Surface
-	// hasDetail records whether a detail surface was supplied; detail-on-demand is
-	// a no-op without one.
-	hasDetail bool
 
 	// preset is the active arrangement name.
 	preset string
-	// hidden is the set of pane ids toggled off. The detail pane starts hidden and
-	// is governed by detailShown rather than this set.
+	// hidden is the set of pane ids toggled off.
 	hidden map[string]bool
-	// detailShown is whether the detail-on-demand pane is currently visible. It is
-	// hidden by default and toggles in/out; it is never in the always-on visible
-	// set.
-	detailShown bool
-	// detailTarget is the last opaque reference the detail pane was opened on
-	// (mirrored into Config). The layout stores it but never resolves it.
-	detailTarget string
 
 	// rects is the last computed arrangement: visible pane id → outer Rect. Recomputed
-	// on every reflow (toggle, preset switch, resize, detail toggle).
+	// on every reflow (toggle, preset switch, resize).
 	rects map[string]Rect
 
 	// level is the current focus level (layout vs stepped-in).
@@ -98,10 +87,8 @@ type Model struct {
 const statusH = 1
 
 // New builds a cockpit Model over a set of surfaces, applying an initial Config.
-// The surfaces slice is the host's pane order; one surface MAY carry the
-// reserved detail id (detailPaneID == "detail"), in which case it becomes the
-// detail-on-demand pane (hidden by default). The keymap supplies every binding —
-// the layout hardcodes no key. The theme variant in cfg overrides th's variant
+// The surfaces slice is the host's pane order. The keymap supplies every binding
+// — the layout hardcodes no key. The theme variant in cfg overrides th's variant
 // so a persisted theme choice is honoured on open.
 func New(th theme.Theme, keys theme.Keymap, cfg Config, surfaces ...surface.Surface) Model {
 	m := Model{
@@ -118,18 +105,14 @@ func New(th theme.Theme, keys theme.Keymap, cfg Config, surfaces ...surface.Surf
 		}
 		m.surfaces[id] = s
 		m.order = append(m.order, id)
-		if id == detailPaneID {
-			m.hasDetail = true
-		}
 	}
 	m.apply(cfg)
 	return m
 }
 
 // apply sets the layout's state from a Config: the theme variant, the active
-// preset, the hidden set, and the detail target. An unknown preset falls back to
-// the cockpit default; the detail pane id is never put in the hidden set (its
-// visibility is detailShown, governed by detail-on-demand, not the toggle set).
+// preset, and the hidden set. An unknown preset falls back to the cockpit
+// default.
 func (m *Model) apply(cfg Config) {
 	if cfg.Theme == theme.VariantLight || cfg.Theme == theme.VariantDark {
 		m.th = theme.New(cfg.Theme)
@@ -140,29 +123,21 @@ func (m *Model) apply(cfg Config) {
 	}
 	m.hidden = make(map[string]bool)
 	for _, id := range cfg.Hidden {
-		if id == detailPaneID {
-			continue
-		}
 		if _, ok := m.surfaces[id]; ok {
 			m.hidden[id] = true
 		}
 	}
-	m.detailTarget = cfg.DetailTarget
-	// A loaded config does not auto-show detail; detail-on-demand stays hidden until
-	// the operator toggles it or a surface intent opens it.
-	m.detailShown = false
 	m.selected = m.firstVisible()
 }
 
 // Config snapshots the layout's current state as a Config the host can persist.
-// It records the active preset, the hidden set, the theme variant, and the
-// detail target; Placements stays empty (preset-mode). The host calls this on
-// change or on quit and hands the result to SaveConfig.
+// It records the active preset, the hidden set, and the theme variant;
+// Placements stays empty (preset-mode). The host calls this on change or on
+// quit and hands the result to SaveConfig.
 func (m Model) Config() Config {
 	cfg := DefaultConfig()
 	cfg.Preset = m.preset
 	cfg.Theme = m.th.Variant
-	cfg.DetailTarget = m.detailTarget
 	cfg.Hidden = m.hiddenList()
 	return cfg
 }
@@ -272,15 +247,19 @@ func (m Model) focusOf(id string) widget.Focus {
 }
 
 // titleHue tints a pane's chrome by what the pane is, mirroring the gallery's
-// convention so the cockpit reads the same as the surface previews.
+// convention so the cockpit reads the same as the surface previews. It is keyed
+// off the STABLE pane id, never the title: a browser's Title changes live while
+// a detail is open ("Topics" → "Topic · build") and the chrome label tracks it,
+// but the hue stays the pane's own so stepping into a detail never recolours
+// the frame.
 func (m Model) titleHue(s surface.Surface) lipgloss.Color {
 	switch s.ID() {
-	case "presence":
+	case "clients":
 		return m.th.RoleHue(theme.RoleHuman)
-	case "artifact", detailPaneID:
-		return m.th.KindHue(theme.KindArtifactUpdate)
-	case "stream":
+	case "topics":
 		return m.th.KindHue(theme.KindChat)
+	case "artifacts":
+		return m.th.KindHue(theme.KindArtifactUpdate)
 	default:
 		return m.th.Accent
 	}

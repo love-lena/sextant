@@ -55,7 +55,7 @@ func assertTiles(t *testing.T, rects map[string]Rect, w, h int) int {
 }
 
 func TestArrangeTilesEveryPresetAndCount(t *testing.T) {
-	presets := []string{PresetCockpit, PresetStream, PresetSplit}
+	presets := []string{PresetCockpit, PresetSplit}
 	sizes := []struct{ w, h int }{
 		{80, 24}, {120, 40}, {100, 30}, {60, 20},
 	}
@@ -84,7 +84,7 @@ func TestArrangeTilesEveryPresetAndCount(t *testing.T) {
 // tile cleanly with whatever it keeps, and must drop the overflow rather than
 // overlap. The 20×6 / 4-pane case the review demonstrated is included.
 func TestArrangeDegradesGracefullyAtTinyTerminals(t *testing.T) {
-	presets := []string{PresetCockpit, PresetStream, PresetSplit}
+	presets := []string{PresetCockpit, PresetSplit}
 	sizes := []struct{ w, h int }{
 		{20, 6}, {20, 5}, {16, 4}, {40, 8}, {30, 7}, {12, 9}, {80, 6},
 	}
@@ -116,7 +116,7 @@ func TestArrangeDegradesGracefullyAtTinyTerminals(t *testing.T) {
 // asserts the no-overlap / no-sub-minimum invariant holds everywhere — the
 // single guarantee the canvas relies on to never overwrite a neighbour.
 func TestArrangeNeverOverlapsExhaustive(t *testing.T) {
-	presets := []string{PresetCockpit, PresetStream, PresetSplit}
+	presets := []string{PresetCockpit, PresetSplit}
 	for _, preset := range presets {
 		for w := 1; w <= 40; w += 3 {
 			for h := 1; h <= 24; h += 2 {
@@ -141,7 +141,7 @@ func TestArrangeEmptyAndDegenerate(t *testing.T) {
 		t.Errorf("zero width should give no rects, got %v", got)
 	}
 	// A single pane fills the whole area regardless of preset.
-	for _, p := range []string{PresetCockpit, PresetStream, PresetSplit} {
+	for _, p := range []string{PresetCockpit, PresetSplit} {
 		got := arrange(p, []string{"only"}, 80, 24)
 		want := Rect{0, 0, 80, 24}
 		if got["only"] != want {
