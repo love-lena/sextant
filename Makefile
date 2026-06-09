@@ -23,6 +23,8 @@ fmt:
 	gofumpt -w .
 
 # Build the mdbook reference into docs/book/book (gitignored output).
+# Regenerates the generated pages from canon first (docgen), then renders.
 # Install mdbook with: cargo install mdbook (or `brew install mdbook`).
 book:
+	go run ./cmd/docgen
 	mdbook build docs/book
