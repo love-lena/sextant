@@ -72,7 +72,7 @@ operations (creds from --creds, $SEXTANT_CREDS, or the active context):
   sextant publish   <subject> <record-json>
   sextant read      <subject> [--since N] [--limit N] [--json]
   sextant subscribe <subject> [--all] [--json]
-  sextant artifact  create|update|get|delete|watch <name> [<record-json>] [--rev N] [--json]
+  sextant artifact  create|update|get|list|delete|watch [<name>] [<record-json>] [--rev N] [--json]
 
 the dash (a cockpit of pane-surfaces over the same SDK — ADR-0023):
   sextant dash      [--theme light|dark|auto] [--config F] [--topic NAME]

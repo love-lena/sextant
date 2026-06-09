@@ -119,6 +119,8 @@ func (b *Bus) dispatch(ctx context.Context, clientID, op string, data []byte) (j
 		return b.opArtifactUpdate(ctx, clientID, data)
 	case wireapi.OpArtifactGet:
 		return b.opArtifactGet(ctx, data)
+	case wireapi.OpArtifactList:
+		return b.opArtifactList(ctx)
 	case wireapi.OpArtifactDelete:
 		return b.opArtifactDelete(ctx, data)
 	case wireapi.OpClientsList:
@@ -302,6 +304,43 @@ func (b *Bus) opArtifactGet(ctx context.Context, data []byte) (json.RawMessage, 
 		CreatedAt: frame.CreatedAt,
 		UpdatedAt: frame.UpdatedAt,
 	})
+}
+
+// opArtifactList is the artifacts directory read: the name and bus-stamped
+// metadata of every artifact in the ARTIFACTS bucket, sorted by name. It is
+// discovery of state the bus already owns (ADR-0016) — a client lists, then
+// artifact.gets the one it wants — so it reads each key's metadata (revision +
+// the stamped create/update times) without returning the records. A key left
+// between the listing and the per-key read is skipped, as is an undecodable
+// frame, rather than failing the whole listing for everyone. An empty bucket is
+// an empty slice, not an error.
+func (b *Bus) opArtifactList(ctx context.Context) (json.RawMessage, error) {
+	keys, err := b.backend.Keys(ctx, sx.BucketArtifacts)
+	if err != nil {
+		return nil, fmt.Errorf("bus: artifact.list: %w", err)
+	}
+	out := wireapi.ArtifactListOutput{Artifacts: make([]wireapi.ArtifactListEntry, 0, len(keys))}
+	for _, k := range keys {
+		val, rev, err := b.backend.Get(ctx, sx.BucketArtifacts, k)
+		if errors.Is(err, backend.ErrNotFound) {
+			continue // deleted between the key listing and this read
+		}
+		if err != nil {
+			return nil, fmt.Errorf("bus: artifact.list: read %q: %w", k, err)
+		}
+		frame, err := wire.Decode(val)
+		if err != nil {
+			continue // skip an undecodable entry rather than fail the listing
+		}
+		out.Artifacts = append(out.Artifacts, wireapi.ArtifactListEntry{
+			Name:      k,
+			Revision:  rev,
+			CreatedAt: frame.CreatedAt,
+			UpdatedAt: frame.UpdatedAt,
+		})
+	}
+	sort.Slice(out.Artifacts, func(i, j int) bool { return out.Artifacts[i].Name < out.Artifacts[j].Name })
+	return json.Marshal(out)
 }
 
 func (b *Bus) opArtifactDelete(ctx context.Context, data []byte) (json.RawMessage, error) {

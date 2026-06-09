@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/love-lena/sextant/internal/clictx"
 	"github.com/love-lena/sextant/pkg/bus"
@@ -23,7 +24,7 @@ import (
 // The operation subcommands — the operator/test face of the protocol's
 // operations (TASK-28). Command names have exact parity with the operations in
 // protocol/methods.json (no aliases): publish, subscribe, read, clients list,
-// artifact create|update|get|delete|watch. Each is a thin wrapper that connects
+// artifact create|update|get|list|delete|watch. Each is a thin wrapper that connects
 // an SDK client and invokes one operation, so the CLI and the SDK share one
 // surface (the conformance test pins the parity).
 
@@ -40,6 +41,7 @@ var cliOperations = map[string]string{
 	"artifact.create":   "artifact create",
 	"artifact.update":   "artifact update",
 	"artifact.get":      "artifact get",
+	"artifact.list":     "artifact list",
 	"artifact.delete":   "artifact delete",
 	"artifact.watch":    "artifact watch",
 	"clients.list":      "clients list",
@@ -397,7 +399,7 @@ func selfName() string {
 
 func cmdArtifact(args []string) {
 	if len(args) < 1 {
-		fatal("usage: sextant artifact create|update|get|delete|watch <name> [...]")
+		fatal("usage: sextant artifact create|update|get|list|delete|watch <name> [...]")
 	}
 	verb, rest := args[0], args[1:]
 	switch verb {
@@ -407,13 +409,41 @@ func cmdArtifact(args []string) {
 		artifactWrite(rest, true)
 	case "get":
 		artifactGet(rest)
+	case "list":
+		artifactList(rest)
 	case "delete":
 		artifactDelete(rest)
 	case "watch":
 		artifactWatch(rest)
 	default:
-		fatal("unknown artifact verb %q (create|update|get|delete|watch)", verb)
+		fatal("unknown artifact verb %q (create|update|get|list|delete|watch)", verb)
 	}
+}
+
+// artifactList prints the artifacts directory: every artifact's name, current
+// revision, and update time (ADR-0024 discovery). It carries no records — a
+// client lists, then `artifact get`s the one it wants.
+func artifactList(args []string) {
+	fs := flag.NewFlagSet("artifact list", flag.ExitOnError)
+	asJSON := fs.Bool("json", false, "emit the directory as JSON")
+	cf := addConnFlags(fs)
+	_ = fs.Parse(args)
+
+	ctx := context.Background()
+	c := cf.connect(ctx)
+	defer c.Close()
+	arts, err := c.ListArtifacts(ctx)
+	if err != nil {
+		fatal("%v", err)
+	}
+	if *asJSON {
+		emitJSON(arts)
+		return
+	}
+	for _, a := range arts {
+		fmt.Printf("%-30s  rev=%-4d  %s\n", a.Name, a.Revision, a.Updated.Format(time.RFC3339))
+	}
+	fmt.Fprintf(os.Stderr, "(%d artifacts)\n", len(arts))
 }
 
 func artifactWrite(args []string, update bool) {

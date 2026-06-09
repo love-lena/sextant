@@ -3,6 +3,7 @@ package sextant
 import (
 	"bytes"
 	"context"
+	"slices"
 	"testing"
 	"time"
 )
@@ -89,6 +90,97 @@ func TestDeleteArtifact(t *testing.T) {
 	}
 	if _, err := c.GetArtifact(ctx, "tmp"); err == nil {
 		t.Error("expected Get to fail after delete")
+	}
+}
+
+func TestListArtifacts(t *testing.T) {
+	b := startBus(t)
+	c := dialClient(t, b, "art-list")
+	ctx := t.Context()
+
+	// An empty bucket lists as an empty slice, not an error.
+	got, err := c.ListArtifacts(ctx)
+	if err != nil {
+		t.Fatalf("ListArtifacts on empty bucket: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("empty bucket listed %d artifacts: %+v", len(got), got)
+	}
+
+	// Create a few out of name order; the listing must come back sorted by name.
+	want := map[string]uint64{}
+	for _, name := range []string{"plan/c", "plan/a", "plan/b"} {
+		rev, err := c.CreateArtifact(ctx, name, []byte(`{"v":1}`))
+		if err != nil {
+			t.Fatalf("CreateArtifact(%s): %v", name, err)
+		}
+		want[name] = rev
+	}
+
+	got, err = c.ListArtifacts(ctx)
+	if err != nil {
+		t.Fatalf("ListArtifacts: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("listed %d artifacts, want %d: %+v", len(got), len(want), got)
+	}
+	names := make([]string, len(got))
+	for i, a := range got {
+		names[i] = a.Name
+		if a.Revision != want[a.Name] {
+			t.Errorf("%s revision = %d, want %d", a.Name, a.Revision, want[a.Name])
+		}
+		if a.Created.IsZero() {
+			t.Errorf("%s Created is zero; want a bus-stamped time", a.Name)
+		}
+	}
+	if !slices.IsSorted(names) {
+		t.Errorf("listing is not sorted by name: %v", names)
+	}
+	if !slices.Equal(names, []string{"plan/a", "plan/b", "plan/c"}) {
+		t.Errorf("names = %v, want [plan/a plan/b plan/c]", names)
+	}
+
+	// A deleted artifact drops out of the listing.
+	if err := c.DeleteArtifact(ctx, "plan/b"); err != nil {
+		t.Fatalf("DeleteArtifact: %v", err)
+	}
+	got, err = c.ListArtifacts(ctx)
+	if err != nil {
+		t.Fatalf("ListArtifacts after delete: %v", err)
+	}
+	for _, a := range got {
+		if a.Name == "plan/b" {
+			t.Errorf("deleted artifact plan/b is still listed: %+v", got)
+		}
+	}
+	if len(got) != 2 {
+		t.Errorf("after delete listed %d artifacts, want 2: %+v", len(got), got)
+	}
+
+	// An update advances the revision the listing reports.
+	rev2, err := c.UpdateArtifact(ctx, "plan/a", []byte(`{"v":2}`), want["plan/a"])
+	if err != nil {
+		t.Fatalf("UpdateArtifact: %v", err)
+	}
+	if rev2 <= want["plan/a"] {
+		t.Fatalf("update did not advance revision: %d -> %d", want["plan/a"], rev2)
+	}
+	got, err = c.ListArtifacts(ctx)
+	if err != nil {
+		t.Fatalf("ListArtifacts after update: %v", err)
+	}
+	var sawUpdated bool
+	for _, a := range got {
+		if a.Name == "plan/a" {
+			sawUpdated = true
+			if a.Revision != rev2 {
+				t.Errorf("plan/a revision = %d after update, want %d", a.Revision, rev2)
+			}
+		}
+	}
+	if !sawUpdated {
+		t.Errorf("plan/a missing from listing after update: %+v", got)
 	}
 }
 
