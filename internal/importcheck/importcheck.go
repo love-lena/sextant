@@ -95,8 +95,9 @@ func AssertPresentationOnly(t *testing.T, pkgPath string) {
 // and — through the surface contract — layout): the bus is reached through the
 // public SDK alone. In the production closure:
 //   - pkg/bus (the embedded-NATS wrapper) never appears;
-//   - the only module package that may directly import a NATS package is
-//     pkg/sextant, so NATS is reachable ONLY via the SDK;
+//   - the only package that may directly import a NATS package is pkg/sextant
+//     (NATS's own intra-family imports aside), so NATS is reachable ONLY via
+//     the SDK — third-party dependencies are held to this edge rule too;
 //   - the only module-internal package allowed is internal/wireapi (the SDK's
 //     wire atom), and only pkg/sextant may import it.
 func AssertSDKOnly(t *testing.T, pkgPath string) {
@@ -108,14 +109,18 @@ func AssertSDKOnly(t *testing.T, pkgPath string) {
 		if strings.HasPrefix(dep, internalNS) && dep != wireAtom {
 			t.Errorf("%s: production closure contains internal package %s", pkgPath, dep)
 		}
-		if !strings.HasPrefix(dep, Module+"/") {
-			continue // the per-edge discipline below binds module packages only
-		}
 		for _, imp := range imports {
-			if strings.HasPrefix(imp, natsNS) && dep != sdkPkg {
+			// The NATS edge rule binds every dep, third-party included — a
+			// dependency pulling in NATS would be a second NATS path in the
+			// linked binary even with our own packages clean. NATS packages
+			// importing their own siblings are the SDK's dependency, not a
+			// second path.
+			if strings.HasPrefix(imp, natsNS) && dep != sdkPkg && !strings.HasPrefix(dep, natsNS) {
 				t.Errorf("%s: %s imports %s directly; NATS is reached only via %s", pkgPath, dep, imp, sdkPkg)
 			}
-			if strings.HasPrefix(imp, internalNS) && dep != sdkPkg {
+			// The internal/ rule is module-only by nature: the compiler
+			// already forbids foreign modules from importing our internals.
+			if strings.HasPrefix(dep, Module+"/") && strings.HasPrefix(imp, internalNS) && dep != sdkPkg {
 				t.Errorf("%s: %s imports %s directly; internal packages are the SDK's alone", pkgPath, dep, imp)
 			}
 		}
