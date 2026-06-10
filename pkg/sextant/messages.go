@@ -72,10 +72,10 @@ func DeliverAll() SubOption {
 // Without OnError, either case is only logged — the handler receives nothing,
 // forever. Registering an OnError makes that silence visible.
 //
-// The handler runs on the NATS client's asynchronous-callback goroutine, the
-// same one that dispatches reconnect events: it must not block, and it must not
-// make calls on this client (they would deadlock or time out behind the
-// reconnect in progress). Hand the error off to a channel and return.
+// The handler runs on the SDK's resume-pass goroutine. It should not block —
+// a blocking handler stalls the remaining subscriptions' resumes behind it —
+// and it should not make calls on this client (mid-reconnect they time out,
+// stalling the pass further). Hand the error off to a channel and return.
 func OnError(h func(error)) SubOption {
 	return func(c *subConfig) { c.onErr = h }
 }
@@ -284,11 +284,78 @@ func (c *Client) deliver(d wireapi.MessageDelivery, h Handler, s *subscription) 
 	})
 }
 
-// reestablishSubs is called by the ReconnectHandler on every successful
-// reconnect. It iterates all registered active subscriptions and re-creates
-// their server-side relay, resuming from last-delivered+1 so no messages are
-// missed or duplicated. A subscription that had no deliveries resumes from its
-// original start option.
+// startResumePass hands one resume pass to its own goroutine and returns
+// immediately. It runs in the ReconnectHandler, which shares the NATS client's
+// async-callback dispatcher with every other notification: one rotation is
+// deadline-bounded, but a pass is unbounded in aggregate (N subscriptions ×
+// 10s against a sick bus), so running it inline would wedge every later
+// disconnect/reconnect notice behind it. The snapshot and the pass token are
+// taken synchronously here, so the pass works exactly the set that existed at
+// its reconnect; a subscription created after that carries a fresh epoch and
+// needs no pass (Subscribe's staleness re-check covers its own window).
+//
+// One pass runs usefully at a time — newest wins. The token is the
+// connection's reconnect count at the pass's reconnect: when the counter moves
+// on, a newer reconnect exists (its handler is guaranteed to start a fresh
+// pass over a full snapshot), so the running pass's remaining rotations are
+// stale and it stops at the next subscription boundary; only its single
+// in-flight rotation may still finish.
+//
+// Convergence when a superseded pass's in-flight rotation overlaps the newer
+// pass (resumeMu serializes the two on the same subscription):
+//
+//   - It lands first with a pre-bump epoch: the generation it installed is
+//     doomed (relayHandler drops on a stale count, lastSeq stays frozen) and
+//     the newer pass rotates it again from the frozen cursor — the normal
+//     reconnect story.
+//   - It lands first with a post-bump epoch: the generation is already healthy;
+//     the newer pass's re-rotation replaces it from last+1 — exact, and the
+//     monotonic cursor drops any overlap.
+//   - It lands second (after the newer pass already rotated): it replaces the
+//     newer pass's generation the same way — fresh epoch, resume from last+1.
+//   - It fails on transport: at worst a lost-reply relay sits under the newest
+//     sub-id, which the next rotation's opening idempotent stop clears.
+//
+// The "reconnected to the bus" log keeps its meaning: it fires only at the end
+// of a completed, non-superseded pass — once every relay this reconnect owed
+// is live again (or has failed loudly) — so callers waiting on that log see a
+// ready bus.
+func (c *Client) startResumePass() {
+	select {
+	case <-c.closed:
+		return // Close is winding the client down; nothing left to resume
+	default:
+	}
+	token := c.nc.Stats().Reconnects
+	active := c.snapshotSubs()
+	c.passWG.Add(1)
+	go func() {
+		defer c.passWG.Done()
+		if c.reestablishSubs(token, active) {
+			c.logf("sextant: reconnected to the bus")
+		}
+	}()
+}
+
+// snapshotSubs copies the active subscription set under the registry lock, so
+// a pass can walk it without holding the lock across network calls.
+func (c *Client) snapshotSubs() []*subscription {
+	c.subsMu.Lock()
+	defer c.subsMu.Unlock()
+	active := make([]*subscription, 0, len(c.subs))
+	for s := range c.subs {
+		active = append(active, s)
+	}
+	return active
+}
+
+// reestablishSubs is one resume pass: it walks the snapshot and re-creates
+// each subscription's server-side relay, resuming from last-delivered+1 so no
+// messages are missed or duplicated. A subscription that had no deliveries
+// resumes from its original start option. It reports whether the pass
+// completed as the final pass — false when it was superseded by a newer
+// reconnect (the counter moved off token) or stopped by Close, in which case
+// the "reconnected" completion belongs to its successor (or to no one).
 //
 // A failed re-establishment splits on who failed (ADR-0027 reserves loud death
 // for an impossible resume, not a flaky network):
@@ -308,19 +375,19 @@ func (c *Client) deliver(d wireapi.MessageDelivery, h Handler, s *subscription) 
 //     pushed in the meantime once a further reconnect intervenes, and the
 //     deliver-side monotonic cursor drops any overlap regardless.
 //
-// Ownership: runs on the NATS client's reconnect goroutine. It holds c.subsMu
-// only long enough to snapshot the active set; a subscription stopped during
-// (or just before) the loop is skipped via its stopped flag.
-func (c *Client) reestablishSubs() {
-	c.subsMu.Lock()
-	// Snapshot active subs so we don't hold the lock while making network calls.
-	active := make([]*subscription, 0, len(c.subs))
-	for s := range c.subs {
-		active = append(active, s)
-	}
-	c.subsMu.Unlock()
-
+// Ownership: runs on a dedicated pass goroutine (startResumePass), never on
+// the NATS async-callback dispatcher. A subscription stopped during (or just
+// before) the loop is skipped via its stopped flag.
+func (c *Client) reestablishSubs(token uint64, active []*subscription) bool {
 	for _, s := range active {
+		select {
+		case <-c.closed:
+			return false // Close is draining the client; stop, stay quiet
+		default:
+		}
+		if c.nc.Stats().Reconnects != token {
+			return false // superseded: a newer reconnect's pass owns a fresh snapshot
+		}
 		if s.stopped.Load() {
 			continue // Stop won the race; nothing to re-establish
 		}
@@ -352,6 +419,14 @@ func (c *Client) reestablishSubs() {
 			s.stopNewestRelay()
 		}
 	}
+	// Completed every rotation — final only if no newer reconnect has taken
+	// over in the meantime and the client is not closing.
+	select {
+	case <-c.closed:
+		return false
+	default:
+	}
+	return c.nc.Stats().Reconnects == token
 }
 
 // registerSub adds a subscription to the client's active set. The set is keyed
@@ -450,11 +525,12 @@ func (s *subscription) advanceLastSeq(seq uint64) bool {
 // zero lastSeq means no message was ever delivered; in that case it re-uses
 // the original start option (DeliverAll or StartNew).
 //
-// Concurrency note: called from reestablishSubs (NATS reconnect goroutine) and
-// from Subscribe's post-call staleness re-check (the caller's goroutine);
-// resumeMu serializes the two. Reads lastSeq atomically and swaps the
-// generation under s.mu; the other fields are written once at construction and
-// are read-only here.
+// Concurrency note: called from a resume pass (its dedicated goroutine — and
+// briefly from two when a superseded pass's in-flight rotation overlaps its
+// successor) and from Subscribe's post-call staleness re-check (the caller's
+// goroutine); resumeMu serializes all of them. Reads lastSeq atomically and
+// swaps the generation under s.mu; the other fields are written once at
+// construction and are read-only here.
 func (s *subscription) reestablish(c *Client) error {
 	s.resumeMu.Lock()
 	defer s.resumeMu.Unlock()

@@ -19,6 +19,7 @@ package bus_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -85,9 +86,10 @@ func dialOnURL(t *testing.T, rawURL, credsPath string) *sextant.Client {
 
 // dialOnURLWithReconnectSignal connects a client and returns a channel that
 // receives once each time the client reconnects AND all subscription relays have
-// been re-established. The "reconnected to the bus" log fires after
-// reestablishSubs returns (see client.go), so waiting on this signal is safe
-// before publishing to a subscription.
+// been re-established. The "reconnected to the bus" log fires only at the end
+// of a completed, non-superseded resume pass (the pass runs asynchronously off
+// the NATS dispatcher, see startResumePass in pkg/sextant), so waiting on this
+// signal is safe before publishing to a subscription.
 func dialOnURLWithReconnectSignal(t *testing.T, rawURL, credsPath string) (*sextant.Client, <-chan struct{}) {
 	t.Helper()
 	reconnected := make(chan struct{}, 4)
@@ -205,7 +207,7 @@ func TestSubscribeDeliverAllSurvivesRestart(t *testing.T) {
 	}
 	t.Cleanup(b2.Shutdown)
 
-	// Wait for reestablishSubs to complete before publishing so the relay is up
+	// Wait for the resume pass to complete before publishing so the relay is up
 	// and the resume-from-seq+1 consumer is in place before any new messages arrive.
 	select {
 	case <-reconnected:
@@ -235,7 +237,7 @@ func TestSubscribeDeliverAllSurvivesRestart(t *testing.T) {
 
 // TestSubscribeLiveOnlySurvivesRestart: a live-only subscription (no DeliverAll)
 // receives messages published after the restart. We wait for the reconnect signal
-// (which fires after reestablishSubs completes) before publishing, avoiding the
+// (which fires after the resume pass completes) before publishing, avoiding the
 // race where a publish beats the relay re-establishment.
 func TestSubscribeLiveOnlySurvivesRestart(t *testing.T) {
 	store := t.TempDir()
@@ -266,8 +268,8 @@ func TestSubscribeLiveOnlySurvivesRestart(t *testing.T) {
 	}
 	t.Cleanup(b2.Shutdown)
 
-	// Wait for reestablishSubs to complete (the "reconnected" log fires after it
-	// returns) before publishing, so the relay is up before the message arrives.
+	// Wait for the resume pass to complete (the "reconnected" log fires at its
+	// end) before publishing, so the relay is up before the message arrives.
 	select {
 	case <-reconnected:
 	case <-time.After(15 * time.Second):
@@ -588,7 +590,7 @@ func TestFlapRestartThenBlipKeepsSubscriptionAlive(t *testing.T) {
 // connected client keeps publishing while the proxied subscriber is dropped and
 // straight through the reconnect window. That window is where the surviving
 // relay resumes pushing the moment the NATS client re-sends its deliver-subject
-// SUB — before reestablishSubs runs — so its pushes interleave with the new
+// SUB — before the resume pass runs — so its pushes interleave with the new
 // relay's replay; the deliver-side monotonic cursor must drop the overlap. The
 // test asserts the subscriber sees every n exactly once, in order: a duplicate
 // or a gap anywhere across the blip fails it.
@@ -697,6 +699,133 @@ func TestBlipExactlyOnceWhilePublisherKeepsPublishing(t *testing.T) {
 		}
 	}
 	// Nothing extra may trail behind the full set (a late duplicate).
+	select {
+	case m := <-got:
+		t.Fatalf("duplicate delivery after the full set: %s", m.Frame.Record)
+	case <-time.After(500 * time.Millisecond):
+	}
+}
+
+// TestDoubleBlipExactlyOnceWithContinuousPublisher: exactly-once across
+// BACK-TO-BACK blips with traffic in flight throughout (ADR-0027). The second
+// drop lands the instant the first recovery's "reconnected" completion fires —
+// so the recovery of blip one is itself ripped out, and timing permitting the
+// second reconnect supersedes a resume pass still finishing its tail. Whatever
+// the interleaving, the final pass owns the resume: the subscriber sees every
+// n exactly once, in order, and exactly the final recovery completes.
+func TestDoubleBlipExactlyOnceWithContinuousPublisher(t *testing.T) {
+	store := t.TempDir()
+	b := startBusWithStore(t, store)
+	subCreds := mintCredsFile(t, b, store, "double-blip-sub")
+	pubCreds := mintCredsFile(t, b, store, "double-blip-pub")
+
+	px := newProxy(t, hostOf(t, b.ClientURL()))
+	c, reconnected := dialOnURLWithReconnectSignal(t, px.url(), subCreds)
+	t.Cleanup(func() { _ = c.Close() })
+	pub := dialOnURL(t, b.ClientURL(), pubCreds)
+	t.Cleanup(func() { _ = pub.Close() })
+
+	subj := sx.TopicSubject("double-blip")
+	got := make(chan sextant.Message, 8192)
+	errCh := make(chan error, 8)
+	sub, err := c.Subscribe(t.Context(), subj, func(m sextant.Message) { got <- m },
+		sextant.OnError(func(e error) { errCh <- e }))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	t.Cleanup(sub.Stop)
+
+	mustPublish(t, pub, subj, json.RawMessage(`{"n":1}`))
+	waitMsg(t, got, "pre-blip delivery")
+
+	// Blip one; the publisher runs continuously from here to the end.
+	px.dropAll()
+	stopPub := make(chan struct{})
+	type pubResult struct {
+		last int
+		err  error
+	}
+	pubDone := make(chan pubResult, 1)
+	go func() {
+		n := 1
+		ticker := time.NewTicker(5 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopPub:
+				pubDone <- pubResult{last: n}
+				return
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				err := pub.Publish(ctx, subj, json.RawMessage(fmt.Sprintf(`{"n":%d}`, n+1)))
+				cancel()
+				if err != nil {
+					pubDone <- pubResult{last: n, err: err}
+					return
+				}
+				n++
+			}
+		}
+	}()
+
+	// Recovery one...
+	select {
+	case <-reconnected:
+	case <-time.After(20 * time.Second):
+		t.Fatal("client did not recover from the first blip within 20s")
+	}
+	// ...ripped out again immediately: blip two, with the first recovery's
+	// replay possibly still in flight.
+	px.dropAll()
+	select {
+	case <-reconnected:
+	case <-time.After(20 * time.Second):
+		t.Fatal("client did not recover from the second blip within 20s")
+	}
+
+	// A little post-recovery traffic, then stop and verify.
+	time.Sleep(300 * time.Millisecond)
+	close(stopPub)
+	res := <-pubDone
+	if res.err != nil {
+		t.Fatalf("the direct publisher failed mid-test: %v", res.err)
+	}
+	if res.last < 3 {
+		t.Fatalf("the publisher only reached n=%d; the blip windows saw no traffic", res.last)
+	}
+
+	// Exactly-once, in order, across both blips and both recoveries.
+	want := 2
+	deadline := time.After(20 * time.Second)
+	var lastSeq uint64
+	for want <= res.last {
+		select {
+		case m := <-got:
+			var rec struct {
+				N int `json:"n"`
+			}
+			if err := json.Unmarshal(m.Frame.Record, &rec); err != nil {
+				t.Fatalf("undecodable record %s: %v", m.Frame.Record, err)
+			}
+			if rec.N != want {
+				t.Fatalf("delivery out of order across the double blip: got n=%d, want n=%d (a duplicate or a gap)", rec.N, want)
+			}
+			if m.Sequence <= lastSeq {
+				t.Fatalf("non-increasing stream sequence %d after %d (duplicate delivery)", m.Sequence, lastSeq)
+			}
+			lastSeq = m.Sequence
+			want++
+		case e := <-errCh:
+			// Blip two can interrupt a resume rotation mid-flight: a non-fatal
+			// deferral notice is legitimate (the final pass retried it). Anything
+			// else is a real failure.
+			if !errors.Is(e, sextant.ErrResumeDeferred) {
+				t.Fatalf("fatal OnError while recovering the double blip: %v", e)
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for n=%d of %d after the double blip (gap)", want, res.last)
+		}
+	}
 	select {
 	case m := <-got:
 		t.Fatalf("duplicate delivery after the full set: %s", m.Frame.Record)

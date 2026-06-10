@@ -19,6 +19,7 @@ import (
 	"github.com/love-lena/sextant/pkg/conninfo"
 	"github.com/love-lena/sextant/pkg/sx"
 	"github.com/love-lena/sextant/pkg/wire"
+	"go.uber.org/goleak"
 )
 
 func TestPublishSubscribeRoundTrip(t *testing.T) {
@@ -353,7 +354,8 @@ func TestResumeTransportFailureDefersUntilNextReconnect(t *testing.T) {
 		URL:       b1.ClientURL(),
 		CredsPath: credsFile,
 		Logf: func(format string, args ...any) {
-			// "reconnected to the bus" logs only after reestablishSubs returns.
+			// "reconnected to the bus" logs only at the end of a completed,
+			// non-superseded resume pass.
 			if strings.Contains(fmt.Sprintf(format, args...), "reconnected to the bus") {
 				select {
 				case reconnected <- struct{}{}:
@@ -390,9 +392,10 @@ func TestResumeTransportFailureDefersUntilNextReconnect(t *testing.T) {
 	// Take the bus down and run a resume pass while it is unreachable: every
 	// call is a transport failure (the request deadline expires; the bus never
 	// answers). This is the deterministic equivalent of a second blip landing
-	// inside the resume window.
+	// inside the resume window. The pass loop is driven directly (no log, no
+	// goroutine) with the live counter as its token, so no supersede fires.
 	stopBusAndFreePort(t, b1)
-	c.reestablishSubs()
+	c.reestablishSubs(c.nc.Stats().Reconnects, c.snapshotSubs())
 
 	// Non-fatal tier: the deferral notice fired...
 	select {
@@ -447,6 +450,170 @@ func TestResumeTransportFailureDefersUntilNextReconnect(t *testing.T) {
 		t.Fatalf("unexpected extra delivery after the resume (duplicate): %s", m.Frame.Record)
 	case <-time.After(500 * time.Millisecond):
 	}
+}
+
+// TestResumePassDoesNotBlockCaller pins the async hand-off: startResumePass is
+// the entire body of the ReconnectHandler, which runs on the NATS client's
+// async-callback dispatcher. Every rotation is deadline-bounded (10s), but a
+// pass is unbounded in aggregate, so the hand-off must return immediately — or
+// N wedged subscriptions would block every later disconnect/reconnect notice
+// for N×10s. With three subscriptions and an unreachable bus (every rotation
+// hangs for its full deadline), the call must return in well under a second,
+// and the dispatcher must stay usable: the next real reconnect supersedes the
+// wedged pass (its token goes stale) and brings every relay back while the
+// wedged rotation is still inside its deadline.
+func TestResumePassDoesNotBlockCaller(t *testing.T) {
+	store := t.TempDir()
+	b1 := startBusOnStore(t, store)
+	creds, _, err := b1.MintClient(t.Context(), "async-pass", "test")
+	if err != nil {
+		t.Fatalf("MintClient: %v", err)
+	}
+	credsFile := writeCreds(t, creds)
+
+	reconnected := make(chan struct{}, 4)
+	c, err := Connect(t.Context(), Options{
+		URL:       b1.ClientURL(),
+		CredsPath: credsFile,
+		Logf: func(format string, args ...any) {
+			if strings.Contains(fmt.Sprintf(format, args...), "reconnected to the bus") {
+				select {
+				case reconnected <- struct{}{}:
+				default:
+				}
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+
+	const n = 3
+	got := make(chan string, 32) // subjects of delivered messages
+	errCh := make(chan error, 16)
+	subjects := make([]string, n)
+	for i := range n {
+		subj := sx.TopicSubject(fmt.Sprintf("async-pass-%d", i))
+		subjects[i] = subj
+		sub, err := c.Subscribe(t.Context(), subj,
+			func(m Message) { got <- m.Subject },
+			OnError(func(e error) {
+				select {
+				case errCh <- e:
+				default:
+				}
+			}))
+		if err != nil {
+			t.Fatalf("Subscribe(%s): %v", subj, err)
+		}
+		t.Cleanup(sub.Stop)
+	}
+
+	// Wedge the resume path: with the bus gone, every rotation call hangs for
+	// its full 10s deadline.
+	stopBusAndFreePort(t, b1)
+
+	start := time.Now()
+	c.startResumePass()
+	if took := time.Since(start); took > time.Second {
+		t.Fatalf("startResumePass blocked its caller for %v with wedged rotations; on the dispatcher this delays every later notification", took)
+	}
+
+	// The caller (in production: the dispatcher) is free. Restart the bus and
+	// let the real ReconnectHandler fire — its pass supersedes the wedged one
+	// (the reconnect moves the counter past the manual pass's token) and must
+	// complete, with all relays live, well before the wedged pass's rotations
+	// (3×10s) could have drained.
+	b2, err := bus.Start(t.Context(), bus.Config{StoreDir: store})
+	if err != nil {
+		t.Fatalf("second Start: %v", err)
+	}
+	t.Cleanup(b2.Shutdown)
+	select {
+	case <-reconnected:
+	case <-time.After(20 * time.Second):
+		t.Fatal("no completed resume pass within 20s of the bus returning")
+	}
+
+	// Every subscription delivers again. A deferral notice from the superseded
+	// pass's single in-flight rotation is legitimate; anything else is fatal.
+	for _, subj := range subjects {
+		if err := c.Publish(t.Context(), subj, json.RawMessage(`{"alive":true}`)); err != nil {
+			t.Fatalf("Publish(%s): %v", subj, err)
+		}
+	}
+	want := make(map[string]bool, n)
+	for _, subj := range subjects {
+		want[subj] = true
+	}
+	deadline := time.After(15 * time.Second)
+	for len(want) > 0 {
+		select {
+		case subj := <-got:
+			delete(want, subj)
+		case e := <-errCh:
+			if !errors.Is(e, ErrResumeDeferred) {
+				t.Fatalf("fatal OnError while recovering: %v", e)
+			}
+		case <-deadline:
+			t.Fatalf("subscriptions still silent after the supersede; missing deliveries on %v", want)
+		}
+	}
+}
+
+// TestCloseMidResumePassIsClean pins the pass lifecycle: Close while a resume
+// pass is wedged against an unreachable bus must return promptly — the closed
+// signal stops the pass at its next subscription boundary and the closed
+// connection fails its in-flight rotation call — and nothing may outlive the
+// client: no pass goroutine, no subscription bridge, no NATS internals
+// (goleak-verified against a baseline taken before the client existed).
+func TestCloseMidResumePassIsClean(t *testing.T) {
+	ignore := goleak.IgnoreCurrent()
+
+	store := t.TempDir()
+	b1 := startBusOnStore(t, store)
+	creds, _, err := b1.MintClient(t.Context(), "close-mid-pass", "test")
+	if err != nil {
+		t.Fatalf("MintClient: %v", err)
+	}
+	credsFile := writeCreds(t, creds)
+	c, err := Connect(t.Context(), Options{
+		URL:       b1.ClientURL(),
+		CredsPath: credsFile,
+		Logf:      func(string, ...any) {},
+	})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	// Subscriptions on a context the test cancels in-body, so their bridge
+	// goroutines wind down before the leak check (not at test-cleanup time).
+	subCtx, cancelSubs := context.WithCancel(t.Context())
+	defer cancelSubs()
+	for i := range 3 {
+		subj := sx.TopicSubject(fmt.Sprintf("close-mid-%d", i))
+		if _, err := c.Subscribe(subCtx, subj, func(Message) {}); err != nil {
+			t.Fatalf("Subscribe(%s): %v", subj, err)
+		}
+	}
+
+	// Wedge a pass against the dead bus, then Close into it.
+	stopBusAndFreePort(t, b1)
+	c.startResumePass()
+
+	start := time.Now()
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if took := time.Since(start); took > 10*time.Second {
+		t.Fatalf("Close took %v with a resume pass in flight; want a prompt, bounded drain", took)
+	}
+
+	// Wind down the subscription bridges (their teardown calls fail fast on the
+	// closed connection), then verify nothing leaked.
+	cancelSubs()
+	goleak.VerifyNone(t, ignore)
 }
 
 // TestSubscribeStopsOnContextCancel verifies the subscription tears down when

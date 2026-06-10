@@ -74,6 +74,14 @@ type Client struct {
 	// Subscribe/Stop); the reconnect snapshot is a single copy under the lock.
 	subsMu sync.Mutex
 	subs   map[*subscription]struct{}
+
+	// closed signals Close: an in-flight resume pass stops at its next
+	// subscription boundary instead of rotating relays on a dying client.
+	closed    chan struct{}
+	closeOnce sync.Once
+	// passWG tracks in-flight resume-pass goroutines (startResumePass) so Close
+	// can drain them with a bounded wait — no pass outlives the client silently.
+	passWG sync.WaitGroup
 }
 
 // Connect dials the bus and runs the connect handshake. ctx governs the
@@ -112,7 +120,14 @@ func Connect(ctx context.Context, opts Options) (*Client, error) {
 		logf = log.Printf
 	}
 
-	c := &Client{id: id, displayName: displayName, skewTol: tol, logf: logf, drained: make(chan struct{})}
+	c := &Client{
+		id:          id,
+		displayName: displayName,
+		skewTol:     tol,
+		logf:        logf,
+		drained:     make(chan struct{}),
+		closed:      make(chan struct{}),
+	}
 
 	nc, err := nats.Connect(
 		url,
@@ -132,12 +147,15 @@ func Connect(ctx context.Context, opts Options) (*Client, error) {
 		}),
 		nats.ReconnectHandler(func(*nats.Conn) {
 			// Re-establish every active subscription's server-side relay so the
-			// subscriber keeps receiving messages (ADR-0027). Runs synchronously on
-			// the NATS reconnect goroutine; each re-establish is deadline-bounded.
-			// Runs first, before the "reconnected" log, so the log fires only after
-			// subscriptions are live — callers waiting on that log see a ready bus.
-			c.reestablishSubs()
-			c.logf("sextant: reconnected to the bus")
+			// subscriber keeps receiving messages (ADR-0027). The pass runs on its
+			// own goroutine — each rotation is deadline-bounded, but a pass is
+			// unbounded in aggregate (N subscriptions × 10s against a sick bus),
+			// and this callback shares the async dispatcher with every other
+			// notification, so running it inline would wedge later disconnect and
+			// reconnect notices behind it. The pass logs "reconnected to the bus"
+			// itself, only once all relays are live (end of a completed,
+			// non-superseded pass), so callers waiting on that log see a ready bus.
+			c.startResumePass()
 		}),
 	)
 	if err != nil {
@@ -250,8 +268,25 @@ func (c *Client) DisplayName() string { return c.displayName }
 // clean close just drops presence to offline — the durable identity persists, so
 // the same client can reconnect later under the same id. Decommissioning for good
 // is an explicit operator `clients retire`, never an implicit consequence of Close.
+//
+// Close also winds down any in-flight resume pass: the closed signal stops it
+// at its next subscription boundary, and closing the connection fails its
+// in-flight rotation call promptly. The drain wait is bounded and loud (never
+// a silent hang): if a pass somehow does not stop in time, Close logs and
+// returns — the pass's own per-rotation deadlines still bound its exit.
 func (c *Client) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
 	c.nc.Close()
+	done := make(chan struct{})
+	go func() {
+		c.passWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		c.logf("sextant: a resume pass did not wind down within 15s of Close; not waiting further")
+	}
 	return nil
 }
 
