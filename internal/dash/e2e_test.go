@@ -342,6 +342,39 @@ func TestDashFirstRunExplicitURLMismatchFailsLoud(t *testing.T) {
 	}
 }
 
+// TestDashFirstRunContextExistsAdvisesKindHuman pins the collision advice
+// (PR #99 review): the dash enrolls kind "human" (the human's seat), but
+// `sextant clients register --self` defaults to kind "client" — so the
+// re-enroll advice must carry `--kind human`, or following it verbatim would
+// silently change the seat's kind. The collision is pre-flighted before any
+// mint, so a discovery file plus an existing context of the same name is
+// enough to reach it.
+func TestDashFirstRunContextExistsAdvisesKindHuman(t *testing.T) {
+	store := t.TempDir()
+	if err := conninfo.Write(filepath.Join(store, conninfo.DefaultFile), conninfo.Info{URL: "nats://127.0.0.1:4222"}); err != nil {
+		t.Fatalf("write discovery: %v", err)
+	}
+
+	t.Setenv("SEXTANT_HOME", t.TempDir())
+	if err := clictx.Save(clictx.Context{Name: "taken-lena", Kind: "human"}); err != nil {
+		t.Fatalf("seed context: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	opts := Options{Store: store, Name: "taken-lena"}
+	err := ensureIdentity(ctx, &opts, io.Discard)
+	if err == nil {
+		t.Fatal("ensureIdentity onto an existing context should fail loud")
+	}
+	if !strings.Contains(err.Error(), "sextant clients register --self --kind human --force") {
+		t.Errorf("collision advice %q must re-enroll under --kind human (register --self defaults to kind client)", err)
+	}
+	if !strings.Contains(err.Error(), "sextant context use taken-lena") {
+		t.Errorf("collision advice %q should offer adopting the existing context", err)
+	}
+}
+
 // assertNoEnrollment asserts a failed first run wrote NO state (fail-loud,
 // fail-early — never partial state then error): no creds resolved, no context
 // saved, none activated.

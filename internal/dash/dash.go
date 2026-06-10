@@ -184,7 +184,10 @@ func ensureIdentity(ctx context.Context, opts *Options, notice io.Writer) error 
 	if err != nil {
 		var ce *selfenroll.ErrContextExists
 		if errors.As(err, &ce) {
-			return fmt.Errorf("context %q already exists — run `sextant context use %s` to adopt it, or `sextant clients register --self --force` to re-enroll", ce.Name, ce.Name)
+			// The advice pins --kind human: the dash enrolls the human's seat, and
+			// `register --self` defaults to kind "client" — following the advice
+			// without it would silently re-enroll the seat under the wrong kind.
+			return fmt.Errorf("context %q already exists — run `sextant context use %s` to adopt it, or `sextant clients register --self --kind human --force` to re-enroll", ce.Name, ce.Name)
 		}
 		return fmt.Errorf("first-run self-enroll: %w", err)
 	}
