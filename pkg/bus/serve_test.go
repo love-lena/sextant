@@ -2,6 +2,7 @@ package bus
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,6 +143,53 @@ func TestServeArtifactLifecycle(t *testing.T) {
 	}
 	if g2 := call(t, nc, id, wireapi.OpArtifactGet, wireapi.ArtifactGetInput{Name: "the-plan"}); g2.Error == "" {
 		t.Error("get after delete should error")
+	}
+}
+
+// TestServeArtifactListSkipsUndecodable: a single undecodable frame in the
+// artifacts bucket must not fail the listing for everyone — the decodable rest
+// is still returned — and the drop must not be silent: one line through
+// Config.Logf names the artifact and the decode error. The mangled value is
+// seeded directly via the backend (the bus encodes every frame a client
+// writes, so only store corruption can produce one).
+func TestServeArtifactListSkipsUndecodable(t *testing.T) {
+	rec := &logRecorder{}
+	b, err := Start(t.Context(), Config{StoreDir: t.TempDir(), Logf: rec.logf})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(b.Shutdown)
+	nc, id := connectClient(t, b, "list-survivor")
+
+	// A well-formed artifact through the API…
+	if resp := call(t, nc, id, wireapi.OpArtifactCreate, wireapi.ArtifactCreateInput{
+		Name: "good", Record: json.RawMessage(`{"ok":true}`),
+	}); resp.Error != "" {
+		t.Fatalf("create good: %s", resp.Error)
+	}
+	// …and an undecodable frame seeded under it in the same bucket.
+	if _, err := b.backend.Put(t.Context(), sx.BucketArtifacts, "mangled", []byte("not a wire frame")); err != nil {
+		t.Fatalf("seed mangled artifact: %v", err)
+	}
+
+	resp := call(t, nc, id, wireapi.OpArtifactList, struct{}{})
+	if resp.Error != "" {
+		t.Fatalf("artifact.list should skip the undecodable frame, not error: %s", resp.Error)
+	}
+	var out wireapi.ArtifactListOutput
+	mustJSON(t, resp.Result, &out)
+	if len(out.Artifacts) != 1 || out.Artifacts[0].Name != "good" {
+		t.Fatalf("listing should return exactly the decodable artifact, got %+v", out.Artifacts)
+	}
+
+	var sawDrop bool
+	for _, line := range rec.all() {
+		if strings.Contains(line, "artifact.list") && strings.Contains(line, `"mangled"`) {
+			sawDrop = true
+		}
+	}
+	if !sawDrop {
+		t.Errorf("dropping the undecodable artifact logged nothing through Config.Logf: %q", rec.all())
 	}
 }
 

@@ -136,7 +136,11 @@ func (b *Bus) runMessageRelay(clientID, subID, deliver string, ch <-chan backend
 	for e := range ch {
 		frame, err := wire.Decode(e.Data)
 		if err != nil {
-			continue // skip an undecodable entry rather than break the stream
+			// Skip an undecodable entry rather than break the stream — but say
+			// so. The bus encodes every frame it stores, so this fires only on
+			// store corruption or seam-injected bytes, never per-frame at volume.
+			b.logf("bus: relay %s: dropping undecodable frame on %s at seq %d: %v", subID, e.Subject, e.Seq, err)
+			continue
 		}
 		payload, err := json.Marshal(wireapi.MessageDelivery{
 			SubID:   subID,
@@ -146,6 +150,7 @@ func (b *Bus) runMessageRelay(clientID, subID, deliver string, ch <-chan backend
 			Frame:   frame,
 		})
 		if err != nil {
+			b.logf("bus: relay %s: dropping frame on %s at seq %d: encode delivery: %v", subID, e.Subject, e.Seq, err)
 			continue
 		}
 		if err := b.opConn.Publish(deliver, payload); err != nil {
@@ -190,7 +195,10 @@ func (b *Bus) runArtifactRelay(clientID, subID, name, deliver string, ch <-chan 
 		if !c.Deleted {
 			frame, err := wire.Decode(c.Value)
 			if err != nil {
-				continue // skip an undecodable record rather than break the stream
+				// Skip an undecodable record rather than break the stream — but
+				// say so (same exceptional-path reasoning as runMessageRelay).
+				b.logf("bus: artifact relay %s: dropping undecodable record %q at revision %d: %v", subID, name, c.Revision, err)
+				continue
 			}
 			d.Record = frame.Record
 			d.CreatedAt = frame.CreatedAt
@@ -198,6 +206,7 @@ func (b *Bus) runArtifactRelay(clientID, subID, name, deliver string, ch <-chan 
 		}
 		payload, err := json.Marshal(d)
 		if err != nil {
+			b.logf("bus: artifact relay %s: dropping change to %q at revision %d: encode delivery: %v", subID, name, c.Revision, err)
 			continue
 		}
 		if err := b.opConn.Publish(deliver, payload); err != nil {

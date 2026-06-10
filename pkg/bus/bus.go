@@ -43,6 +43,23 @@ type Config struct {
 	StoreDir string
 	// Port is the listen port; 0 or -1 picks a random available port.
 	Port int
+	// Logf is the library's only output channel: every diagnostic the bus
+	// emits (the port-fallback notice, a dropped undecodable frame, …) goes
+	// through it, one Printf-style call per line, with no trailing newline in
+	// format. It may be called from concurrent goroutines. Nil means the
+	// default: write the line to stderr — exactly what a zero-config embedder
+	// sees today.
+	Logf func(format string, args ...any)
+}
+
+// logf returns the resolved log function: cfg.Logf, or the stderr default.
+func (cfg Config) logf() func(format string, args ...any) {
+	if cfg.Logf != nil {
+		return cfg.Logf
+	}
+	return func(format string, args ...any) {
+		fmt.Fprintf(os.Stderr, format+"\n", args...)
+	}
 }
 
 // Bus is a running embedded NATS server with the sx namespace bootstrapped. It
@@ -70,6 +87,10 @@ type Bus struct {
 	relayCancel context.CancelFunc
 	relaysMu    sync.Mutex
 	relays      map[string]map[string]*relay
+
+	// logf is the resolved Config.Logf (never nil): the bus's only output
+	// channel. Components log through it instead of writing to stderr.
+	logf func(format string, args ...any)
 }
 
 // stablePort resolves the listen port for a (re)start. If cfg.Port is non-zero
@@ -77,7 +98,7 @@ type Bus struct {
 // previous address in the store's bus.json: same store ⇒ same address when the
 // port is still free (ADR-0025). It returns the port to use (−1 means
 // "let the OS pick") and, when a recorded port was found but unavailable, a
-// non-empty notice to print to stderr.
+// non-empty notice to log.
 func stablePort(storeDir string, cfgPort int) (port int, notice string) {
 	if cfgPort != 0 {
 		return cfgPort, ""
@@ -125,9 +146,10 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 	if err != nil {
 		return nil, err
 	}
+	logf := cfg.logf()
 	port, portNotice := stablePort(cfg.StoreDir, cfg.Port)
 	if portNotice != "" {
-		fmt.Fprintln(os.Stderr, portNotice)
+		logf("%s", portNotice)
 	}
 
 	opts := &natsserver.Options{
@@ -159,7 +181,7 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 		return nil, err
 	}
 
-	b := &Bus{ns: ns, store: cfg.StoreDir, ident: ident}
+	b := &Bus{ns: ns, store: cfg.StoreDir, ident: ident, logf: logf}
 
 	// The bus's own operator-tier connection is in-process: it needs no TCP
 	// listener, so bootstrap runs while the client port is still closed and

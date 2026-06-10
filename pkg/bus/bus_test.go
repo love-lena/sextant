@@ -2,9 +2,11 @@ package bus
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,6 +26,25 @@ func displayNameOf(uc *jwt.UserClaims) string {
 		}
 	}
 	return ""
+}
+
+// logRecorder is a race-safe capturing Config.Logf: the bus may log from
+// concurrent goroutines (relays, call handlers), so reads and writes lock.
+type logRecorder struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (r *logRecorder) logf(format string, args ...any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lines = append(r.lines, fmt.Sprintf(format, args...))
+}
+
+func (r *logRecorder) all() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.lines...)
 }
 
 func startTestBus(t *testing.T) *Bus {
