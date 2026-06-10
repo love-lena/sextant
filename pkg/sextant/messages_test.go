@@ -165,6 +165,29 @@ func TestDeliverDropsNonIncreasingSeq(t *testing.T) {
 	}
 }
 
+// TestSubscribeFailureLeavesNoRegistration pins the failure half of the
+// register-before-call ordering: Subscribe registers the subscription before
+// the message.subscribe call (so a reconnect firing inside the call window can
+// re-establish it), and must deregister and tear it down when the call fails —
+// a failed Subscribe leaves nothing for a later reconnect pass to resurrect.
+func TestSubscribeFailureLeavesNoRegistration(t *testing.T) {
+	b := startBus(t)
+	c := dialClient(t, b, "register-window")
+
+	// The bus rejects a subject outside the messages space — a call failure
+	// that lands after the registration happened.
+	if _, err := c.Subscribe(t.Context(), "sx.control.nope", func(Message) {}); err == nil {
+		t.Fatal("expected Subscribe on a non-messages subject to fail")
+	}
+
+	c.subsMu.Lock()
+	n := len(c.subs)
+	c.subsMu.Unlock()
+	if n != 0 {
+		t.Fatalf("a failed Subscribe left %d subscription(s) registered; want 0", n)
+	}
+}
+
 // TestSubscribeStopsOnContextCancel verifies the subscription tears down when
 // the caller cancels the context it was created with, not only on Stop.
 func TestSubscribeStopsOnContextCancel(t *testing.T) {

@@ -128,20 +128,31 @@ func (c *Client) Subscribe(ctx context.Context, subject string, h Handler, opts 
 	}
 	s.natsSub = natsSub
 
+	subCtx, cancel := context.WithCancel(ctx)
+	s.cancel = cancel
+
+	// Register BEFORE the subscribe call, so a reconnect firing inside the call
+	// window sees this subscription — otherwise its relay is never re-established
+	// and it stays silently relay-less. A reconnect pass that catches it mid-call
+	// is safe: the pass rotates to a fresh sub-id, this generation's handler
+	// drops anything a late-landing relay pushes (its reconnect count is stale),
+	// and the failure path below tears down whatever generation is newest.
+	c.registerSub(s)
+
 	if err := c.call(ctx, wireapi.OpMessageSubscribe, wireapi.SubscribeInput{
 		Subject:    subject,
 		SubID:      subID,
 		DeliverAll: cfg.deliverAll,
 	}, nil); err != nil {
-		_ = natsSub.Unsubscribe()
+		c.deregisterSub(s)
+		cancel()
+		// Full teardown, not just the local unsubscribe: a reconnect pass racing
+		// this call may have established a relay for this subscription, and
+		// teardown's bus-side subscription.stop (idempotent, deadline-bounded)
+		// clears the newest generation's relay.
+		s.teardown()
 		return nil, err
 	}
-
-	subCtx, cancel := context.WithCancel(ctx)
-	s.cancel = cancel
-
-	// Register so the reconnect handler can find this subscription.
-	c.registerSub(s)
 
 	// Bridge ctx cancellation to teardown: a cancelled ctx ends the subscription
 	// (unsubscribe + bus-side relay stop), same as an explicit Stop. The bridge
