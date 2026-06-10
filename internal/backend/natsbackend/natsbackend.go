@@ -101,10 +101,16 @@ func (b *Backend) Subscribe(ctx context.Context, subject string, start backend.S
 	case backend.StartAll:
 		cfg.DeliverPolicy = jetstream.DeliverAllPolicy
 	case backend.StartFromSeq:
-		// Guard against a wiped or heavily-expired stream: if the requested resume
-		// sequence is beyond last+1, the messages we previously delivered no longer
-		// exist. Return an error so the SDK can surface it loudly (ADR-0027) rather
-		// than wait silently for a sequence that may never arrive.
+		// Guard against lost history (ADR-0027): the resume sequence must still be
+		// addressable in the stream. Two ways it can not be:
+		//   - beyond last+1: messages we previously delivered no longer exist (the
+		//     store was wiped and the stream restarted from scratch) — JetStream
+		//     would wait silently for a sequence that may never arrive;
+		//   - below the first retained sequence: retention (MaxAge, purge) expired
+		//     the messages between last-delivered and the current first — JetStream's
+		//     DeliverByStartSequencePolicy would silently start at FirstSeq,
+		//     skipping the gap without a word.
+		// Both return ErrSequenceGone so the SDK surfaces the loss loudly.
 		info, err := stream.Info(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("natsbackend: stream info for resume check: %w", err)
@@ -112,6 +118,10 @@ func (b *Backend) Subscribe(ctx context.Context, subject string, start backend.S
 		if sinceSeq > info.State.LastSeq+1 {
 			return nil, fmt.Errorf("natsbackend: %w: resume sequence %d is beyond stream head %d (store may have been wiped or history expired)",
 				backend.ErrSequenceGone, sinceSeq, info.State.LastSeq)
+		}
+		if sinceSeq < info.State.FirstSeq {
+			return nil, fmt.Errorf("natsbackend: %w: resume sequence %d is below the first retained sequence %d (history expired or purged)",
+				backend.ErrSequenceGone, sinceSeq, info.State.FirstSeq)
 		}
 		cfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
 		cfg.OptStartSeq = sinceSeq

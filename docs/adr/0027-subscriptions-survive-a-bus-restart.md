@@ -5,20 +5,24 @@ date: 2026-06-10
 
 # Subscriptions survive a bus restart
 
-A `Subscribe` call returns a `Subscription` that works across a bus restart of
-the same store. The SDK re-establishes the server-side relay on reconnect,
-resuming from the last delivered sequence so no messages are missed or
-duplicated. When re-establishment is impossible — the store was wiped, history
-expired — the SDK calls the subscriber's error handler immediately: never
-silence.
+A `Subscribe` call returns a `Subscription` that works across a reconnect —
+a bus restart of the same store, or a plain network blip with the bus still
+up. The SDK re-establishes the server-side relay on reconnect, resuming from
+the last delivered sequence so no messages are missed or duplicated. When
+re-establishment is impossible — the store was wiped, history expired — the
+SDK calls the subscriber's error handler immediately: never silence.
 
 ## What this guarantees
 
-**A subscription outlives a bus restart.** When the bus restarts against the
+**A subscription outlives a reconnect.** When the bus restarts against the
 same store (same address, same JetStream data — ADR-0025), a live `Subscribe`
 subscription keeps delivering without any action from the caller. Messages
 published after the restart arrive on the existing handler; messages published
-before the restart and already delivered are not re-delivered.
+before the restart and already delivered are not re-delivered. The same holds
+for a reconnect to a surviving bus (a network blip): the SDK replaces the
+bus-side relay it can no longer trust — stopping the old one first, then
+re-subscribing — and the resume recovers any messages the old relay published
+into the void while the client was disconnected.
 
 **Resume is exact and gap-free.** The SDK records the stream sequence of each
 delivered message. On reconnect, it re-subscribes with `since_seq = last + 1`,
@@ -27,14 +31,20 @@ not yet seen. A subscription with no deliveries before the restart resumes from
 its original start option (`DeliverAll` → from sequence 1; live-only → new
 messages only).
 
-**Impossible resume is loud, never silent.** If the resume sequence is beyond
-the stream head — because the store was wiped or retention expired the relevant
-history — the SDK calls the `OnError` handler registered at subscribe time. The
-subscription is stopped. A subscriber that registered no `OnError` gets a log
-line; one that did gets the error. Either way, the caller is not left watching a
-subscription that delivers nothing while believing it is live. The `busfeed`
-layer always registers `OnError` and routes it to an `ErrMsg` through the pump,
-so a Bubble Tea surface shows the failure.
+**Impossible resume is loud, never silent.** If the resume sequence is no
+longer addressable — beyond the stream head because the store was wiped, or
+below the first retained sequence because retention expired or purged the
+history in between — the SDK calls the `OnError` handler registered at
+subscribe time. The subscription is stopped. A subscriber that registered no
+`OnError` gets a log line; one that did gets the error. Either way, the caller
+is not left watching a subscription that delivers nothing while believing it is
+live. The `busfeed` layer always registers `OnError` and routes it to an
+`ErrMsg` through the pump, so a Bubble Tea surface shows the failure.
+
+One accepted risk: a store that is wiped and then republished past the old
+sequence resumes at a wrong position undetected — the resume sequence is within
+bounds again, but it indexes a different history. Detecting that would require
+tracking stream identity across restarts, which is deliberately not built.
 
 **`Stop` during downtime is clean.** Stopping a subscription while the bus is
 unreachable calls `subscription.stop` on the bus (which will time out or
@@ -60,12 +70,15 @@ The SDK's `ReconnectHandler` calls `reestablishSubs` before logging "reconnected
 to the bus", so the log fires only after all relays are live. Each active
 `subscription` stores the last delivered stream sequence (an atomic `uint64`
 updated on every quarantine-passing delivery). On reconnect, `reestablish`
-issues a fresh `message.subscribe` Wire API call carrying `since_seq = last + 1`
-(or the original start policy when `last = 0`). The bus relay handles `since_seq`
-by mapping it to a `StartFromSeq` backend start with a stream-bounds check: if
-`since_seq` exceeds the stream's current last sequence plus one, the backend
-returns `backend.ErrSequenceGone` and the bus surfaces it as a call error, which
-the SDK turns into an `OnError` call and a subscription stop.
+first issues `subscription.stop` for its own sub-id — idempotent on the bus, so
+it is a no-op after a real restart, and it clears the surviving relay after a
+plain blip — then a fresh `message.subscribe` Wire API call carrying
+`since_seq = last + 1` (or the original start policy when `last = 0`). The bus
+relay handles `since_seq` by mapping it to a `StartFromSeq` backend start with a
+stream-bounds check: a `since_seq` beyond the stream's last sequence plus one,
+or below its first retained sequence, returns `backend.ErrSequenceGone`, and the
+bus surfaces it as a call error, which the SDK turns into an `OnError` call and
+a subscription stop.
 
 Active subscriptions register themselves on the client at creation and
 deregister on teardown. The registry (`Client.subs`) is guarded by a mutex;

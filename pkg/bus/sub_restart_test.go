@@ -1,11 +1,15 @@
 package bus_test
 
-// Subscription-across-restart integration tests (ADR-0027). They reuse the
+// Subscription-across-reconnect integration tests (ADR-0027). They reuse the
 // embedded-bus restart pattern from restart_test.go but drive the full SDK
 // Subscribe path to assert that:
 //   - a DeliverAll subscription resumes from last-delivered+1 after a restart
 //     of the same store (no duplicates, no gap);
 //   - a live-only subscription receives post-restart publishes;
+//   - a plain network blip — reconnect to a SURVIVING bus, no restart — keeps
+//     the subscription alive (the bus-side relay still exists; the SDK must
+//     replace it, not collide with it);
+//   - a flap (restart, reconnect, blip again) keeps the subscription alive;
 //   - a restart onto a wiped store (sequences gone) fires the OnError handler
 //     rather than going silent;
 //   - Stop during bus downtime leaves no goroutine leak and no error after.
@@ -14,17 +18,17 @@ package bus_test
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/love-lena/sextant/internal/backend"
 	"github.com/love-lena/sextant/pkg/bus"
 	"github.com/love-lena/sextant/pkg/conninfo"
 	"github.com/love-lena/sextant/pkg/sextant"
@@ -329,16 +333,17 @@ func TestSubscribeLoudDeathOnWipedStore(t *testing.T) {
 	}
 	t.Cleanup(b2.Shutdown)
 
-	// The OnError handler must fire within a generous deadline.
+	// The OnError handler must fire within a generous deadline. Errors are
+	// stringified across the wire (wireapi.Response.Error), so no sentinel
+	// survives — assert non-nil and the stable "sequence gone" message fragment
+	// the backend embeds.
 	select {
 	case err := <-errCh:
 		if err == nil {
-			t.Error("OnError called with nil error; want a non-nil loud error")
+			t.Fatal("OnError called with nil error; want a non-nil loud error")
 		}
-		if !errors.Is(err, backend.ErrSequenceGone) && !strings.Contains(err.Error(), "sequence") {
-			// Accept either the sentinel or any error message mentioning "sequence"
-			// — the exact wrapping may vary.
-			t.Logf("OnError error: %v (accepted: any sequence-related error)", err)
+		if !strings.Contains(err.Error(), "sequence gone") {
+			t.Errorf("OnError error = %v; want it to carry the backend's 'sequence gone' message", err)
 		}
 	case <-time.After(15 * time.Second):
 		t.Fatal("OnError was not called after restart onto wiped store (silent failure)")
@@ -396,6 +401,184 @@ func TestStopDuringDowntimeIsClean(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 		// good: subscription is truly stopped
 	}
+}
+
+// proxy is a single-backend TCP proxy whose live connections can be dropped on
+// command, forcing the NATS client to reconnect while the bus stays up. Adapted
+// from the TASK-39 review repro.
+type proxy struct {
+	ln      net.Listener
+	backend string
+
+	mu    sync.Mutex
+	conns []net.Conn
+}
+
+func newProxy(t *testing.T, backend string) *proxy {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &proxy{ln: ln, backend: backend}
+	go p.serve()
+	t.Cleanup(func() { _ = ln.Close(); p.dropAll() })
+	return p
+}
+
+func (p *proxy) serve() {
+	for {
+		c, err := p.ln.Accept()
+		if err != nil {
+			return
+		}
+		b, err := net.Dial("tcp", p.backend)
+		if err != nil {
+			_ = c.Close()
+			continue
+		}
+		p.mu.Lock()
+		p.conns = append(p.conns, c, b)
+		p.mu.Unlock()
+		go func() { _, _ = io.Copy(b, c); _ = b.Close() }()
+		go func() { _, _ = io.Copy(c, b); _ = c.Close() }()
+	}
+}
+
+func (p *proxy) dropAll() {
+	p.mu.Lock()
+	for _, c := range p.conns {
+		_ = c.Close()
+	}
+	p.conns = nil
+	p.mu.Unlock()
+}
+
+func (p *proxy) url() string { return "nats://" + p.ln.Addr().String() }
+
+// hostOf returns the host:port of a nats:// URL.
+func hostOf(t *testing.T, rawURL string) string {
+	t.Helper()
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parse URL %q: %v", rawURL, err)
+	}
+	return u.Host
+}
+
+// assertSubAlive publishes one message and asserts it arrives on got, and that
+// no OnError fired on errCh first. The OnError check is a short negative window;
+// the delivery check is a hard deadline.
+func assertSubAlive(t *testing.T, c *sextant.Client, subj string, record json.RawMessage, got <-chan sextant.Message, errCh <-chan error, label string) {
+	t.Helper()
+	select {
+	case e := <-errCh:
+		t.Fatalf("%s: OnError fired (subscription should be alive): %v", label, e)
+	case <-time.After(500 * time.Millisecond):
+	}
+	mustPublish(t, c, subj, record)
+	select {
+	case <-got:
+	case e := <-errCh:
+		t.Fatalf("%s: OnError fired instead of a delivery: %v", label, e)
+	case <-time.After(10 * time.Second):
+		t.Fatalf("%s: publish was not delivered — subscription is dead", label)
+	}
+}
+
+// TestBlipWithoutRestartKeepsSubscriptionAlive: the reviewer-proven Major 1
+// case. A client-side reconnect to a SURVIVING bus (TCP drop, no bus restart):
+// the bus-side relay for (clientID, subID) still exists, so the SDK's resume
+// must replace it (stop-then-subscribe), not collide with it. No OnError; the
+// subscription keeps delivering.
+func TestBlipWithoutRestartKeepsSubscriptionAlive(t *testing.T) {
+	store := t.TempDir()
+	b := startBusWithStore(t, store)
+	credsFile := mintCredsFile(t, b, store, "blip")
+
+	px := newProxy(t, hostOf(t, b.ClientURL()))
+	c, reconnected := dialOnURLWithReconnectSignal(t, px.url(), credsFile)
+	t.Cleanup(func() { _ = c.Close() })
+
+	subj := sx.TopicSubject("blip")
+	got := make(chan sextant.Message, 8)
+	errCh := make(chan error, 4)
+	sub, err := c.Subscribe(t.Context(), subj, func(m sextant.Message) { got <- m },
+		sextant.OnError(func(e error) { errCh <- e }))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	t.Cleanup(sub.Stop)
+
+	// One pre-blip delivery so lastSeq > 0 (the resume path uses SinceSeq).
+	mustPublish(t, c, subj, json.RawMessage(`{"n":1}`))
+	waitMsg(t, got, "pre-blip delivery")
+
+	// Drop the TCP connections; the bus never restarts.
+	px.dropAll()
+
+	select {
+	case <-reconnected:
+	case <-time.After(20 * time.Second):
+		t.Fatal("client did not reconnect through the proxy within 20s")
+	}
+
+	assertSubAlive(t, c, subj, json.RawMessage(`{"n":2}`), got, errCh, "post-blip")
+}
+
+// TestFlapRestartThenBlipKeepsSubscriptionAlive: a full flap — bus restart
+// (same store), reconnect, then a plain blip with the new bus still alive. The
+// subscription must survive both transitions: the restart resume and the
+// blip's replace-the-surviving-relay path.
+func TestFlapRestartThenBlipKeepsSubscriptionAlive(t *testing.T) {
+	store := t.TempDir()
+	b1 := startBusWithStore(t, store)
+	credsFile := mintCredsFile(t, b1, store, "flap")
+
+	px := newProxy(t, hostOf(t, b1.ClientURL()))
+	c, reconnected := dialOnURLWithReconnectSignal(t, px.url(), credsFile)
+	t.Cleanup(func() { _ = c.Close() })
+
+	subj := sx.TopicSubject("flap")
+	got := make(chan sextant.Message, 8)
+	errCh := make(chan error, 4)
+	sub, err := c.Subscribe(t.Context(), subj, func(m sextant.Message) { got <- m },
+		sextant.OnError(func(e error) { errCh <- e }))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	t.Cleanup(sub.Stop)
+
+	mustPublish(t, c, subj, json.RawMessage(`{"n":1}`))
+	waitMsg(t, got, "pre-flap delivery")
+
+	// Leg 1: restart the bus on the same store (same port; the proxy backend
+	// address stays valid). The proxy's connections die with the old server.
+	hardStopAndWait(t, b1)
+	b2, err := bus.Start(t.Context(), bus.Config{StoreDir: store})
+	if err != nil {
+		t.Fatalf("second Start: %v", err)
+	}
+	t.Cleanup(b2.Shutdown)
+
+	select {
+	case <-reconnected:
+	case <-time.After(20 * time.Second):
+		t.Fatal("client did not reconnect after the restart within 20s")
+	}
+	assertSubAlive(t, c, subj, json.RawMessage(`{"n":2}`), got, errCh, "post-restart")
+
+	// Leg 2: plain blip — drop the TCP connections; b2 stays up. The b2-side
+	// relay re-created in leg 1 still exists and must be replaced, not collided
+	// with.
+	px.dropAll()
+
+	select {
+	case <-reconnected:
+	case <-time.After(20 * time.Second):
+		t.Fatal("client did not reconnect after the blip within 20s")
+	}
+	assertSubAlive(t, c, subj, json.RawMessage(`{"n":3}`), got, errCh, "post-blip")
 }
 
 // itoa is a tiny int-to-string helper for building test JSON records.

@@ -48,11 +48,17 @@ func DeliverAll() SubOption {
 }
 
 // OnError registers a handler that is called when the subscription cannot be
-// re-established after a bus restart. A subscription that was live when the bus
-// went down will attempt to resume on reconnect; if that fails (e.g. the store
-// was wiped) the handler is called with the error and the subscription is
-// stopped. Without OnError, a failed resume is only logged — the handler
-// receives nothing, forever. Registering an OnError makes that silence visible.
+// re-established after a reconnect. A subscription that was live when the
+// connection dropped will attempt to resume on reconnect; if that fails (e.g.
+// the store was wiped) the handler is called with the error and the
+// subscription is stopped. Without OnError, a failed resume is only logged —
+// the handler receives nothing, forever. Registering an OnError makes that
+// silence visible.
+//
+// The handler runs on the NATS client's asynchronous-callback goroutine, the
+// same one that dispatches reconnect events: it must not block, and it must not
+// make calls on this client (they would deadlock or time out behind the
+// reconnect in progress). Hand the error off to a channel and return.
 func OnError(h func(error)) SubOption {
 	return func(c *subConfig) { c.onErr = h }
 }
@@ -91,11 +97,12 @@ func (c *Client) FetchMessages(ctx context.Context, subject string, since uint64
 // (skipped + logged) on a violation (ADR-0006, ADR-0010). The subscription runs
 // until Stop is called or ctx is cancelled, whichever comes first.
 //
-// A Subscription survives a bus restart (ADR-0027): on reconnect the SDK
-// re-establishes the server-side relay, resuming from the last delivered sequence
-// so no messages are missed or duplicated. If re-establishment is impossible
-// (e.g. the store was wiped), the OnError handler is called and the subscription
-// is stopped — never silent.
+// A Subscription survives a reconnect — a bus restart of the same store or a
+// plain network blip (ADR-0027): on reconnect the SDK re-establishes the
+// server-side relay, resuming from the last delivered sequence so no messages
+// are missed or duplicated. If re-establishment is impossible (e.g. the store
+// was wiped), the OnError handler is called and the subscription is stopped —
+// never silent.
 func (c *Client) Subscribe(ctx context.Context, subject string, h Handler, opts ...SubOption) (Subscription, error) {
 	var cfg subConfig
 	for _, o := range opts {
@@ -109,7 +116,6 @@ func (c *Client) Subscribe(ctx context.Context, subject string, h Handler, opts 
 		subID:      subID,
 		subject:    subject,
 		deliverAll: cfg.deliverAll,
-		handler:    h,
 		onErr:      cfg.onErr,
 	}
 
@@ -193,8 +199,8 @@ func (c *Client) deliver(d wireapi.MessageDelivery, h Handler, s *subscription) 
 // OnError handler is called (if registered) and the subscription is stopped.
 //
 // Ownership: runs on the NATS client's reconnect goroutine. It holds c.subsMu
-// only long enough to snapshot the active set; each subscription's own mu
-// guards its fields during the re-establish call.
+// only long enough to snapshot the active set; a subscription stopped during
+// (or just before) the loop is skipped via its stopped flag.
 func (c *Client) reestablishSubs() {
 	c.subsMu.Lock()
 	// Snapshot active subs so we don't hold the lock while making network calls.
@@ -205,12 +211,27 @@ func (c *Client) reestablishSubs() {
 	c.subsMu.Unlock()
 
 	for _, s := range active {
+		if s.stopped.Load() {
+			continue // Stop won the race; nothing to re-establish
+		}
 		if err := s.reestablish(c); err != nil {
+			if s.stopped.Load() {
+				continue // stopped concurrently; the failure is teardown, not loss
+			}
 			c.logf("sextant: subscription %s on %q cannot resume after reconnect: %v", s.subID, s.subject, err)
 			if s.onErr != nil {
-				s.onErr(fmt.Errorf("sextant: subscription on %q lost after bus restart: %w", s.subject, err))
+				s.onErr(fmt.Errorf("sextant: subscription on %q lost after reconnect: %w", s.subject, err))
 			}
 			s.cancel() // tears down via the bridge goroutine
+			continue
+		}
+		if s.stopped.Load() {
+			// Stop ran while we were re-establishing: the fresh relay may have been
+			// registered after teardown's subscription.stop. Stop it again
+			// (idempotent on the bus) so no relay is orphaned.
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = c.call(ctx, wireapi.OpSubscriptionStop, wireapi.SubscriptionStopInput{SubID: s.subID}, nil)
+			cancel()
 		}
 	}
 }
@@ -238,11 +259,15 @@ type subscription struct {
 	subID      string
 	subject    string
 	deliverAll bool
-	handler    Handler
 	natsSub    *nats.Subscription
 	cancel     context.CancelFunc
 	onErr      func(error)
 	once       sync.Once
+
+	// stopped is set synchronously in Stop (before cancel) and in teardown, so
+	// the reconnect path can observe an in-flight stop and skip — or undo — a
+	// re-establish that would otherwise orphan a relay on the bus.
+	stopped atomic.Bool
 
 	// lastSeq is the stream sequence of the last message successfully passed to
 	// the handler. It is updated atomically on every delivery and read (also
@@ -250,11 +275,18 @@ type subscription struct {
 	lastSeq uint64
 }
 
-// reestablish re-creates the server-side relay after a NATS reconnect.
-// It sends a fresh message.subscribe call carrying the resume sequence (last
-// delivered+1), which the bus maps to StartFromSeq on the backend. A zero
-// lastSeq means no message was delivered before the restart; in that case it
-// re-uses the original start option (DeliverAll or StartNew).
+// reestablish re-creates the server-side relay after a NATS reconnect. It first
+// issues subscription.stop for its own SubID: a surviving bus (plain network
+// blip, no restart) still holds this SubID's relay and would reject the
+// re-subscribe as a duplicate; the stop is idempotent on the bus, so it is a
+// no-op after a real restart. Dropping the stale relay rather than keeping it
+// also closes a silent gap — a surviving relay published into the void while
+// the client was disconnected, and resuming from last-delivered+1 recovers
+// exactly those messages. It then sends a fresh message.subscribe call carrying
+// the resume sequence (last delivered+1), which the bus maps to StartFromSeq on
+// the backend. A zero lastSeq means no message was delivered before the
+// reconnect; in that case it re-uses the original start option (DeliverAll or
+// StartNew).
 //
 // Concurrency note: called from reestablishSubs (NATS reconnect goroutine).
 // Reads lastSeq atomically; all other fields are written once at construction
@@ -272,17 +304,27 @@ func (s *subscription) reestablish(c *Client) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	if err := c.call(ctx, wireapi.OpSubscriptionStop, wireapi.SubscriptionStopInput{SubID: s.subID}, nil); err != nil {
+		return fmt.Errorf("stop stale relay: %w", err)
+	}
 	return c.call(ctx, wireapi.OpMessageSubscribe, in, nil)
 }
 
-// Stop ends the subscription (safe to call more than once). It cancels the
-// internal context, which the bridge goroutine observes to run teardown.
-func (s *subscription) Stop() { s.cancel() }
+// Stop ends the subscription (safe to call more than once). It marks the
+// subscription stopped first — synchronously, so a concurrent reconnect skips
+// it — then cancels the internal context, which the bridge goroutine observes
+// to run teardown.
+func (s *subscription) Stop() {
+	s.stopped.Store(true)
+	s.cancel()
+}
 
 // teardown unsubscribes the delivery subject and asks the bus to stop the relay.
-// It runs exactly once, whether reached via Stop or a cancelled ctx.
+// It runs exactly once, whether reached via Stop or a cancelled ctx (it also
+// sets stopped, covering the ctx-cancel path that bypasses Stop).
 func (s *subscription) teardown() {
 	s.once.Do(func() {
+		s.stopped.Store(true)
 		if s.natsSub != nil {
 			_ = s.natsSub.Unsubscribe()
 		}

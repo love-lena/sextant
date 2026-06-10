@@ -17,9 +17,9 @@
     },
     {
       "name": "message.subscribe",
-      "summary": "Stream messages matching a subject until stopped.",
+      "summary": "Stream messages matching a subject until stopped. A subscription can resume after a reconnect: since_seq restarts delivery from a stream sequence, and a sequence the log no longer retains fails the call rather than skipping silently (ADR-0027).",
       "delivery": "push-stream",
-      "input": { "subject": "string (exact or wildcard)", "deliver": "new | all" },
+      "input": { "subject": "string (exact or wildcard)", "deliver": "new | all", "since_seq": "uint64 (optional; resume delivery from this stream sequence, inclusive — takes priority over deliver. Set by the SDK on reconnect to last-delivered+1; additive, protocol epoch unchanged)" },
       "output": { "stream": "frame" }
     },
     {

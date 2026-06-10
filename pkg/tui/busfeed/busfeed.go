@@ -219,9 +219,23 @@ func (f *Feed) next() tea.Msg {
 	}
 	f.mu.Unlock()
 
-	// Select on both channels so a mid-stream error (reconnect failure) surfaces
-	// as an ErrMsg rather than silently starving the pump. ErrMsg is terminal:
-	// the caller must not issue Next after receiving one.
+	// Drain already-buffered events before honoring a terminal error, so an
+	// ErrMsg cannot preempt up to DefaultBuffer events that were delivered
+	// before the failure — the subscriber sees everything it received, then the
+	// error.
+	select {
+	case m, ok := <-f.events:
+		if !ok {
+			// Channel closed by Stop and fully drained: the pump ends here.
+			return nil
+		}
+		return EventMsg{From: f, Message: m}
+	default:
+	}
+
+	// Buffer empty: block on both channels so a mid-stream error (reconnect
+	// failure) surfaces as an ErrMsg rather than silently starving the pump.
+	// ErrMsg is terminal: the caller must not issue Next after receiving one.
 	select {
 	case err := <-f.errs:
 		return ErrMsg{From: f, Err: err}

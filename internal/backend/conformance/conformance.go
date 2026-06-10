@@ -94,6 +94,45 @@ func Run(t *testing.T, newHarness func(t *testing.T) Harness) {
 		}
 	})
 
+	t.Run("log: subscribe from a sequence resumes there", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		subj := h.SubjectBase + ".fromseq"
+		_, err := h.Backend.Append(ctx, subj, []byte(`{"n":1}`))
+		mustNil(t, err)
+		s2, err := h.Backend.Append(ctx, subj, []byte(`{"n":2}`))
+		mustNil(t, err)
+		s3, err := h.Backend.Append(ctx, subj, []byte(`{"n":3}`))
+		mustNil(t, err)
+		// Resume from the second entry's sequence: it and the third arrive; the
+		// first does not (nothing below the resume point, no gap above it).
+		ch, err := h.Backend.Subscribe(ctx, subj, backend.StartFromSeq, s2)
+		mustNil(t, err)
+		for _, want := range []uint64{s2, s3} {
+			select {
+			case e := <-ch:
+				if e.Seq != want {
+					t.Fatalf("resumed delivery seq = %d, want %d", e.Seq, want)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("subscribe from sequence %d did not deliver entry %d", s2, want)
+			}
+		}
+	})
+
+	t.Run("log: subscribe from a gone sequence fails loud", func(t *testing.T) {
+		ctx := t.Context()
+		subj := h.SubjectBase + ".goneseq"
+		s, err := h.Backend.Append(ctx, subj, []byte(`{"n":1}`))
+		mustNil(t, err)
+		// A resume sequence far beyond the head names history the log has never
+		// held (a wiped store, seen at resume time): the backend must refuse with
+		// ErrSequenceGone, never wait silently for a sequence that may not come.
+		if _, err := h.Backend.Subscribe(ctx, subj, backend.StartFromSeq, s+1000); !errors.Is(err, backend.ErrSequenceGone) {
+			t.Fatalf("subscribe far beyond the head returned %v; want backend.ErrSequenceGone", err)
+		}
+	})
+
 	t.Run("kv: create then get", func(t *testing.T) {
 		ctx := t.Context()
 		rev, err := h.Backend.Create(ctx, h.Bucket, "a", []byte(`{"v":1}`))
