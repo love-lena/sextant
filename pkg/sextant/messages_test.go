@@ -3,10 +3,14 @@ package sextant
 import (
 	"context"
 	"encoding/json"
+	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/love-lena/sextant/internal/wireapi"
 	"github.com/love-lena/sextant/pkg/sx"
+	"github.com/love-lena/sextant/pkg/wire"
 )
 
 func TestPublishSubscribeRoundTrip(t *testing.T) {
@@ -118,6 +122,48 @@ func TestFetchMessages(t *testing.T) {
 // they need to inject raw frames that bypass the bus's stamping — something a
 // client can no longer do under the allow-list — which the operator seam there
 // provides without a production test surface. See docs/conventions/test-features.md.
+
+// TestDeliverDropsNonIncreasingSeq pins the deliver-side monotonic cursor
+// (ADR-0027 no-duplicates): within one subscription a single ordered relay
+// delivers strictly increasing stream sequences, and a resume relay replays
+// only from last+1 — so a non-increasing sequence is always overlap from a
+// replaced relay (its in-flight pushes interleaving with the new relay's replay
+// around a reconnect blip), never a fresh message. deliver must drop it and
+// must never move lastSeq backwards: a regressed cursor would make the next
+// resume replay messages the handler already saw.
+func TestDeliverDropsNonIncreasingSeq(t *testing.T) {
+	c := &Client{skewTol: wire.SkewTolerance, logf: func(string, ...any) {}}
+	s := &subscription{}
+	var gotSeqs []uint64
+	h := func(m Message) { gotSeqs = append(gotSeqs, m.Sequence) }
+
+	mk := func(seq uint64) wireapi.MessageDelivery {
+		return wireapi.MessageDelivery{
+			SubID:   "sub",
+			Subject: sx.TopicSubject("dedup"),
+			Seq:     seq,
+			BusTime: time.Now(),
+			Frame:   wire.New("author", json.RawMessage(`{}`)),
+		}
+	}
+
+	// 1, 2 fresh (the very first delivery starts from lastSeq 0); 2, 1 overlap
+	// (a replaced relay's pushes arriving after the new relay's); 3 fresh; 5
+	// fresh (a subject-filtered subscription sees increasing but non-contiguous
+	// stream sequences); 4 late overlap arriving after 5 — it must be dropped
+	// AND must not regress the cursor; 6 fresh.
+	for _, seq := range []uint64{1, 2, 2, 1, 3, 5, 4, 6} {
+		c.deliver(mk(seq), h, s)
+	}
+
+	want := []uint64{1, 2, 3, 5, 6}
+	if !slices.Equal(gotSeqs, want) {
+		t.Errorf("delivered sequences = %v, want %v (each exactly once, in order)", gotSeqs, want)
+	}
+	if last := atomic.LoadUint64(&s.lastSeq); last != 6 {
+		t.Errorf("lastSeq = %d, want 6 (the cursor must be monotonic)", last)
+	}
+}
 
 // TestSubscribeStopsOnContextCancel verifies the subscription tears down when
 // the caller cancels the context it was created with, not only on Stop.

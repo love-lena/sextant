@@ -17,6 +17,7 @@ package bus_test
 // All waits are deadline-bound (fail-loud, not hang — MEMORY.md feedback_fail_loud).
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -579,6 +580,128 @@ func TestFlapRestartThenBlipKeepsSubscriptionAlive(t *testing.T) {
 		t.Fatal("client did not reconnect after the blip within 20s")
 	}
 	assertSubAlive(t, c, subj, json.RawMessage(`{"n":3}`), got, errCh, "post-blip")
+}
+
+// TestBlipExactlyOnceWhilePublisherKeepsPublishing: exactly-once across a blip
+// with traffic in flight (ADR-0027 no-gaps-no-duplicates). Every other test
+// publishes only after the reconnected signal; here a second, DIRECTLY
+// connected client keeps publishing while the proxied subscriber is dropped and
+// straight through the reconnect window. That window is where the surviving
+// relay resumes pushing the moment the NATS client re-sends its deliver-subject
+// SUB — before reestablishSubs runs — so its pushes interleave with the new
+// relay's replay; the deliver-side monotonic cursor must drop the overlap. The
+// test asserts the subscriber sees every n exactly once, in order: a duplicate
+// or a gap anywhere across the blip fails it.
+func TestBlipExactlyOnceWhilePublisherKeepsPublishing(t *testing.T) {
+	store := t.TempDir()
+	b := startBusWithStore(t, store)
+	subCreds := mintCredsFile(t, b, store, "blip-once-sub")
+	pubCreds := mintCredsFile(t, b, store, "blip-once-pub")
+
+	// The subscriber connects through the droppable proxy; the publisher
+	// connects directly, so it keeps publishing while the subscriber is out.
+	px := newProxy(t, hostOf(t, b.ClientURL()))
+	c, reconnected := dialOnURLWithReconnectSignal(t, px.url(), subCreds)
+	t.Cleanup(func() { _ = c.Close() })
+	pub := dialOnURL(t, b.ClientURL(), pubCreds)
+	t.Cleanup(func() { _ = pub.Close() })
+
+	subj := sx.TopicSubject("blip-exactly-once")
+	got := make(chan sextant.Message, 4096)
+	errCh := make(chan error, 4)
+	sub, err := c.Subscribe(t.Context(), subj, func(m sextant.Message) { got <- m },
+		sextant.OnError(func(e error) { errCh <- e }))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	t.Cleanup(sub.Stop)
+
+	// One pre-blip delivery so lastSeq > 0 (the resume path uses SinceSeq).
+	mustPublish(t, pub, subj, json.RawMessage(`{"n":1}`))
+	waitMsg(t, got, "pre-blip delivery")
+
+	// Drop the subscriber's TCP; the bus and the publisher stay up. From here a
+	// goroutine publishes n=2,3,... continuously until told to stop.
+	px.dropAll()
+	stopPub := make(chan struct{})
+	type pubResult struct {
+		last int // the highest n that was published successfully
+		err  error
+	}
+	pubDone := make(chan pubResult, 1)
+	go func() {
+		n := 1
+		ticker := time.NewTicker(5 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopPub:
+				pubDone <- pubResult{last: n}
+				return
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				err := pub.Publish(ctx, subj, json.RawMessage(fmt.Sprintf(`{"n":%d}`, n+1)))
+				cancel()
+				if err != nil {
+					pubDone <- pubResult{last: n, err: err}
+					return
+				}
+				n++
+			}
+		}
+	}()
+
+	select {
+	case <-reconnected:
+	case <-time.After(20 * time.Second):
+		t.Fatal("client did not reconnect through the proxy within 20s")
+	}
+	// Keep publishing a little past the reconnect so the interleave window
+	// (deliver-subject SUB re-sent → reestablish's relay stop) sees traffic.
+	time.Sleep(300 * time.Millisecond)
+	close(stopPub)
+	res := <-pubDone
+	if res.err != nil {
+		t.Fatalf("the direct publisher failed mid-test: %v", res.err)
+	}
+	if res.last < 2 {
+		t.Fatalf("the publisher only reached n=%d; the blip window saw no traffic", res.last)
+	}
+
+	// Exactly-once, in order: n=2..last each appear once. The monotonic cursor
+	// also forces delivery order, so any duplicate or gap shows up as a wrong n.
+	want := 2
+	deadline := time.After(20 * time.Second)
+	var lastSeq uint64
+	for want <= res.last {
+		select {
+		case m := <-got:
+			var rec struct {
+				N int `json:"n"`
+			}
+			if err := json.Unmarshal(m.Frame.Record, &rec); err != nil {
+				t.Fatalf("undecodable record %s: %v", m.Frame.Record, err)
+			}
+			if rec.N != want {
+				t.Fatalf("delivery out of order across the blip: got n=%d, want n=%d (a duplicate or a gap)", rec.N, want)
+			}
+			if m.Sequence <= lastSeq {
+				t.Fatalf("non-increasing stream sequence %d after %d (duplicate delivery)", m.Sequence, lastSeq)
+			}
+			lastSeq = m.Sequence
+			want++
+		case e := <-errCh:
+			t.Fatalf("OnError fired while recovering the blip: %v", e)
+		case <-deadline:
+			t.Fatalf("timed out waiting for n=%d of %d after the blip (gap)", want, res.last)
+		}
+	}
+	// Nothing extra may trail behind the full set (a late duplicate).
+	select {
+	case m := <-got:
+		t.Fatalf("duplicate delivery after the full set: %s", m.Frame.Record)
+	case <-time.After(500 * time.Millisecond):
+	}
 }
 
 // itoa is a tiny int-to-string helper for building test JSON records.

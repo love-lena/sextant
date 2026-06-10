@@ -116,19 +116,13 @@ func (c *Client) Subscribe(ctx context.Context, subject string, h Handler, opts 
 		subID:      subID,
 		subject:    subject,
 		deliverAll: cfg.deliverAll,
+		handler:    h,
 		onErr:      cfg.onErr,
 	}
 
 	// Subscribe to the delivery subject BEFORE making the call, so a frame the bus
 	// relays the instant it replies can't outrun our subscription.
-	natsSub, err := c.nc.Subscribe(deliver, func(m *nats.Msg) {
-		var d wireapi.MessageDelivery
-		if err := json.Unmarshal(m.Data, &d); err != nil {
-			c.logf("sextant: undecodable delivery on %s, skipping: %v", subject, err)
-			return
-		}
-		c.deliver(d, h, s)
-	})
+	natsSub, err := c.nc.Subscribe(deliver, c.relayHandler(s, c.nc.Stats().Reconnects))
 	if err != nil {
 		return nil, fmt.Errorf("sextant: subscribe delivery: %w", err)
 	}
@@ -155,9 +149,34 @@ func (c *Client) Subscribe(ctx context.Context, subject string, h Handler, opts 
 	go func() {
 		<-subCtx.Done()
 		s.teardown()
-		c.deregisterSub(s.subID)
+		c.deregisterSub(s)
 	}()
 	return s, nil
+}
+
+// relayHandler returns the delivery-subject handler for one relay generation —
+// the (sub-id, server-side relay) pair established by Subscribe or by one
+// resume pass. epoch is the connection's reconnect count when the generation
+// was established: a frame processed after a later reconnect is dropped,
+// because its relay may have published part of its stream into the dropped
+// connection — a void the client cannot see — so nothing it pushes after a
+// reconnect can be trusted to be gap-free. The reconnect's resume pass replaces
+// the generation and replays everything past lastSeq, so a dropped frame is
+// re-covered, never lost. The NATS client bumps the counter under the
+// connection lock before it re-sends subscriptions, so no frame can be
+// processed on a restored connection while the count still reads stale.
+func (c *Client) relayHandler(s *subscription, epoch uint64) nats.MsgHandler {
+	return func(m *nats.Msg) {
+		if c.nc.Stats().Reconnects != epoch {
+			return // doomed generation: a reconnect intervened; the resume re-covers it
+		}
+		var d wireapi.MessageDelivery
+		if err := json.Unmarshal(m.Data, &d); err != nil {
+			c.logf("sextant: undecodable delivery on %s, skipping: %v", s.subject, err)
+			return
+		}
+		c.deliver(d, s.handler, s)
+	}
 }
 
 // deliver applies the receiver-side quarantine to one pushed delivery and, if it
@@ -179,9 +198,15 @@ func (c *Client) deliver(d wireapi.MessageDelivery, h Handler, s *subscription) 
 		c.logf("sextant: quarantined %s on %s: %v", frame.ID, d.Subject, err)
 		return
 	}
-	// Track the last successfully delivered sequence for reconnect resume.
-	if s != nil && d.Seq > 0 {
-		atomic.StoreUint64(&s.lastSeq, d.Seq)
+	// Advance the resume cursor and drop overlap. Within one subscription a
+	// single ordered relay delivers strictly increasing stream sequences, and a
+	// resume relay replays only from last+1 — so a non-increasing sequence is
+	// always overlap (a replaced relay's in-flight pushes interleaving with the
+	// new relay's replay around a reconnect), never a fresh message. Dropping it
+	// holds ADR-0027's no-duplicates guarantee, and the monotonic cursor keeps a
+	// stale push from moving the next resume point backwards.
+	if s != nil && d.Seq > 0 && !s.advanceLastSeq(d.Seq) {
+		return
 	}
 	h(Message{
 		Frame:    frame,
@@ -205,7 +230,7 @@ func (c *Client) reestablishSubs() {
 	c.subsMu.Lock()
 	// Snapshot active subs so we don't hold the lock while making network calls.
 	active := make([]*subscription, 0, len(c.subs))
-	for _, s := range c.subs {
+	for s := range c.subs {
 		active = append(active, s)
 	}
 	c.subsMu.Unlock()
@@ -218,7 +243,7 @@ func (c *Client) reestablishSubs() {
 			if s.stopped.Load() {
 				continue // stopped concurrently; the failure is teardown, not loss
 			}
-			c.logf("sextant: subscription %s on %q cannot resume after reconnect: %v", s.subID, s.subject, err)
+			c.logf("sextant: subscription on %q cannot resume after reconnect: %v", s.subject, err)
 			if s.onErr != nil {
 				s.onErr(fmt.Errorf("sextant: subscription on %q lost after reconnect: %w", s.subject, err))
 			}
@@ -229,40 +254,52 @@ func (c *Client) reestablishSubs() {
 			// Stop ran while we were re-establishing: the fresh relay may have been
 			// registered after teardown's subscription.stop. Stop it again
 			// (idempotent on the bus) so no relay is orphaned.
+			s.mu.Lock()
+			subID := s.subID
+			s.mu.Unlock()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_ = c.call(ctx, wireapi.OpSubscriptionStop, wireapi.SubscriptionStopInput{SubID: s.subID}, nil)
+			_ = c.call(ctx, wireapi.OpSubscriptionStop, wireapi.SubscriptionStopInput{SubID: subID}, nil)
 			cancel()
 		}
 	}
 }
 
-// registerSub adds a subscription to the client's active set.
+// registerSub adds a subscription to the client's active set. The set is keyed
+// by the subscription itself, not its sub-id — the sub-id rotates on every
+// resume pass, while the subscription is the stable identity.
 // Ownership: c.subsMu guards c.subs.
 func (c *Client) registerSub(s *subscription) {
 	c.subsMu.Lock()
 	if c.subs == nil {
-		c.subs = make(map[string]*subscription)
+		c.subs = make(map[*subscription]struct{})
 	}
-	c.subs[s.subID] = s
+	c.subs[s] = struct{}{}
 	c.subsMu.Unlock()
 }
 
 // deregisterSub removes a subscription from the client's active set.
-func (c *Client) deregisterSub(subID string) {
+func (c *Client) deregisterSub(s *subscription) {
 	c.subsMu.Lock()
-	delete(c.subs, subID)
+	delete(c.subs, s)
 	c.subsMu.Unlock()
 }
 
 type subscription struct {
 	c          *Client
-	subID      string
 	subject    string
 	deliverAll bool
-	natsSub    *nats.Subscription
+	handler    Handler
 	cancel     context.CancelFunc
 	onErr      func(error)
 	once       sync.Once
+
+	// mu guards the live relay generation: the (subID, natsSub) pair. Every
+	// resume pass rotates to a fresh sub-id (see reestablish), so the pair
+	// changes over the subscription's life; teardown and the resume passes read
+	// the newest pair under the lock.
+	mu      sync.Mutex
+	subID   string
+	natsSub *nats.Subscription
 
 	// stopped is set synchronously in Stop (before cancel) and in teardown, so
 	// the reconnect path can observe an in-flight stop and skip — or undo — a
@@ -270,42 +307,97 @@ type subscription struct {
 	stopped atomic.Bool
 
 	// lastSeq is the stream sequence of the last message successfully passed to
-	// the handler. It is updated atomically on every delivery and read (also
-	// atomically) in reestablish. Zero means no delivery has occurred yet.
+	// the handler. It only moves forward (see advanceLastSeq) and is read
+	// atomically in reestablish. Zero means no delivery has occurred yet.
 	lastSeq uint64
 }
 
-// reestablish re-creates the server-side relay after a NATS reconnect. It first
-// issues subscription.stop for its own SubID: a surviving bus (plain network
-// blip, no restart) still holds this SubID's relay and would reject the
-// re-subscribe as a duplicate; the stop is idempotent on the bus, so it is a
-// no-op after a real restart. Dropping the stale relay rather than keeping it
-// also closes a silent gap — a surviving relay published into the void while
-// the client was disconnected, and resuming from last-delivered+1 recovers
-// exactly those messages. It then sends a fresh message.subscribe call carrying
-// the resume sequence (last delivered+1), which the bus maps to StartFromSeq on
-// the backend. A zero lastSeq means no message was delivered before the
-// reconnect; in that case it re-uses the original start option (DeliverAll or
-// StartNew).
+// advanceLastSeq records seq as delivered if it moves the cursor forward,
+// returning false when seq is not newer than the last delivered sequence — the
+// caller must then drop the frame as overlap. The CAS-max loop keeps the cursor
+// monotonic even when a replaced relay's in-flight pushes interleave with the
+// new relay's replay around a reconnect.
+func (s *subscription) advanceLastSeq(seq uint64) bool {
+	for {
+		last := atomic.LoadUint64(&s.lastSeq)
+		if seq <= last {
+			return false
+		}
+		if atomic.CompareAndSwapUint64(&s.lastSeq, last, seq) {
+			return true
+		}
+	}
+}
+
+// reestablish replaces this subscription's relay generation after a NATS
+// reconnect. The replaced relay can no longer be trusted: a surviving bus
+// (plain blip, no restart) kept it pushing into the void while the client was
+// disconnected, and once the connection is back it resumes pushing — frames
+// from BEYOND that void, which must not advance the cursor. Two mechanisms
+// make the replacement exact:
+//
+//   - The old generation's handler stopped accepting frames the moment the
+//     connection reconnected (its reconnect count is stale — see relayHandler),
+//     so lastSeq is frozen at the last frame the handler saw before the drop.
+//   - The new generation gets a FRESH sub-id, hence a fresh private delivery
+//     subject: anything the old relay still has in flight (it can publish a
+//     final in-hand frame even after its stop is acknowledged) lands on a
+//     subject this generation never subscribes — frames are attributable to
+//     exactly one relay, with no timing assumptions.
+//
+// The pass unsubscribes the old delivery subject, stops the old relay on the
+// bus (idempotent — a no-op after a real restart), subscribes the new delivery
+// subject, and sends a fresh message.subscribe carrying the resume sequence
+// (last delivered+1), which the bus maps to StartFromSeq on the backend. A
+// zero lastSeq means no message was ever delivered; in that case it re-uses
+// the original start option (DeliverAll or StartNew).
 //
 // Concurrency note: called from reestablishSubs (NATS reconnect goroutine).
-// Reads lastSeq atomically; all other fields are written once at construction
-// and are read-only here.
+// Reads lastSeq atomically and swaps the generation pair under s.mu; the other
+// fields are written once at construction and are read-only here.
 func (s *subscription) reestablish(c *Client) error {
+	s.mu.Lock()
+	oldSubID, oldNatsSub := s.subID, s.natsSub
+	s.mu.Unlock()
+
+	// The old generation's handler already drops everything, so unsubscribing
+	// here only sheds queued frames early. An already-invalid subscription
+	// (a previous pass failed after this point) is fine to unsubscribe again.
+	if oldNatsSub != nil {
+		_ = oldNatsSub.Unsubscribe()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := c.call(ctx, wireapi.OpSubscriptionStop, wireapi.SubscriptionStopInput{SubID: oldSubID}, nil); err != nil {
+		return fmt.Errorf("stop stale relay: %w", err)
+	}
+
+	subID := ulid.Make().String()
+	natsSub, err := c.nc.Subscribe(wireapi.DeliverSubject(c.id, subID), c.relayHandler(s, c.nc.Stats().Reconnects))
+	if err != nil {
+		return fmt.Errorf("subscribe delivery: %w", err)
+	}
+	// Swap the generation in BEFORE the bus call: whatever happens to the call,
+	// teardown and the next resume pass must target the newest sub-id — a relay
+	// whose subscribe landed but whose reply was lost is then found and stopped
+	// by the next pass (or by teardown) rather than orphaned.
+	s.mu.Lock()
+	s.subID, s.natsSub = subID, natsSub
+	s.mu.Unlock()
+
+	// Snapshot the resume point after the old generation is fully out of the
+	// picture: its handler froze lastSeq at the reconnect and its relay is now
+	// stopped, so last is the exact high-water mark of what the handler saw.
 	last := atomic.LoadUint64(&s.lastSeq)
 	in := wireapi.SubscribeInput{
 		Subject:    s.subject,
-		SubID:      s.subID,
+		SubID:      subID,
 		DeliverAll: s.deliverAll,
 	}
 	if last > 0 {
 		in.SinceSeq = last + 1
 		in.DeliverAll = false // SinceSeq takes priority; don't replay from the top
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := c.call(ctx, wireapi.OpSubscriptionStop, wireapi.SubscriptionStopInput{SubID: s.subID}, nil); err != nil {
-		return fmt.Errorf("stop stale relay: %w", err)
 	}
 	return c.call(ctx, wireapi.OpMessageSubscribe, in, nil)
 }
@@ -319,17 +411,22 @@ func (s *subscription) Stop() {
 	s.cancel()
 }
 
-// teardown unsubscribes the delivery subject and asks the bus to stop the relay.
-// It runs exactly once, whether reached via Stop or a cancelled ctx (it also
-// sets stopped, covering the ctx-cancel path that bypasses Stop).
+// teardown unsubscribes the delivery subject and asks the bus to stop the relay
+// (the newest generation's — a concurrent resume pass that rotates afterwards is
+// covered by reestablishSubs's post-pass stopped check). It runs exactly once,
+// whether reached via Stop or a cancelled ctx (it also sets stopped, covering
+// the ctx-cancel path that bypasses Stop).
 func (s *subscription) teardown() {
 	s.once.Do(func() {
 		s.stopped.Store(true)
-		if s.natsSub != nil {
-			_ = s.natsSub.Unsubscribe()
+		s.mu.Lock()
+		subID, natsSub := s.subID, s.natsSub
+		s.mu.Unlock()
+		if natsSub != nil {
+			_ = natsSub.Unsubscribe()
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = s.c.call(ctx, wireapi.OpSubscriptionStop, wireapi.SubscriptionStopInput{SubID: s.subID}, nil)
+		_ = s.c.call(ctx, wireapi.OpSubscriptionStop, wireapi.SubscriptionStopInput{SubID: subID}, nil)
 	})
 }

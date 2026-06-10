@@ -67,12 +67,13 @@ type Client struct {
 	drained   chan struct{}
 
 	// subsMu guards subs. Subscriptions register themselves on creation and
-	// deregister on teardown; the reconnect handler snapshots the map under the
-	// lock so it can re-establish each relay without holding the lock. Write
-	// operations (register, deregister) are infrequent (one per Subscribe/Stop);
-	// the reconnect snapshot is a single copy under the lock.
+	// deregister on teardown; the reconnect handler snapshots the set under the
+	// lock so it can re-establish each relay without holding the lock. The set
+	// is keyed by the subscription itself — its sub-id rotates on every resume
+	// pass. Write operations (register, deregister) are infrequent (one per
+	// Subscribe/Stop); the reconnect snapshot is a single copy under the lock.
 	subsMu sync.Mutex
-	subs   map[string]*subscription
+	subs   map[*subscription]struct{}
 }
 
 // Connect dials the bus and runs the connect handshake. ctx governs the
