@@ -156,13 +156,27 @@ func Run(ctx context.Context, opts Options) error {
 // line to the given writer BEFORE the alt-screen opens. The next run resolves
 // the saved (now active) context silently. With no bus discoverable it fails
 // loud with guidance, never hangs (the enrollment is deadline-bound).
+//
+// Self-enrollment only works against the locally-discovered bus: it mints over
+// the enroll.creds the bus provisioned under Store, and those creds belong to
+// that bus alone. An explicit --url pointing anywhere else would enroll against
+// the local bus and then dial the other one with the wrong creds — an auth
+// failure AFTER a context was created and activated. So a mismatched (or
+// undiscoverable) --url fails loud HERE, before any state is written; a --url
+// that matches the discovered bus proceeds normally.
 func ensureIdentity(ctx context.Context, opts *Options, notice io.Writer) error {
 	if opts.CredsPath != "" {
 		return nil
 	}
 	info, err := conninfo.Read(connInfoPath(opts.Store))
 	if err != nil {
+		if opts.URL != "" {
+			return fmt.Errorf("no identity for --url %s — first-run self-enrollment only works against the locally-discovered bus (its enroll.creds under %s), and none was found: drop --url to enroll against a local `sextant up` bus, or for a remote bus pass --creds, or mint an identity there with `sextant clients register` and save it with `sextant context add`", opts.URL, opts.Store)
+		}
 		return fmt.Errorf("no identity and no local bus discovered under %s — run `sextant up` first (or pass --creds / select a context with `sextant context use`): %w", opts.Store, err)
+	}
+	if opts.URL != "" && opts.URL != info.URL {
+		return fmt.Errorf("no identity, and --url %s is not the locally-discovered bus (%s, under %s) — first-run self-enrollment would mint against the local bus, leaving creds the --url bus rejects: drop --url to enroll locally, or for a remote bus pass --creds, or mint an identity there with `sextant clients register` and save it with `sextant context add`", opts.URL, info.URL, opts.Store)
 	}
 	ectx, cancel := context.WithTimeout(ctx, enrollTimeout)
 	defer cancel()

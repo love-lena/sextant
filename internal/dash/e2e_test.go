@@ -265,6 +265,103 @@ func TestDashZeroConfigNoBusFailsLoud(t *testing.T) {
 	}
 }
 
+// TestDashFirstRunExplicitURLNoDiscoveryFailsLoud: an explicit --url cannot
+// substitute for the local discovery file on a first run — self-enrollment
+// mints over the bus store's enroll.creds, which only the locally-discovered
+// bus accepts. With no identity, --url set, and NO discovery file, the dash
+// must fail up front with --url-aware guidance (not the misleading "no local
+// bus discovered" message) and write no state: no context created, none
+// activated, no creds resolved.
+func TestDashFirstRunExplicitURLNoDiscoveryFailsLoud(t *testing.T) {
+	t.Setenv("SEXTANT_HOME", t.TempDir()) // hermetic context store
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	opts := Options{Store: t.TempDir(), URL: "nats://10.0.0.9:4222"} // empty store: no discovery file
+	err := ensureIdentity(ctx, &opts, io.Discard)
+	if err == nil {
+		t.Fatal("ensureIdentity with --url and no discovery file should fail loud")
+	}
+	if !strings.Contains(err.Error(), "--url") {
+		t.Errorf("error %q should explain the --url conflict, not just claim no bus", err)
+	}
+	if !strings.Contains(err.Error(), "sextant clients register") {
+		t.Errorf("error %q should guide toward registering on the remote bus", err)
+	}
+	assertNoEnrollment(t, opts)
+}
+
+// TestDashFirstRunExplicitURLMismatchFailsLoud is review bug (b) on PR #99:
+// with no identity, a discoverable LOCAL bus, and --url naming a DIFFERENT
+// bus, the old path enrolled against the discovered bus and then dialed the
+// --url bus with the wrong creds — an auth failure AFTER a fresh context was
+// created and activated (stranding it, broken). The conflict must surface
+// BEFORE any state is written: ensureIdentity fails loud, no context exists,
+// nothing was activated. A --url that MATCHES the discovered bus proceeds
+// normally (proven against the same live bus).
+func TestDashFirstRunExplicitURLMismatchFailsLoud(t *testing.T) {
+	store := t.TempDir()
+	b, err := bus.Start(t.Context(), bus.Config{StoreDir: store})
+	if err != nil {
+		t.Fatalf("bus.Start: %v", err)
+	}
+	t.Cleanup(b.Shutdown)
+	if err := conninfo.Write(filepath.Join(store, conninfo.DefaultFile), conninfo.Info{URL: b.ClientURL()}); err != nil {
+		t.Fatalf("write discovery: %v", err)
+	}
+
+	t.Setenv("SEXTANT_HOME", t.TempDir()) // hermetic context store
+	t.Setenv("SEXTANT_CREDS", "")
+	t.Setenv("SEXTANT_CONTEXT", "")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	opts := Options{Store: store, URL: "nats://10.0.0.9:4222", Name: "url-mismatch-lena"}
+	err = ensureIdentity(ctx, &opts, io.Discard)
+	if err == nil {
+		t.Fatal("ensureIdentity with a mismatched --url should fail loud before enrolling")
+	}
+	if !strings.Contains(err.Error(), "--url") || !strings.Contains(err.Error(), b.ClientURL()) {
+		t.Errorf("error %q should name the --url/discovered-bus conflict", err)
+	}
+	assertNoEnrollment(t, opts)
+
+	// A --url that matches the discovered bus is no conflict: the same first run
+	// proceeds and enrolls normally.
+	match := Options{Store: store, URL: b.ClientURL(), Name: "url-match-lena"}
+	var notice bytes.Buffer
+	if err := ensureIdentity(ctx, &match, &notice); err != nil {
+		t.Fatalf("ensureIdentity with the matching --url: %v", err)
+	}
+	if match.CredsPath == "" {
+		t.Fatal("matching --url first run did not resolve a creds path")
+	}
+	if got := clictx.Active(); got != "url-match-lena" {
+		t.Errorf("active context = %q, want url-match-lena", got)
+	}
+}
+
+// assertNoEnrollment asserts a failed first run wrote NO state (fail-loud,
+// fail-early — never partial state then error): no creds resolved, no context
+// saved, none activated.
+func assertNoEnrollment(t *testing.T, opts Options) {
+	t.Helper()
+	if opts.CredsPath != "" {
+		t.Errorf("failed first run resolved creds %q; want none", opts.CredsPath)
+	}
+	if got := clictx.Active(); got != "" {
+		t.Errorf("failed first run activated context %q; want none", got)
+	}
+	ctxs, err := clictx.List()
+	if err != nil {
+		t.Fatalf("clictx.List: %v", err)
+	}
+	if len(ctxs) != 0 {
+		t.Errorf("failed first run left %d context(s) behind: %+v", len(ctxs), ctxs)
+	}
+}
+
 // TestWatchDrainExitsOnCtxCancel is the focused, teatest-free regression guard
 // for the watchDrain goroutine leak (review item 1): it drives ONLY the root's
 // drain watch — the single goroutine the dash itself owns — without a tea.Program,
