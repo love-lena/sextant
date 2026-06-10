@@ -3,12 +3,20 @@ package sextant
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"net/url"
+	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/love-lena/sextant/internal/wireapi"
+	"github.com/love-lena/sextant/pkg/bus"
+	"github.com/love-lena/sextant/pkg/conninfo"
 	"github.com/love-lena/sextant/pkg/sx"
 	"github.com/love-lena/sextant/pkg/wire"
 )
@@ -185,6 +193,165 @@ func TestSubscribeFailureLeavesNoRegistration(t *testing.T) {
 	c.subsMu.Unlock()
 	if n != 0 {
 		t.Fatalf("a failed Subscribe left %d subscription(s) registered; want 0", n)
+	}
+}
+
+// startBusOnStore starts a bus against store and writes bus.json so a later
+// restart on the same store reclaims the same port (ADR-0025).
+func startBusOnStore(t *testing.T, store string) *bus.Bus {
+	t.Helper()
+	b, err := bus.Start(t.Context(), bus.Config{StoreDir: store})
+	if err != nil {
+		t.Fatalf("bus.Start: %v", err)
+	}
+	if err := conninfo.Write(filepath.Join(store, conninfo.DefaultFile), conninfo.Info{URL: b.ClientURL()}); err != nil {
+		t.Fatalf("write bus.json: %v", err)
+	}
+	t.Cleanup(b.Shutdown)
+	return b
+}
+
+// stopBusAndFreePort shuts b down and blocks until its port is free, so a
+// restart on the same store can rebind it. Deadline-bound, never hangs.
+func stopBusAndFreePort(t *testing.T, b *bus.Bus) {
+	t.Helper()
+	u, err := url.Parse(b.ClientURL())
+	if err != nil {
+		t.Fatalf("parse bus URL: %v", err)
+	}
+	b.Shutdown()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		ln, lerr := net.Listen("tcp", "127.0.0.1:"+u.Port())
+		if lerr == nil {
+			_ = ln.Close()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("port was not released within 5s of Shutdown — cannot restart")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestResumeTransportFailureDefersUntilNextReconnect pins the two-tier resume
+// failure contract (ADR-0027 reserves loud death for an IMPOSSIBLE resume, not
+// a flaky network): a resume pass whose calls fail on transport — the bus never
+// answered — must not stop the subscription. It stays registered, OnError gets
+// the non-fatal ErrResumeDeferred notice, and the next reconnect pass retries
+// the resume with no gaps and no duplicates. (The fatal tier — a bus-answered
+// impossible resume — is pinned by TestSubscribeLoudDeathOnWipedStore in
+// pkg/bus.)
+func TestResumeTransportFailureDefersUntilNextReconnect(t *testing.T) {
+	store := t.TempDir()
+	b1 := startBusOnStore(t, store)
+
+	// Mint before the outage: the identity is durable in the store, so the same
+	// credential reconnects to the restarted bus.
+	creds, _, err := b1.MintClient(t.Context(), "defer-resume", "test")
+	if err != nil {
+		t.Fatalf("MintClient: %v", err)
+	}
+	credsFile := writeCreds(t, creds)
+
+	reconnected := make(chan struct{}, 4)
+	c, err := Connect(t.Context(), Options{
+		URL:       b1.ClientURL(),
+		CredsPath: credsFile,
+		Logf: func(format string, args ...any) {
+			// "reconnected to the bus" logs only after reestablishSubs returns.
+			if strings.Contains(fmt.Sprintf(format, args...), "reconnected to the bus") {
+				select {
+				case reconnected <- struct{}{}:
+				default:
+				}
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+
+	subj := sx.TopicSubject("defer-resume")
+	got := make(chan Message, 16)
+	errCh := make(chan error, 4)
+	sub, err := c.Subscribe(t.Context(), subj, func(m Message) { got <- m },
+		OnError(func(e error) { errCh <- e }))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	t.Cleanup(sub.Stop)
+
+	// One delivery so lastSeq > 0 — the retried resume must resume, not replay.
+	if err := c.Publish(t.Context(), subj, json.RawMessage(`{"n":1}`)); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	select {
+	case <-got:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for the pre-outage delivery")
+	}
+
+	// Take the bus down and run a resume pass while it is unreachable: every
+	// call is a transport failure (the request deadline expires; the bus never
+	// answers). This is the deterministic equivalent of a second blip landing
+	// inside the resume window.
+	stopBusAndFreePort(t, b1)
+	c.reestablishSubs()
+
+	// Non-fatal tier: the deferral notice fired...
+	select {
+	case e := <-errCh:
+		if !errors.Is(e, ErrResumeDeferred) {
+			t.Fatalf("OnError = %v; want a non-fatal notice wrapping ErrResumeDeferred", e)
+		}
+	default:
+		t.Fatal("no OnError notice for a transport-failed resume (silent dead window)")
+	}
+	// ...the subscription is still registered for the next pass, and not stopped.
+	s := sub.(*subscription)
+	c.subsMu.Lock()
+	_, registered := c.subs[s]
+	c.subsMu.Unlock()
+	if !registered {
+		t.Fatal("a transport-failed resume deregistered the subscription; it must stay registered so the next reconnect retries it")
+	}
+	if s.stopped.Load() {
+		t.Fatal("a transport-failed resume stopped the subscription; a deferral must keep it live")
+	}
+
+	// Restart on the same store (same port via bus.json): the real reconnect
+	// pass retries the resume and must succeed.
+	b2, err := bus.Start(t.Context(), bus.Config{StoreDir: store})
+	if err != nil {
+		t.Fatalf("second Start: %v", err)
+	}
+	t.Cleanup(b2.Shutdown)
+	select {
+	case <-reconnected:
+	case <-time.After(20 * time.Second):
+		t.Fatal("client did not reconnect within 20s")
+	}
+
+	if err := c.Publish(t.Context(), subj, json.RawMessage(`{"n":2}`)); err != nil {
+		t.Fatalf("Publish after restart: %v", err)
+	}
+	select {
+	case m := <-got:
+		if string(m.Frame.Record) != `{"n":2}` {
+			t.Fatalf("post-restart delivery = %s; want {\"n\":2} (anything else is a duplicate replay)", m.Frame.Record)
+		}
+	case e := <-errCh:
+		t.Fatalf("OnError fired instead of a delivery after the retried resume: %v", e)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the retried resume never delivered — the subscription was lost")
+	}
+	// No duplicate of n=1 trailing behind the resume.
+	select {
+	case m := <-got:
+		t.Fatalf("unexpected extra delivery after the resume (duplicate): %s", m.Frame.Record)
+	case <-time.After(500 * time.Millisecond):
 	}
 }
 

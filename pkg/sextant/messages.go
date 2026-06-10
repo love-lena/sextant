@@ -3,6 +3,7 @@ package sextant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -28,6 +29,15 @@ type Message struct {
 // Handler processes a received message.
 type Handler func(Message)
 
+// ErrResumeDeferred marks a non-fatal OnError notice: a reconnect-time resume
+// attempt failed on transport (the bus never answered — a timeout, or a second
+// blip inside the resume window), so the subscription stays registered and the
+// next reconnect retries the resume. Until a retry succeeds the subscription
+// delivers nothing; the notice makes that window visible. Distinguish it with
+// errors.Is(err, ErrResumeDeferred) — any OnError that does not wrap it is
+// fatal, and the subscription is stopped.
+var ErrResumeDeferred = errors.New("sextant: subscription resume deferred to the next reconnect")
+
 // Subscription is an active subscription; call Stop to end it.
 type Subscription interface {
 	Stop()
@@ -47,13 +57,20 @@ func DeliverAll() SubOption {
 	return func(c *subConfig) { c.deliverAll = true }
 }
 
-// OnError registers a handler that is called when the subscription cannot be
-// re-established after a reconnect. A subscription that was live when the
-// connection dropped will attempt to resume on reconnect; if that fails (e.g.
-// the store was wiped) the handler is called with the error and the
-// subscription is stopped. Without OnError, a failed resume is only logged —
-// the handler receives nothing, forever. Registering an OnError makes that
-// silence visible.
+// OnError registers a handler that is called when a reconnect-time resume
+// fails. A subscription that was live when the connection dropped will attempt
+// to resume on reconnect; the handler then sees one of two distinguishable
+// errors:
+//
+//   - Fatal: the bus answered that the resume is impossible (e.g. the store was
+//     wiped and the sequence is gone). The subscription is stopped.
+//   - Non-fatal: the resume failed on transport — the bus never answered — and
+//     wraps ErrResumeDeferred (check errors.Is). The subscription stays
+//     registered and the next reconnect retries it; until then it delivers
+//     nothing, which the notice makes visible.
+//
+// Without OnError, either case is only logged — the handler receives nothing,
+// forever. Registering an OnError makes that silence visible.
 //
 // The handler runs on the NATS client's asynchronous-callback goroutine, the
 // same one that dispatches reconnect events: it must not block, and it must not
@@ -231,8 +248,25 @@ func (c *Client) deliver(d wireapi.MessageDelivery, h Handler, s *subscription) 
 // reconnect. It iterates all registered active subscriptions and re-creates
 // their server-side relay, resuming from last-delivered+1 so no messages are
 // missed or duplicated. A subscription that had no deliveries resumes from its
-// original start option. If re-establishment fails for a subscription, the
-// OnError handler is called (if registered) and the subscription is stopped.
+// original start option.
+//
+// A failed re-establishment splits on who failed (ADR-0027 reserves loud death
+// for an impossible resume, not a flaky network):
+//
+//   - The bus answered with an error (busError): the resume is impossible —
+//     e.g. the sequence is gone after a wipe. OnError fires with a fatal error
+//     and the subscription is stopped.
+//   - Transport failure (the bus never answered — a timeout, or a second blip
+//     inside the resume window): the outcome is unknown but recoverable. The
+//     subscription stays registered and the next reconnect pass retries the
+//     resume; no retry loop runs here — the NATS reconnect machinery provides
+//     the cadence. OnError fires with a non-fatal ErrResumeDeferred notice so
+//     the dead window is visible. A partially-applied attempt converges on
+//     retry: the pass targets the newest sub-id, so a relay whose subscribe
+//     landed but whose reply was lost is found and stopped by the next pass's
+//     idempotent bus-side stop; its generation handler drops anything it
+//     pushed in the meantime once a further reconnect intervenes, and the
+//     deliver-side monotonic cursor drops any overlap regardless.
 //
 // Ownership: runs on the NATS client's reconnect goroutine. It holds c.subsMu
 // only long enough to snapshot the active set; a subscription stopped during
@@ -253,6 +287,15 @@ func (c *Client) reestablishSubs() {
 		if err := s.reestablish(c); err != nil {
 			if s.stopped.Load() {
 				continue // stopped concurrently; the failure is teardown, not loss
+			}
+			var be *busError
+			if !errors.As(err, &be) {
+				// Transport failure: stay registered, retry on the next reconnect.
+				c.logf("sextant: subscription on %q: resume deferred to the next reconnect: %v", s.subject, err)
+				if s.onErr != nil {
+					s.onErr(fmt.Errorf("%w: subscription on %q delivers nothing until then: %v", ErrResumeDeferred, s.subject, err))
+				}
+				continue
 			}
 			c.logf("sextant: subscription on %q cannot resume after reconnect: %v", s.subject, err)
 			if s.onErr != nil {
