@@ -117,6 +117,10 @@ func (c *ClientsBrowser) SetTheme(th theme.Theme) {
 	err := c.err // re-applying the snapshot is not a successful fetch
 	c.applySnapshot(c.last)
 	c.err = err
+	// applySnapshot restored the full list height (no error from its view);
+	// re-reserve the footer row for the restored error, or a theme switch would
+	// clip the footer off the pane's bottom row.
+	c.relayoutList(c.err != nil)
 }
 
 // Update folds in the directory snapshots, the refresh tick, and the fetch error,

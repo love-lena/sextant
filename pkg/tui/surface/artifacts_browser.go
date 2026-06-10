@@ -105,6 +105,10 @@ func (a *ArtifactsBrowser) SetTheme(th theme.Theme) {
 	err := a.err // re-applying the snapshot is not a successful fetch
 	a.applySnapshot(a.last)
 	a.err = err
+	// applySnapshot restored the full list height (no error from its view);
+	// re-reserve the footer row for the restored error, or a theme switch would
+	// clip the footer off the pane's bottom row.
+	a.relayoutList(a.err != nil)
 }
 
 // Update folds in the directory snapshots, the refresh tick, and the fetch error,
