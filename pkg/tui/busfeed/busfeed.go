@@ -55,8 +55,11 @@ type EventMsg struct {
 
 // DroppedMsg reports that N events were dropped because the buffer was full when
 // they arrived. It is coalesced: the feed accumulates the count and surfaces it
-// as a single message when the pump next runs, so the UI can show one gap marker
-// instead of one message per drop. Overflow is fail-loud, never silent.
+// as a single message, so the UI can show one gap marker instead of one message
+// per drop. The marker is delivered in stream position — after every event that
+// arrived before the gap and before the first event that arrived after it — so
+// the gap renders exactly where the loss happened. Overflow is fail-loud, never
+// silent.
 type DroppedMsg struct {
 	// From identifies the emitting feed (see EventMsg.From).
 	From *Feed
@@ -101,16 +104,29 @@ type Feed struct {
 	subject string
 	opts    []sextant.SubOption
 
-	events chan sextant.Message
+	events chan item
 	// errs receives mid-stream errors delivered by the SDK's OnError handler
 	// (e.g. a subscription that cannot be re-established after a bus restart).
 	// Capacity 1: there is at most one fatal error per subscription lifetime.
 	errs chan error
 
 	mu      sync.Mutex
-	dropped int                  // events lost to a full buffer, not yet reported
+	dropped int // events lost to a full buffer, not yet carried by an item
+	// pending holds the event whose in-band gap (item.gapBefore) the previous
+	// pump step just reported as a DroppedMsg; the next step returns it.
+	pending *sextant.Message
 	sub     sextant.Subscription // set once Subscribe succeeds; nil before/after
 	stopped bool
+}
+
+// item is one buffered entry on the events channel. gapBefore carries the gap
+// in-band: it is the number of events dropped immediately before this one was
+// enqueued (zero in the common case), so the pump can place the gap marker
+// exactly between the events that arrived before the drops and the first that
+// arrived after them — channel order IS stream order.
+type item struct {
+	msg       sextant.Message
+	gapBefore int
 }
 
 // New builds a Feed that will subscribe client to subject. The SubOptions are
@@ -127,7 +143,7 @@ func New(client *sextant.Client, subject string, opts ...sextant.SubOption) *Fee
 	f := &Feed{
 		client:  client,
 		subject: subject,
-		events:  make(chan sextant.Message, DefaultBuffer),
+		events:  make(chan item, DefaultBuffer),
 		errs:    make(chan error, 1),
 	}
 	// Prepend the OnError handler so caller-supplied opts are applied after it;
@@ -178,6 +194,10 @@ func (f *Feed) Subscribe(ctx context.Context) tea.Cmd {
 // counts it. This is the locked overflow policy — drop, count, surface, never
 // block the handler and never ring-buffer.
 //
+// The first successful enqueue after a drop carries the accumulated count
+// in-band (item.gapBefore), so the gap travels through the buffer in stream
+// position rather than jumping the queue when the pump next runs.
+//
 // The send is gated by the stopped flag under the mutex. The SDK's Stop is
 // asynchronous (it cancels and tears down on a bridge goroutine), so a delivery
 // can race a Stop; gating under the lock that also guards close keeps the send
@@ -189,7 +209,8 @@ func (f *Feed) handle(m sextant.Message) {
 		return
 	}
 	select {
-	case f.events <- m:
+	case f.events <- item{msg: m, gapBefore: f.dropped}:
+		f.dropped = 0
 	default:
 		f.dropped++
 	}
@@ -199,18 +220,42 @@ func (f *Feed) handle(m sextant.Message) {
 // Next is the pump step: it reads one event off the buffer, off the main loop,
 // and returns it as a tea.Msg. A model returns Next on every EventMsg and every
 // DroppedMsg to keep the pump running (ErrMsg is terminal — the feed surfaces it
-// and stops reading). If events were dropped since the last step, Next reports
-// the coalesced DroppedMsg first (the dropped count is then cleared); the next
-// Next resumes reading events. Next returns nil when the feed is stopped and the
-// buffer is drained, ending the pump cleanly.
+// and stops reading). A coalesced DroppedMsg surfaces in stream position: after
+// every buffered event that arrived before the gap, and before the first event
+// that arrived after it (that event is held one step and returned by the next
+// Next). Next returns nil when the feed is stopped and the buffer is drained,
+// ending the pump cleanly.
 func (f *Feed) Next() tea.Cmd {
 	return f.next
 }
 
 // next implements one pump step. It is the tea.Cmd body Next returns.
 func (f *Feed) next() tea.Msg {
-	// Report coalesced drops before reading more, so a gap marker precedes the
-	// events that arrived after the gap.
+	// The previous step reported a gap carried by an event (item.gapBefore) and
+	// held the event itself back; deliver it now, right after its marker.
+	f.mu.Lock()
+	if m := f.pending; m != nil {
+		f.pending = nil
+		f.mu.Unlock()
+		return EventMsg{From: f, Message: *m}
+	}
+	f.mu.Unlock()
+
+	// Drain already-buffered events before honoring a terminal error, so an
+	// ErrMsg cannot preempt up to DefaultBuffer events that were delivered
+	// before the failure — the subscriber sees everything it received, then the
+	// error. Gap placement rides the channel order: every buffered event arrived
+	// BEFORE any event currently being dropped, so events drain first and a gap
+	// surfaces only when its carrying item (or the empty buffer, below) says so.
+	select {
+	case it, ok := <-f.events:
+		return f.emit(it, ok)
+	default:
+	}
+
+	// Buffer empty: a trailing gap — drops not yet carried in-band because no
+	// event has been enqueued after them — is reported now, so a burst that ends
+	// in losses still surfaces its marker without waiting for the next event.
 	f.mu.Lock()
 	if n := f.dropped; n > 0 {
 		f.dropped = 0
@@ -219,33 +264,40 @@ func (f *Feed) next() tea.Msg {
 	}
 	f.mu.Unlock()
 
-	// Drain already-buffered events before honoring a terminal error, so an
-	// ErrMsg cannot preempt up to DefaultBuffer events that were delivered
-	// before the failure — the subscriber sees everything it received, then the
-	// error.
-	select {
-	case m, ok := <-f.events:
-		if !ok {
-			// Channel closed by Stop and fully drained: the pump ends here.
-			return nil
-		}
-		return EventMsg{From: f, Message: m}
-	default:
-	}
-
-	// Buffer empty: block on both channels so a mid-stream error (reconnect
-	// failure) surfaces as an ErrMsg rather than silently starving the pump.
-	// ErrMsg is terminal: the caller must not issue Next after receiving one.
+	// Block on both channels so a mid-stream error (reconnect failure) surfaces
+	// as an ErrMsg rather than silently starving the pump. ErrMsg is terminal:
+	// the caller must not issue Next after receiving one.
 	select {
 	case err := <-f.errs:
 		return ErrMsg{From: f, Err: err}
-	case m, ok := <-f.events:
-		if !ok {
-			// Channel closed by Stop and fully drained: the pump ends here.
-			return nil
-		}
-		return EventMsg{From: f, Message: m}
+	case it, ok := <-f.events:
+		return f.emit(it, ok)
 	}
+}
+
+// emit turns one channel read into the pump's tea.Msg. An item carrying a gap
+// yields the DroppedMsg first and parks the event in pending for the next step,
+// so the marker lands exactly between the pre-gap and post-gap events. A closed
+// channel (ok=false: Stop ran and the buffer is drained) reports any trailing
+// drops, then ends the pump with nil.
+func (f *Feed) emit(it item, ok bool) tea.Msg {
+	if !ok {
+		f.mu.Lock()
+		if n := f.dropped; n > 0 {
+			f.dropped = 0
+			f.mu.Unlock()
+			return DroppedMsg{From: f, N: n}
+		}
+		f.mu.Unlock()
+		return nil
+	}
+	if it.gapBefore > 0 {
+		f.mu.Lock()
+		f.pending = &it.msg
+		f.mu.Unlock()
+		return DroppedMsg{From: f, N: it.gapBefore}
+	}
+	return EventMsg{From: f, Message: it.msg}
 }
 
 // Stop tears the feed down: it stops the SDK subscription and closes the buffer

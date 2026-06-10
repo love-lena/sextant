@@ -222,11 +222,47 @@ func TestStopViaCtxCancel(t *testing.T) {
 	f.Stop() // also closes the buffer so the pump can end and goleak is clean
 }
 
-// TestOverflowFiresDropped pins the locked overflow policy: flooding more frames
-// than the buffer holds while the pump is not draining drops the excess,
-// coalesces the count, and surfaces a single DroppedMsg{N>0} — no panic, no
-// block, no silent loss.
-func TestOverflowFiresDropped(t *testing.T) {
+// waitFor polls cond until it holds or the deadline passes, failing the test on
+// a timeout. It synchronizes with the SDK's asynchronous delivery goroutine
+// without sleep-and-hope: the condition is the fact the test needs, observed.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("condition not reached within deadline: %s", what)
+}
+
+// eventIndex extracts the i field of a test record ({"i":N}) from an EventMsg,
+// failing the test on any other message type or a malformed record.
+func eventIndex(t *testing.T, msg tea.Msg) int {
+	t.Helper()
+	ev, ok := msg.(busfeed.EventMsg)
+	if !ok {
+		t.Fatalf("got %#v; want EventMsg", msg)
+	}
+	var rec struct {
+		I int `json:"i"`
+	}
+	if err := json.Unmarshal(ev.Message.Frame.Record, &rec); err != nil {
+		t.Fatalf("unmarshal record %s: %v", ev.Message.Frame.Record, err)
+	}
+	return rec.I
+}
+
+// TestOverflowFiresDroppedInStreamPosition pins the locked overflow policy AND
+// the gap marker's placement, order-strictly. Flooding more frames than the
+// buffer holds while the pump is not draining drops the excess and coalesces
+// the count — no panic, no block, no silent loss — and the single DroppedMsg
+// surfaces in stream position: after EVERY buffered pre-gap event (they all
+// arrived before anything was dropped) and before the first post-gap event.
+// A marker jumping the queue ahead of buffered events is the regression this
+// test exists to catch.
+func TestOverflowFiresDroppedInStreamPosition(t *testing.T) {
 	c, _ := dialEnv(t, "feed-overflow")
 	subject := sx.TopicSubject("overflow")
 
@@ -241,6 +277,7 @@ func TestOverflowFiresDropped(t *testing.T) {
 	pubCtx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	const flood = busfeed.DefaultBuffer + 64
+	const overflow = flood - busfeed.DefaultBuffer
 	for i := range flood {
 		rec := json.RawMessage(`{"i":` + itoa(i) + `}`)
 		if err := c.Publish(pubCtx, subject, rec); err != nil {
@@ -248,24 +285,44 @@ func TestOverflowFiresDropped(t *testing.T) {
 		}
 	}
 
-	// Drain the pump until a DroppedMsg surfaces. Events come first (buffered),
-	// then the coalesced drop count.
-	var dropped int
-	deadline := time.Now().Add(10 * time.Second)
-	for dropped == 0 && time.Now().Before(deadline) {
-		switch msg := runStep(t, f.Next()).(type) {
-		case busfeed.DroppedMsg:
-			dropped = msg.N
-		case busfeed.EventMsg:
-			// buffered event; keep draining
-		case busfeed.ErrMsg:
-			t.Fatalf("feed error: %v", msg.Err)
-		case nil:
-			t.Fatal("pump ended before a DroppedMsg surfaced")
+	// Delivery is ordered, so the buffer holds exactly events 0..DefaultBuffer-1
+	// once the whole flood has been delivered — observed as the drop counter
+	// reaching the overflow.
+	waitFor(t, "flood delivered (drop counter at overflow)", func() bool {
+		return f.DroppedCount() == overflow
+	})
+
+	// Drain one slot, then publish a post-gap event; it enqueues into the freed
+	// slot carrying the coalesced gap in-band (the counter returns to zero).
+	if got := eventIndex(t, runStep(t, f.Next())); got != 0 {
+		t.Fatalf("first pump step yielded event %d; want 0 (the marker must not jump the queue)", got)
+	}
+	if err := c.Publish(pubCtx, subject, json.RawMessage(`{"i":`+itoa(flood)+`}`)); err != nil {
+		t.Fatalf("Publish post-gap: %v", err)
+	}
+	waitFor(t, "post-gap event enqueued (drop counter back to zero)", func() bool {
+		return f.DroppedCount() == 0
+	})
+
+	// Order-strict drain: the remaining pre-gap events, in publish order, with
+	// no marker interleaved...
+	for i := 1; i < busfeed.DefaultBuffer; i++ {
+		if got := eventIndex(t, runStep(t, f.Next())); got != i {
+			t.Fatalf("pre-gap event out of order: got %d, want %d", got, i)
 		}
 	}
-	if dropped <= 0 {
-		t.Fatalf("DroppedMsg.N = %d; want > 0 (overflow must be fail-loud)", dropped)
+	// ...then the coalesced marker with the exact count...
+	msg := runStep(t, f.Next())
+	d, ok := msg.(busfeed.DroppedMsg)
+	if !ok {
+		t.Fatalf("after the pre-gap events got %#v; want DroppedMsg", msg)
+	}
+	if d.N != overflow {
+		t.Fatalf("DroppedMsg.N = %d; want %d (overflow must be fail-loud and exact)", d.N, overflow)
+	}
+	// ...then the post-gap event.
+	if got := eventIndex(t, runStep(t, f.Next())); got != flood {
+		t.Fatalf("post-gap event: got %d, want %d", got, flood)
 	}
 }
 
