@@ -294,12 +294,17 @@ func (c *Client) deliver(d wireapi.MessageDelivery, h Handler, s *subscription) 
 // its reconnect; a subscription created after that carries a fresh epoch and
 // needs no pass (Subscribe's staleness re-check covers its own window).
 //
-// One pass runs usefully at a time — newest wins. The token is the
-// connection's reconnect count at the pass's reconnect: when the counter moves
-// on, a newer reconnect exists (its handler is guaranteed to start a fresh
-// pass over a full snapshot), so the running pass's remaining rotations are
-// stale and it stops at the next subscription boundary; only its single
-// in-flight rotation may still finish.
+// At most one pass runs per token, and the newest token wins. The token is
+// the connection's reconnect count as the pass is spawned: when the counter
+// moves on, a newer reconnect exists (its handler is guaranteed to start a
+// fresh pass over a full snapshot), so the running pass's remaining rotations
+// are stale and it stops at the next subscription boundary; only its single
+// in-flight rotation may still finish. Sibling handlers can carry EQUAL
+// tokens — nats.go bumps the counter under the connection lock and only then
+// queues the handler on the serial async dispatcher, so two rapid reconnects
+// can hand both handlers the same, latest count. The claim slot (passClaimed)
+// admits exactly one pass per token; the sibling skips and does not log, so
+// one recovery produces exactly one "reconnected to the bus" completion.
 //
 // Convergence when a superseded pass's in-flight rotation overlaps the newer
 // pass (resumeMu serializes the two on the same subscription):
@@ -341,6 +346,11 @@ func (c *Client) startResumePass() {
 		return // Close is winding the client down; nothing left to resume
 	default:
 	}
+	if token+1 <= c.passClaimed {
+		c.passMu.Unlock()
+		return // an equal-or-newer pass is already claimed (sibling handler); it owns this recovery
+	}
+	c.passClaimed = token + 1
 	c.passWG.Add(1)
 	c.passMu.Unlock()
 

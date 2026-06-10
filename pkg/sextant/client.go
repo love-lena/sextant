@@ -91,6 +91,13 @@ type Client struct {
 	// (the reconnect count, the registry snapshot) are read outside the lock.
 	passMu sync.Mutex
 	passWG sync.WaitGroup
+	// passClaimed (under passMu) is 1 + the highest pass token a resume pass
+	// has been spawned for; 0 means none yet. nats.go bumps the reconnect count
+	// under the connection lock and only then queues the handler on the serial
+	// async dispatcher, so after two rapid reconnects both handlers can read
+	// the same, latest count: the claim admits exactly one pass per token — the
+	// sibling skips, runs nothing, and logs nothing.
+	passClaimed uint64
 
 	// passSpawnHook is a test seam: when non-nil, startResumePass calls it
 	// between reading its spawn inputs and entering the passMu critical

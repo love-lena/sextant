@@ -617,6 +617,70 @@ func TestCloseMidResumePassIsClean(t *testing.T) {
 	goleak.VerifyNone(t, ignore)
 }
 
+// TestSiblingResumePassesDedupe pins the equal-token claim: nats.go bumps the
+// reconnect count under the connection lock and only then queues the handler
+// on the serial async dispatcher, so two rapid reconnects can hand both
+// handlers the same, latest token — and without a claim both passes run to
+// completion and "reconnected to the bus" logs twice for one recovery (a
+// buffered stale signal that satisfies a later waiter prematurely). Both spawn
+// calls here carry the same token, exactly like two queued sibling handlers:
+// exactly one pass may run, complete, and log.
+func TestSiblingResumePassesDedupe(t *testing.T) {
+	b := startBus(t)
+	reconnected := make(chan struct{}, 8)
+	c, err := Connect(t.Context(), Options{
+		URL:       b.ClientURL(),
+		CredsPath: credsPath(t, b, "sibling-dedupe"),
+		Logf: func(format string, args ...any) {
+			if strings.Contains(fmt.Sprintf(format, args...), "reconnected to the bus") {
+				select {
+				case reconnected <- struct{}{}:
+				default:
+				}
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+
+	subj := sx.TopicSubject("sibling-dedupe")
+	got := make(chan Message, 8)
+	sub, err := c.Subscribe(t.Context(), subj, func(m Message) { got <- m })
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	t.Cleanup(sub.Stop)
+
+	// Two sibling spawns, one token.
+	c.startResumePass()
+	c.startResumePass()
+
+	// Exactly one completion...
+	select {
+	case <-reconnected:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the claimed pass never completed")
+	}
+	// ...and not a second one.
+	select {
+	case <-reconnected:
+		t.Fatal("two completions for one token: sibling passes were not deduped")
+	case <-time.After(1 * time.Second):
+	}
+
+	// The claimed pass rotated the subscription and left it live.
+	if err := c.Publish(t.Context(), subj, json.RawMessage(`{"alive":true}`)); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	select {
+	case <-got:
+	case <-time.After(10 * time.Second):
+		t.Fatal("subscription silent after the deduped pass")
+	}
+}
+
 // TestCloseConcurrentWithPassSpawnIsSafe pins the spawn/Close atomicity: a
 // reconnect handler can stall between reading its spawn inputs (Stats blocks
 // on the connection lock, which Close also takes) and registering the pass on

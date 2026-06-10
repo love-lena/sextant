@@ -831,6 +831,16 @@ func TestDoubleBlipExactlyOnceWithContinuousPublisher(t *testing.T) {
 		t.Fatalf("duplicate delivery after the full set: %s", m.Frame.Record)
 	case <-time.After(500 * time.Millisecond):
 	}
+
+	// Exactly one "reconnected" completion per recovery: both signals were
+	// consumed above, so a lingering one means a recovery logged twice (sibling
+	// passes for one token were not deduped) — a stale buffered signal that
+	// would satisfy a later waiter prematurely.
+	select {
+	case <-reconnected:
+		t.Fatal("extra \"reconnected\" completion: one recovery logged twice")
+	case <-time.After(500 * time.Millisecond):
+	}
 }
 
 // itoa is a tiny int-to-string helper for building test JSON records.
