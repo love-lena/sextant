@@ -604,6 +604,14 @@ func (s *subscription) reestablish(c *Client) error {
 		in.SinceSeq = last + 1
 		in.DeliverAll = false // SinceSeq takes priority; don't replay from the top
 	}
+	// Known window (tracked in the backlog; not redesigned here): with a zero
+	// cursor on a live-only subscription, this re-subscribe falls back to the
+	// original start option — "new messages only" — so a message published
+	// between the stop above and this call landing is not delivered, and no
+	// later replay recovers it. Every other shape is covered: lastSeq > 0
+	// resumes via SinceSeq (the replay closes the window exactly) and
+	// DeliverAll replays from the top. Only the never-delivered live-only
+	// case leaks, and only when a publish races into that stop→subscribe gap.
 	return c.call(ctx, wireapi.OpMessageSubscribe, in, nil)
 }
 
