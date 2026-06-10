@@ -321,14 +321,29 @@ func (c *Client) deliver(d wireapi.MessageDelivery, h Handler, s *subscription) 
 // is live again (or has failed loudly) — so callers waiting on that log see a
 // ready bus.
 func (c *Client) startResumePass() {
+	// Read the spawn inputs first — Stats blocks on the connection lock, which
+	// Close also takes, so this can stall arbitrarily long relative to Close.
+	token := c.nc.Stats().Reconnects
+	active := c.snapshotSubs()
+
+	if c.passSpawnHook != nil {
+		c.passSpawnHook() // test seam: stall here, between the reads and the claim
+	}
+
+	// The closed re-check and the Add form one critical section with Close's
+	// close(closed) (see passMu): once Close has signalled, no pass can be
+	// added to the WaitGroup it is about to drain — sync.WaitGroup requires
+	// every Add to happen before the Wait.
+	c.passMu.Lock()
 	select {
 	case <-c.closed:
+		c.passMu.Unlock()
 		return // Close is winding the client down; nothing left to resume
 	default:
 	}
-	token := c.nc.Stats().Reconnects
-	active := c.snapshotSubs()
 	c.passWG.Add(1)
+	c.passMu.Unlock()
+
 	go func() {
 		defer c.passWG.Done()
 		if c.reestablishSubs(token, active) {

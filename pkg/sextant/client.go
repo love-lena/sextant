@@ -81,7 +81,22 @@ type Client struct {
 	closeOnce sync.Once
 	// passWG tracks in-flight resume-pass goroutines (startResumePass) so Close
 	// can drain them with a bounded wait — no pass outlives the client silently.
+	//
+	// passMu makes spawning and Close atomic with respect to each other: a
+	// spawn holds it across {closed re-check, passWG.Add}, and Close holds it
+	// across close(closed). That yields the ordering sync.WaitGroup requires —
+	// every Add happens-before close(closed), which happens-before
+	// passWG.Wait — so an Add can never race the Wait, and no pass goroutine
+	// can spawn once Close has decided to drain. The expensive spawn inputs
+	// (the reconnect count, the registry snapshot) are read outside the lock.
+	passMu sync.Mutex
 	passWG sync.WaitGroup
+
+	// passSpawnHook is a test seam: when non-nil, startResumePass calls it
+	// between reading its spawn inputs and entering the passMu critical
+	// section, so a test can hold a spawn exactly inside the window that races
+	// Close. Always nil in production.
+	passSpawnHook func()
 }
 
 // Connect dials the bus and runs the connect handshake. ctx governs the
@@ -275,7 +290,12 @@ func (c *Client) DisplayName() string { return c.displayName }
 // a silent hang): if a pass somehow does not stop in time, Close logs and
 // returns — the pass's own per-rotation deadlines still bound its exit.
 func (c *Client) Close() error {
+	// Under passMu so the closed signal is atomic with any in-flight spawn's
+	// {closed re-check, passWG.Add}: after this critical section, no resume
+	// pass can be added to the WaitGroup the drain below waits on.
+	c.passMu.Lock()
 	c.closeOnce.Do(func() { close(c.closed) })
+	c.passMu.Unlock()
 	c.nc.Close()
 	done := make(chan struct{})
 	go func() {

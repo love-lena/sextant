@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -614,6 +615,106 @@ func TestCloseMidResumePassIsClean(t *testing.T) {
 	// closed connection), then verify nothing leaked.
 	cancelSubs()
 	goleak.VerifyNone(t, ignore)
+}
+
+// TestCloseConcurrentWithPassSpawnIsSafe pins the spawn/Close atomicity: a
+// reconnect handler can stall between reading its spawn inputs (Stats blocks
+// on the connection lock, which Close also takes) and registering the pass on
+// the WaitGroup. Without passMu serializing {closed re-check, passWG.Add}
+// against Close's close(closed), that interleaving is sync.WaitGroup's
+// documented misuse — an Add racing the Wait — and can spawn a pass goroutine
+// that outlives Close. The seam parks a spawn exactly inside that window while
+// Close runs to completion; the released spawn must observe closed and spawn
+// nothing.
+func TestCloseConcurrentWithPassSpawnIsSafe(t *testing.T) {
+	b := startBus(t)
+	ignore := goleak.IgnoreCurrent() // bus goroutines are baseline; the client must not outlive the test body
+
+	reconnected := make(chan struct{}, 4)
+	c, err := Connect(t.Context(), Options{
+		URL:       b.ClientURL(),
+		CredsPath: credsPath(t, b, "close-vs-spawn"),
+		Logf: func(format string, args ...any) {
+			if strings.Contains(fmt.Sprintf(format, args...), "reconnected to the bus") {
+				select {
+				case reconnected <- struct{}{}:
+				default:
+				}
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	arrived := make(chan struct{})
+	release := make(chan struct{})
+	c.passSpawnHook = func() { close(arrived); <-release }
+
+	spawnDone := make(chan struct{})
+	go func() { defer close(spawnDone); c.startResumePass() }()
+	select {
+	case <-arrived:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the spawn never reached the seam")
+	}
+
+	// Close completes — counter zero, Wait returns — while the spawn is parked
+	// inside the racy window.
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	close(release)
+	select {
+	case <-spawnDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the parked spawn never returned after Close")
+	}
+
+	// The released spawn must have spawned nothing: no pass, no completion log,
+	// and no goroutine outliving the closed client.
+	select {
+	case <-reconnected:
+		t.Fatal("a resume pass ran (and logged) after Close returned")
+	case <-time.After(500 * time.Millisecond):
+	}
+	goleak.VerifyNone(t, ignore)
+}
+
+// TestCloseVersusPassSpawnHammer drives many concurrent spawns against a
+// concurrent Close, over several client lifetimes: a WaitGroup-misuse panic or
+// a data race fails the run. Meant to be hammered at high -count under -race.
+func TestCloseVersusPassSpawnHammer(t *testing.T) {
+	b := startBus(t)
+	for i := range 8 {
+		c, err := Connect(t.Context(), Options{
+			URL:       b.ClientURL(),
+			CredsPath: credsPath(t, b, fmt.Sprintf("hammer-%d", i)),
+			Logf:      func(string, ...any) {},
+		})
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for range 4 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				c.startResumePass()
+			}()
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = c.Close()
+		}()
+		close(start)
+		wg.Wait()
+	}
 }
 
 // TestSubscribeStopsOnContextCancel verifies the subscription tears down when
