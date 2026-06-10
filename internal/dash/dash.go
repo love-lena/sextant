@@ -110,7 +110,7 @@ func Run(ctx context.Context, opts Options) error {
 		Logf: func(string, ...any) {},
 	})
 	if err != nil {
-		return fmt.Errorf("dash: connect: %w", err)
+		return fmt.Errorf("connect: %w", err)
 	}
 
 	// A child context that Run cancels the moment the program exits, by ANY quit
@@ -142,7 +142,7 @@ func Run(ctx context.Context, opts Options) error {
 	_ = client.Close()
 
 	if runErr != nil {
-		return fmt.Errorf("dash: run: %w", runErr)
+		return fmt.Errorf("run: %w", runErr)
 	}
 	return nil
 }
@@ -162,7 +162,7 @@ func ensureIdentity(ctx context.Context, opts *Options, notice io.Writer) error 
 	}
 	info, err := conninfo.Read(connInfoPath(opts.Store))
 	if err != nil {
-		return fmt.Errorf("dash: no identity and no local bus discovered under %s — run `sextant up` first (or pass --creds / select a context with `sextant context use`): %w", opts.Store, err)
+		return fmt.Errorf("no identity and no local bus discovered under %s — run `sextant up` first (or pass --creds / select a context with `sextant context use`): %w", opts.Store, err)
 	}
 	ectx, cancel := context.WithTimeout(ctx, enrollTimeout)
 	defer cancel()
@@ -170,9 +170,9 @@ func ensureIdentity(ctx context.Context, opts *Options, notice io.Writer) error 
 	if err != nil {
 		var ce *selfenroll.ErrContextExists
 		if errors.As(err, &ce) {
-			return fmt.Errorf("dash: context %q already exists — run `sextant context use %s` to adopt it, or `sextant clients register --self --force` to re-enroll", ce.Name, ce.Name)
+			return fmt.Errorf("context %q already exists — run `sextant context use %s` to adopt it, or `sextant clients register --self --force` to re-enroll", ce.Name, ce.Name)
 		}
-		return fmt.Errorf("dash: first-run self-enroll: %w", err)
+		return fmt.Errorf("first-run self-enroll: %w", err)
 	}
 	opts.CredsPath = res.CredsPath
 	if opts.URL == "" {
@@ -195,7 +195,7 @@ func build(ctx context.Context, client *sextant.Client, opts Options) (root, err
 	if opts.ConfigPath != "" {
 		loaded, err := layout.LoadConfig(opts.ConfigPath)
 		if err != nil {
-			return root{}, fmt.Errorf("dash: load config: %w", err)
+			return root{}, fmt.Errorf("load config: %w", err)
 		}
 		cfg = loaded
 	}

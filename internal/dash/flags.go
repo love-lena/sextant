@@ -53,7 +53,7 @@ func AddFlags(fs *flag.FlagSet) *Flags {
 func (f *Flags) Resolve() (Options, error) {
 	th := ThemeChoice(*f.theme)
 	if !th.Valid() {
-		return Options{}, fmt.Errorf("dash: invalid --theme %q (want light, dark, or auto)", *f.theme)
+		return Options{}, fmt.Errorf("invalid --theme %q (want light, dark, or auto)", *f.theme)
 	}
 
 	creds, url := *f.creds, *f.url
@@ -65,7 +65,7 @@ func (f *Flags) Resolve() (Options, error) {
 		if name != "" {
 			c, err := clictx.Load(name)
 			if err != nil {
-				return Options{}, fmt.Errorf("dash: context %q: %w", name, err)
+				return Options{}, fmt.Errorf("context %q: %w", name, err)
 			}
 			creds = c.Creds
 			if url == "" {
