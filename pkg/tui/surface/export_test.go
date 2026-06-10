@@ -45,3 +45,8 @@ func NewTopicsErrMsg(err error) any { return busfeed.ErrMsg{Err: err} }
 // resume reading watch changes after driving a first one to completion. It is the
 // same command the surface returns on each delivered change.
 func (a *Artifact) NextChangeCmd() tea.Cmd { return a.nextChange() }
+
+// HardBreak exposes the stream's cell-width line splitter so the wrap tests can
+// assert grapheme-cluster integrity (a ZWJ emoji or a combining-mark sequence at
+// the break boundary moves whole) directly, without composing a full stream view.
+func HardBreak(line string, width int) []string { return hardBreak(line, width) }

@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/reflow/wordwrap"
+	"github.com/rivo/uniseg"
 
 	"github.com/love-lena/sextant/pkg/sextant"
 	"github.com/love-lena/sextant/pkg/tui/busfeed"
@@ -650,8 +651,12 @@ func wrapText(s string, width int) []string {
 }
 
 // hardBreak splits a single line into chunks no wider than width, by display
-// cells (so multi-cell runes are not split mid-glyph). A line already within
-// width is returned unchanged.
+// cells. It walks grapheme clusters, not runes, so a multi-rune glyph — a ZWJ
+// emoji sequence, a base letter plus combining marks — moves to the next chunk
+// whole rather than being split mid-cluster (a per-rune walk would also
+// miscount a joined sequence's width by summing its parts). For plain ASCII
+// every rune is its own single-cell cluster, so the chunks are exactly what the
+// rune walk produced. A line already within width is returned unchanged.
 func hardBreak(line string, width int) []string {
 	if lipgloss.Width(line) <= width {
 		return []string{line}
@@ -659,15 +664,16 @@ func hardBreak(line string, width int) []string {
 	var out []string
 	var cur strings.Builder
 	curW := 0
-	for _, r := range line {
-		rw := lipgloss.Width(string(r))
-		if curW+rw > width && curW > 0 {
+	g := uniseg.NewGraphemes(line)
+	for g.Next() {
+		gw := g.Width()
+		if curW+gw > width && curW > 0 {
 			out = append(out, cur.String())
 			cur.Reset()
 			curW = 0
 		}
-		cur.WriteRune(r)
-		curW += rw
+		cur.WriteString(g.Str())
+		curW += gw
 	}
 	if cur.Len() > 0 {
 		out = append(out, cur.String())

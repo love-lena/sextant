@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rivo/uniseg"
+
 	"github.com/love-lena/sextant/pkg/tui/surface"
 	"github.com/love-lena/sextant/pkg/tui/theme"
 	"github.com/love-lena/sextant/pkg/tui/widget"
@@ -111,6 +113,73 @@ func TestStreamReflowsOnResize(t *testing.T) {
 	narrow := len(visibleLines(s.View()))
 	if narrow <= wide {
 		t.Errorf("narrowing did not re-wrap the buffer: %d lines at width 30 not > %d at width 70", narrow, wide)
+	}
+}
+
+// TestHardBreakKeepsZWJEmojiWhole pins that the hard-breaker splits on grapheme
+// clusters, not runes: a ZWJ emoji sequence (one glyph built from several runes
+// joined by zero-width joiners) that lands on the break boundary moves to the
+// next chunk WHOLE. A per-rune split would shear the family into its members
+// across two lines and miscount the joined glyph's width by summing its parts.
+func TestHardBreakKeepsZWJEmojiWhole(t *testing.T) {
+	// 👨‍👩‍👧‍👦: man ZWJ woman ZWJ girl ZWJ boy — one 2-cell grapheme cluster.
+	const family = "\U0001F468\u200d\U0001F469\u200d\U0001F467\u200d\U0001F466"
+	const width = 10
+	// 5 single-cell letters then the family: summing the members per rune
+	// (2+0+2+0+2+0+2) would overflow the chunk mid-sequence and split the glyph;
+	// as one 2-cell cluster it fits whole.
+	line := strings.Repeat("a", 5) + family + strings.Repeat("b", 9)
+
+	chunks := surface.HardBreak(line, width)
+	if len(chunks) < 2 {
+		t.Fatalf("over-wide line should hard-break to ≥2 chunks; got %d: %q", len(chunks), chunks)
+	}
+	assertClustersIntact(t, chunks, line, width, family)
+}
+
+// TestHardBreakKeepsCombiningMarksWithBase pins the same property for a
+// combining-mark sequence: a base letter plus its combining marks is one
+// grapheme cluster, and a break boundary never strands the marks from the base.
+func TestHardBreakKeepsCombiningMarksWithBase(t *testing.T) {
+	const cluster = "e\u0301\u0327" // e + combining acute + combining cedilla: one 1-cell cluster
+	const width = 5
+	// 5 single-cell letters fill the first chunk exactly; the cluster must open
+	// the second chunk with both marks still attached to the e.
+	line := strings.Repeat("x", 5) + cluster + strings.Repeat("y", 5)
+
+	chunks := surface.HardBreak(line, width)
+	if len(chunks) < 2 {
+		t.Fatalf("over-wide line should hard-break to ≥2 chunks; got %d: %q", len(chunks), chunks)
+	}
+	assertClustersIntact(t, chunks, line, width, cluster)
+}
+
+// assertClustersIntact checks the three properties a cluster-safe hard-break
+// guarantees: the chunks reassemble the input losslessly, no chunk exceeds the
+// width in display cells, and the sentinel cluster survives in exactly one chunk
+// — never split across a boundary (no chunk carries a partial: any chunk
+// containing one of the cluster's runes contains the whole sequence).
+func assertClustersIntact(t *testing.T, chunks []string, line string, width int, cluster string) {
+	t.Helper()
+	if got := strings.Join(chunks, ""); got != line {
+		t.Errorf("chunks lost or reordered text:\n got %q\nwant %q", got, line)
+	}
+	whole := 0
+	for i, c := range chunks {
+		if w := uniseg.StringWidth(c); w > width {
+			t.Errorf("chunk %d width %d exceeds %d: %q", i, w, width, c)
+		}
+		whole += strings.Count(c, cluster)
+		// A chunk that carries any piece of the cluster must carry all of it.
+		for _, r := range cluster {
+			if strings.ContainsRune(c, r) && !strings.Contains(c, cluster) {
+				t.Errorf("chunk %d holds a partial cluster (rune %q without the full sequence): %q", i, r, c)
+				break
+			}
+		}
+	}
+	if whole != 1 {
+		t.Errorf("cluster should appear intact in exactly one chunk; found %d in %q", whole, chunks)
 	}
 }
 
