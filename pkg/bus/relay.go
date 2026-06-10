@@ -103,15 +103,22 @@ func (b *Bus) opSubscribe(clientID string, data []byte) (json.RawMessage, error)
 	if err := validSubID(in.SubID); err != nil {
 		return nil, fmt.Errorf("bus: subscribe: %w", err)
 	}
-	start := backend.StartNew
-	if in.DeliverAll {
+	var start backend.Start
+	var sinceSeq uint64
+	switch {
+	case in.SinceSeq > 0:
+		start = backend.StartFromSeq
+		sinceSeq = in.SinceSeq
+	case in.DeliverAll:
 		start = backend.StartAll
+	default:
+		start = backend.StartNew
 	}
 	relayCtx, err := b.registerRelay(clientID, in.SubID)
 	if err != nil {
 		return nil, fmt.Errorf("bus: subscribe: %w", err)
 	}
-	ch, err := b.backend.Subscribe(relayCtx, in.Subject, start)
+	ch, err := b.backend.Subscribe(relayCtx, in.Subject, start, sinceSeq)
 	if err != nil {
 		b.stopRelay(clientID, in.SubID)
 		return nil, fmt.Errorf("bus: subscribe: %w", err)

@@ -289,11 +289,14 @@ const (
 
 // SubscribeInput starts a push-stream subscription. SubID is the
 // client-generated ULID naming the delivery subject; DeliverAll replays retained
-// history before live messages.
+// history before live messages. SinceSeq, when non-zero, resumes from that
+// stream sequence (inclusive) and takes priority over DeliverAll — it is set by
+// the SDK on reconnect to resume from last-delivered+1.
 type SubscribeInput struct {
 	Subject    string `json:"subject"`
 	SubID      string `json:"sub_id"`
 	DeliverAll bool   `json:"deliver_all"`
+	SinceSeq   uint64 `json:"since_seq,omitempty"`
 }
 
 // SubscribeOutput confirms the subscription and echoes the delivery subject the

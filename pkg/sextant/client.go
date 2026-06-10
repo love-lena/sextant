@@ -65,6 +65,14 @@ type Client struct {
 
 	drainOnce sync.Once
 	drained   chan struct{}
+
+	// subsMu guards subs. Subscriptions register themselves on creation and
+	// deregister on teardown; the reconnect handler snapshots the map under the
+	// lock so it can re-establish each relay without holding the lock. Write
+	// operations (register, deregister) are infrequent (one per Subscribe/Stop);
+	// the reconnect snapshot is a single copy under the lock.
+	subsMu sync.Mutex
+	subs   map[string]*subscription
 }
 
 // Connect dials the bus and runs the connect handshake. ctx governs the
@@ -122,6 +130,12 @@ func Connect(ctx context.Context, opts Options) (*Client, error) {
 			}
 		}),
 		nats.ReconnectHandler(func(*nats.Conn) {
+			// Re-establish every active subscription's server-side relay so the
+			// subscriber keeps receiving messages (ADR-0027). Runs synchronously on
+			// the NATS reconnect goroutine; each re-establish is deadline-bounded.
+			// Runs first, before the "reconnected" log, so the log fires only after
+			// subscriptions are live — callers waiting on that log see a ready bus.
+			c.reestablishSubs()
 			c.logf("sextant: reconnected to the bus")
 		}),
 	)

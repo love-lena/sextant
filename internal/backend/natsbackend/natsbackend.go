@@ -89,19 +89,36 @@ func (b *Backend) Read(ctx context.Context, subject string, since uint64, limit 
 }
 
 // Subscribe streams entries matching subject from start until ctx is cancelled.
-func (b *Backend) Subscribe(ctx context.Context, subject string, start backend.Start) (<-chan backend.LogEntry, error) {
+// sinceSeq is used only when start == backend.StartFromSeq; it is the first
+// stream sequence to deliver (inclusive).
+func (b *Backend) Subscribe(ctx context.Context, subject string, start backend.Start, sinceSeq uint64) (<-chan backend.LogEntry, error) {
 	stream, err := b.js.Stream(ctx, b.logStream)
 	if err != nil {
 		return nil, fmt.Errorf("natsbackend: open stream %s: %w", b.logStream, err)
 	}
-	dp := jetstream.DeliverNewPolicy
-	if start == backend.StartAll {
-		dp = jetstream.DeliverAllPolicy
+	cfg := jetstream.OrderedConsumerConfig{FilterSubjects: []string{subject}}
+	switch start {
+	case backend.StartAll:
+		cfg.DeliverPolicy = jetstream.DeliverAllPolicy
+	case backend.StartFromSeq:
+		// Guard against a wiped or heavily-expired stream: if the requested resume
+		// sequence is beyond last+1, the messages we previously delivered no longer
+		// exist. Return an error so the SDK can surface it loudly (ADR-0027) rather
+		// than wait silently for a sequence that may never arrive.
+		info, err := stream.Info(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("natsbackend: stream info for resume check: %w", err)
+		}
+		if sinceSeq > info.State.LastSeq+1 {
+			return nil, fmt.Errorf("natsbackend: %w: resume sequence %d is beyond stream head %d (store may have been wiped or history expired)",
+				backend.ErrSequenceGone, sinceSeq, info.State.LastSeq)
+		}
+		cfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
+		cfg.OptStartSeq = sinceSeq
+	default: // StartNew
+		cfg.DeliverPolicy = jetstream.DeliverNewPolicy
 	}
-	cons, err := stream.OrderedConsumer(ctx, jetstream.OrderedConsumerConfig{
-		FilterSubjects: []string{subject},
-		DeliverPolicy:  dp,
-	})
+	cons, err := stream.OrderedConsumer(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("natsbackend: subscribe consumer: %w", err)
 	}

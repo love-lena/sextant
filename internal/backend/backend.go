@@ -27,6 +27,10 @@ var (
 	ErrRevisionMismatch = errors.New("backend: revision mismatch")
 	// ErrNotFound is returned by Get and CompareAndSet when the key is absent.
 	ErrNotFound = errors.New("backend: not found")
+	// ErrSequenceGone is returned by Subscribe(StartFromSeq) when the requested
+	// resume sequence is beyond the stream head — the store was wiped or the
+	// history expired. The SDK maps this to a loud subscriber error (ADR-0027).
+	ErrSequenceGone = errors.New("backend: sequence gone")
 )
 
 // LogEntry is one record in the durable log, with the substrate-assigned
@@ -46,6 +50,12 @@ const (
 	StartNew Start = iota
 	// StartAll replays retained history first, then live entries.
 	StartAll
+	// StartFromSeq resumes from a specific stream sequence (inclusive). The
+	// sequence is passed as sinceSeq to Subscribe; it is the first sequence to
+	// deliver, so resuming from last-delivered+1 closes the gap without
+	// duplicating the last message. If the sequence is beyond the head of the
+	// retained log (the store was wiped) the backend returns an error.
+	StartFromSeq
 )
 
 // Change is one update delivered by Watch: the value at this revision, or a
@@ -76,7 +86,9 @@ type Backend interface {
 	// Subscribe streams entries matching subject from start on the returned
 	// channel until ctx is cancelled (which closes the channel). The bus owns the
 	// position; the backend keeps no per-subscriber replay state.
-	Subscribe(ctx context.Context, subject string, start Start) (<-chan LogEntry, error)
+	// sinceSeq is only used when start == StartFromSeq; it is the first stream
+	// sequence to deliver (inclusive). Pass 0 for StartNew and StartAll.
+	Subscribe(ctx context.Context, subject string, start Start, sinceSeq uint64) (<-chan LogEntry, error)
 
 	// --- Named, versioned records (the Artifacts + registry substrate) ---
 

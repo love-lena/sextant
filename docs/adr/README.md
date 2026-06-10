@@ -33,6 +33,7 @@ human has signed off — see
 | [0024](0024-the-dash-is-three-master-detail-browsers.md) | The dash is three master-detail browsers | proposed |
 | [0025](0025-the-bus-keeps-its-address-across-restarts.md) | The bus keeps its address across restarts of the same store | proposed |
 | [0026](0026-one-focused-pane-panes-hold-their-place.md) | One focused pane; panes hold their place | proposed |
+| [0027](0027-subscriptions-survive-a-bus-restart.md) | Subscriptions survive a bus restart | proposed |
 
 ## Review batches
 - **Batch 1 — substrate:** 0004–0007 — *accepted*

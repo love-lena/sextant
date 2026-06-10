@@ -76,7 +76,7 @@ func Run(t *testing.T, newHarness func(t *testing.T) Harness) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		subj := h.SubjectBase + ".sub"
-		ch, err := h.Backend.Subscribe(ctx, subj, backend.StartNew)
+		ch, err := h.Backend.Subscribe(ctx, subj, backend.StartNew, 0)
 		mustNil(t, err)
 		time.Sleep(200 * time.Millisecond) // let the consumer establish
 		_, err = h.Backend.Append(ctx, subj, []byte(`{"hi":true}`))

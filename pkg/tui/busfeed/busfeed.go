@@ -102,6 +102,10 @@ type Feed struct {
 	opts    []sextant.SubOption
 
 	events chan sextant.Message
+	// errs receives mid-stream errors delivered by the SDK's OnError handler
+	// (e.g. a subscription that cannot be re-established after a bus restart).
+	// Capacity 1: there is at most one fatal error per subscription lifetime.
+	errs chan error
 
 	mu      sync.Mutex
 	dropped int                  // events lost to a full buffer, not yet reported
@@ -114,13 +118,28 @@ type Feed struct {
 // backlog before live events. New does not open the subscription — call
 // Subscribe (a tea.Cmd) to do that, so the lifecycle stays inside the Bubble Tea
 // loop.
+//
+// The Feed always registers an OnError handler with the SDK so that a
+// subscription that cannot be re-established after a bus restart surfaces an
+// ErrMsg through the pump rather than going silent (ADR-0027). The error is
+// terminal: Next returns ErrMsg once, then nil on subsequent calls.
 func New(client *sextant.Client, subject string, opts ...sextant.SubOption) *Feed {
-	return &Feed{
+	f := &Feed{
 		client:  client,
 		subject: subject,
-		opts:    opts,
 		events:  make(chan sextant.Message, DefaultBuffer),
+		errs:    make(chan error, 1),
 	}
+	// Prepend the OnError handler so caller-supplied opts are applied after it;
+	// a caller can override with their own OnError if needed (last write wins in
+	// subConfig because SubOption is a func that overwrites the field).
+	f.opts = append([]sextant.SubOption{sextant.OnError(func(err error) {
+		select {
+		case f.errs <- err:
+		default: // already has an error queued; discard the duplicate
+		}
+	})}, opts...)
+	return f
 }
 
 // Subscribe is the tea.Cmd that opens the SDK subscription. The SDK Handler does
@@ -200,12 +219,19 @@ func (f *Feed) next() tea.Msg {
 	}
 	f.mu.Unlock()
 
-	m, ok := <-f.events
-	if !ok {
-		// Channel closed by Stop and fully drained: the pump ends here.
-		return nil
+	// Select on both channels so a mid-stream error (reconnect failure) surfaces
+	// as an ErrMsg rather than silently starving the pump. ErrMsg is terminal:
+	// the caller must not issue Next after receiving one.
+	select {
+	case err := <-f.errs:
+		return ErrMsg{From: f, Err: err}
+	case m, ok := <-f.events:
+		if !ok {
+			// Channel closed by Stop and fully drained: the pump ends here.
+			return nil
+		}
+		return EventMsg{From: f, Message: m}
 	}
-	return EventMsg{From: f, Message: m}
 }
 
 // Stop tears the feed down: it stops the SDK subscription and closes the buffer
