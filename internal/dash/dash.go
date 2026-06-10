@@ -84,10 +84,11 @@ type Options struct {
 	ConfigPath string
 }
 
-// enrollTimeout bounds the whole first-run self-enrollment (connect + mint +
-// context write), so a wedged or half-up bus fails loud instead of hanging the
-// launch.
-const enrollTimeout = 10 * time.Second
+// launchTimeout bounds each launch I/O step — the whole first-run
+// self-enrollment (connect + mint + context write) and the steady-state
+// connect handshake — so a wedged or half-up bus fails loud instead of
+// hanging the launch.
+const launchTimeout = 10 * time.Second
 
 // Run connects under the resolved identity, assembles the cockpit, and runs the
 // dash to completion. It is the shared entry point both faces call. With no
@@ -101,7 +102,17 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 
-	client, err := sextant.Connect(ctx, sextant.Options{
+	// The connect handshake is deadline-bound like every other launch I/O step
+	// (fail-loud, never hang): the TCP dial is bounded by the NATS client's own
+	// connect timeout, but a bus that ACCEPTS the connection and never answers
+	// the hello (a wedged API responder) would otherwise block the launch
+	// forever. Bounding is safe: sextant.Connect uses its ctx only for the
+	// post-dial handshake (hello + the drain-subscription flush) — the
+	// long-lived client is not tied to it — so the timeout cannot tear the
+	// session down later.
+	cctx, cancelConnect := context.WithTimeout(ctx, launchTimeout)
+	defer cancelConnect()
+	client, err := sextant.Connect(cctx, sextant.Options{
 		CredsPath:    opts.CredsPath,
 		URL:          opts.URL,
 		ConnInfoPath: connInfoPath(opts.Store),
@@ -110,6 +121,12 @@ func Run(ctx context.Context, opts Options) error {
 		Logf: func(string, ...any) {},
 	})
 	if err != nil {
+		// Our deadline firing (not a caller cancel) means the dial succeeded and
+		// the handshake went unanswered — a different state from "no bus", so say so.
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			return fmt.Errorf("bus at %s: connected but no answer after %s — is it healthy? try restarting it with `sextant up`: %w",
+				selfenroll.ResolveBusURL(opts.URL, opts.Store), launchTimeout, err)
+		}
 		return fmt.Errorf("connect: %w", err)
 	}
 
@@ -178,7 +195,7 @@ func ensureIdentity(ctx context.Context, opts *Options, notice io.Writer) error 
 	if opts.URL != "" && opts.URL != info.URL {
 		return fmt.Errorf("no identity, and --url %s is not the locally-discovered bus (%s, under %s) — first-run self-enrollment would mint against the local bus, leaving creds the --url bus rejects: drop --url to enroll locally, or for a remote bus pass --creds, or mint an identity there with `sextant clients register` and save it with `sextant context add`", opts.URL, info.URL, opts.Store)
 	}
-	ectx, cancel := context.WithTimeout(ctx, enrollTimeout)
+	ectx, cancel := context.WithTimeout(ctx, launchTimeout)
 	defer cancel()
 	res, err := selfenroll.Enroll(ectx, opts.Name, "human", info.URL, opts.Store, false)
 	if err != nil {

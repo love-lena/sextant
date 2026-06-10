@@ -17,11 +17,14 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/exp/teatest"
 	"github.com/love-lena/sextant/internal/clictx"
+	"github.com/love-lena/sextant/internal/wireapi"
 	"github.com/love-lena/sextant/pkg/bus"
 	"github.com/love-lena/sextant/pkg/conninfo"
 	"github.com/love-lena/sextant/pkg/sextant"
 	"github.com/love-lena/sextant/pkg/sx"
 	"github.com/love-lena/sextant/pkg/tui/layout"
+	natsserver "github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
 	"go.uber.org/goleak"
 )
 
@@ -392,6 +395,76 @@ func assertNoEnrollment(t *testing.T, opts Options) {
 	}
 	if len(ctxs) != 0 {
 		t.Errorf("failed first run left %d context(s) behind: %+v", len(ctxs), ctxs)
+	}
+}
+
+// TestDashConnectWedgedBusFailsLoud: the steady-state launch connect is
+// deadline-bound like every other launch I/O (PR #99 review). A fully-down bus
+// fails fast under the NATS client's own connect timeout — the gap is a bus
+// that ACCEPTS the connection and never answers the hello handshake (a wedged
+// API responder), which used to block the launch forever. The wedge here is
+// real: a bare NATS server (no Wire API) plus a silent subscriber on the hello
+// subject, so the request finds a responder that never replies (with no
+// responder at all it would fail fast with "no responders" instead of
+// hanging). Run must return the loud connected-but-no-answer error once
+// launchTimeout fires, well before this test's own deadline.
+func TestDashConnectWedgedBusFailsLoud(t *testing.T) {
+	// Real creds — the SDK reads the identity out of the credential before
+	// dialing — minted from a throwaway embedded bus.
+	b, err := bus.Start(t.Context(), bus.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("bus.Start: %v", err)
+	}
+	t.Cleanup(b.Shutdown)
+	creds, id, err := b.MintClient(t.Context(), "lena", "human")
+	if err != nil {
+		t.Fatalf("MintClient: %v", err)
+	}
+	credsPath := writeCreds(t, creds)
+
+	// The wedged "bus": a bare no-auth NATS server that accepts the dial...
+	srv, err := natsserver.NewServer(&natsserver.Options{Host: "127.0.0.1", Port: -1})
+	if err != nil {
+		t.Fatalf("natsserver.NewServer: %v", err)
+	}
+	srv.Start()
+	t.Cleanup(func() { srv.Shutdown(); srv.WaitForShutdown() })
+	if !srv.ReadyForConnections(5 * time.Second) {
+		t.Fatal("bare nats server never came up")
+	}
+	// ...and a hello responder that never answers.
+	wedge, err := nats.Connect(srv.ClientURL())
+	if err != nil {
+		t.Fatalf("wedge connect: %v", err)
+	}
+	t.Cleanup(wedge.Close)
+	if _, err := wedge.Subscribe(wireapi.CallSubject(id, wireapi.OpClientsHello), func(*nats.Msg) {}); err != nil {
+		t.Fatalf("wedge subscribe: %v", err)
+	}
+	if err := wedge.Flush(); err != nil {
+		t.Fatalf("wedge flush: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(context.Background(), Options{
+			CredsPath: credsPath,
+			URL:       srv.ClientURL(),
+			Theme:     ThemeDark,
+		})
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Run against a wedged bus returned nil; want the loud connect error")
+		}
+		for _, want := range []string{srv.ClientURL(), "connected but no answer", "sextant up"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q should contain %q", err, want)
+			}
+		}
+	case <-time.After(launchTimeout + 5*time.Second):
+		t.Fatal("Run never returned against a wedged bus — the connect handshake is not deadline-bound")
 	}
 }
 
