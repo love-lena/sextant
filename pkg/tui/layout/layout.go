@@ -162,11 +162,22 @@ func (m Model) View() string {
 	if m.w == 0 || m.h == 0 {
 		return "starting dash…"
 	}
-	// Graceful degradation: when the area can't fit even one pane at the Box
-	// minimum, arrange returns no rects — render a notice instead of an overlapping
-	// composite. The minimum usable terminal is one pane plus the hint row.
+	// No rects means no panes to composite — two distinct states, each named
+	// honestly: every pane toggled off (the operator's choice; say so and point
+	// at the options menu, which stays reachable to toggle panes back on) or a
+	// terminal too small to fit even one pane at the Box minimum (graceful
+	// degradation; the minimum usable terminal is one pane plus the hint row).
+	// The options menu still overlays either notice, so the escape hatch is
+	// visible, not just live.
 	if len(m.rects) == 0 {
-		return m.tooSmallNotice()
+		notice := m.tooSmallNotice()
+		if len(m.visibleOrder()) == 0 {
+			notice = m.allHiddenNotice()
+		}
+		if m.menu != nil {
+			return m.menu.overlay(m.th, notice, m.w, m.h)
+		}
+		return notice
 	}
 	canvas := newCanvas(m.w, m.areaH(), m.th.Bg)
 	// Place panes in the stable visible order (not the map's randomized iteration
@@ -208,7 +219,21 @@ func (m Model) tooSmallNotice() string {
 		needW = minPaneW
 		needH = minPaneH + statusH
 	)
-	msg := fmt.Sprintf("terminal too small\nneed ≥ %d×%d", needW, needH)
+	return m.notice(fmt.Sprintf("terminal too small\nneed ≥ %d×%d", needW, needH))
+}
+
+// allHiddenNotice renders the message shown when the operator has toggled every
+// pane off: an honest statement of the state plus the way back in, never a
+// misdiagnosis (an empty arrangement is not a too-small terminal) and never a
+// refusal — hiding the last pane stays allowed; the notice keeps it recoverable.
+// The hint names the Options key from the keymap, so a rebind stays honest.
+func (m Model) allHiddenNotice() string {
+	return m.notice(fmt.Sprintf("all panes hidden\npress %s for options", m.keys.Options.Help().Key))
+}
+
+// notice renders a full-terminal centred message on the theme background — the
+// shared chrome for the no-rects states (all panes hidden, terminal too small).
+func (m Model) notice(msg string) string {
 	return lipgloss.NewStyle().
 		Background(m.th.Bg).
 		Foreground(m.th.Fg).

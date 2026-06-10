@@ -651,3 +651,55 @@ func TestSingleCharPastedKeyIsContent(t *testing.T) {
 		}
 	}
 }
+
+// TestAllPanesHiddenShowsHonestNotice: hiding every pane is allowed (the
+// operator stays free), and the empty cockpit names its real state — "all
+// panes hidden", with the way back in — never the false "terminal too small"
+// diagnosis. The options menu keeps working over the notice (visible, not
+// just live), so the state is recoverable from inside it.
+func TestAllPanesHiddenShowsHonestNotice(t *testing.T) {
+	m, _ := newCockpit(t)
+	// Toggle all three panes off from the options menu (rows 0..2 are the panes).
+	m, _ = m.Update(key("o"))
+	for range 3 {
+		m, _ = m.Update(key("enter"))
+		m, _ = m.Update(key("down"))
+	}
+	if got := m.VisibleIDs(); len(got) != 0 {
+		t.Fatalf("precondition: all panes hidden, still visible: %v", got)
+	}
+
+	// With the menu still open it stays VISIBLE, composited over the notice
+	// (the centred panel covers the centred text — what matters is that the
+	// operator still sees the menu they are driving, and no misdiagnosis).
+	out := stripANSI(m.View())
+	if !strings.Contains(out, "options") {
+		t.Errorf("the options menu must stay visible over the empty cockpit, got:\n%s", out)
+	}
+	if strings.Contains(out, "terminal too small") {
+		t.Errorf("all-hidden must not be misdiagnosed as a too-small terminal:\n%s", out)
+	}
+
+	// Menu closed: the honest notice, not the too-small misdiagnosis.
+	m, _ = m.Update(key("esc"))
+	out = stripANSI(m.View())
+	if !strings.Contains(out, "all panes hidden") {
+		t.Errorf("empty cockpit should say so, got:\n%s", out)
+	}
+	if strings.Contains(out, "terminal too small") {
+		t.Errorf("all-hidden must not be misdiagnosed as a too-small terminal:\n%s", out)
+	}
+
+	// The escape hatch: o reopens the menu, and toggling a pane back recovers.
+	m, _ = m.Update(key("o"))
+	if !m.MenuOpen() {
+		t.Fatal("o should reopen the options menu over the empty cockpit")
+	}
+	m, _ = m.Update(key("enter")) // cursor row 0: toggle clients back on
+	if !contains(m.VisibleIDs(), "clients") {
+		t.Fatalf("toggling a pane back on should recover, visible: %v", m.VisibleIDs())
+	}
+	if m.Focused() != "clients" {
+		t.Errorf("focus should land on the reopened pane, got %q", m.Focused())
+	}
+}
