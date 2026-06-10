@@ -378,3 +378,49 @@ func TestComposeChunkSpellingABindingIsText(t *testing.T) {
 		t.Errorf("chunks were eaten as editing commands:\n got %q\nwant %q", got, want)
 	}
 }
+
+// TestPastedChunkNeverScrolls pins the chunk guard at the widget's own binding
+// matches: pasted text is content, so a chunk spelling a scroll binding ("up",
+// "down") — or a single-character bracketed paste of one ("k", "j"), which a
+// length guard alone would miss — must not move a Stream's or a List's view.
+func TestPastedChunkNeverScrolls(t *testing.T) {
+	chunk := func(s string) tea.KeyMsg {
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+	}
+	paste := func(s string) tea.KeyMsg {
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s), Paste: true}
+	}
+
+	t.Run("stream", func(t *testing.T) {
+		s := widget.NewStream(theme.DefaultKeymap())
+		s.SetSize(40, 4)
+		s.SetLines(sampleStream()) // 8 lines into 4 rows: scrollable, following
+		for _, msg := range []tea.KeyMsg{chunk("up"), paste("k"), paste("up")} {
+			s, _ = s.Update(msg)
+			if !s.Following() {
+				t.Fatalf("pasted %q scrolled the stream off the tail", msg.Runes)
+			}
+		}
+		// The real keystroke still scrolls — the guard blocks chunks, not keys.
+		s, _ = s.Update(tea.KeyMsg{Type: tea.KeyUp})
+		if s.Following() {
+			t.Error("a real Up keystroke should still scroll")
+		}
+	})
+
+	t.Run("list", func(t *testing.T) {
+		l := widget.NewList(theme.DefaultKeymap(),
+			widget.ListItem{Title: "row0"}, widget.ListItem{Title: "row1"}, widget.ListItem{Title: "row2"})
+		l.SetSize(40, 3)
+		for _, msg := range []tea.KeyMsg{chunk("down"), paste("j"), paste("down")} {
+			l, _ = l.Update(msg)
+			if l.Cursor() != 0 {
+				t.Fatalf("pasted %q moved the list cursor to %d", msg.Runes, l.Cursor())
+			}
+		}
+		l, _ = l.Update(tea.KeyMsg{Type: tea.KeyDown})
+		if l.Cursor() != 1 {
+			t.Error("a real Down keystroke should still move the cursor")
+		}
+	})
+}

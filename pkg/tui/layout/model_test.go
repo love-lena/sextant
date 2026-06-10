@@ -612,3 +612,42 @@ func contains(ss []string, s string) bool {
 	}
 	return false
 }
+
+// TestSingleCharPastedKeyIsContent closes the length-guard hole: a bracketed
+// paste arrives with KeyMsg.Paste set, and a SINGLE-character paste ("q", "o",
+// "p") has len(Runes)==1, so a multi-rune guard alone would let it reach the
+// binding matches. A paste is content in every size: it must not quit, open
+// the menu, or cycle the preset — it is delivered to the focused surface.
+func TestSingleCharPastedKeyIsContent(t *testing.T) {
+	m, panes := newCockpit(t)
+	paste := func(s string) tea.KeyMsg {
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s), Paste: true}
+	}
+	var cmd tea.Cmd
+	for _, text := range []string{"q", "o", "p"} {
+		m, cmd = m.Update(paste(text))
+		if cmd != nil {
+			t.Fatalf("pasting %q produced a command (quit?): %#v", text, cmd())
+		}
+	}
+	if m.MenuOpen() {
+		t.Error("pasting \"o\" opened the options menu")
+	}
+	if m.Config().Preset != layout.PresetCockpit {
+		t.Error("pasting \"p\" cycled the preset")
+	}
+	for id, p := range panes {
+		if p.stopped != 0 {
+			t.Errorf("pasting \"q\" stopped surface %q", id)
+		}
+	}
+	// Each paste reached the focused surface as content, nothing else.
+	if got := len(panes["clients"].keys); got != 3 {
+		t.Errorf("focused pane received %d keys (%v), want the 3 pasted chunks", got, panes["clients"].keys)
+	}
+	for _, id := range []string{"topics", "artifacts"} {
+		if len(panes[id].keys) != 0 {
+			t.Errorf("unfocused pane %q received keys: %v", id, panes[id].keys)
+		}
+	}
+}

@@ -60,15 +60,17 @@ func (m Model) broadcast(msg tea.Msg) tea.Cmd {
 // Everything else is delivered to the focused surface. Focus movement never
 // touches a surface's content state — an open detail stays open.
 func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
-	// A multi-rune KeyRunes message is burst/pasted TEXT (an unbracketed paste,
-	// a fast input burst), never a chord — but its String() can spell a binding
-	// name ("ctrl+c", "tab"), and binding matches compare strings, so matching
-	// it against the bindings would let pasted text quit the dash or move
-	// focus. Text is content, in EVERY input state — the guard sits above the
-	// menu dispatch because the menu matches bindings too (pasting "ctrl+c"
-	// over an open menu must not quit). With the menu open there is no text
-	// consumer, so the chunk is dropped rather than delivered behind the menu.
-	if msg.Type == tea.KeyRunes && len(msg.Runes) > 1 {
+	// A burst/pasted chunk is TEXT, never a chord (widget.IsTextChunk: a
+	// bracketed paste — even a single character, which would otherwise be
+	// indistinguishable from the keystroke — or a multi-rune KeyRunes burst).
+	// Its String() can spell a binding name ("ctrl+c", "tab"), and binding
+	// matches compare strings, so matching it against the bindings would let
+	// pasted text quit the dash or move focus. Text is content, in EVERY input
+	// state — the guard sits above the menu dispatch because the menu matches
+	// bindings too (pasting "ctrl+c" over an open menu must not quit). With the
+	// menu open there is no text consumer, so the chunk is dropped rather than
+	// delivered behind the menu.
+	if widget.IsTextChunk(msg) {
 		if m.menu != nil || m.focused == "" {
 			return m, nil
 		}
