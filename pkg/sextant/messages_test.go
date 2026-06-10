@@ -173,6 +173,100 @@ func TestDeliverDropsNonIncreasingSeq(t *testing.T) {
 	}
 }
 
+// TestSubscribeRotatesWhenEpochMovesBeforeRegistration pins the close of the
+// residual silent-death window: Subscribe captures the relay generation's
+// epoch BEFORE registerSub, so a reconnect completing inside that gap runs its
+// resume pass without seeing the subscription — nothing rotates it, the
+// buffered message.subscribe succeeds on the restored connection, and
+// relayHandler drops every frame forever with no OnError and no log (the
+// permanently-silent state ADR-0027 forbids). The post-call staleness re-check
+// must detect the moved counter and rotate immediately. The test plants a
+// stale epoch through the internal subscribe seam — the deterministic
+// equivalent of a reconnect completing inside the gap — and asserts the
+// subscription delivers and carries the live counter afterwards.
+func TestSubscribeRotatesWhenEpochMovesBeforeRegistration(t *testing.T) {
+	b := startBus(t)
+	c := dialClient(t, b, "stale-epoch")
+	subj := sx.TopicSubject("stale-epoch")
+
+	got := make(chan Message, 8)
+	// An epoch the connection never had: every frame delivered to this
+	// generation would fail relayHandler's reconnect-count check and be dropped.
+	stale := c.nc.Stats().Reconnects + 1
+	sub, err := c.subscribe(t.Context(), subj, func(m Message) { got <- m }, subConfig{}, stale)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	t.Cleanup(sub.Stop)
+
+	if err := c.Publish(t.Context(), subj, json.RawMessage(`{"alive":true}`)); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	select {
+	case <-got:
+		// Delivered: the re-check rotated the doomed generation.
+	case <-time.After(10 * time.Second):
+		t.Fatal("no delivery: the stale-epoch generation was never rotated (permanently silent subscription)")
+	}
+
+	s := sub.(*subscription)
+	s.mu.Lock()
+	gotEpoch := s.epoch
+	s.mu.Unlock()
+	if live := c.nc.Stats().Reconnects; gotEpoch != live {
+		t.Errorf("generation epoch = %d after the re-check, want the live counter %d", gotEpoch, live)
+	}
+}
+
+// TestRotationRacingStopUnsubscribesNewestPair pins the cleanup sweep for the
+// Stop-races-resume interleaving: when teardown runs against the pre-rotation
+// generation while a rotation is mid-flight, the post-rotation sweep
+// (stopNewestRelay) must also unsubscribe the rotated-in NATS subscription —
+// not only re-stop the bus-side relay — or it lives on the connection,
+// receiving nothing, for the client's life. The test reproduces the
+// interleaving's end state directly: teardown first, then the rotation that
+// was already in flight, then the sweep.
+func TestRotationRacingStopUnsubscribesNewestPair(t *testing.T) {
+	b := startBus(t)
+	c := dialClient(t, b, "stop-race")
+	subj := sx.TopicSubject("stop-race")
+
+	sub, err := c.Subscribe(t.Context(), subj, func(Message) {})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	s := sub.(*subscription)
+
+	// Stop the subscription and wait (deadline-bound) for teardown to drop the
+	// original delivery subscription off the connection.
+	withSub := c.nc.NumSubscriptions()
+	sub.Stop()
+	base := withSub - 1
+	deadline := time.Now().Add(10 * time.Second)
+	for c.nc.NumSubscriptions() != base {
+		if time.Now().After(deadline) {
+			t.Fatalf("teardown did not unsubscribe the delivery subject within 10s (subs=%d, want %d)", c.nc.NumSubscriptions(), base)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// The rotation that was mid-flight when Stop landed: it swaps in a fresh
+	// (sub-id, natsSub) pair that teardown never saw.
+	if err := s.reestablish(c); err != nil {
+		t.Fatalf("reestablish: %v", err)
+	}
+	if got := c.nc.NumSubscriptions(); got != base+1 {
+		t.Fatalf("rotation should have added one NATS subscription (subs=%d, want %d)", got, base+1)
+	}
+
+	// The post-rotation sweep must remove it again — bus relay AND client-side
+	// NATS subscription.
+	s.stopNewestRelay()
+	if got := c.nc.NumSubscriptions(); got != base {
+		t.Errorf("stopNewestRelay left the rotated-in NATS subscription on the connection (subs=%d, want %d)", got, base)
+	}
+}
+
 // TestSubscribeFailureLeavesNoRegistration pins the failure half of the
 // register-before-call ordering: Subscribe registers the subscription before
 // the message.subscribe call (so a reconnect firing inside the call window can

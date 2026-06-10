@@ -125,12 +125,21 @@ func (c *Client) Subscribe(ctx context.Context, subject string, h Handler, opts 
 	for _, o := range opts {
 		o(&cfg)
 	}
+	return c.subscribe(ctx, subject, h, cfg, c.nc.Stats().Reconnects)
+}
+
+// subscribe is Subscribe with the first relay generation's epoch injected.
+// Production code always passes the live reconnect count; the seam lets the
+// silent-death regression test plant a stale epoch, standing in for a reconnect
+// that completes between Subscribe's capture and the registration below.
+func (c *Client) subscribe(ctx context.Context, subject string, h Handler, cfg subConfig, epoch uint64) (Subscription, error) {
 	subID := ulid.Make().String()
 	deliver := wireapi.DeliverSubject(c.id, subID)
 
 	s := &subscription{
 		c:          c,
 		subID:      subID,
+		epoch:      epoch,
 		subject:    subject,
 		deliverAll: cfg.deliverAll,
 		handler:    h,
@@ -139,7 +148,7 @@ func (c *Client) Subscribe(ctx context.Context, subject string, h Handler, opts 
 
 	// Subscribe to the delivery subject BEFORE making the call, so a frame the bus
 	// relays the instant it replies can't outrun our subscription.
-	natsSub, err := c.nc.Subscribe(deliver, c.relayHandler(s, c.nc.Stats().Reconnects))
+	natsSub, err := c.nc.Subscribe(deliver, c.relayHandler(s, epoch))
 	if err != nil {
 		return nil, fmt.Errorf("sextant: subscribe delivery: %w", err)
 	}
@@ -153,7 +162,10 @@ func (c *Client) Subscribe(ctx context.Context, subject string, h Handler, opts 
 	// and it stays silently relay-less. A reconnect pass that catches it mid-call
 	// is safe: the pass rotates to a fresh sub-id, this generation's handler
 	// drops anything a late-landing relay pushes (its reconnect count is stale),
-	// and the failure path below tears down whatever generation is newest.
+	// and the failure path below tears down whatever generation is newest. The
+	// one window no pass covers — a reconnect completing between the epoch
+	// capture in Subscribe and this registration — is closed by the staleness
+	// re-check at the end of this function.
 	c.registerSub(s)
 
 	if err := c.call(ctx, wireapi.OpMessageSubscribe, wireapi.SubscribeInput{
@@ -173,12 +185,40 @@ func (c *Client) Subscribe(ctx context.Context, subject string, h Handler, opts 
 
 	// Bridge ctx cancellation to teardown: a cancelled ctx ends the subscription
 	// (unsubscribe + bus-side relay stop), same as an explicit Stop. The bridge
-	// also unblocks on Stop (which cancels subCtx), so it never leaks.
+	// also unblocks on Stop (which cancels subCtx), so it never leaks. Started
+	// before the staleness re-check, so a caller-side cancel still winds the
+	// subscription down promptly even while a re-check rotation is in flight.
 	go func() {
 		<-subCtx.Done()
 		s.teardown()
 		c.deregisterSub(s)
 	}()
+
+	// Staleness re-check: the generation's epoch was captured BEFORE registerSub,
+	// so a reconnect that completed inside that gap ran its resume pass without
+	// seeing this subscription — nothing would ever rotate it, and relayHandler
+	// would drop every frame, forever, with no OnError and no log: the
+	// permanently-silent state ADR-0027 forbids. If the counter moved, rotate
+	// now. Reading s.epoch (not the local capture) skips the rotation when a
+	// pass that did see the registration already rotated us; reestablish
+	// serializes with a concurrent pass (resumeMu) either way.
+	s.mu.Lock()
+	genEpoch := s.epoch
+	s.mu.Unlock()
+	if c.nc.Stats().Reconnects != genEpoch && !s.stopped.Load() {
+		if err := s.reestablish(c); err != nil {
+			// Fail loud: at Subscribe time an error means no subscription — the
+			// deferral tier exists for already-established ones. Clean up
+			// synchronously (the bridge's duplicate teardown/deregister are no-ops).
+			cancel()
+			s.teardown()
+			c.deregisterSub(s)
+			return nil, fmt.Errorf("sextant: subscribe: re-establish after a mid-subscribe reconnect: %w", err)
+		}
+		if s.stopped.Load() {
+			s.stopNewestRelay() // Stop raced the rotation; sweep the newest generation
+		}
+	}
 	return s, nil
 }
 
@@ -305,15 +345,11 @@ func (c *Client) reestablishSubs() {
 			continue
 		}
 		if s.stopped.Load() {
-			// Stop ran while we were re-establishing: the fresh relay may have been
-			// registered after teardown's subscription.stop. Stop it again
-			// (idempotent on the bus) so no relay is orphaned.
-			s.mu.Lock()
-			subID := s.subID
-			s.mu.Unlock()
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_ = c.call(ctx, wireapi.OpSubscriptionStop, wireapi.SubscriptionStopInput{SubID: subID}, nil)
-			cancel()
+			// Stop ran while we were re-establishing: teardown swept the pair it
+			// saw, which may be the pre-rotation one. Sweep the newest generation —
+			// its bus-side relay AND the rotated-in NATS subscription, which would
+			// otherwise live on the connection for the client's life.
+			s.stopNewestRelay()
 		}
 	}
 }
@@ -347,13 +383,21 @@ type subscription struct {
 	onErr      func(error)
 	once       sync.Once
 
-	// mu guards the live relay generation: the (subID, natsSub) pair. Every
-	// resume pass rotates to a fresh sub-id (see reestablish), so the pair
+	// resumeMu serializes rotations (reestablish): the reconnect pass and
+	// Subscribe's post-call staleness re-check can both request one, and two
+	// interleaved rotations could strand a relay on the bus. Held across the
+	// rotation's network calls; never taken while holding mu.
+	resumeMu sync.Mutex
+
+	// mu guards the live relay generation: the (subID, natsSub) pair and the
+	// epoch (the connection's reconnect count) it was established under. Every
+	// resume pass rotates to a fresh sub-id (see reestablish), so the trio
 	// changes over the subscription's life; teardown and the resume passes read
-	// the newest pair under the lock.
+	// the newest values under the lock.
 	mu      sync.Mutex
 	subID   string
 	natsSub *nats.Subscription
+	epoch   uint64
 
 	// stopped is set synchronously in Stop (before cancel) and in teardown, so
 	// the reconnect path can observe an in-flight stop and skip — or undo — a
@@ -406,10 +450,15 @@ func (s *subscription) advanceLastSeq(seq uint64) bool {
 // zero lastSeq means no message was ever delivered; in that case it re-uses
 // the original start option (DeliverAll or StartNew).
 //
-// Concurrency note: called from reestablishSubs (NATS reconnect goroutine).
-// Reads lastSeq atomically and swaps the generation pair under s.mu; the other
-// fields are written once at construction and are read-only here.
+// Concurrency note: called from reestablishSubs (NATS reconnect goroutine) and
+// from Subscribe's post-call staleness re-check (the caller's goroutine);
+// resumeMu serializes the two. Reads lastSeq atomically and swaps the
+// generation under s.mu; the other fields are written once at construction and
+// are read-only here.
 func (s *subscription) reestablish(c *Client) error {
+	s.resumeMu.Lock()
+	defer s.resumeMu.Unlock()
+
 	s.mu.Lock()
 	oldSubID, oldNatsSub := s.subID, s.natsSub
 	s.mu.Unlock()
@@ -428,7 +477,8 @@ func (s *subscription) reestablish(c *Client) error {
 	}
 
 	subID := ulid.Make().String()
-	natsSub, err := c.nc.Subscribe(wireapi.DeliverSubject(c.id, subID), c.relayHandler(s, c.nc.Stats().Reconnects))
+	epoch := c.nc.Stats().Reconnects
+	natsSub, err := c.nc.Subscribe(wireapi.DeliverSubject(c.id, subID), c.relayHandler(s, epoch))
 	if err != nil {
 		return fmt.Errorf("subscribe delivery: %w", err)
 	}
@@ -437,7 +487,7 @@ func (s *subscription) reestablish(c *Client) error {
 	// whose subscribe landed but whose reply was lost is then found and stopped
 	// by the next pass (or by teardown) rather than orphaned.
 	s.mu.Lock()
-	s.subID, s.natsSub = subID, natsSub
+	s.subID, s.natsSub, s.epoch = subID, natsSub, epoch
 	s.mu.Unlock()
 
 	// Snapshot the resume point after the old generation is fully out of the
@@ -454,6 +504,24 @@ func (s *subscription) reestablish(c *Client) error {
 		in.DeliverAll = false // SinceSeq takes priority; don't replay from the top
 	}
 	return c.call(ctx, wireapi.OpMessageSubscribe, in, nil)
+}
+
+// stopNewestRelay sweeps the newest relay generation — its NATS subscription
+// and its bus-side relay — after a rotation raced teardown: teardown swept the
+// pair it saw, but a rotation in flight may have swapped a fresh pair in after
+// that sweep. Both halves are idempotent (unsubscribing an already-invalid
+// NATS subscription errors harmlessly; the bus stop is a no-op for a sub-id it
+// no longer tracks), so it is safe after any rotation.
+func (s *subscription) stopNewestRelay() {
+	s.mu.Lock()
+	subID, natsSub := s.subID, s.natsSub
+	s.mu.Unlock()
+	if natsSub != nil {
+		_ = natsSub.Unsubscribe()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = s.c.call(ctx, wireapi.OpSubscriptionStop, wireapi.SubscriptionStopInput{SubID: subID}, nil)
 }
 
 // Stop ends the subscription (safe to call more than once). It marks the
