@@ -29,7 +29,11 @@ human has signed off — see
 | [0020](0020-clients-are-bus-issued-identities.md) | Clients are bus-issued identities | accepted |
 | [0021](0021-saved-client-contexts.md) | Saved client contexts | accepted |
 | [0022](0022-modules-over-a-locked-core.md) | A locked core lets modules build in parallel | accepted |
-| [0023](0023-the-dash-is-a-composable-pane-cockpit.md) | The dash is a composable pane cockpit | accepted |
+| [0023](0023-the-dash-is-a-composable-pane-cockpit.md) | The dash is a composable pane cockpit | accepted (refined by 0024) |
+| [0024](0024-the-dash-is-three-master-detail-browsers.md) | The dash is three master-detail browsers | proposed |
+| [0025](0025-the-bus-keeps-its-address-across-restarts.md) | The bus keeps its address across restarts of the same store | proposed |
+| [0026](0026-one-focused-pane-panes-hold-their-place.md) | One focused pane; panes hold their place | proposed |
+| [0027](0027-subscriptions-survive-a-bus-restart.md) | Subscriptions survive a bus restart | proposed |
 
 ## Review batches
 - **Batch 1 — substrate:** 0004–0007 — *accepted*
@@ -39,3 +43,6 @@ human has signed off — see
 - **0015 — operator-only state in its own account** — *accepted* (refines 0012; from the #71 review)
 - **0016 — artifacts are Lexicon records** — *accepted* (the #70 JSON-vs-CBOR decision; signed off in-session 2026-06-03)
 - **0023 — the dash is a composable pane cockpit** — *accepted* (sharpens 0014; grilled in-session prototype-grounded, signed off 2026-06-05)
+- **0024 — the dash is three master-detail browsers** — *proposed* (refines 0023's composition after M4 dogfooding; grilled in-session 2026-06-08)
+- **0025 — the bus keeps its address across restarts** — *proposed* (stable-address guarantee for enrolled contexts; TASK-35)
+- **0026 — one focused pane; panes hold their place** — *proposed* (tmux-style focus replacing 0023's step-in/out; decided in-session 2026-06-09)

@@ -74,6 +74,7 @@ const (
 	OpArtifactCreate   = "artifact.create"
 	OpArtifactUpdate   = "artifact.update"
 	OpArtifactGet      = "artifact.get"
+	OpArtifactList     = "artifact.list"
 	OpArtifactDelete   = "artifact.delete"
 	OpArtifactWatch    = "artifact.watch"
 	OpClientsList      = "clients.list"
@@ -226,6 +227,31 @@ type ArtifactDeleteInput struct {
 	Name string `json:"name"`
 }
 
+// --- artifact.list ---
+
+// ArtifactListInput carries no fields: artifact.list returns every artifact in
+// the ARTIFACTS bucket (no filter — a client lists, then artifact.gets the one
+// it wants).
+type ArtifactListInput struct{}
+
+// ArtifactListOutput is the artifacts directory: the name and bus-stamped
+// metadata of every artifact, sorted by name. It carries no records — discovery
+// of what exists, not the contents (those come from artifact.get).
+type ArtifactListOutput struct {
+	Artifacts []ArtifactListEntry `json:"artifacts"`
+}
+
+// ArtifactListEntry is one entry in the artifacts directory: an artifact's name
+// and bus-stamped metadata (its current revision and the create/update times),
+// but not its record. CreatedAt and UpdatedAt are RFC3339 strings, as in
+// ArtifactGetOutput.
+type ArtifactListEntry struct {
+	Name      string `json:"name"`
+	Revision  uint64 `json:"revision"`
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
+}
+
 // --- clients.list ---
 
 // ClientsListOutput is the clients registry directory.
@@ -263,11 +289,14 @@ const (
 
 // SubscribeInput starts a push-stream subscription. SubID is the
 // client-generated ULID naming the delivery subject; DeliverAll replays retained
-// history before live messages.
+// history before live messages. SinceSeq, when non-zero, resumes from that
+// stream sequence (inclusive) and takes priority over DeliverAll — it is set by
+// the SDK on reconnect to resume from last-delivered+1.
 type SubscribeInput struct {
 	Subject    string `json:"subject"`
 	SubID      string `json:"sub_id"`
 	DeliverAll bool   `json:"deliver_all"`
+	SinceSeq   uint64 `json:"since_seq,omitempty"`
 }
 
 // SubscribeOutput confirms the subscription and echoes the delivery subject the

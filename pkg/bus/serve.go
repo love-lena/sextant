@@ -119,6 +119,8 @@ func (b *Bus) dispatch(ctx context.Context, clientID, op string, data []byte) (j
 		return b.opArtifactUpdate(ctx, clientID, data)
 	case wireapi.OpArtifactGet:
 		return b.opArtifactGet(ctx, data)
+	case wireapi.OpArtifactList:
+		return b.opArtifactList(ctx)
 	case wireapi.OpArtifactDelete:
 		return b.opArtifactDelete(ctx, data)
 	case wireapi.OpClientsList:
@@ -187,7 +189,10 @@ func (b *Bus) opRead(ctx context.Context, data []byte) (json.RawMessage, error) 
 	for _, e := range entries {
 		f, err := wire.Decode(e.Data)
 		if err != nil {
-			continue // skip an undecodable entry rather than fail the whole batch
+			// Skip an undecodable entry rather than fail the whole batch — but
+			// say so. Only store corruption or seam-injected bytes reach here.
+			b.logf("bus: read: dropping undecodable frame on %s at seq %d: %v", e.Subject, e.Seq, err)
+			continue
 		}
 		out.Messages = append(out.Messages, f)
 	}
@@ -304,6 +309,45 @@ func (b *Bus) opArtifactGet(ctx context.Context, data []byte) (json.RawMessage, 
 	})
 }
 
+// opArtifactList is the artifacts directory read: the name and bus-stamped
+// metadata of every artifact in the ARTIFACTS bucket, sorted by name. It is
+// discovery of state the bus already owns (ADR-0016) — a client lists, then
+// artifact.gets the one it wants — so it reads each key's metadata (revision +
+// the stamped create/update times) without returning the records. A key left
+// between the listing and the per-key read is skipped, as is an undecodable
+// frame, rather than failing the whole listing for everyone. An empty bucket is
+// an empty slice, not an error.
+func (b *Bus) opArtifactList(ctx context.Context) (json.RawMessage, error) {
+	keys, err := b.backend.Keys(ctx, sx.BucketArtifacts)
+	if err != nil {
+		return nil, fmt.Errorf("bus: artifact.list: %w", err)
+	}
+	out := wireapi.ArtifactListOutput{Artifacts: make([]wireapi.ArtifactListEntry, 0, len(keys))}
+	for _, k := range keys {
+		val, rev, err := b.backend.Get(ctx, sx.BucketArtifacts, k)
+		if errors.Is(err, backend.ErrNotFound) {
+			continue // deleted between the key listing and this read
+		}
+		if err != nil {
+			return nil, fmt.Errorf("bus: artifact.list: read %q: %w", k, err)
+		}
+		frame, err := wire.Decode(val)
+		if err != nil {
+			// Skip an undecodable frame rather than fail the listing — but say so.
+			b.logf("bus: artifact.list: skipping artifact %q at revision %d: undecodable frame: %v", k, rev, err)
+			continue
+		}
+		out.Artifacts = append(out.Artifacts, wireapi.ArtifactListEntry{
+			Name:      k,
+			Revision:  rev,
+			CreatedAt: frame.CreatedAt,
+			UpdatedAt: frame.UpdatedAt,
+		})
+	}
+	sort.Slice(out.Artifacts, func(i, j int) bool { return out.Artifacts[i].Name < out.Artifacts[j].Name })
+	return json.Marshal(out)
+}
+
 func (b *Bus) opArtifactDelete(ctx context.Context, data []byte) (json.RawMessage, error) {
 	var in wireapi.ArtifactDeleteInput
 	if err := json.Unmarshal(data, &in); err != nil {
@@ -348,7 +392,9 @@ func (b *Bus) opClientsList(ctx context.Context) (json.RawMessage, error) {
 		}
 		var e wireapi.ClientEntry
 		if err := json.Unmarshal(val, &e); err != nil {
-			continue // skip a corrupt entry rather than fail the listing
+			// Skip a corrupt record rather than fail the listing — but say so.
+			b.logf("bus: clients.list: skipping corrupt registry record %q: %v", k, err)
+			continue
 		}
 		e.ID = k // the registry key is the authoritative id, not the record body
 		e.Presence = wireapi.PresenceOffline
@@ -474,10 +520,15 @@ func (b *Bus) onlineClientIDs(ctx context.Context) ([]string, error) {
 	for _, k := range keys {
 		val, _, err := b.backend.Get(ctx, sx.BucketClients, k)
 		if err != nil {
+			if !errors.Is(err, backend.ErrNotFound) { // not-found = deleted between listing and read (benign)
+				b.logf("bus: drain: skipping client %q: read record: %v", k, err)
+			}
 			continue
 		}
 		var e wireapi.ClientEntry
 		if err := json.Unmarshal(val, &e); err != nil {
+			// A corrupt record means this client cannot be drain-targeted — say so.
+			b.logf("bus: drain: skipping corrupt registry record %q: %v", k, err)
 			continue
 		}
 		if e.Subject != "" && online[e.Subject] {
