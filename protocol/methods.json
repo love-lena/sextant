@@ -48,7 +48,7 @@
       "summary": "List the artifacts directory: the name and bus-stamped metadata of every artifact in the ARTIFACTS bucket, sorted by name. Discovery of existing state the bus already owns (ADR-0016) — a client lists, then artifact.gets the one it wants. Deleted artifacts are not listed; an empty bucket is an empty list, not an error.",
       "delivery": "one-shot",
       "input": {},
-      "output": { "artifacts": "artifact[]" }
+      "output": { "artifacts": "ArtifactInfo[]" }
     },
     {
       "name": "artifact.delete",
