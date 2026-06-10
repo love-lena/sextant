@@ -23,7 +23,8 @@ import (
 // requested name already exists and force is false. Callers that surface the
 // error to a user can errors.As to this type to provide advice that matches
 // THEIR command surface — the CLI caller adds --force; the dash caller adds
-// `sextant context use <name>` or `sextant clients register --self --force`.
+// `sextant context use <name>` or
+// `sextant clients register --self --kind human --force`.
 type ErrContextExists struct {
 	// Name is the context name that collided.
 	Name string
