@@ -70,15 +70,24 @@ The SDK's `ReconnectHandler` calls `reestablishSubs` before logging "reconnected
 to the bus", so the log fires only after all relays are live. Each active
 `subscription` stores the last delivered stream sequence (an atomic `uint64`
 updated on every quarantine-passing delivery). On reconnect, `reestablish`
-first issues `subscription.stop` for its own sub-id — idempotent on the bus, so
-it is a no-op after a real restart, and it clears the surviving relay after a
-plain blip — then a fresh `message.subscribe` Wire API call carrying
-`since_seq = last + 1` (or the original start policy when `last = 0`). The bus
-relay handles `since_seq` by mapping it to a `StartFromSeq` backend start with a
-stream-bounds check: a `since_seq` beyond the stream's last sequence plus one,
-or below its first retained sequence, returns `backend.ErrSequenceGone`, and the
-bus surfaces it as a call error, which the SDK turns into an `OnError` call and
-a subscription stop.
+replaces the relay generation wholesale: it stops the old relay on the bus
+(`subscription.stop` — idempotent, so it is a no-op after a real restart, and
+it clears the surviving relay after a plain blip), then subscribes under a
+fresh sub-id — and with it a fresh private delivery subject — and sends a
+fresh `message.subscribe` Wire API call for that sub-id carrying
+`since_seq = last + 1` (or the original start policy when `last = 0`). The
+rotation makes every frame attributable to exactly one relay: anything a
+replaced relay still has in flight lands on a delivery subject the live
+generation never subscribes. Each generation's delivery handler is also
+stamped with the connection's reconnect count at establishment and processes
+frames only while that count is current, so the cutover holds without timing
+assumptions; the monotonic delivery cursor (the last delivered sequence only
+moves forward) is a further defense layer, dropping any non-increasing
+sequence as overlap. The bus relay handles `since_seq` by mapping it to a
+`StartFromSeq` backend start with a stream-bounds check: a `since_seq` beyond
+the stream's last sequence plus one, or below its first retained sequence,
+returns `backend.ErrSequenceGone`, and the bus surfaces it as a call error,
+which the SDK turns into an `OnError` call and a subscription stop.
 
 Active subscriptions register themselves on the client at creation and
 deregister on teardown. The registry (`Client.subs`) is guarded by a mutex;
