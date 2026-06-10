@@ -40,6 +40,15 @@ type Model struct {
 	th   theme.Theme
 	keys theme.Keymap
 
+	// themeChoice is the operator's persisted theme intent: a concrete variant
+	// after an explicit choice (a flag, a saved config, or the options-menu
+	// toggle), or VariantAuto while the operator is in detection mode. It is
+	// what Config emits, kept separate from th — th always holds a RESOLVED
+	// concrete theme (the host probes the terminal before construction), and
+	// persisting that resolved variant would turn auto into a one-launch
+	// choice. Auto stays auto until the operator picks a concrete theme.
+	themeChoice theme.Variant
+
 	// order is the host's pane order (registration order), the stable order presets
 	// fill slots in and the selection cycles through.
 	order []string
@@ -81,8 +90,10 @@ const statusH = 1
 
 // New builds a cockpit Model over a set of surfaces, applying an initial Config.
 // The surfaces slice is the host's pane order. The keymap supplies every binding
-// — the layout hardcodes no key. The theme variant in cfg overrides th's variant
-// so a persisted theme choice is honoured on open.
+// — the layout hardcodes no key. A concrete theme variant in cfg overrides th's
+// variant so a persisted theme choice is honoured on open; the auto variant
+// keeps th as given (the host resolved the detection before constructing the
+// layout — this package never probes the terminal).
 func New(th theme.Theme, keys theme.Keymap, cfg Config, surfaces ...surface.Surface) Model {
 	m := Model{
 		th:       th,
@@ -103,12 +114,20 @@ func New(th theme.Theme, keys theme.Keymap, cfg Config, surfaces ...surface.Surf
 	return m
 }
 
-// apply sets the layout's state from a Config: the theme variant, the active
+// apply sets the layout's state from a Config: the theme choice, the active
 // preset, and the hidden set. An unknown preset falls back to the cockpit
 // default.
 func (m *Model) apply(cfg Config) {
-	if cfg.Theme == theme.VariantLight || cfg.Theme == theme.VariantDark {
+	switch cfg.Theme {
+	case theme.VariantLight, theme.VariantDark:
 		m.th = theme.New(cfg.Theme)
+		m.themeChoice = cfg.Theme
+	default:
+		// Auto (or an empty/unknown value, which resolves to auto): keep the
+		// host-resolved th — detection happened at the composition root — and
+		// record the auto intent so Config persists "auto", not the variant the
+		// probe resolved to this launch.
+		m.themeChoice = theme.VariantAuto
 	}
 	m.preset = cfg.Preset
 	if !validPreset(m.preset) {
@@ -132,15 +151,17 @@ func (m *Model) apply(cfg Config) {
 }
 
 // Config snapshots the layout's current state as a Config the host can persist.
-// It records the active preset, the hidden set, and the theme variant, and
-// emits the loaded Placements unchanged — preset-mode never renders from the
+// It records the active preset, the hidden set, and the theme CHOICE — auto
+// when the operator is in detection mode (never the variant auto resolved to
+// this launch, so detection re-runs next launch), the concrete variant after
+// an explicit pick — and emits the loaded Placements unchanged — preset-mode never renders from the
 // free-placement seam, but it preserves it (config.go's promise), so a dash
 // exit never deletes a newer file's data. The host calls this on change or on
 // quit and hands the result to SaveConfig.
 func (m Model) Config() Config {
 	cfg := DefaultConfig()
 	cfg.Preset = m.preset
-	cfg.Theme = m.th.Variant
+	cfg.Theme = m.themeChoice
 	cfg.Hidden = m.hiddenList()
 	cfg.Placements = clonePlacements(m.placements)
 	return cfg

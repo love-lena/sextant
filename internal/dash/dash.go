@@ -31,12 +31,16 @@ import (
 	"github.com/love-lena/sextant/pkg/tui/theme"
 )
 
-// ThemeChoice selects the cockpit's palette. Auto detects the terminal
-// background; Light/Dark force a palette.
+// ThemeChoice selects the cockpit's palette. Light/Dark force a palette; Auto
+// detects the terminal background at every launch. Every explicit choice is
+// persisted to the layout config — auto included, so `--theme auto` is the way
+// back into detection after a concrete choice.
 type ThemeChoice string
 
 const (
-	// ThemeAuto detects the terminal background (the default).
+	// ThemeAuto detects the terminal background at every launch (the fresh-config
+	// default). Passed explicitly, it resets a persisted concrete theme back to
+	// detection.
 	ThemeAuto ThemeChoice = "auto"
 	// ThemeLight forces the light palette.
 	ThemeLight ThemeChoice = "light"
@@ -45,9 +49,10 @@ const (
 )
 
 // Valid reports whether c is one of the three known theme choices. The empty
-// string is also valid (it resolves to auto), so an unset Options.Theme is
-// accepted. Resolve uses this to fail loud on a bad --theme rather than silently
-// falling back to auto (fail-loud over a surprising silent default).
+// string is also valid: it means "not chosen this launch" — the persisted
+// config's choice applies (auto on a fresh config). Resolve uses this to fail
+// loud on a bad --theme rather than silently falling back to a surprising
+// default.
 func (c ThemeChoice) Valid() bool {
 	switch c {
 	case "", ThemeAuto, ThemeLight, ThemeDark:
@@ -77,7 +82,12 @@ type Options struct {
 	// under (--name); empty defaults from $USER (selfenroll.SelfName).
 	Name string
 
-	// Theme selects the palette (auto/light/dark). Empty resolves to auto.
+	// Theme is the palette chosen THIS launch (auto/light/dark), persisted to
+	// the layout config so it holds across runs: light/dark force a palette;
+	// auto re-detects the terminal background at every launch (and, passed
+	// explicitly, resets a persisted concrete choice back to detection). Empty
+	// means no choice was made this launch — the persisted config's choice
+	// applies, auto on a fresh config.
 	Theme ThemeChoice
 	// ConfigPath is where the layout config is loaded from and persisted to. Empty
 	// disables persistence (a fresh DefaultConfig each run).
@@ -222,7 +232,6 @@ func ensureIdentity(ctx context.Context, opts *Options, notice io.Writer) error 
 // out so the e2e can drive the same root model against an embedded bus without
 // going through Run's program loop.
 func build(ctx context.Context, client *sextant.Client, opts Options) (root, error) {
-	th := resolveTheme(opts.Theme)
 	keys := theme.DefaultKeymap()
 
 	cfg := layout.DefaultConfig()
@@ -233,16 +242,19 @@ func build(ctx context.Context, client *sextant.Client, opts Options) (root, err
 		}
 		cfg = loaded
 	}
-	// A persisted theme variant is honoured by the layout (apply overrides th's
-	// variant); pin the loaded variant onto the surfaces too, since a surface
-	// resolves its hues at construction. An explicit --theme overrides the config.
-	if opts.Theme == "" || opts.Theme == ThemeAuto {
-		if cfg.Theme == theme.VariantLight || cfg.Theme == theme.VariantDark {
-			th = theme.New(cfg.Theme)
-		}
-	} else {
-		cfg.Theme = th.Variant
-	}
+	// The theme choice to honour and persist: an explicit --theme this launch
+	// wins (so a typed `--theme auto` resets a saved concrete theme back to
+	// detection); otherwise the saved choice applies. cfg.Theme carries the
+	// CHOICE — auto persists as auto, never as the variant it resolves to this
+	// launch — so detection re-runs at every launch while the choice is auto.
+	cfg.Theme = themeIntent(opts.Theme, cfg.Theme)
+
+	// Resolve the choice into the render theme. The terminal-background probe
+	// runs here, at the composition root, once per launch; the layout and the
+	// surfaces receive a resolved concrete theme and never probe. In a non-tty
+	// context (tests, pipes) the probe is skipped and auto resolves to dark,
+	// deterministically.
+	th := resolveTheme(cfg.Theme)
 
 	// Resolve the conversations' author map from the directory (id → display name
 	// + role), the seam ADR-0023 leaves open. The topics browser has no directory
@@ -281,13 +293,37 @@ func resolveAuthors(ctx context.Context, client *sextant.Client) map[string]surf
 	return authors
 }
 
-// resolveTheme maps a ThemeChoice to a concrete Theme (auto detects the terminal
-// background).
-func resolveTheme(c ThemeChoice) theme.Theme {
-	switch c {
+// themeIntent picks the theme choice to honour and persist this launch: the
+// explicitly passed flag value when there is one — an explicit auto
+// deliberately overwrites a saved concrete choice; that is the way back into
+// detection — else the saved choice. The result is always one of the three
+// known variants, so an unknown value in a hand-edited config resolves to the
+// default (auto) instead of round-tripping garbage.
+func themeIntent(choice ThemeChoice, saved theme.Variant) theme.Variant {
+	switch choice {
 	case ThemeLight:
-		return theme.Light()
+		return theme.VariantLight
 	case ThemeDark:
+		return theme.VariantDark
+	case ThemeAuto:
+		return theme.VariantAuto
+	}
+	switch saved {
+	case theme.VariantLight, theme.VariantDark, theme.VariantAuto:
+		return saved
+	}
+	return theme.VariantAuto
+}
+
+// resolveTheme maps a theme choice to a resolved concrete Theme. Auto probes
+// the terminal background via theme.Auto — bounded by termenv's own query
+// deadline, and skipped entirely (falling back to dark) when stdout is not a
+// terminal, so a test or piped run never hangs on it.
+func resolveTheme(v theme.Variant) theme.Theme {
+	switch v {
+	case theme.VariantLight:
+		return theme.Light()
+	case theme.VariantDark:
 		return theme.Dark()
 	default:
 		return theme.Auto()

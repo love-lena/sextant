@@ -45,8 +45,12 @@ type Config struct {
 	// this list (and present in the host's surface set) is visible.
 	Hidden []string `json:"hidden,omitempty"`
 
-	// Theme is the chosen theme variant ("light" or "dark"). An empty or unknown
-	// value resolves to the dash default when applied.
+	// Theme is the operator's theme choice: a concrete variant ("light" or
+	// "dark"), or "auto" — re-detect the terminal background at every launch.
+	// Auto persists AS auto: this package only stores the choice; the host
+	// resolves it (the terminal probe is the composition root's job) before
+	// constructing the layout. An empty or unknown value resolves to auto when
+	// applied.
 	Theme theme.Variant `json:"theme"`
 
 	// Placements is the free-placement seam (deferred, ADR-0023). Empty in
@@ -74,13 +78,15 @@ type Placement struct {
 }
 
 // DefaultConfig returns the cockpit default: the cockpit preset, nothing hidden,
-// the dark theme, preset-mode (no placements). It is what a fresh dash starts
-// from and what LoadConfig falls back to when no file exists.
+// the auto theme (detect the terminal background at every launch), preset-mode
+// (no placements). It is what a fresh dash starts from and what LoadConfig
+// falls back to when no file exists — so a first run on a light terminal opens
+// light.
 func DefaultConfig() Config {
 	return Config{
 		Version: ConfigVersion,
 		Preset:  PresetCockpit,
-		Theme:   theme.VariantDark,
+		Theme:   theme.VariantAuto,
 	}
 }
 
@@ -112,7 +118,7 @@ func LoadConfig(path string) (Config, error) {
 		c.Preset = PresetCockpit
 	}
 	if c.Theme == "" {
-		c.Theme = theme.VariantDark
+		c.Theme = theme.VariantAuto
 	}
 	return c, nil
 }

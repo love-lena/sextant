@@ -576,11 +576,18 @@ func TestConfigApplyOnNew(t *testing.T) {
 // TestOptionsMenuTogglesTheme: switching the theme from the options menu changes
 // the persisted theme variant AND re-themes every mounted surface (so the pane
 // bodies follow, not just the chrome the layout owns). The menu stays open so
-// the operator can flip more.
+// the operator can flip more. The cockpit starts in detection mode (the
+// DefaultConfig auto choice, rendered with the host-resolved dark), so this
+// also pins the toggle-out-of-auto contract: picking a theme from the menu
+// persists the CONCRETE variant — the operator stays concrete until asking for
+// auto again.
 func TestOptionsMenuTogglesTheme(t *testing.T) {
 	m, panes := newCockpit(t)
 	if m.Theme().Variant != theme.VariantDark {
 		t.Fatalf("precondition: dark theme, got %q", m.Theme().Variant)
+	}
+	if m.Config().Theme != theme.VariantAuto {
+		t.Fatalf("precondition: auto theme choice (DefaultConfig), got %q", m.Config().Theme)
 	}
 	m, _ = m.Update(key("o"))
 	// Move the cursor to the theme row (it is second-to-last: ...preset, theme,

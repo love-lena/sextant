@@ -16,6 +16,12 @@ import (
 // `sextant dash` alias — register and resolve these the same way so they
 // behave identically.
 type Flags struct {
+	// fs is the flag set the flags were registered on, kept so Resolve can ask
+	// which flags were EXPLICITLY passed (fs.Visit) — the theme flag's behaviour
+	// differs between "not passed" (follow the persisted config) and "passed as
+	// its default value" (`--theme auto` resets a persisted concrete theme).
+	fs *flag.FlagSet
+
 	creds   *string
 	store   *string
 	url     *string
@@ -30,12 +36,13 @@ type Flags struct {
 // same way the operator CLI does. Call fs.Parse, then Resolve.
 func AddFlags(fs *flag.FlagSet) *Flags {
 	return &Flags{
+		fs:      fs,
 		creds:   fs.String("creds", os.Getenv("SEXTANT_CREDS"), "client credentials file (issue with `sextant clients register`; or set $SEXTANT_CREDS)"),
 		store:   fs.String("store", defaultStore(), "bus store dir for discovery (or set $SEXTANT_STORE)"),
 		url:     fs.String("url", "", "bus URL (default: discovery file under --store)"),
 		context: fs.String("context", os.Getenv("SEXTANT_CONTEXT"), "saved context to connect as (default: the active one; see `sextant context`)"),
 
-		theme:  fs.String("theme", "auto", "cockpit theme: light, dark, or auto"),
+		theme:  fs.String("theme", "auto", "cockpit theme: light, dark, or auto (re-detect the terminal background each launch); an explicit value is persisted, otherwise the saved choice applies"),
 		config: fs.String("config", defaultConfigPath(), "layout config file (preset, hidden panes, theme); persisted on quit"),
 		name:   fs.String("name", "", "display name a first-run self-enrollment registers under (default: $USER)"),
 	}
@@ -54,6 +61,13 @@ func (f *Flags) Resolve() (Options, error) {
 	th := ThemeChoice(*f.theme)
 	if !th.Valid() {
 		return Options{}, fmt.Errorf("invalid --theme %q (want light, dark, or auto)", *f.theme)
+	}
+	// An untouched --theme is "no choice this launch" (empty), so the persisted
+	// config's choice applies. Only an EXPLICIT --theme carries through — which
+	// is what lets a typed `--theme auto` (identical in value to the untouched
+	// default) reset a persisted concrete theme back to detection.
+	if !f.explicitlySet("theme") {
+		th = ""
 	}
 
 	creds, url := *f.creds, *f.url
@@ -81,6 +95,19 @@ func (f *Flags) Resolve() (Options, error) {
 		Theme:      th,
 		ConfigPath: *f.config,
 	}, nil
+}
+
+// explicitlySet reports whether the named flag was passed on the command line
+// (flag.Visit walks only the flags that were set), distinguishing an explicit
+// choice from the flag's untouched default value.
+func (f *Flags) explicitlySet(name string) bool {
+	set := false
+	f.fs.Visit(func(fl *flag.Flag) {
+		if fl.Name == name {
+			set = true
+		}
+	})
+	return set
 }
 
 // defaultStore is the bus store dir a dash uses when --store is not given:

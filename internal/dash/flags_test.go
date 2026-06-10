@@ -43,8 +43,8 @@ func TestResolveRejectsBadTheme(t *testing.T) {
 	}
 }
 
-// TestResolveAcceptsKnownThemes confirms the three documented values (and the
-// auto default) resolve cleanly when an identity is present.
+// TestResolveAcceptsKnownThemes confirms the three documented values resolve
+// cleanly when an identity is present, each carried through explicitly.
 func TestResolveAcceptsKnownThemes(t *testing.T) {
 	hermeticEnv(t)
 	for _, th := range []string{"light", "dark", "auto"} {
@@ -56,13 +56,30 @@ func TestResolveAcceptsKnownThemes(t *testing.T) {
 			t.Fatalf("--theme %s resolved to %q", th, opts.Theme)
 		}
 	}
-	// The default (no --theme) is auto.
+}
+
+// TestResolveUnsetThemeIsNoChoice: an untouched --theme resolves to the EMPTY
+// ThemeChoice ("no choice this launch" — the persisted config's choice applies),
+// distinct from an explicitly typed `--theme auto` (same string value as the
+// flag's default) which carries through as ThemeAuto and resets a persisted
+// concrete theme back to detection. The distinction is what makes auto
+// re-enterable.
+func TestResolveUnsetThemeIsNoChoice(t *testing.T) {
+	hermeticEnv(t)
 	opts, err := parseFlags(t, "--creds", "/tmp/x.creds")
 	if err != nil {
-		t.Fatalf("default theme: %v", err)
+		t.Fatalf("no --theme: %v", err)
+	}
+	if opts.Theme != "" {
+		t.Fatalf("unset --theme = %q, want empty (defer to the persisted config)", opts.Theme)
+	}
+
+	opts, err = parseFlags(t, "--creds", "/tmp/x.creds", "--theme", "auto")
+	if err != nil {
+		t.Fatalf("--theme auto: %v", err)
 	}
 	if opts.Theme != ThemeAuto {
-		t.Fatalf("default --theme = %q, want auto", opts.Theme)
+		t.Fatalf("explicit --theme auto = %q, want %q", opts.Theme, ThemeAuto)
 	}
 }
 

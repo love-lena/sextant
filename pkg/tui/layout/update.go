@@ -315,10 +315,13 @@ func cloneHidden(src map[string]bool) map[string]bool {
 // surface, by calling each surface's SetTheme — so the pane BODIES re-theme too,
 // not just the chrome. SetTheme is in the Surface contract precisely so the
 // layout can re-theme without reconstructing a surface (it stays domain-free —
-// it never builds a surface). The variant is recorded in the persisted config so
-// the choice survives a relaunch.
+// it never builds a surface). The variant is recorded as the persisted theme
+// choice so it survives a relaunch — toggling out of auto picks a concrete
+// theme and stays concrete until the operator asks for auto again (--theme
+// auto).
 func (m Model) setTheme(v theme.Variant) Model {
 	m.th = theme.New(v)
+	m.themeChoice = m.th.Variant
 	for _, id := range m.order {
 		m.surfaces[id].SetTheme(m.th)
 	}

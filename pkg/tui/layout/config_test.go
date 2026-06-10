@@ -92,8 +92,8 @@ func TestLoadOldConfigFillsDefaults(t *testing.T) {
 	if got.Preset != layout.PresetCockpit {
 		t.Errorf("preset not defaulted: %q", got.Preset)
 	}
-	if got.Theme != theme.VariantDark {
-		t.Errorf("theme not defaulted: %q", got.Theme)
+	if got.Theme != theme.VariantAuto {
+		t.Errorf("theme not defaulted to auto: %q", got.Theme)
 	}
 	if len(got.Hidden) != 1 || got.Hidden[0] != "topics" {
 		t.Errorf("hidden lost: %v", got.Hidden)
@@ -110,6 +110,46 @@ func TestLoadMalformedIsLoudError(t *testing.T) {
 	}
 	if _, err := layout.LoadConfig(path); err == nil {
 		t.Fatal("malformed config should be a loud error, got nil")
+	}
+}
+
+// TestAutoThemeSurvivesUntouchedSession is the auto-stays-auto regression
+// guard: the dash's real round-trip is LoadConfig → layout.New (with the
+// HOST-RESOLVED concrete theme — the probe ran at the composition root) →
+// operate → Model.Config() → SaveConfig on exit. A persisted "auto" must come
+// back out as "auto" after a session that never touched the theme — were the
+// Model to emit the variant the probe resolved to (here dark), auto would be a
+// one-launch choice and detection would never run again.
+func TestAutoThemeSurvivesUntouchedSession(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "layout.json")
+	seed := layout.DefaultConfig()
+	seed.Theme = theme.VariantAuto
+	if err := layout.SaveConfig(path, seed); err != nil {
+		t.Fatalf("save seed: %v", err)
+	}
+	cfg, err := layout.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	// theme.Dark() stands in for the host's per-launch resolution of auto.
+	m := layout.New(theme.Dark(), theme.DefaultKeymap(), cfg,
+		newMock("clients", "Clients"), newMock("topics", "Topics"), newMock("artifacts", "Artifacts"))
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m, _ = m.Update(key("p")) // operate (cycle preset) — but never touch the theme
+
+	if m.Theme().Variant != theme.VariantDark {
+		t.Fatalf("render theme = %q, want the host-resolved dark", m.Theme().Variant)
+	}
+	if err := layout.SaveConfig(path, m.Config()); err != nil {
+		t.Fatalf("save on exit: %v", err)
+	}
+	got, err := layout.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got.Theme != theme.VariantAuto {
+		t.Errorf("persisted theme = %q after an untouched session, want auto", got.Theme)
 	}
 }
 
