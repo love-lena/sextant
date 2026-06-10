@@ -21,6 +21,19 @@ import (
 // so the text bodies align down the stream regardless of name length.
 const authorWidth = 14
 
+// MaxStreamEntries caps the entry log a Stream retains — and with it the
+// rendered-lines buffer, which replays from the log. The feed subscribes with
+// DeliverAll, so a busy topic's full retained history loads on open, and an
+// open conversation holds its place for the dash's whole life (ADR-0026);
+// without a cap both the logged frames (record bytes included) and the rendered
+// lines grow forever. Past the cap the oldest entries are dropped and the
+// buffer renders behind an honest "older history trimmed" marker (mirroring the
+// drop-gap marker), so the operator knows the view is truncated. It is an
+// overridable package-level default, not a hard policy — set it before
+// constructing streams to retain more (or less); zero or negative disables
+// trimming.
+var MaxStreamEntries = 4000
+
 // Author resolves a frame author id to what the stream renders: a display name
 // and a role (e.g. "agent", "human"), so the line shows a readable name in the
 // author's role hue. It is the resolution unit a WithAuthors map carries.
@@ -92,8 +105,13 @@ type Stream struct {
 	// entries is the ordered log of what the stream has shown — each a received
 	// frame or a coalesced drop-gap — kept so SetTheme can re-render the buffer
 	// with the new palette (a rendered line bakes in the author hue, so a runtime
-	// theme switch must replay the log to re-hue it).
+	// theme switch must replay the log to re-hue it). It is bounded by
+	// MaxStreamEntries; trimmed counts what fell off the front.
 	entries []streamEntry
+	// trimmed is the total number of messages dropped from the front of the
+	// entry log to hold MaxStreamEntries, rendered as the trim marker at the top
+	// of the buffer so the truncation is honest, never silent.
+	trimmed int
 
 	focus widget.Focus
 	// w, h is the inner area; the compose row, when shown, takes the last line.
@@ -198,16 +216,59 @@ func (s *Stream) SetTheme(th theme.Theme) {
 }
 
 // replay re-renders the whole entry log to stream lines for the current theme and
-// width. It is called when the palette OR the inner width changes (a theme switch,
-// a reflow), since both the per-line hues and the soft-wrap depend on the current
-// state: a wrapped line wraps to the current content width, and a narrower width
-// must reflow the buffer to fewer columns.
+// width, behind the trim marker when older history has been dropped. It is called
+// when the palette OR the inner width changes (a theme switch, a reflow) and when
+// the log is trimmed, since the rendered lines depend on the current state: a
+// wrapped line wraps to the current content width, a narrower width must reflow
+// the buffer to fewer columns, and a trim moves the buffer's head. Replaying from
+// the bounded log is also what bounds the widget's rendered-lines buffer.
 func (s *Stream) replay() {
 	var lines []string
+	if s.trimmed > 0 {
+		lines = append(lines, s.trimMarker(s.trimmed))
+	}
 	for _, e := range s.entries {
 		lines = append(lines, s.renderEntry(e)...)
 	}
 	s.stream.SetLines(lines)
+}
+
+// appendEntry logs one entry and renders it into the stream. When the log
+// exceeds MaxStreamEntries it trims the oldest entries and replays the bounded
+// log behind the trim marker; otherwise the new entry's lines append directly.
+func (s *Stream) appendEntry(e streamEntry) {
+	s.entries = append(s.entries, e)
+	if s.trim() {
+		s.replay()
+	} else {
+		s.stream.Append(s.renderEntry(e)...)
+	}
+}
+
+// trim drops the oldest entries once the log exceeds MaxStreamEntries, keeping
+// a tenth of slack under the cap so the full-buffer replay is paid once per
+// batch rather than on every message at the cap. The trimmed count accumulates
+// what the marker reports — a trimmed drop-gap contributes the messages it
+// stood for, so the total stays honest. It reports whether anything was
+// trimmed.
+func (s *Stream) trim() bool {
+	limit := MaxStreamEntries
+	if limit <= 0 || len(s.entries) <= limit {
+		return false
+	}
+	keep := limit - limit/10
+	if keep < 1 {
+		keep = 1
+	}
+	for _, e := range s.entries[:len(s.entries)-keep] {
+		if e.hasFrame {
+			s.trimmed++
+		} else {
+			s.trimmed += e.dropped
+		}
+	}
+	s.entries = s.entries[len(s.entries)-keep:]
+	return true
 }
 
 // streamEntry is one logged item the stream has shown: a received frame, or a
@@ -279,14 +340,10 @@ func (s *Stream) Update(msg tea.Msg) tea.Cmd {
 		// Subscription is live; start the pump.
 		return s.feed.Next()
 	case busfeed.EventMsg:
-		e := streamEntry{frame: msg.Message, hasFrame: true}
-		s.entries = append(s.entries, e)
-		s.stream.Append(s.renderEntry(e)...)
+		s.appendEntry(streamEntry{frame: msg.Message, hasFrame: true})
 		return s.feed.Next() // keep pumping
 	case busfeed.DroppedMsg:
-		e := streamEntry{dropped: msg.N}
-		s.entries = append(s.entries, e)
-		s.stream.Append(s.renderEntry(e)...)
+		s.appendEntry(streamEntry{dropped: msg.N})
 		return s.feed.Next() // DroppedMsg is not terminal; keep pumping
 	case busfeed.ErrMsg:
 		// Terminal: the feed stops reading. Surface the error in the footer.
@@ -558,6 +615,15 @@ func shortLabel(s string) string {
 // shows as one honest line in the stream rather than vanishing.
 func (s *Stream) dropMarker(n int) string {
 	marker := fmt.Sprintf("⋯ %d message(s) dropped (buffer overflow) ⋯", n)
+	return lipgloss.NewStyle().Foreground(s.theme.StatusHue(theme.StatusDraining)).Render(marker)
+}
+
+// trimMarker renders the truncation marker for n messages dropped from the
+// front of the bounded entry log, mirroring dropMarker's convention, so the
+// capped buffer reads as an honest gap at the top rather than silently missing
+// history.
+func (s *Stream) trimMarker(n int) string {
+	marker := fmt.Sprintf("⋯ older history trimmed (%d message(s)) ⋯", n)
 	return lipgloss.NewStyle().Foreground(s.theme.StatusHue(theme.StatusDraining)).Render(marker)
 }
 
