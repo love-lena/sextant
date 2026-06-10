@@ -112,6 +112,15 @@ type Stream struct {
 	// entry log to hold MaxStreamEntries, rendered as the trim marker at the top
 	// of the buffer so the truncation is honest, never silent.
 	trimmed int
+	// firstLines maps each entry to the index of its first rendered line in the
+	// widget's CURRENT buffer (parallel to entries; the trim marker, when shown,
+	// occupies the line above firstLines[0]). replay reads it to re-anchor a
+	// scrolled-back view on the entry that was topmost (ADR-0026: panes hold
+	// their place through a rewrap or a retheme), then rebuilds it.
+	firstLines []int
+	// lineCount is the widget buffer's current length, kept in step with
+	// firstLines so an append can record the new entry's first-line index.
+	lineCount int
 
 	focus widget.Focus
 	// w, h is the inner area; the compose row, when shown, takes the last line.
@@ -182,7 +191,7 @@ func (s *Stream) SetSize(w, h int) {
 		s.input.SetWidth(w)
 	}
 	if widthChanged {
-		s.replay()
+		s.replay(0)
 	}
 	s.relayout()
 }
@@ -212,7 +221,7 @@ func (s *Stream) relayout() {
 // time for its own chrome (scroll cues), but the per-line hues live in the lines.
 func (s *Stream) SetTheme(th theme.Theme) {
 	s.theme = th
-	s.replay()
+	s.replay(0)
 }
 
 // replay re-renders the whole entry log to stream lines for the current theme and
@@ -222,53 +231,105 @@ func (s *Stream) SetTheme(th theme.Theme) {
 // wrapped line wraps to the current content width, a narrower width must reflow
 // the buffer to fewer columns, and a trim moves the buffer's head. Replaying from
 // the bounded log is also what bounds the widget's rendered-lines buffer.
-func (s *Stream) replay() {
-	var lines []string
+//
+// The scroll state survives the rebuild (ADR-0026: panes hold their place). A
+// tail-following view re-pins; a scrolled-back view re-anchors on the ENTRY that
+// was topmost before the replay, scrolling so its first rendered line is topmost
+// after — entry-anchored, not line-anchored, so the anchor is stable across a
+// rewrap (sub-entry position through a rewrap is deliberately approximate: a
+// long entry may shift within itself). anchorShift is how many entries the
+// caller just dropped from the log's front (a trim), so an anchor read against
+// the old rendering maps onto the new indices; an anchor trimmed away clamps to
+// the oldest surviving entry.
+func (s *Stream) replay(anchorShift int) {
+	// Read the widget's scroll state BEFORE the rebuild mutates it.
+	anchored := !s.stream.Following()
+	anchor := -1 // -1: the trim marker (or an empty log) was topmost; keep the top
+	if anchored {
+		if anchor = s.entryAt(s.stream.Offset()); anchor >= 0 {
+			anchor -= anchorShift
+			if anchor < 0 {
+				anchor = 0 // the anchored entry was trimmed away: oldest survivor
+			}
+		}
+	}
+
+	lines := make([]string, 0, s.lineCount)
+	s.firstLines = s.firstLines[:0]
 	if s.trimmed > 0 {
 		lines = append(lines, s.trimMarker(s.trimmed))
 	}
 	for _, e := range s.entries {
+		s.firstLines = append(s.firstLines, len(lines))
 		lines = append(lines, s.renderEntry(e)...)
 	}
-	s.stream.SetLines(lines)
+	s.lineCount = len(lines)
+	s.stream.SetLines(lines) // holds the follow state; re-pins only while following
+	if anchored {
+		target := 0
+		if anchor >= 0 && anchor < len(s.firstLines) {
+			target = s.firstLines[anchor]
+		}
+		s.stream.ScrollTo(target)
+	}
+}
+
+// entryAt returns the index of the entry whose rendering covers the given line
+// of the widget's CURRENT buffer (per the firstLines mapping), or -1 when the
+// line sits above the first entry (the trim marker row) or the log is empty.
+func (s *Stream) entryAt(line int) int {
+	idx := -1
+	for i, fl := range s.firstLines {
+		if fl > line {
+			break
+		}
+		idx = i
+	}
+	return idx
 }
 
 // appendEntry logs one entry and renders it into the stream. When the log
 // exceeds MaxStreamEntries it trims the oldest entries and replays the bounded
-// log behind the trim marker; otherwise the new entry's lines append directly.
+// log behind the trim marker (shifting any scroll-back anchor by the entries
+// dropped); otherwise the new entry's lines append directly, extending the
+// line↔entry mapping.
 func (s *Stream) appendEntry(e streamEntry) {
 	s.entries = append(s.entries, e)
-	if s.trim() {
-		s.replay()
-	} else {
-		s.stream.Append(s.renderEntry(e)...)
+	if dropped := s.trim(); dropped > 0 {
+		s.replay(dropped)
+		return
 	}
+	s.firstLines = append(s.firstLines, s.lineCount)
+	lines := s.renderEntry(e)
+	s.lineCount += len(lines)
+	s.stream.Append(lines...)
 }
 
 // trim drops the oldest entries once the log exceeds MaxStreamEntries, keeping
 // a tenth of slack under the cap so the full-buffer replay is paid once per
 // batch rather than on every message at the cap. The trimmed count accumulates
 // what the marker reports — a trimmed drop-gap contributes the messages it
-// stood for, so the total stays honest. It reports whether anything was
-// trimmed.
-func (s *Stream) trim() bool {
+// stood for, so the total stays honest. It returns how many ENTRIES were
+// dropped (0 when nothing was), which is the shift a scroll-back anchor needs.
+func (s *Stream) trim() int {
 	limit := MaxStreamEntries
 	if limit <= 0 || len(s.entries) <= limit {
-		return false
+		return 0
 	}
 	keep := limit - limit/10
 	if keep < 1 {
 		keep = 1
 	}
-	for _, e := range s.entries[:len(s.entries)-keep] {
+	dropped := len(s.entries) - keep
+	for _, e := range s.entries[:dropped] {
 		if e.hasFrame {
 			s.trimmed++
 		} else {
 			s.trimmed += e.dropped
 		}
 	}
-	s.entries = s.entries[len(s.entries)-keep:]
-	return true
+	s.entries = s.entries[dropped:]
+	return dropped
 }
 
 // streamEntry is one logged item the stream has shown: a received frame, or a

@@ -30,12 +30,17 @@ func NewStream(keys theme.Keymap) Stream {
 	return Stream{keys: keys, follow: true}
 }
 
-// SetSize sets the inner content area (inside any box chrome) and re-pins the
-// tail when following.
+// SetSize sets the inner content area (inside any box chrome): re-pinning the
+// tail when following, clamping a scrolled-back offset into the new range
+// otherwise (the view holds its place through a resize).
 func (s *Stream) SetSize(w, h int) {
 	s.width, s.height = w, h
 	if s.follow {
 		s.pinTail()
+		return
+	}
+	if s.offset > s.maxOffset() {
+		s.offset = s.maxOffset()
 	}
 }
 
@@ -48,15 +53,44 @@ func (s *Stream) Append(lines ...string) {
 	}
 }
 
-// SetLines replaces the whole buffer and pins to the tail.
+// SetLines replaces the whole buffer, holding the scroll state (ADR-0026:
+// panes hold their place): while following it re-pins to the tail; scrolled
+// back it clamps the offset into the new range and stays scrolled back, so a
+// re-render (a retheme, a rewrap) never yanks the operator off their position.
+// A caller that wants to move the view positions it explicitly with ScrollTo.
 func (s *Stream) SetLines(lines []string) {
 	s.lines = lines
-	s.follow = true
-	s.pinTail()
+	if s.follow {
+		s.pinTail()
+		return
+	}
+	if s.offset > s.maxOffset() {
+		s.offset = s.maxOffset()
+	}
 }
 
 // Following reports whether the view is tracking the tail.
 func (s Stream) Following() bool { return s.follow }
+
+// Offset returns the index of the top visible line, so a caller about to
+// re-render the buffer (the surface's replay) can read the position it must
+// re-anchor before the lines change under it.
+func (s Stream) Offset() int { return s.offset }
+
+// ScrollTo puts line at the top of the view, clamped into the valid range.
+// Landing at (or past) the tail re-engages follow — the same rule ScrollDown
+// applies when the operator reaches the bottom; anywhere above it the view is
+// scrolled back and holds.
+func (s *Stream) ScrollTo(line int) {
+	if line < 0 {
+		line = 0
+	}
+	if line > s.maxOffset() {
+		line = s.maxOffset()
+	}
+	s.offset = line
+	s.follow = s.offset >= s.maxOffset()
+}
 
 // Init implements tea.Model. The stream has no startup command.
 func (s Stream) Init() tea.Cmd { return nil }
