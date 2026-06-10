@@ -51,6 +51,14 @@ type Model struct {
 	// hidden is the set of pane ids toggled off.
 	hidden map[string]bool
 
+	// placements carries the loaded Config's free-placement seam through the
+	// Model, verbatim: today's preset-mode layout never renders from it, but
+	// config.go promises a populated Placements survives a load/save round-trip
+	// — and the dash's real round-trip goes LoadConfig → New → Config →
+	// SaveConfig on exit, so dropping it here would silently delete a newer
+	// file's free-placement data every time an older binary exits.
+	placements []Placement
+
 	// rects is the last computed arrangement: visible pane id → outer Rect. Recomputed
 	// on every reflow (toggle, preset switch, resize).
 	rects map[string]Rect
@@ -112,21 +120,44 @@ func (m *Model) apply(cfg Config) {
 			m.hidden[id] = true
 		}
 	}
+	// Stash the free-placement seam so Config can emit it back unchanged.
+	// Cloned, not aliased: the layout never mutates it, but the caller still
+	// owns its cfg (and Config hands the data out again), so sharing one backing
+	// array would let an outside mutation reach into every Model copy — the same
+	// aliasing cloneHidden guards the hidden set against.
+	m.placements = clonePlacements(cfg.Placements)
 	// Focus starts on the first visible pane (ADR-0026: one pane is always
 	// focused; there is no resting layout level).
 	m.focused = m.firstVisible()
 }
 
 // Config snapshots the layout's current state as a Config the host can persist.
-// It records the active preset, the hidden set, and the theme variant;
-// Placements stays empty (preset-mode). The host calls this on change or on
+// It records the active preset, the hidden set, and the theme variant, and
+// emits the loaded Placements unchanged — preset-mode never renders from the
+// free-placement seam, but it preserves it (config.go's promise), so a dash
+// exit never deletes a newer file's data. The host calls this on change or on
 // quit and hands the result to SaveConfig.
 func (m Model) Config() Config {
 	cfg := DefaultConfig()
 	cfg.Preset = m.preset
 	cfg.Theme = m.th.Variant
 	cfg.Hidden = m.hiddenList()
+	cfg.Placements = clonePlacements(m.placements)
 	return cfg
+}
+
+// clonePlacements returns an independent copy of a placements slice (nil for
+// an empty one, keeping omitempty clean), so the Model and the Configs it was
+// built from and snapshots to never share a backing array — the copy-on-mutate
+// discipline cloneHidden holds for the hidden set. Placement is a plain value
+// struct, so a shallow copy is fully independent.
+func clonePlacements(src []Placement) []Placement {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make([]Placement, len(src))
+	copy(dst, src)
+	return dst
 }
 
 // hiddenList returns the hidden pane ids in the host's registration order, so a
