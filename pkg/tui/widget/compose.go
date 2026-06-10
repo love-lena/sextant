@@ -2,6 +2,7 @@ package widget
 
 import (
 	"strings"
+	"unicode"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -105,26 +106,21 @@ func (c *Compose) resize() {
 }
 
 // visualRows counts how many display rows the current text occupies at the
-// current width. The textarea wraps at (width - promptWidth) characters. Each
-// hard line is counted as its wrapped row count. An empty compose is 1 row.
+// current width — using the SAME wrapping rules the textarea applies, so the
+// height we set never disagrees with how the textarea actually wraps. (A
+// shorter height makes the textarea scroll to keep the cursor visible, and the
+// head of the draft silently disappears — found live.) The textarea wraps at
+// (width - promptWidth) cells; each hard line contributes its soft-wrapped row
+// count. An empty compose is 1 row.
 func (c *Compose) visualRows() int {
 	promptW := lipgloss.Width(composePrompt)
 	bodyW := c.width - promptW
 	if bodyW < 1 {
 		bodyW = 1
 	}
-	text := c.ta.Value()
-	if text == "" {
-		return 1
-	}
 	total := 0
-	for _, para := range strings.Split(text, "\n") {
-		// Hard-break each paragraph to bodyW to count wrapped rows.
-		rows := wrappedRowCount(para, bodyW)
-		if rows < 1 {
-			rows = 1
-		}
-		total += rows
+	for _, para := range strings.Split(c.ta.Value(), "\n") {
+		total += softWrapRows([]rune(para), bodyW)
 	}
 	if total < 1 {
 		total = 1
@@ -132,24 +128,56 @@ func (c *Compose) visualRows() int {
 	return total
 }
 
-// wrappedRowCount returns how many rows a paragraph of rune-counted text takes
-// when wrapped to width columns. An empty paragraph occupies 1 row (the cursor
-// row). A paragraph with runeWidth cells takes ceil(runeWidth / width) rows,
-// floored at 1.
-func wrappedRowCount(para string, width int) int {
+// softWrapRows counts the rows one logical line occupies under the textarea's
+// soft-wrap. It is a counting port of bubbles/textarea's wrap(): word-aware
+// (a word that would overflow moves whole to the next row), long words
+// hard-break, wrapped rows keep their trailing spaces, and a final row whose
+// content reaches the width spills one extra row (the cursor's row — the
+// textarea always leaves room to type). It must stay faithful to the pinned
+// bubbles version; TestComposeHeightMatchesTextareaWrap fails loudly against
+// the real render if an upgrade changes the wrap rules.
+func softWrapRows(runes []rune, width int) int {
 	if width < 1 {
 		width = 1
 	}
-	runes := []rune(para)
-	if len(runes) == 0 {
-		return 1
+	var (
+		rows   = 1
+		lineW  int // display cells committed to the current row
+		wordW  int // display cells of the pending word
+		lastW  int // display cells of the word's last rune
+		spaces int // pending spaces after the word
+	)
+	for _, r := range runes {
+		if unicode.IsSpace(r) {
+			spaces++
+		} else {
+			w := lipgloss.Width(string(r))
+			wordW += w
+			lastW = w
+		}
+		if spaces > 0 {
+			// A space flushes word+spaces into the current row, or onto a new one.
+			if lineW+wordW+spaces > width {
+				rows++
+				lineW = wordW + spaces
+			} else {
+				lineW += wordW + spaces
+			}
+			wordW, spaces = 0, 0
+		} else if wordW > 0 && wordW+lastW > width {
+			// The pending word alone (over-)fills a row: hard-break it onto its
+			// own row (a fresh one if the current row has content).
+			if lineW > 0 {
+				rows++
+			}
+			lineW = wordW
+			wordW = 0
+		}
 	}
-	// Count display cells (1 per BMP rune for simplicity; lipgloss handles East
-	// Asian width but the compose wraps on characters, not cells).
-	cells := lipgloss.Width(para)
-	rows := (cells + width - 1) / width
-	if rows < 1 {
-		rows = 1
+	// The remainder: spills to one more row when it REACHES the width (>=, not
+	// >) — the textarea reserves the cell after the text for the cursor.
+	if lineW+wordW+spaces >= width {
+		rows++
 	}
 	return rows
 }

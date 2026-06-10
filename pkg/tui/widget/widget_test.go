@@ -241,3 +241,55 @@ func TestComposeCapAtMaxRows(t *testing.T) {
 		t.Errorf("compose truncated input: got %d runes, want ≥ %d", len([]rune(got)), overflow)
 	}
 }
+
+// TestComposeHeightMatchesTextareaWrap pins Height() against the textarea's REAL
+// word-aware wrap, not a character-packing estimate. The two diverge on text
+// with spaces: word wrap moves whole words to the next row (more rows than
+// ceil(chars/width)), so an underestimated height makes the textarea scroll to
+// the cursor and the HEAD of the draft silently disappears — found live, typing
+// an ordinary sentence into a DM. For a buffet of sentences and widths, the
+// head of the draft must stay visible whenever the content fits under the cap,
+// and the trailing cursor row the textarea reserves must be accounted for.
+// This test is the loud-failure tripwire if a bubbles upgrade changes wrap().
+func TestComposeHeightMatchesTextareaWrap(t *testing.T) {
+	cases := []struct {
+		name  string
+		width int
+		text  string
+	}{
+		// Three 10-char words at bodyW=18: char-packing says ceil(32/18)=2 rows,
+		// the word-aware wrap needs 3 (each word straddles a boundary and moves
+		// down whole, leaving ~8 cells of slack per row). THE divergent case —
+		// the old estimate set height 2, the textarea scrolled, the head vanished.
+		{"words_leave_slack", 20, "aaaaaaaaaa bbbbbbbbbb cccccccccc"},
+		{"dogfood_sentence", 40, "this is my third dash iteration, oh god where did the rest of my message go?"},
+		{"word_straddles_boundary", 20, "wrap on word boundaries pushes whole words down"},
+		{"short_words", 16, "a bb ccc dddd eeeee ffffff ggggggg"},
+		{"exact_fill_reserves_cursor_row", 12, "abcdefghij"},
+		{"single_word", 30, "hello"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := widget.NewCompose()
+			c.SetWidth(tc.width)
+			_ = c.Focus()
+			c = typeCompose(c, tc.text)
+
+			if c.Height() > widget.ComposeMaxRows {
+				t.Fatalf("height %d exceeds the cap %d", c.Height(), widget.ComposeMaxRows)
+			}
+			view := plain(c.View(theme.Dark(), widget.FocusActive))
+			firstWord := strings.Fields(tc.text)[0]
+			lastWord := tc.text[strings.LastIndex(tc.text, " ")+1:]
+			if c.Height() < widget.ComposeMaxRows {
+				// Under the cap nothing may scroll away: head AND tail visible.
+				if !strings.Contains(view, firstWord) {
+					t.Errorf("head of the draft scrolled out of view (height %d under-counts the textarea's wrap); view:\n%s", c.Height(), view)
+				}
+			}
+			if !strings.Contains(view, lastWord) {
+				t.Errorf("tail of the draft not visible (cursor row missing); view:\n%s", view)
+			}
+		})
+	}
+}
