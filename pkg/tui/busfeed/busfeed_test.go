@@ -3,6 +3,8 @@ package busfeed_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -323,6 +325,84 @@ func TestOverflowFiresDroppedInStreamPosition(t *testing.T) {
 	// ...then the post-gap event.
 	if got := eventIndex(t, runStep(t, f.Next())); got != flood {
 		t.Fatalf("post-gap event: got %d, want %d", got, flood)
+	}
+}
+
+// TestResumeDeferredKeepsThePumpAlive pins the non-fatal tier of the SDK's
+// resume-failure contract: an OnError wrapping sextant.ErrResumeDeferred (a
+// transport-failed resume the next reconnect retries) surfaces as a
+// NON-terminal ResumeDeferredMsg — after everything already buffered, coalesced
+// across repeated deferrals — and the pump keeps delivering events afterwards.
+// Routing the recoverable tier into the terminal ErrMsg permanently killed the
+// pane while the still-registered subscription delivered into a feed nobody
+// pumped — the regression this test exists to catch.
+func TestResumeDeferredKeepsThePumpAlive(t *testing.T) {
+	c, _ := dialEnv(t, "feed-deferred")
+	subject := sx.TopicSubject("deferred")
+
+	f := busfeed.New(c, subject)
+	defer f.Stop()
+	subscribe(t, t.Context(), f)
+
+	// One event already buffered when the deferral lands: the notice must not
+	// jump ahead of it.
+	pubCtx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if err := c.Publish(pubCtx, subject, json.RawMessage(`{"i":0}`)); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	waitFor(t, "pre-stall event buffered", func() bool { return f.BufferedCount() == 1 })
+
+	// Two deferrals while the notice is unread: they coalesce into one.
+	deferred := fmt.Errorf("%w: subscription on %q delivers nothing until then: timeout", sextant.ErrResumeDeferred, subject)
+	f.InjectError(deferred)
+	f.InjectError(deferred)
+
+	// The buffered event drains first, then the single notice.
+	if got := eventIndex(t, runStep(t, f.Next())); got != 0 {
+		t.Fatalf("first pump step yielded event %d; want 0 (the notice must not preempt buffered events)", got)
+	}
+	msg := runStep(t, f.Next())
+	notice, ok := msg.(busfeed.ResumeDeferredMsg)
+	if !ok {
+		t.Fatalf("after the buffered event got %#v; want ResumeDeferredMsg", msg)
+	}
+	if !errors.Is(notice.Err, sextant.ErrResumeDeferred) {
+		t.Errorf("notice.Err = %v; want a wrapped sextant.ErrResumeDeferred", notice.Err)
+	}
+
+	// The pump is alive: a later event (the deferred resume succeeded) is
+	// delivered — not a duplicate notice, not a terminal error, not a dead pane.
+	if err := c.Publish(pubCtx, subject, json.RawMessage(`{"i":1}`)); err != nil {
+		t.Fatalf("Publish post-stall: %v", err)
+	}
+	if got := eventIndex(t, runStep(t, f.Next())); got != 1 {
+		t.Fatalf("post-stall pump step yielded event %d; want 1 (the pump must survive a deferral)", got)
+	}
+}
+
+// TestFatalOnErrorIsTerminal pins the fatal tier: an OnError that does NOT wrap
+// ErrResumeDeferred means the SDK has stopped the subscription, and the feed
+// surfaces it as the terminal ErrMsg exactly as before the deferred tier
+// existed.
+func TestFatalOnErrorIsTerminal(t *testing.T) {
+	c, _ := dialEnv(t, "feed-fatal")
+	subject := sx.TopicSubject("fatal")
+
+	f := busfeed.New(c, subject)
+	defer f.Stop()
+	subscribe(t, t.Context(), f)
+
+	fatal := errors.New("sextant: subscription lost after reconnect: sequence gone")
+	f.InjectError(fatal)
+
+	msg := runStep(t, f.Next())
+	em, ok := msg.(busfeed.ErrMsg)
+	if !ok {
+		t.Fatalf("got %#v; want terminal ErrMsg", msg)
+	}
+	if !errors.Is(em.Err, fatal) {
+		t.Errorf("ErrMsg.Err = %v; want the injected fatal error", em.Err)
 	}
 }
 

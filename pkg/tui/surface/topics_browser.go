@@ -59,6 +59,11 @@ type TopicsBrowser struct {
 	// err holds a discovery-feed error for the footer (fail-loud), kept honest
 	// rather than swallowed.
 	err error
+	// notice holds a transient non-fatal discovery-feed notice (a deferred
+	// resume: discovery is stalled until the next reconnect, so the list may
+	// run stale). Unlike err the feed is still pumping, so the next discovered
+	// frame clears it.
+	notice error
 	// authors resolves frame author ids in every conversation the browser opens
 	// (WithConversationAuthors); nil renders the documented short-id fallback.
 	authors map[string]Author
@@ -110,7 +115,24 @@ func NewTopicsBrowser(ctx context.Context, client *sextant.Client, th theme.Them
 // detail if one is open.
 func (t *TopicsBrowser) SetSize(w, h int) {
 	t.Browser.SetSize(w, h)
-	t.relayoutList(t.err != nil)
+	t.relayoutList(t.footerShowing())
+}
+
+// footerShowing reports whether the bottom row is reserved for a footer: a
+// terminal discovery error, or the transient reconnect notice. One row serves
+// both — the error, being terminal, wins when both are set.
+func (t *TopicsBrowser) footerShowing() bool {
+	return t.err != nil || t.notice != nil
+}
+
+// footerErr returns what the footer row shows: the terminal error when one is
+// set (it cannot be recovered from, so it outranks the transient notice),
+// otherwise the notice, otherwise nil.
+func (t *TopicsBrowser) footerErr() error {
+	if t.err != nil {
+		return t.err
+	}
+	return t.notice
 }
 
 // SetTheme re-themes the browser: the list rows bake in the kind hue at rebuild
@@ -148,6 +170,12 @@ func (t *TopicsBrowser) Update(msg tea.Msg) tea.Cmd {
 			// Subscription is live; start the pump.
 			return t.feed.Next()
 		case busfeed.EventMsg:
+			if t.notice != nil {
+				// Frames are flowing again: the deferred resume succeeded, so the
+				// transient notice auto-clears.
+				t.notice = nil
+				t.relayoutList(t.footerShowing())
+			}
 			t.observe(msg.Message)
 			return t.feed.Next() // keep pumping
 		case busfeed.DroppedMsg:
@@ -155,10 +183,17 @@ func (t *TopicsBrowser) Update(msg tea.Msg) tea.Cmd {
 			// message; not terminal, so keep pumping (no gap marker — the list is a set,
 			// not a stream).
 			return t.feed.Next()
+		case busfeed.ResumeDeferredMsg:
+			// NOT terminal: discovery is stalled until the next reconnect retries
+			// the resume. Surface the transient notice and keep pumping — the pump
+			// is what delivers the recovery.
+			t.notice = msg.Err
+			t.relayoutList(t.footerShowing())
+			return t.feed.Next()
 		case busfeed.ErrMsg:
 			// Terminal: the discovery feed stops reading. Surface the error.
 			t.err = msg.Err
-			t.relayoutList(t.err != nil)
+			t.relayoutList(t.footerShowing())
 			return nil
 		}
 	}
@@ -181,20 +216,21 @@ func (t *TopicsBrowser) claims(msg tea.Msg) bool {
 // from every other message Browser.Update should see.
 func isBusfeedMsg(msg tea.Msg) bool {
 	switch msg.(type) {
-	case busfeed.SubscribedMsg, busfeed.EventMsg, busfeed.DroppedMsg, busfeed.ErrMsg:
+	case busfeed.SubscribedMsg, busfeed.EventMsg, busfeed.DroppedMsg, busfeed.ResumeDeferredMsg, busfeed.ErrMsg:
 		return true
 	}
 	return false
 }
 
-// View renders the list (or the open detail) with a discovery-feed error footer
-// below it when one is showing — kept visible rather than swallowed (fail-loud).
-// At the detail level the inner surface owns its own footer, so the discovery
-// error only shows at the list.
+// View renders the list (or the open detail) with a discovery-feed footer below
+// it when one is showing — a terminal error, or the transient reconnect notice
+// — kept visible rather than swallowed (fail-loud). At the detail level the
+// inner surface owns its own footer, so the discovery footer only shows at the
+// list.
 func (t *TopicsBrowser) View() string {
 	body := t.Browser.View()
-	if t.err != nil && !t.inDetail() {
-		return body + "\n" + errorFooter(t.th, t.err, t.width())
+	if fe := t.footerErr(); fe != nil && !t.inDetail() {
+		return body + "\n" + errorFooter(t.th, fe, t.width())
 	}
 	return body
 }

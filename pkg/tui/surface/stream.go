@@ -126,6 +126,11 @@ type Stream struct {
 	// w, h is the inner area; the compose row, when shown, takes the last line.
 	w, h int
 	err  error
+	// notice holds a transient non-fatal feed notice (a deferred resume:
+	// delivery is stalled until the next reconnect). It renders as a footer like
+	// err but, unlike err, the feed is still pumping — so the next delivered
+	// event clears it (the stall is over).
+	notice error
 }
 
 // NewStream builds a message surface subscribing to subject. Pass a context that
@@ -198,14 +203,18 @@ func (s *Stream) SetSize(w, h int) {
 
 // relayout sizes the stream viewport to the inner area minus the compose's
 // current height (if compose is on — the compose grows as the operator types,
-// so the stream body shrinks to match) and the error-footer row (if an error is
-// showing), so neither overlaps the stream.
+// so the stream body shrinks to match) and the footer rows (a fatal error
+// and/or a transient reconnect notice, when showing), so none overlaps the
+// stream.
 func (s *Stream) relayout() {
 	streamH := s.h
 	if s.compose {
 		streamH -= s.input.Height()
 	}
 	if s.err != nil {
+		streamH--
+	}
+	if s.notice != nil {
 		streamH--
 	}
 	if streamH < 1 {
@@ -375,9 +384,10 @@ func (s *Stream) CapturingText() bool {
 	return s.compose && s.input.Focused()
 }
 
-// Init opens the feed. The pump runs from Update: every EventMsg and DroppedMsg
-// re-issues Next. A nil client (a seeded gallery / golden) skips the subscribe —
-// those feed events directly, the same convention the artifact surface follows.
+// Init opens the feed. The pump runs from Update: every EventMsg, DroppedMsg,
+// and ResumeDeferredMsg re-issues Next. A nil client (a seeded gallery /
+// golden) skips the subscribe — those feed events directly, the same
+// convention the artifact surface follows.
 func (s *Stream) Init() tea.Cmd {
 	if s.client == nil {
 		return nil
@@ -401,11 +411,25 @@ func (s *Stream) Update(msg tea.Msg) tea.Cmd {
 		// Subscription is live; start the pump.
 		return s.feed.Next()
 	case busfeed.EventMsg:
+		if s.notice != nil {
+			// Events are flowing again: the deferred resume succeeded, so the
+			// transient reconnect notice auto-clears (mirroring how a drop-gap is
+			// a one-off marker, not a sticky state).
+			s.notice = nil
+			s.relayout()
+		}
 		s.appendEntry(streamEntry{frame: msg.Message, hasFrame: true})
 		return s.feed.Next() // keep pumping
 	case busfeed.DroppedMsg:
 		s.appendEntry(streamEntry{dropped: msg.N})
 		return s.feed.Next() // DroppedMsg is not terminal; keep pumping
+	case busfeed.ResumeDeferredMsg:
+		// NOT terminal: delivery is stalled until the next reconnect retries the
+		// resume, but the subscription is still registered. Show the transient
+		// notice and keep pumping — the pump is what delivers the recovery.
+		s.notice = msg.Err
+		s.relayout()
+		return s.feed.Next()
 	case busfeed.ErrMsg:
 		// Terminal: the feed stops reading. Surface the error in the footer.
 		s.err = msg.Err
@@ -477,13 +501,17 @@ func (s *Stream) handleKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-// View renders the stream, the compose line below it when compose is on, and an
-// error footer below that when a subscribe or publish failed — kept visible
-// rather than swallowed (fail-loud).
+// View renders the stream, the compose line below it when compose is on, and a
+// footer below that when something needs saying — a fatal error (subscribe or
+// publish failed) and/or the transient reconnect notice — kept visible rather
+// than swallowed (fail-loud).
 func (s *Stream) View() string {
 	parts := []string{s.stream.View(s.theme, s.focus)}
 	if s.compose {
 		parts = append(parts, s.composeLine())
+	}
+	if s.notice != nil {
+		parts = append(parts, errorFooter(s.theme, s.notice, s.w))
 	}
 	if s.err != nil {
 		parts = append(parts, errorFooter(s.theme, s.err, s.w))

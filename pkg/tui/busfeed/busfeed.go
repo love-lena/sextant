@@ -17,6 +17,7 @@ package busfeed
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -66,13 +67,36 @@ type DroppedMsg struct {
 	N    int
 }
 
-// ErrMsg reports a subscribe error. The SDK already reconnects the underlying
-// bus connection, so the feed adds no reconnect layer of its own; a surfaced
-// error is for the UI to show, not for the feed to retry.
+// ErrMsg reports a FATAL subscription error: a failed subscribe, or a resume
+// the bus answered is impossible (e.g. the store was wiped) — the SDK has
+// stopped the subscription. It is terminal: the model shows it and must not
+// issue Next again. The SDK already reconnects the underlying bus connection,
+// so the feed adds no reconnect layer of its own; a surfaced error is for the
+// UI to show, not for the feed to retry. A recoverable resume failure is NOT
+// an ErrMsg — see ResumeDeferredMsg.
 type ErrMsg struct {
 	// From identifies the emitting feed (see EventMsg.From).
 	From *Feed
 	Err  error
+}
+
+// ResumeDeferredMsg reports the SDK's non-fatal resume notice
+// (sextant.ErrResumeDeferred): a reconnect-time resume failed on transport, the
+// subscription stays registered, and the next reconnect retries it — until then
+// it delivers nothing. It is NOT terminal: the model returns Next on it, the
+// same as a DroppedMsg, and shows a transient "reconnecting" notice that it
+// clears when events flow again (the deferred resume succeeded). It is
+// coalesced: repeated deferrals while one notice is still unread surface as a
+// single message. It surfaces after everything already buffered — the events
+// it stands between were all delivered before the stall — and never disturbs
+// the gap-marker accounting (drops ride the events channel; the notice does
+// not).
+type ResumeDeferredMsg struct {
+	// From identifies the emitting feed (see EventMsg.From).
+	From *Feed
+	// Err is the SDK's wrapped notice (errors.Is(Err, sextant.ErrResumeDeferred)
+	// holds); it names the subject and the underlying transport failure.
+	Err error
 }
 
 // From returns the feed a busfeed message was emitted by, or nil when msg is not
@@ -86,6 +110,8 @@ func From(msg tea.Msg) *Feed {
 		return m.From
 	case DroppedMsg:
 		return m.From
+	case ResumeDeferredMsg:
+		return m.From
 	case ErrMsg:
 		return m.From
 	}
@@ -94,7 +120,8 @@ func From(msg tea.Msg) *Feed {
 
 // Feed wraps a public SDK subscription as a Bubble Tea stream source. Construct
 // it with New, start it from a model's Init with Subscribe, pump it by returning
-// Next on every EventMsg and DroppedMsg, and tear it down with Stop. A Feed is
+// Next on every EventMsg, DroppedMsg, and ResumeDeferredMsg (only ErrMsg is
+// terminal), and tear it down with Stop. A Feed is
 // single-consumer: exactly one Next command is in flight at a time, following the
 // pump loop. Use one Feed per surface; a model embedding several feeds
 // demultiplexes their messages on the From tag each one carries (see
@@ -105,10 +132,15 @@ type Feed struct {
 	opts    []sextant.SubOption
 
 	events chan item
-	// errs receives mid-stream errors delivered by the SDK's OnError handler
-	// (e.g. a subscription that cannot be re-established after a bus restart).
-	// Capacity 1: there is at most one fatal error per subscription lifetime.
+	// errs receives FATAL mid-stream errors delivered by the SDK's OnError
+	// handler (a resume the bus answered is impossible — the subscription is
+	// stopped). Capacity 1: there is at most one fatal error per subscription
+	// lifetime.
 	errs chan error
+	// notices receives the SDK's non-fatal ErrResumeDeferred notices (a
+	// transport-failed resume the next reconnect retries). Capacity 1 with a
+	// non-blocking send coalesces repeated deferrals into one unread notice.
+	notices chan error
 
 	mu      sync.Mutex
 	dropped int // events lost to a full buffer, not yet carried by an item
@@ -135,27 +167,49 @@ type item struct {
 // Subscribe (a tea.Cmd) to do that, so the lifecycle stays inside the Bubble Tea
 // loop.
 //
-// The Feed always registers an OnError handler with the SDK so that a
-// subscription that cannot be re-established after a bus restart surfaces an
-// ErrMsg through the pump rather than going silent (ADR-0027). The error is
-// terminal: Next returns ErrMsg once, then nil on subsequent calls.
+// The Feed always registers an OnError handler with the SDK and splits its
+// two-tier resume-failure contract (ADR-0027) into two pump messages, so
+// neither tier goes silent:
+//
+//   - A non-fatal deferral (wraps sextant.ErrResumeDeferred: the resume failed
+//     on transport and the next reconnect retries it) surfaces as a
+//     ResumeDeferredMsg. The pump keeps running — the still-registered
+//     subscription delivers again once a retry succeeds.
+//   - Anything else is fatal (the subscription is stopped) and surfaces as an
+//     ErrMsg, which is terminal: Next returns it once, then nil on subsequent
+//     calls.
 func New(client *sextant.Client, subject string, opts ...sextant.SubOption) *Feed {
 	f := &Feed{
 		client:  client,
 		subject: subject,
 		events:  make(chan item, DefaultBuffer),
 		errs:    make(chan error, 1),
+		notices: make(chan error, 1),
 	}
 	// Prepend the OnError handler so caller-supplied opts are applied after it;
 	// a caller can override with their own OnError if needed (last write wins in
 	// subConfig because SubOption is a func that overwrites the field).
-	f.opts = append([]sextant.SubOption{sextant.OnError(func(err error) {
-		select {
-		case f.errs <- err:
-		default: // already has an error queued; discard the duplicate
-		}
-	})}, opts...)
+	f.opts = append([]sextant.SubOption{sextant.OnError(f.onError)}, opts...)
 	return f
+}
+
+// onError is the SDK OnError handler. It runs on the NATS client's
+// asynchronous-callback goroutine and must not block, so it hands the error to
+// a buffered channel and returns: the non-fatal ErrResumeDeferred tier
+// (distinguished with errors.Is, per the sextant.OnError contract) to notices,
+// everything else — fatal, the subscription is stopped — to errs. Both sends
+// are non-blocking onto capacity-1 channels: a duplicate while one is unread
+// coalesces (drops), which loses no information — the notice is a state, not a
+// count, and there is at most one fatal error per subscription lifetime.
+func (f *Feed) onError(err error) {
+	ch := f.errs
+	if errors.Is(err, sextant.ErrResumeDeferred) {
+		ch = f.notices
+	}
+	select {
+	case ch <- err:
+	default: // one already queued; coalesce
+	}
 }
 
 // Subscribe is the tea.Cmd that opens the SDK subscription. The SDK Handler does
@@ -218,9 +272,12 @@ func (f *Feed) handle(m sextant.Message) {
 }
 
 // Next is the pump step: it reads one event off the buffer, off the main loop,
-// and returns it as a tea.Msg. A model returns Next on every EventMsg and every
-// DroppedMsg to keep the pump running (ErrMsg is terminal — the feed surfaces it
-// and stops reading). A coalesced DroppedMsg surfaces in stream position: after
+// and returns it as a tea.Msg. A model returns Next on every EventMsg, every
+// DroppedMsg, and every ResumeDeferredMsg to keep the pump running (only ErrMsg
+// is terminal — the feed surfaces it and stops reading; a deferred resume is
+// recoverable, so its notice must never end the pump — events flow again once
+// a later reconnect resumes the subscription). A coalesced DroppedMsg surfaces
+// in stream position: after
 // every buffered event that arrived before the gap, and before the first event
 // that arrived after it (that event is held one step and returned by the next
 // Next). Next returns nil when the feed is stopped and the buffer is drained,
@@ -264,12 +321,26 @@ func (f *Feed) next() tea.Msg {
 	}
 	f.mu.Unlock()
 
-	// Block on both channels so a mid-stream error (reconnect failure) surfaces
-	// as an ErrMsg rather than silently starving the pump. ErrMsg is terminal:
-	// the caller must not issue Next after receiving one.
+	// A queued deferred-resume notice surfaces once everything already received
+	// has drained (the same everything-then-the-news ordering the terminal error
+	// gets): the buffered events all arrived before the stall, and the notice's
+	// separate channel never disturbs the gap accounting riding the events. It
+	// is not terminal — the model returns Next and the pump keeps running.
+	select {
+	case err := <-f.notices:
+		return ResumeDeferredMsg{From: f, Err: err}
+	default:
+	}
+
+	// Block on all three channels so a mid-stream error (reconnect failure)
+	// surfaces rather than silently starving the pump: a fatal one as a terminal
+	// ErrMsg (the caller must not issue Next after receiving one), a deferral as
+	// a non-terminal ResumeDeferredMsg.
 	select {
 	case err := <-f.errs:
 		return ErrMsg{From: f, Err: err}
+	case err := <-f.notices:
+		return ResumeDeferredMsg{From: f, Err: err}
 	case it, ok := <-f.events:
 		return f.emit(it, ok)
 	}
