@@ -226,6 +226,19 @@ func (c *Compose) Focused() bool { return c.ta.Focused() }
 // up/down are the stream scroll bindings, so they are consumed by the surface
 // before they reach the compose (the same routing textinput used).
 func (c *Compose) Update(msg tea.Msg) (Compose, tea.Cmd) {
+	// A multi-rune KeyRunes is burst/pasted TEXT, but the textarea string-matches
+	// its OWN editing bindings before inserting — and a chunk whose String()
+	// spells one ("right", "up", "end") would execute as an editing command and
+	// the text would silently vanish (found live: the word "right" disappeared
+	// from a sentence delivered as a burst). Insert chunks directly, bypassing
+	// the textarea's key matching; single keystrokes keep the normal path so the
+	// real editing keys still work. InsertString sanitizes the chunk the same way
+	// the textarea's own insert path does.
+	if k, ok := msg.(tea.KeyMsg); ok && k.Type == tea.KeyRunes && len(k.Runes) > 1 {
+		c.ta.InsertString(string(k.Runes))
+		c.resize()
+		return *c, nil
+	}
 	var cmd tea.Cmd
 	c.ta, cmd = c.ta.Update(msg)
 	c.resize()

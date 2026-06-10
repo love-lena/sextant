@@ -293,3 +293,29 @@ func TestComposeHeightMatchesTextareaWrap(t *testing.T) {
 		})
 	}
 }
+
+// TestComposeChunkSpellingABindingIsText pins the burst/paste guard at the
+// WIDGET level: the textarea string-matches its own editing bindings, so a
+// multi-rune chunk whose String() spells one ("right", "up", "end") would
+// execute as an editing command and the text would silently vanish. (Found
+// live: the word "right" disappeared from a sentence delivered as a burst.)
+// Compose must insert chunks directly — every word lands, including the
+// binding-spelling ones.
+func TestComposeChunkSpellingABindingIsText(t *testing.T) {
+	c := widget.NewCompose()
+	c.SetWidth(60)
+	_ = c.Focus()
+
+	chunk := func(s string) tea.KeyMsg {
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+	}
+	// Delivered the way a terminal burst arrives: arbitrary chunk boundaries,
+	// some chunks spelling textarea editing bindings.
+	for _, piece := range []string{"its all ", "right", " here ", "up", " and ", "end", " to ", "down"} {
+		c, _ = c.Update(chunk(piece))
+	}
+	const want = "its all right here up and end to down"
+	if got := c.Value(); got != want {
+		t.Errorf("chunks were eaten as editing commands:\n got %q\nwant %q", got, want)
+	}
+}
