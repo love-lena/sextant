@@ -164,7 +164,7 @@ func (a *ArtifactsBrowser) applySnapshot(infos []sextant.ArtifactInfo) {
 	a.last = infos
 	a.err = nil
 	a.relayoutList(false) // error cleared: restore full list height
-	a.setRows(items)
+	a.setRows(items, a.names)
 }
 
 // artifactRow maps one ArtifactInfo to a list row: the name in the default

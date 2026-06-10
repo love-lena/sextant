@@ -111,11 +111,13 @@ func TestTopicsBrowserDiscoversAndOpens(t *testing.T) {
 		return strings.Contains(v, "plan") && strings.Contains(v, "build")
 	})
 
-	// "build" sorts before "plan", so the cursor rests on "build". Open it; its
-	// conversation must render its seeded message. Keep the live pump for the
-	// round-trip below.
+	// "build" sorts above "plan", but the selection is keyed by identity: the
+	// cursor stays on "plan" (the first topic discovered, selected when the
+	// list appeared) rather than sliding onto whichever row took index 0. Open
+	// it; its conversation must render its seeded message. Keep the live pump
+	// for the round-trip below.
 	pump := drivePump(t, tb, enter(tb), func() bool {
-		return strings.Contains(stripANSI(tb.View()), "hello build")
+		return strings.Contains(stripANSI(tb.View()), "hello plan")
 	})
 
 	// A line composed in the open conversation round-trips back through the bus

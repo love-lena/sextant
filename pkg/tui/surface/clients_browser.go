@@ -175,13 +175,15 @@ func (c *ClientsBrowser) applySnapshot(clients []sextant.ClientInfo) {
 	})
 
 	items := make([]widget.ListItem, len(sorted))
+	keys := make([]string, len(sorted))
 	for i, ci := range sorted {
 		items[i] = clientRow(c.th, ci)
+		keys[i] = ci.ID // the stable identity the selection survives re-sorts by
 	}
 	c.last = sorted
 	c.err = nil
 	c.relayoutList(false) // error cleared: restore full list height
-	c.setRows(items)
+	c.setRows(items, keys)
 }
 
 // fetch reads the directory off the main loop and returns it as a ClientsLoadedMsg

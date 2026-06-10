@@ -1,10 +1,12 @@
 package surface
 
 import (
+	"context"
 	"strconv"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/love-lena/sextant/pkg/sextant"
 	"github.com/love-lena/sextant/pkg/tui/theme"
 	"github.com/love-lena/sextant/pkg/tui/widget"
 )
@@ -37,7 +39,7 @@ func keyMsg(t tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: t} }
 
 func newTestBrowser(open func(cursor int) (Surface, string)) *Browser {
 	b := newBrowser("fake", "Fakes", theme.DefaultKeymap(), theme.Dark(), open)
-	b.setRows([]widget.ListItem{{Title: "row0"}, {Title: "row1"}, {Title: "row2"}})
+	b.setRows([]widget.ListItem{{Title: "row0"}, {Title: "row1"}, {Title: "row2"}}, nil)
 	b.SetSize(40, 10)
 	b.SetFocus(widget.FocusActive)
 	return &b
@@ -166,5 +168,64 @@ func TestBrowserStopTearsDownOpenDetail(t *testing.T) {
 	b.Stop()
 	if !det.stopped {
 		t.Fatal("Stop must tear down the open detail")
+	}
+}
+
+// TestSetRowsPreservesSelectionByKey pins the refresh-shift fix: rows re-sort
+// and insert live (clients/artifacts re-snapshot every 2s, topics grow on
+// discovery), so a cursor preserved by INDEX would put a different item under
+// it between seeing and pressing Enter. The selection follows the stable row
+// key; only when the key disappears does it fall back to the clamped index.
+func TestSetRowsPreservesSelectionByKey(t *testing.T) {
+	rows := func(names ...string) []widget.ListItem {
+		items := make([]widget.ListItem, len(names))
+		for i, n := range names {
+			items[i] = widget.ListItem{Title: n}
+		}
+		return items
+	}
+	b := newBrowser("fake", "Fakes", theme.DefaultKeymap(), theme.Dark(), nil)
+	b.SetSize(40, 10)
+
+	b.setRows(rows("alpha", "beta", "gamma"), []string{"alpha", "beta", "gamma"})
+	b.list.SetCursor(1) // select beta
+
+	// A refresh inserts a row that sorts above the selection.
+	b.setRows(rows("aardvark", "alpha", "beta", "gamma"), []string{"aardvark", "alpha", "beta", "gamma"})
+	if got := b.list.Cursor(); got != 2 {
+		t.Fatalf("selection slid off beta: cursor %d, want 2", got)
+	}
+
+	// The selected item disappears: fall back to the clamped index.
+	b.setRows(rows("alpha", "gamma"), []string{"alpha", "gamma"})
+	if got := b.list.Cursor(); got != 1 {
+		t.Fatalf("vanished key should clamp the old index: cursor %d, want 1", got)
+	}
+}
+
+// TestClientsBrowserSelectionSurvivesRefresh drives the same guarantee through
+// a concrete browser end to end: select a client, let a refresh snapshot insert
+// one that sorts above it, and Enter must open the DM the operator was looking
+// at — not whichever client slid under the cursor.
+func TestClientsBrowserSelectionSurvivesRefresh(t *testing.T) {
+	c := NewClientsBrowser(context.Background(), nil, theme.Dark(), theme.DefaultKeymap())
+	c.SetSize(40, 10)
+	c.SetFocus(widget.FocusActive)
+	c.Update(ClientsLoadedMsg{Clients: []sextant.ClientInfo{
+		{ID: "01B", DisplayName: "beta"},
+		{ID: "01G", DisplayName: "gamma"},
+	}})
+	c.Update(keyMsg(tea.KeyDown)) // select gamma
+
+	// The 2s re-snapshot lands with a new client sorting above the selection.
+	c.Update(ClientsLoadedMsg{Clients: []sextant.ClientInfo{
+		{ID: "01A", DisplayName: "alpha"},
+		{ID: "01B", DisplayName: "beta"},
+		{ID: "01G", DisplayName: "gamma"},
+	}})
+
+	c.Update(keyMsg(tea.KeyEnter))
+	if got := c.Title(); got != "DM · gamma" {
+		t.Fatalf("Enter opened %q, want \"DM · gamma\" (the item selected before the refresh)", got)
 	}
 }

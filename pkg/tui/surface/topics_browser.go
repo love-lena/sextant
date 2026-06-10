@@ -238,7 +238,7 @@ func (t *TopicsBrowser) rebuild() {
 		}
 	}
 	t.names = names
-	t.setRows(items)
+	t.setRows(items, names)
 }
 
 // topicOf returns the topic name carried by a subject (the segment after

@@ -41,6 +41,14 @@ type Browser struct {
 	// means the row cannot be opened (Enter is a no-op).
 	openRow func(cursor int) (Surface, string)
 
+	// rowKeys holds the stable identity of each list row (a client id, a topic
+	// or artifact name), parallel to the rows, so setRows can keep the SELECTED
+	// ITEM selected across a data refresh — rows re-sort and insert live, so a
+	// cursor preserved by index would slide onto a different item between
+	// seeing and pressing Enter. Nil when the concrete browser supplies no keys
+	// (selection then falls back to the clamped index).
+	rowKeys []string
+
 	detail      Surface // the open detail, or nil at the list level
 	detailTitle string
 }
@@ -169,11 +177,30 @@ func (b *Browser) View() string {
 // after calling stopDetail.
 func (b *Browser) Stop() { b.stopDetail() }
 
-// setRows replaces the list rows, preserving the cursor position (clamped). The
-// concrete browser calls it whenever its data arrives or refreshes.
-func (b *Browser) setRows(items []widget.ListItem) {
+// setRows replaces the list rows, preserving the selection by stable row key
+// (keys[i] identifies items[i]: a client id, a topic or artifact name). Data
+// refreshes re-sort and insert rows live, so preserving the cursor INDEX would
+// put a different item under it; preserving the key keeps the operator's
+// selection on the same item, so Enter opens what they saw. When the selected
+// key disappeared from the new rows — or the caller supplies no keys — the
+// cursor falls back to the old index, clamped. The concrete browser calls it
+// whenever its data arrives or refreshes.
+func (b *Browser) setRows(items []widget.ListItem, keys []string) {
+	selected := ""
 	cur := b.list.Cursor()
+	if cur >= 0 && cur < len(b.rowKeys) {
+		selected = b.rowKeys[cur]
+	}
 	b.list.SetItems(items)
+	b.rowKeys = keys
+	if selected != "" {
+		for i, k := range keys {
+			if k == selected {
+				b.list.SetCursor(i)
+				return
+			}
+		}
+	}
 	b.list.SetCursor(cur)
 }
 
