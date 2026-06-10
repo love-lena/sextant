@@ -65,7 +65,7 @@ reconnect (a bounded retry timer is tracked as TASK-40,
 **`Stop` during downtime is clean.** Stopping a subscription while the bus is
 unreachable calls `subscription.stop` on the bus (which will time out or
 succeed once the bus is back), but the subscription is marked stopped
-immediately. When the client reconnects, `reestablishSubs` skips already-stopped
+immediately. When the client reconnects, the resume pass skips already-stopped
 subscriptions. No goroutine leak, no panic, no spurious error delivery.
 
 ## Why
@@ -82,8 +82,16 @@ reconnects"; this ADR makes that promise true for the subscribe side as well.
 
 ## Implementation
 
-The SDK's `ReconnectHandler` calls `reestablishSubs` before logging "reconnected
-to the bus", so the log fires only after all relays are live. Each active
+The SDK's `ReconnectHandler` snapshots the subscription registry and hands the
+resume pass to a dedicated goroutine, so the NATS callback dispatcher stays
+free for later connection events while each rotation keeps its full
+per-subscription deadline. The pass carries the connection's reconnect count
+as its token: at most one pass runs per token, a newer token supersedes a
+running pass at its next subscription boundary, and a per-subscription lock
+serializes any rotations that overlap across passes. "Reconnected to the bus"
+logs at the end of a completed, non-superseded pass — only once every relay
+that reconnect owed is live again — so callers waiting on the log see a ready
+bus, and `Close` drains an in-flight pass with a bounded wait. Each active
 `subscription` stores the last delivered stream sequence (an atomic `uint64`
 updated on every quarantine-passing delivery). On reconnect, `reestablish`
 replaces the relay generation wholesale: it stops the old relay on the bus
@@ -111,6 +119,6 @@ subscription stays registered and `OnError` gets the non-fatal
 `ErrResumeDeferred` notice instead.
 
 Active subscriptions register themselves on the client at creation and
-deregister on teardown. The registry (`Client.subs`) is guarded by a mutex;
-`reestablishSubs` snapshots it under the lock and then re-establishes each relay
+deregister on teardown. The registry (`Client.subs`) is guarded by a mutex; a
+resume pass snapshots it under the lock and then re-establishes each relay
 without holding the lock, so delivery goroutines and Stop can run concurrently.
