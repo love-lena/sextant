@@ -90,8 +90,9 @@ as its token: at most one pass runs per token, a newer token supersedes a
 running pass at its next subscription boundary, and a per-subscription lock
 serializes any rotations that overlap across passes. "Reconnected to the bus"
 logs at the end of a completed, non-superseded pass — only once every relay
-that reconnect owed is live again — so callers waiting on the log see a ready
-bus, and `Close` drains an in-flight pass with a bounded wait. Each active
+that reconnect owed is live again (or has deferred or failed loudly) — so
+callers waiting on the log see a settled bus, and `Close` drains an in-flight
+pass with a bounded wait. Each active
 `subscription` stores the last delivered stream sequence (an atomic `uint64`
 updated on every quarantine-passing delivery). On reconnect, `reestablish`
 replaces the relay generation wholesale: it stops the old relay on the bus
