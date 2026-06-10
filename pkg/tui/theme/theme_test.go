@@ -1,6 +1,8 @@
 package theme_test
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -116,13 +118,19 @@ func TestDefaultKeymapBindsArrowsAndHJKL(t *testing.T) {
 	}
 }
 
+// TestKeymapMergeOverridesLayoutShortcuts proves a layout shortcut is an
+// overridable default like any other binding: the override key acts, the old
+// default does not, the receiver is unchanged, and the help text survives.
 func TestKeymapMergeOverridesLayoutShortcuts(t *testing.T) {
 	base := theme.DefaultKeymap()
-	merged := base.Merge(
-		theme.Override{Action: "PresetCycle", Keys: []string{"tab"}},
+	merged, err := base.Merge(
+		theme.Override{Action: "PresetCycle", Keys: []string{"f2"}},
 	)
-	if !key.Matches(keyMsg("tab"), merged.PresetCycle) {
-		t.Error("merged PresetCycle should bind the override key tab")
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	if !key.Matches(keyMsg("f2"), merged.PresetCycle) {
+		t.Error("merged PresetCycle should bind the override key f2")
 	}
 	if key.Matches(keyMsg("p"), merged.PresetCycle) {
 		t.Error("merged PresetCycle should no longer bind p")
@@ -137,9 +145,46 @@ func TestKeymapMergeOverridesLayoutShortcuts(t *testing.T) {
 	}
 }
 
+// TestKeymapMergeCollisionIsAnError pins the ambiguity guard: rebinding
+// PresetCycle onto tab while FocusNext still holds tab would leave dispatch
+// order to decide which action a tab press drives, silently — so Merge fails
+// loud instead, naming the key and both actions.
+func TestKeymapMergeCollisionIsAnError(t *testing.T) {
+	_, err := theme.DefaultKeymap().Merge(
+		theme.Override{Action: "PresetCycle", Keys: []string{"tab"}},
+	)
+	if err == nil {
+		t.Fatal("binding PresetCycle to tab should collide with FocusNext's default tab")
+	}
+	for _, want := range []string{`"tab"`, "FocusNext", "PresetCycle"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("collision error should name %s; got %q", want, err)
+		}
+	}
+}
+
+// TestKeymapMergeFreedKeyIsRebindable proves the collision check reads the
+// MERGED state, not the defaults: a key freed by one override is available to
+// another in the same Merge.
+func TestKeymapMergeFreedKeyIsRebindable(t *testing.T) {
+	merged, err := theme.DefaultKeymap().Merge(
+		theme.Override{Action: "FocusNext", Keys: []string{"f3"}},
+		theme.Override{Action: "PresetCycle", Keys: []string{"tab"}},
+	)
+	if err != nil {
+		t.Fatalf("tab was freed by the FocusNext override; Merge should accept it: %v", err)
+	}
+	if !key.Matches(keyMsg("tab"), merged.PresetCycle) {
+		t.Error("merged PresetCycle should bind the freed key tab")
+	}
+}
+
 func TestKeymapMergeOverridesAndPreservesOriginal(t *testing.T) {
 	base := theme.DefaultKeymap()
-	merged := base.Merge(theme.Override{Action: "Up", Keys: []string{"w"}})
+	merged, err := base.Merge(theme.Override{Action: "Up", Keys: []string{"w"}})
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
 
 	if !key.Matches(keyMsg("w"), merged.Up) {
 		t.Error("merged Up should bind the override key w")
@@ -159,9 +204,73 @@ func TestKeymapMergeOverridesAndPreservesOriginal(t *testing.T) {
 
 func TestKeymapMergeUnknownActionIsNoop(t *testing.T) {
 	base := theme.DefaultKeymap()
-	merged := base.Merge(theme.Override{Action: "Nonexistent", Keys: []string{"z"}})
+	merged, err := base.Merge(theme.Override{Action: "Nonexistent", Keys: []string{"z"}})
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
 	// Nothing should have changed.
 	if !key.Matches(keyMsg("k"), merged.Up) {
 		t.Error("unknown override should leave the keymap untouched")
+	}
+}
+
+// TestKeymapMergeNilKeysIsNoChange pins override semantics rule one: an
+// override speaks only about the actions it names, so nil Keys (the zero
+// value — a config entry that names an action but says nothing about keys)
+// changes nothing. A typo'd omission can never silently stop an action.
+func TestKeymapMergeNilKeysIsNoChange(t *testing.T) {
+	merged, err := theme.DefaultKeymap().Merge(theme.Override{Action: "Options"})
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	if !merged.Options.Enabled() {
+		t.Error("nil Keys should not unbind the action")
+	}
+	if !key.Matches(keyMsg("o"), merged.Options) {
+		t.Error("nil Keys should leave the action's default keys in place")
+	}
+}
+
+// TestKeymapMergeEmptyKeysUnbinds pins rule two AT THE DECODE LEVEL: the
+// distinction between "keys absent" (nil — no change) and "keys": [] (empty —
+// explicit unbind) must survive JSON parsing, since that is how a config file
+// will carry overrides. The overrides are unmarshalled, not hand-built, so the
+// test proves the wire distinction, not just the Go-struct one.
+func TestKeymapMergeEmptyKeysUnbinds(t *testing.T) {
+	var overrides []theme.Override
+	raw := `[{"action": "Options", "keys": []}, {"action": "Quit"}]`
+	if err := json.Unmarshal([]byte(raw), &overrides); err != nil {
+		t.Fatalf("unmarshal overrides: %v", err)
+	}
+	if overrides[0].Keys == nil {
+		t.Fatal(`decode dropped the distinction: "keys": [] should decode to an empty non-nil slice`)
+	}
+	if overrides[1].Keys != nil {
+		t.Fatal("decode invented keys: an absent field should decode to nil")
+	}
+
+	merged, err := theme.DefaultKeymap().Merge(overrides...)
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	// "keys": [] is a deliberate unbind: the action is bound to nothing.
+	if merged.Options.Enabled() {
+		t.Error(`"keys": [] should unbind the action (Enabled() should report false)`)
+	}
+	if key.Matches(keyMsg("o"), merged.Options) {
+		t.Error("an unbound action should not match its old default key")
+	}
+	// The absent-keys override left Quit alone.
+	if !key.Matches(keyMsg("q"), merged.Quit) {
+		t.Error("an absent keys field should leave the action's keys unchanged")
+	}
+}
+
+// TestDefaultKeymapMergesClean pins the premise the collision check rests on:
+// the default keymap binds every key string exactly once, so a bare Merge
+// validates clean and any collision is introduced by an override.
+func TestDefaultKeymapMergesClean(t *testing.T) {
+	if _, err := theme.DefaultKeymap().Merge(); err != nil {
+		t.Fatalf("the default keymap should be collision-free: %v", err)
 	}
 }

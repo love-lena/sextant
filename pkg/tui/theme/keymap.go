@@ -1,6 +1,10 @@
 package theme
 
-import "github.com/charmbracelet/bubbles/key"
+import (
+	"fmt"
+
+	"github.com/charmbracelet/bubbles/key"
+)
 
 // Keymap is the dash's binding set as data: one named key.Binding per action.
 // Nothing in a widget hardcodes a key — widgets read bindings from a Keymap, so
@@ -134,32 +138,95 @@ func DefaultKeymap() Keymap {
 // Override names a single action by field and supplies the keys to rebind it to.
 // It is the unit a user-override path passes to Merge. Action is the Keymap
 // field name (e.g. "Up", "Options"); an unknown name is ignored by Merge.
+//
+// Keys distinguishes nil from empty, and the distinction is load-bearing: nil
+// means the override says nothing about the action's keys (no change), while an
+// empty-but-present list is an explicit unbind. The JSON tags carry that
+// distinction through a config file — an absent "keys" decodes to nil, a
+// literal "keys": [] decodes to empty — so a typo'd omission can never silently
+// stop an action.
 type Override struct {
 	// Action is the Keymap field to rebind, by its Go field name (case-sensitive:
 	// "Up", "Down", "Left", "Right", "Enter", "Back", "FocusNext", "FocusPrev",
 	// "FocusLeft", "FocusDown", "FocusUp", "FocusRight", "Options",
 	// "PresetCycle", "Quit", "ForceQuit").
-	Action string
+	Action string `json:"action"`
 	// Keys are the new key strings for the action (Bubble Tea key names, e.g.
-	// "ctrl+n", "g"). The binding keeps its help description.
-	Keys []string
+	// "ctrl+n", "g"). The binding keeps its help description. nil leaves the
+	// action's keys unchanged; an empty non-nil slice unbinds the action
+	// deliberately (its binding then reports Enabled() == false).
+	Keys []string `json:"keys"`
 }
 
 // Merge layers overrides onto a copy of the receiver and returns the result; the
 // receiver is unchanged. Each override rebinds the named action's keys, keeping
-// its help text. This is the in-memory user-override path — a later config task
-// reads a file and produces the overrides; nothing here does file I/O. An
-// override with an empty Action or an unknown field name is skipped.
-func (k Keymap) Merge(overrides ...Override) Keymap {
+// its help text. An override speaks only about what it names: an empty Action or
+// an unknown field name is skipped, and nil Keys leaves the action's keys alone
+// — only an empty-but-present Keys unbinds it (see Override).
+//
+// After applying the overrides, Merge validates the result: one key string
+// bound to two enabled actions is ambiguous (dispatch order would decide which
+// acts, silently), so it returns an error naming the key and both actions. The
+// default keymap binds every key string exactly once (a test pins that), so a
+// collision is always a config mistake; a caller surfaces it as a loud
+// launch-time error rather than dispatching ambiguously. On error the returned
+// Keymap is the zero value — never a partially-valid binding set.
+//
+// This is the in-memory user-override path — a later config task reads a file
+// and produces the overrides; nothing here does file I/O.
+func (k Keymap) Merge(overrides ...Override) (Keymap, error) {
 	out := k
 	for _, o := range overrides {
 		b := out.binding(o.Action)
-		if b == nil {
+		if b == nil || o.Keys == nil {
+			continue
+		}
+		if len(o.Keys) == 0 {
+			b.SetKeys() // explicit unbind: nil keys, so Enabled() reports false
 			continue
 		}
 		b.SetKeys(o.Keys...)
 	}
-	return out
+	if err := out.collision(); err != nil {
+		return Keymap{}, err
+	}
+	return out, nil
+}
+
+// actions is the canonical action order (struct order). collision walks it so
+// a collision error is deterministic about which two actions it names, and it
+// doubles as the dispatch table's index for any walker that needs every
+// binding.
+var actions = []string{
+	"Up", "Down", "Left", "Right",
+	"Enter", "Back",
+	"FocusNext", "FocusPrev",
+	"FocusLeft", "FocusDown", "FocusUp", "FocusRight",
+	"Options", "PresetCycle", "Quit", "ForceQuit",
+}
+
+// collision returns an error for the first key string bound to two enabled
+// actions, naming the key and both actions. Disabled (unbound) actions take no
+// part — an explicitly unbound action's old keys are free to rebind. The check
+// covers the WHOLE keymap, not just overridden actions: the default set is
+// collision-free by construction (every key string appears once), so any
+// collision — default key versus override, or override versus override — is a
+// real ambiguity.
+func (k *Keymap) collision() error {
+	bound := make(map[string]string)
+	for _, name := range actions {
+		b := k.binding(name)
+		if !b.Enabled() {
+			continue
+		}
+		for _, ks := range b.Keys() {
+			if prev, ok := bound[ks]; ok {
+				return fmt.Errorf("key %q bound to both %s and %s", ks, prev, name)
+			}
+			bound[ks] = name
+		}
+	}
+	return nil
 }
 
 // binding returns a pointer to the named field on the receiver, or nil for an

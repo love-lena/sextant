@@ -518,10 +518,13 @@ func TestPresetCycleReflows(t *testing.T) {
 // preset cycle and the focus cycle by the new keys, and the defaults no longer
 // act.
 func TestLayoutShortcutsAreOverridable(t *testing.T) {
-	keys := theme.DefaultKeymap().Merge(
+	keys, err := theme.DefaultKeymap().Merge(
 		theme.Override{Action: "PresetCycle", Keys: []string{"f2"}},
 		theme.Override{Action: "FocusNext", Keys: []string{"f3"}},
 	)
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
 	m := layout.New(theme.Dark(), keys, layout.DefaultConfig(),
 		newMock("clients", "Clients"), newMock("topics", "Topics"),
 		newMock("artifacts", "Artifacts"))

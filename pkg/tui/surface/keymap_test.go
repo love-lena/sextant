@@ -60,9 +60,12 @@ func TestTopLevelBackIsNoOp(t *testing.T) {
 // strings: with Back remapped, the old Esc no longer pops an open detail (it is
 // delivered to the detail instead) and the new key does.
 func TestBrowserDetailPopIsOverridable(t *testing.T) {
-	keys := theme.DefaultKeymap().Merge(
+	keys, err := theme.DefaultKeymap().Merge(
 		theme.Override{Action: "Back", Keys: []string{"f1"}},
 	)
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
 	b := surface.NewClientsBrowser(context.Background(), nil, theme.Dark(), keys)
 	b.SetSize(40, 8)
 	b.SetFocus(widget.FocusActive)
@@ -153,9 +156,12 @@ func TestComposeDraftSurvivesBlur(t *testing.T) {
 // composed line is consumed (the input clears) on the rebound key and not on the
 // old default — enough to prove the binding, not the literal string, gates send.
 func TestSurfaceSendIsOverridable(t *testing.T) {
-	keys := theme.DefaultKeymap().Merge(
+	keys, err := theme.DefaultKeymap().Merge(
 		theme.Override{Action: "Enter", Keys: []string{"ctrl+s"}},
 	)
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
 	s := surface.NewStream(context.Background(), nil, "msg.topic.plan", theme.Dark(), keys, surface.WithCompose())
 	s.SetSize(40, 8)
 	s.SetFocus(widget.FocusActive)
