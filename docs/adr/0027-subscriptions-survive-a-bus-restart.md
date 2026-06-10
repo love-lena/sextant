@@ -10,7 +10,10 @@ a bus restart of the same store, or a plain network blip with the bus still
 up. The SDK re-establishes the server-side relay on reconnect, resuming from
 the last delivered sequence so no messages are missed or duplicated. When
 re-establishment is impossible — the store was wiped, history expired — the
-SDK calls the subscriber's error handler immediately: never silence.
+SDK calls the subscriber's error handler immediately: never silence. When a
+resume attempt merely could not reach the bus, the subscription defers —
+announced through the same handler, kept registered, retried on the next
+reconnect.
 
 ## What this guarantees
 
@@ -45,6 +48,19 @@ One accepted risk: a store that is wiped and then republished past the old
 sequence resumes at a wrong position undetected — the resume sequence is within
 bounds again, but it indexes a different history. Detecting that would require
 tracking stream identity across restarts, which is deliberately not built.
+
+**A transport-failed resume defers, then retries.** Loud death is reserved for
+resumes the bus *answered* with "impossible". When the resume attempt itself
+cannot reach the bus — a request timeout, a second blip inside the window —
+the subscription stays registered and the next reconnect pass retries it. The
+deferral is still announced: `OnError` receives a non-fatal notice wrapping the
+exported `ErrResumeDeferred` sentinel (`errors.Is`-distinguishable; any
+`OnError` that does not wrap it is fatal). The `busfeed` layer surfaces it as a
+non-terminal `ResumeDeferredMsg` — the pump stays alive and the notice clears
+on the next delivery. One accepted gap for now: the retry rides the reconnect
+cadence, so a deferral on a connection that stays healthy waits for the next
+reconnect (a bounded retry timer is tracked as TASK-40,
+[[bug-sdk-resume-deferral-no-retry-cadence]]).
 
 **`Stop` during downtime is clean.** Stopping a subscription while the bus is
 unreachable calls `subscription.stop` on the bus (which will time out or
@@ -87,7 +103,12 @@ sequence as overlap. The bus relay handles `since_seq` by mapping it to a
 `StartFromSeq` backend start with a stream-bounds check: a `since_seq` beyond
 the stream's last sequence plus one, or below its first retained sequence,
 returns `backend.ErrSequenceGone`, and the bus surfaces it as a call error,
-which the SDK turns into an `OnError` call and a subscription stop.
+which the SDK turns into an `OnError` call and a subscription stop. The SDK
+classifies resume failures by *who* failed: an error the bus replied with
+arrives as a typed call error and is fatal as above; an error where the bus
+never answered (timeout, closed connection) is the transport's, so the
+subscription stays registered and `OnError` gets the non-fatal
+`ErrResumeDeferred` notice instead.
 
 Active subscriptions register themselves on the client at creation and
 deregister on teardown. The registry (`Client.subs`) is guarded by a mutex;
