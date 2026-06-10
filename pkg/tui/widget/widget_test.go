@@ -169,6 +169,39 @@ func TestEmptyWidgetsShowPlaceholders(t *testing.T) {
 	}
 }
 
+// --- box title chip (regression for rune-vs-cell chip measurement) ---
+
+// TestBoxFrameWidthWithWideRuneTitle pins the title chip's measurement in
+// display CELLS: a wide-rune title (CJK, emoji — 2 cells per rune) must still
+// produce a frame of exactly the requested outer width on every row, whether
+// the chip fits or must truncate. The old rune count overfilled the top border
+// (and a rune-index cut mis-sized it) for any non-1-cell title.
+func TestBoxFrameWidthWithWideRuneTitle(t *testing.T) {
+	th := theme.Dark()
+	for _, tc := range []struct {
+		name  string
+		title string
+		w, h  int
+	}{
+		{"cjk_fits", "日本語", 24, 4},
+		{"cjk_truncates", "日本語タイトル長い", 12, 4},
+		{"emoji", "🚀 launch", 20, 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := widget.Box(th, widget.FocusActive, tc.title, th.Accent, "body", tc.w, tc.h)
+			lines := strings.Split(out, "\n")
+			if len(lines) != tc.h {
+				t.Fatalf("box rendered %d rows, want exactly %d:\n%s", len(lines), tc.h, plain(out))
+			}
+			for i, ln := range lines {
+				if got := lipgloss.Width(plain(ln)); got != tc.w {
+					t.Errorf("row %d is %d cells wide, want %d: %q", i, got, tc.w, plain(ln))
+				}
+			}
+		})
+	}
+}
+
 // --- compose widget ---
 
 // typeCompose feeds a string into a Compose widget key by key, returning the

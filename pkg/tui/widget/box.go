@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/love-lena/sextant/pkg/tui/theme"
 )
 
@@ -38,13 +39,16 @@ func Box(t theme.Theme, focus Focus, title string, titleHue lipgloss.Color, body
 		Render(body)
 
 	// Top border with the title chip: one lead dash, the bold-tinted chip, then
-	// dashes filling to the corner.
+	// dashes filling to the corner. The chip is measured and truncated in display
+	// CELLS, not runes — a wide rune (CJK, emoji) occupies two cells, so a rune
+	// count would overfill the frame and a rune-index cut would mis-size it.
 	chip := " " + title + " "
-	chipR := []rune(chip)
-	dashes := innerW - 1 - len(chipR) // one lead dash before the chip
+	dashes := innerW - 1 - lipgloss.Width(chip) // one lead dash before the chip
 	if dashes < 0 {
-		chipR = chipR[:max(0, innerW-1)]
-		dashes = 0
+		chip = ansi.Truncate(chip, innerW-1, "")
+		// A wide rune straddling the cut leaves one spare cell; the recompute
+		// hands it to the dashes so the frame stays exact.
+		dashes = innerW - 1 - lipgloss.Width(chip)
 	}
 	seg := func(s string, c lipgloss.Color) string {
 		return lipgloss.NewStyle().Foreground(c).Render(s)
@@ -53,7 +57,7 @@ func Box(t theme.Theme, focus Focus, title string, titleHue lipgloss.Color, body
 		return lipgloss.NewStyle().Foreground(c).Bold(true).Render(s)
 	}
 
-	top := seg("╭─", bc) + segBold(string(chipR), titleHue) + seg(strings.Repeat("─", dashes)+"╮", bc)
+	top := seg("╭─", bc) + segBold(chip, titleHue) + seg(strings.Repeat("─", dashes)+"╮", bc)
 	bottom := seg("╰"+strings.Repeat("─", innerW)+"╯", bc)
 
 	var b strings.Builder
