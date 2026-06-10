@@ -184,7 +184,10 @@ func softWrapRows(runes []rune, width int) int {
 
 // Height returns the compose's current display height in rows: the visual row
 // count of the current text, capped at ComposeMaxRows and floored at 1. The
-// hosting surface subtracts this from the body height on each relayout.
+// hosting surface subtracts this from the body height on each relayout. The
+// height holds across blur (the draft is retained, and View pads the unfocused
+// hint to the same rows), so a host that does not relayout on focus changes
+// never sees View and Height disagree.
 func (c *Compose) Height() int {
 	h := c.ta.Height()
 	if h < 1 {
@@ -249,16 +252,20 @@ func (c *Compose) Update(msg tea.Msg) (Compose, tea.Cmd) {
 // textarea renders; when selected or idle a dim hint is shown (the operator sees
 // their place, but the draft is not displayed — the typed text is held, not shown,
 // while unfocused, consistent with the textinput convention). The rendered output
-// is always exactly Height() rows wide.
+// is always exactly Height() rows tall — including while blurred with a
+// multi-line draft, when the hint pads to the draft's rows: the host subtracts
+// Height() from its body whatever the focus state (a blur does not relayout),
+// so a 1-row hint under a 4-row Height would leave a dead zone.
 func (c *Compose) View(t theme.Theme, focus Focus) string {
 	if focus != FocusActive {
-		// Unfocused placeholder: dim hint that focus-to-compose, padded to width.
+		// Unfocused placeholder: dim hint that focus-to-compose, padded to the
+		// full width and to the held draft's height so the reserved rows render.
 		w := c.width
 		if w <= 0 {
 			w = 1
 		}
 		hint := "> focus pane to compose"
-		return lipgloss.NewStyle().Foreground(t.Dim).Width(w).MaxWidth(w).Render(hint)
+		return lipgloss.NewStyle().Foreground(t.Dim).Width(w).MaxWidth(w).Height(c.Height()).Render(hint)
 	}
 	return c.ta.View()
 }

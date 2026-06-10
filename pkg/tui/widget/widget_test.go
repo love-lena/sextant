@@ -294,6 +294,32 @@ func TestComposeHeightMatchesTextareaWrap(t *testing.T) {
 	}
 }
 
+// TestComposeBlurredViewMatchesHeight pins the Height()/View() contract across
+// blur: a blurred compose holding a multi-line draft must still render exactly
+// Height() rows. Blur retains the draft (so Height() keeps the draft's row
+// count) but renders the one-line hint — unpadded, that left hosts which
+// subtract Height() from their body (surface/stream.go relayout) with a dead
+// zone of up to ComposeMaxRows-1 rows, since a blur does not relayout.
+func TestComposeBlurredViewMatchesHeight(t *testing.T) {
+	const width = 20 // bodyW = 18
+	c := widget.NewCompose()
+	c.SetWidth(width)
+	_ = c.Focus()
+	c = typeCompose(c, strings.Repeat("x", 3*(width-2))) // 3 full rows + cursor row
+	c.Blur()
+
+	h := c.Height()
+	if h < 2 {
+		t.Fatalf("multi-line draft should keep Height() > 1 across blur; got %d", h)
+	}
+	for _, focus := range []widget.Focus{widget.FocusIdle, widget.FocusSelected} {
+		view := c.View(theme.Dark(), focus)
+		if got := strings.Count(view, "\n") + 1; got != h {
+			t.Errorf("focus %d: blurred View renders %d rows; Height() = %d (host dead zone)", focus, got, h)
+		}
+	}
+}
+
 // TestComposeChunkSpellingABindingIsText pins the burst/paste guard at the
 // WIDGET level: the textarea string-matches its own editing bindings, so a
 // multi-rune chunk whose String() spells one ("right", "up", "end") would
