@@ -19,12 +19,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/love-lena/sextant/internal/backend"
 	"github.com/love-lena/sextant/internal/wireapi"
+	"github.com/love-lena/sextant/pkg/conninfo"
 	"github.com/love-lena/sextant/pkg/sx"
 	"github.com/love-lena/sextant/pkg/wire"
 	natsserver "github.com/nats-io/nats-server/v2/server"
@@ -38,6 +43,23 @@ type Config struct {
 	StoreDir string
 	// Port is the listen port; 0 or -1 picks a random available port.
 	Port int
+	// Logf is the library's only output channel: every diagnostic the bus
+	// emits (the port-fallback notice, a dropped undecodable frame, …) goes
+	// through it, one Printf-style call per line, with no trailing newline in
+	// format. It may be called from concurrent goroutines. Nil means the
+	// default: write the line to stderr — exactly what a zero-config embedder
+	// sees today.
+	Logf func(format string, args ...any)
+}
+
+// logf returns the resolved log function: cfg.Logf, or the stderr default.
+func (cfg Config) logf() func(format string, args ...any) {
+	if cfg.Logf != nil {
+		return cfg.Logf
+	}
+	return func(format string, args ...any) {
+		fmt.Fprintf(os.Stderr, format+"\n", args...)
+	}
 }
 
 // Bus is a running embedded NATS server with the sx namespace bootstrapped. It
@@ -65,6 +87,53 @@ type Bus struct {
 	relayCancel context.CancelFunc
 	relaysMu    sync.Mutex
 	relays      map[string]map[string]*relay
+
+	// logf is the resolved Config.Logf (never nil): the bus's only output
+	// channel. Components log through it instead of writing to stderr.
+	logf func(format string, args ...any)
+}
+
+// stablePort resolves the listen port for a (re)start. If cfg.Port is non-zero
+// the caller asked for a specific port — use it as-is. Otherwise look for a
+// previous address in the store's bus.json: same store ⇒ same address when the
+// port is still free (ADR-0025). It returns the port to use (−1 means
+// "let the OS pick") and, when a recorded port was found but unavailable, a
+// non-empty notice to log.
+func stablePort(storeDir string, cfgPort int) (port int, notice string) {
+	if cfgPort != 0 {
+		return cfgPort, ""
+	}
+	prev, ok := recordedPort(storeDir)
+	if !ok {
+		return -1, "" // fresh store or unreadable file — ephemeral is correct
+	}
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", prev))
+	if err != nil {
+		// Port is taken by something else — fall back and warn.
+		return -1, fmt.Sprintf("bus: recorded port %d is in use; starting on a new port (enrolled contexts may need updating)", prev)
+	}
+	// Port is free — release the probe listener and let NATS bind it.
+	_ = ln.Close()
+	return prev, ""
+}
+
+// recordedPort reads the bus URL from the store's discovery file and returns
+// the port number. Returns (0, false) if the file is absent, unreadable, or
+// contains no parseable port.
+func recordedPort(storeDir string) (int, bool) {
+	info, err := conninfo.Read(filepath.Join(storeDir, conninfo.DefaultFile))
+	if err != nil {
+		return 0, false
+	}
+	u, err := url.Parse(info.URL)
+	if err != nil {
+		return 0, false
+	}
+	p, err := strconv.Atoi(u.Port())
+	if err != nil || p <= 0 {
+		return 0, false
+	}
+	return p, true
 }
 
 // Start launches the embedded bus under JWT auth and bootstraps the reserved
@@ -77,15 +146,16 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 	if err != nil {
 		return nil, err
 	}
-	port := cfg.Port
-	if port == 0 {
-		port = -1 // random available port
+	logf := cfg.logf()
+	port, portNotice := stablePort(cfg.StoreDir, cfg.Port)
+	if portNotice != "" {
+		logf("%s", portNotice)
 	}
 
 	opts := &natsserver.Options{
 		ServerName: "sextant",
 		Host:       "127.0.0.1",
-		Port:       port,
+		Port:       port, // set by stablePort: previous port, caller-requested, or −1 (ephemeral)
 		JetStream:  true,
 		StoreDir:   cfg.StoreDir,
 		NoSigs:     true, // the CLI owns signal handling
@@ -111,7 +181,7 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 		return nil, err
 	}
 
-	b := &Bus{ns: ns, store: cfg.StoreDir, ident: ident}
+	b := &Bus{ns: ns, store: cfg.StoreDir, ident: ident, logf: logf}
 
 	// The bus's own operator-tier connection is in-process: it needs no TCP
 	// listener, so bootstrap runs while the client port is still closed and

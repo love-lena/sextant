@@ -39,6 +39,8 @@ func main() {
 		cmdContext(os.Args[2:])
 	case "artifact":
 		cmdArtifact(os.Args[2:])
+	case "dash":
+		cmdDash(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -70,7 +72,12 @@ operations (creds from --creds, $SEXTANT_CREDS, or the active context):
   sextant publish   <subject> <record-json>
   sextant read      <subject> [--since N] [--limit N] [--json]
   sextant subscribe <subject> [--all] [--json]
-  sextant artifact  create|update|get|delete|watch <name> [<record-json>] [--rev N] [--json]
+  sextant artifact  create|update|get|list|delete|watch [<name>] [<record-json>] [--rev N] [--json]
+
+the dash (a cockpit of three master-detail browsers over the same SDK — ADR-0024):
+  sextant dash      [--theme light|dark|auto] [--config F] [--name N]
+                    (alias for the sextant-dash binary; same connection flags;
+                    first run with no identity self-enrolls against a local bus)
 
 environment (avoids repeating the flags):
   SEXTANT_STORE   default for --store (the bus store dir; discovery + creds)

@@ -91,6 +91,40 @@ func (c *Client) DeleteArtifact(ctx context.Context, name string) error {
 	return c.call(ctx, wireapi.OpArtifactDelete, wireapi.ArtifactDeleteInput{Name: name}, nil)
 }
 
+// ArtifactInfo is one entry in the artifacts directory: an artifact's name and
+// bus-stamped metadata, but not its Record. It is what ListArtifacts returns —
+// enough to show what exists and pick one, with the contents fetched on demand
+// by GetArtifact. Revision is the artifact's current revision; Created and
+// Updated are the bus's stamped times (ADR-0016).
+type ArtifactInfo struct {
+	Name     string
+	Revision uint64
+	Created  time.Time
+	Updated  time.Time
+}
+
+// ListArtifacts returns the artifacts directory — the name and bus-stamped
+// metadata of every artifact, sorted by name — via the artifact.list operation.
+// It is discovery, not contents: a client lists, then GetArtifacts the one it
+// wants. Deleted artifacts are not listed, and an empty bucket is an empty
+// slice, not an error.
+func (c *Client) ListArtifacts(ctx context.Context) ([]ArtifactInfo, error) {
+	var out wireapi.ArtifactListOutput
+	if err := c.call(ctx, wireapi.OpArtifactList, wireapi.ArtifactListInput{}, &out); err != nil {
+		return nil, err
+	}
+	infos := make([]ArtifactInfo, 0, len(out.Artifacts))
+	for _, e := range out.Artifacts {
+		infos = append(infos, ArtifactInfo{
+			Name:     e.Name,
+			Revision: e.Revision,
+			Created:  parseArtifactTime(e.CreatedAt),
+			Updated:  parseArtifactTime(e.UpdatedAt),
+		})
+	}
+	return infos, nil
+}
+
 // ArtifactChange is a change delivered to a WatchArtifact handler: the artifact
 // at this revision, plus whether the change was a deletion. On a delete the
 // Record is empty and Deleted is true — so a watcher can tell a removal from a

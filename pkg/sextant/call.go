@@ -18,6 +18,19 @@ func (c *Client) call(ctx context.Context, op string, input, out any) error {
 	return callConn(ctx, c.nc, c.id, op, input, out)
 }
 
+// busError is a failure the bus itself replied with (wireapi.Response.Error):
+// the request reached the bus and was definitively answered. Its presence (via
+// errors.As) distinguishes a bus-side refusal from a transport failure — a
+// timeout or dropped connection where the bus never answered and the outcome is
+// unknown. The reconnect resume path keys its fatal/retry decision on this type,
+// never on error-string matching.
+type busError struct {
+	op  string
+	msg string
+}
+
+func (e *busError) Error() string { return fmt.Sprintf("sextant: %s: %s", e.op, e.msg) }
+
 // callConn is the connection-level Wire API call shared by Client and Issuer: it
 // requests sx.api.<id>.<op> on nc and decodes the reply. id is the subject token
 // (the caller's authenticated identity); the credential's allow-list binds the
@@ -36,7 +49,7 @@ func callConn(ctx context.Context, nc *nats.Conn, id, op string, input, out any)
 		return fmt.Errorf("sextant: %s: decode reply: %w", op, err)
 	}
 	if resp.Error != "" {
-		return fmt.Errorf("sextant: %s: %s", op, resp.Error)
+		return &busError{op: op, msg: resp.Error}
 	}
 	if out != nil {
 		if err := json.Unmarshal(resp.Result, out); err != nil {

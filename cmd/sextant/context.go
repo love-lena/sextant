@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/love-lena/sextant/internal/clictx"
+	"github.com/love-lena/sextant/internal/selfenroll"
 )
 
 // cmdContext manages saved client contexts (ADR-0021): local (bus URL + identity
@@ -137,7 +138,7 @@ func contextAdd(args []string) {
 	if err != nil {
 		fatal("%v", err)
 	}
-	busURL := resolveBusURL(*url, *store)
+	busURL := selfenroll.ResolveBusURL(*url, *store)
 	if err := clictx.Save(clictx.Context{
 		Name: name, URL: busURL, ID: *id, Display: *display, Kind: *kind, Creds: credsPath,
 	}); err != nil {
