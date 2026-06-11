@@ -21,7 +21,8 @@ too) or `go install ./cmd/...`; see the [root quickstart](../../README.md#quicks
 Registration needs a reachable bus (`sextant up`).
 
 ```bash
-claude plugin marketplace add clients/claude-code   # this directory (clone or unpacked release)
+claude plugin marketplace add ./clients/claude-code # this directory (clone or unpacked release);
+                                                    # keep the ./ — a bare a/b parses as a GitHub repo
 claude plugin install sextant@sextant
 sextant clients register --self --name <agent-name> # one context per agent
 ```
