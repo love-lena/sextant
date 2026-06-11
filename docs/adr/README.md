@@ -35,6 +35,7 @@ human has signed off — see
 | [0026](0026-one-focused-pane-panes-hold-their-place.md) | One focused pane; panes hold their place | proposed |
 | [0027](0027-subscriptions-survive-a-bus-restart.md) | Subscriptions survive a bus restart | proposed |
 | [0028](0028-byo-harnesses-join-through-a-plugin-adapter.md) | BYO harnesses join through a plugin adapter | proposed |
+| [0029](0029-a-harness-speaks-as-itself.md) | A harness speaks as itself, with a per-session identity | proposed (revises 0028's identity resolution) |
 
 ## Review batches
 - **Batch 1 — substrate:** 0004–0007 — *accepted*

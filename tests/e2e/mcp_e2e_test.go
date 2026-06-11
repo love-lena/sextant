@@ -12,7 +12,9 @@ package e2e
 import (
 	"bufio"
 	"encoding/json"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -44,9 +46,12 @@ func TestMCPAcceptance(t *testing.T) {
 	}
 	agentID := mustParseID(t, agentOut, `enrolled as (`+ulidPat+`)`)
 
+	// The MCP server no longer inherits the active context (ADR-0029), so the
+	// agent identity is pinned explicitly — exercising the $SEXTANT_CONTEXT path.
 	srv := startMCP(t, h, mcpBin, map[string]string{
-		"SEXTANT_HOME":  agentHome,
-		"SEXTANT_STORE": h.store,
+		"SEXTANT_HOME":    agentHome,
+		"SEXTANT_STORE":   h.store,
+		"SEXTANT_CONTEXT": "claude-agent",
 	})
 
 	// --- handshake: capability + tool surface (AC#1) -------------------------
@@ -73,6 +78,7 @@ func TestMCPAcceptance(t *testing.T) {
 		"message_publish": true, "message_read": true, "message_subscribe": true,
 		"message_unsubscribe": true, "artifact_create": true, "artifact_update": true,
 		"artifact_get": true, "artifact_list": true, "artifact_delete": true, "clients_list": true,
+		"context_use": true,
 	}
 	if len(tl.Tools) != len(want) {
 		t.Fatalf("tools/list returned %d tools, want %d: %s", len(tl.Tools), len(want), toolsRes)
@@ -158,40 +164,70 @@ func TestMCPAcceptance(t *testing.T) {
 	}
 }
 
-// TestMCPHeal is AC#7: a server started with no identity gives the recipe,
-// then succeeds on the same process after register --self.
-func TestMCPHeal(t *testing.T) {
+// TestMCPAutoMintAndResume is AC#8/#9 + AC#2/#3 (ADR-0029): with nothing
+// pinned, the server provisions its OWN identity on first use — without
+// touching the operator's active context — keyed by CLAUDE_CODE_SESSION_ID so a
+// resumed session (same id) reattaches to it, while a different id is a
+// different identity.
+func TestMCPAutoMintAndResume(t *testing.T) {
 	h := newHarness(t)
 	h.startBus()
 	mcpBin := buildMCPBinary(t)
 
-	home := t.TempDir() // empty: no contexts, no active
-	srv := startMCP(t, h, mcpBin, map[string]string{
-		"SEXTANT_HOME":  home,
-		"SEXTANT_STORE": h.store,
-	})
-	srv.call(t, "initialize", map[string]any{
-		"protocolVersion": "2025-06-18",
-		"capabilities":    map[string]any{},
-		"clientInfo":      map[string]any{"name": "e2e", "version": "0"},
-	})
-	srv.notify(t, "notifications/initialized", map[string]any{})
-
-	out := srv.tool(t, "clients_list", `{}`)
-	for _, wantText := range []string{"no credentials", "register --self", "$SEXTANT_CREDS"} {
-		if !strings.Contains(out, wantText) {
-			t.Errorf("pre-identity error %q missing %q", out, wantText)
-		}
-	}
-
-	if regOut, code := h.run(map[string]string{"SEXTANT_HOME": home, "USER": "healed-agent"},
+	// An operator owns the active context in the agent's home. The MCP server
+	// must neither speak as it nor disturb it.
+	home := t.TempDir()
+	if out, code := h.run(map[string]string{"SEXTANT_HOME": home, "USER": "operator"},
 		"clients", "register", "--self", "--store", h.store); code != 0 {
-		t.Fatalf("register --self exited %d: %s", code, regOut)
+		t.Fatalf("register operator: %s", out)
+	}
+	if got := readActive(t, home); got != "operator" {
+		t.Fatalf("precondition: active = %q, want operator", got)
 	}
 
-	// Same process, same tool: now it must succeed.
-	if out := srv.tool(t, "clients_list", `{}`); !strings.Contains(out, "healed-agent") {
-		t.Fatalf("post-heal clients_list: %s", out)
+	start := func(sessionID string) *mcpProc {
+		srv := startMCP(t, h, mcpBin, map[string]string{
+			"SEXTANT_HOME": home, "SEXTANT_STORE": h.store,
+			"CLAUDE_CODE_SESSION_ID": sessionID,
+		})
+		initMCP(t, srv)
+		return srv
+	}
+
+	// First session: auto-mints (no register --self), and the operator's active
+	// context is untouched.
+	id1 := start("sess-A").selfID(t, "msg.topic.probe-a1")
+	if got := readActive(t, home); got != "operator" {
+		t.Fatalf("active changed to %q — auto-mint must not disturb the operator", got)
+	}
+
+	// Resume: same session id reattaches to the same identity.
+	if id2 := start("sess-A").selfID(t, "msg.topic.probe-a2"); id2 != id1 {
+		t.Fatalf("resume minted a new identity %s, want reattach to %s", id2, id1)
+	}
+
+	// A different session is a different identity (no dup-answer).
+	if id3 := start("sess-B").selfID(t, "msg.topic.probe-b"); id3 == id1 {
+		t.Fatalf("a different session shares the identity %s — sessions must be distinct", id3)
+	}
+}
+
+// TestMCPNoBusActionableError is AC#7: when the server cannot mint (no bus, no
+// enrollment credential) and nothing is pinned, it returns the recovery recipe
+// rather than borrowing the operator's identity.
+func TestMCPNoBusActionableError(t *testing.T) {
+	h := newHarness(t)
+	mcpBin := buildMCPBinary(t) // no startBus; empty store below
+	srv := startMCP(t, h, mcpBin, map[string]string{
+		"SEXTANT_HOME": t.TempDir(), "SEXTANT_STORE": t.TempDir(),
+		"CLAUDE_CODE_SESSION_ID": "sess-nobus",
+	})
+	initMCP(t, srv)
+	out := srv.tool(t, "clients_list", `{}`)
+	for _, want := range []string{"agent identity", "$SEXTANT_CONTEXT", "enroll.creds"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("no-bus error %q missing %q", out, want)
+		}
 	}
 }
 
@@ -341,6 +377,46 @@ func (p *mcpProc) waitEvent(t *testing.T, match func(channelEvent) bool) channel
 			t.Fatalf("no matching channel event within %s", stepTimeout)
 		}
 	}
+}
+
+// initMCP runs the MCP lifecycle handshake.
+func initMCP(t *testing.T, srv *mcpProc) {
+	t.Helper()
+	srv.call(t, "initialize", map[string]any{
+		"protocolVersion": "2025-06-18",
+		"capabilities":    map[string]any{},
+		"clientInfo":      map[string]any{"name": "e2e", "version": "0"},
+	})
+	srv.notify(t, "notifications/initialized", map[string]any{})
+}
+
+// selfID publishes a probe to a fresh subject and reads it back, returning the
+// agent's own bus-stamped author ULID — the identity it actually connected as.
+func (p *mcpProc) selfID(t *testing.T, subject string) string {
+	t.Helper()
+	if out := p.tool(t, "message_publish", `{"subject":"`+subject+`","record":{"$type":"chat.message","text":"id-probe"}}`); !strings.Contains(out, "published") {
+		t.Fatalf("probe publish: %s", out)
+	}
+	out := p.tool(t, "message_read", `{"subject":"`+subject+`"}`)
+	var res struct {
+		Messages []struct {
+			Author string `json:"author"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil || len(res.Messages) == 0 {
+		t.Fatalf("selfID: unparseable read or no messages: %s", out)
+	}
+	return res.Messages[len(res.Messages)-1].Author
+}
+
+// readActive returns the active context name recorded under a SEXTANT_HOME.
+func readActive(t *testing.T, home string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(home, "active"))
+	if err != nil {
+		t.Fatalf("read active: %v", err)
+	}
+	return strings.TrimSpace(string(b))
 }
 
 func buildMCPBinary(t *testing.T) string {
