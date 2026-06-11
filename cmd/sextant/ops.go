@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -66,36 +65,14 @@ func addConnFlags(fs *flag.FlagSet) connFlags {
 	}
 }
 
-// errNoIdentity is the "you didn't say who to connect as" error. resolve returns
-// it when no creds, no named context, and no active context are available.
-var errNoIdentity = errors.New("no credentials: pass --creds, set $SEXTANT_CREDS, or select a context with `sextant context use <name>` (create one with `sextant context add`)")
-
-// resolve picks the credentials and bus URL for a connection. Precedence:
-// explicit --creds / $SEXTANT_CREDS wins (URL then comes from --url or --store
-// discovery); otherwise a context — named by --context / $SEXTANT_CONTEXT, else
-// the active one — supplies both creds and URL. An explicit --url still
-// overrides a context's URL.
+// resolve picks the credentials and bus URL for a connection — the precedence
+// lives in clictx.Resolve, shared with sextant-mcp.
 func (cf connFlags) resolve() (creds, url string, err error) {
-	creds, url = *cf.creds, *cf.url
-	if creds != "" {
-		return creds, url, nil
-	}
-	name := *cf.context
-	if name == "" {
-		name = clictx.Active()
-	}
-	if name == "" {
-		return "", "", errNoIdentity
-	}
-	c, err := clictx.Load(name)
+	rc, err := clictx.Resolve(*cf.creds, *cf.url, *cf.context)
 	if err != nil {
-		return "", "", fmt.Errorf("context %q: %w", name, err)
+		return "", "", err
 	}
-	creds = c.Creds
-	if url == "" {
-		url = c.URL
-	}
-	return creds, url, nil
+	return rc.Creds, rc.URL, nil
 }
 
 // connect dials an SDK client from the connection flags. ctx governs the call.
