@@ -102,8 +102,11 @@ func (h *channelHub) frameEvent(m sextant.Message) {
 		content = rec.Text
 	}
 	h.event(content, map[string]any{
-		"subject":   m.Subject,
-		"sender":    h.names.displayName(context.Background(), m.Frame.Author),
+		"subject": m.Subject,
+		// Cached-only: this runs on the SDK delivery goroutine, where a
+		// directory call would stall delivery. A cold cache renders the raw
+		// id and the async refresh names the frames after it.
+		"sender":    h.names.displayNameCached(m.Frame.Author),
 		"sender_id": m.Frame.Author,
 		"seq":       fmt.Sprint(m.Sequence),
 		"id":        m.Frame.ID,
@@ -141,11 +144,22 @@ func (h *channelHub) subscribe(ctx context.Context, c *sextant.Client, subject, 
 		go h.resumeNotice(subject, err)
 	}))
 
+	// Warm the name cache on the tool path, so the first delivered frames
+	// resolve senders without the delivery goroutine ever touching the bus.
+	h.names.refresh(ctx)
+
 	sub, err := c.Subscribe(ctx, subject, h.frameEvent, opts...)
 	if err != nil {
 		return nil, err
 	}
 	h.mu.Lock()
+	if _, raced := h.subs[subject]; raced {
+		// A concurrent subscribe to the same subject won; keep its
+		// subscription and stop this one (idempotent semantics, no leak).
+		h.mu.Unlock()
+		sub.Stop()
+		return h.active(), nil
+	}
 	h.subs[subject] = sub
 	h.mu.Unlock()
 

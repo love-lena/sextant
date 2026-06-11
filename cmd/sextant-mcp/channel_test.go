@@ -50,14 +50,17 @@ func (r *recorder) last(t *testing.T) (content string, meta map[string]any) {
 	return content, meta
 }
 
+// staticNames builds a pre-warmed cache (frameEvent resolves cached-only).
 func staticNames(m map[string]string) *nameCache {
-	return newNameCache(func(ctx context.Context) ([]sextant.ClientInfo, error) {
+	nc := newNameCache(func(ctx context.Context) ([]sextant.ClientInfo, error) {
 		var out []sextant.ClientInfo
 		for id, name := range m {
 			out = append(out, sextant.ClientInfo{ID: id, DisplayName: name})
 		}
 		return out, nil
 	})
+	nc.refresh(context.Background())
+	return nc
 }
 
 func msg(subject, author, record string, seq uint64) sextant.Message {
