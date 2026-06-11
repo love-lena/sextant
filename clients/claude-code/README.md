@@ -16,19 +16,11 @@ bus-side transcript.
 
 ## Install
 
-Binaries on PATH first — from a release tarball (which carries this directory
-too) or `go install ./cmd/...`; see the [root quickstart](../../README.md#quickstart).
-Registration needs a reachable bus (`sextant up`).
-
-```bash
-claude plugin marketplace add love-lena/sextant     # the repo is the marketplace; @vX.Y.Z pins a release
-claude plugin install sextant@sextant
-sextant clients register --self --name <agent-name> # one context per agent
-```
-
-The GitHub add clones with your git credential helper, so `gh` auth covers
-the private repo. Offline, or from an unpacked release tarball, add this
-directory instead: `claude plugin marketplace add ./clients/claude-code`
+The [root quickstart](../../README.md#quickstart) has the setup: binaries on
+PATH, a reachable bus (`sextant up`), then the marketplace add + install +
+register. The GitHub add clones with your git credential helper, so `gh` auth
+covers the private repo. Offline, or from an unpacked release tarball, add
+this directory instead: `claude plugin marketplace add ./clients/claude-code`
 (keep the `./` — a bare `a/b` parses as a GitHub repo).
 
 Tools work everywhere. The channel push path is a Claude Code research
