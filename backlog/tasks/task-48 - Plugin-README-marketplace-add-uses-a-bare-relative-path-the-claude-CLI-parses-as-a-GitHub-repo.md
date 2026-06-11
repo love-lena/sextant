@@ -6,7 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-06-11 03:41'
-updated_date: '2026-06-11 03:42'
+updated_date: '2026-06-11 03:49'
 labels:
   - bug
   - docs
@@ -34,6 +34,8 @@ Lena's cold test of the v0.1.0 quickstart failed at plugin setup: the plugin REA
 
 <!-- SECTION:NOTES:BEGIN -->
 Discovered in: Lena's v0.1.0 cold test (2026-06-10). Related: [[feat-release-artifacts-dogfood]] (task-47). The v0.1.0 tarball's embedded README keeps the broken line until the next release; root README quickstart is unaffected (no marketplace command there).
+
+Follow-through (same PR): repo is now the marketplace — root .claude-plugin/marketplace.json with source ./clients/claude-code. 'claude plugin marketplace add love-lena/sextant' is the README-primary install (private clone via git credential helper / SSH; @tag pins a release). Validated hermetically against the branch: add love-lena/sextant@fix/task-48-marketplace-add-path + install succeeded, payload complete. Local dir add (./clients/claude-code) stays as the offline/tarball path. Note: @vX.Y.Z pinning works from the first tag that contains the root manifest (v0.1.1+), not v0.1.0.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
