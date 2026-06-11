@@ -50,8 +50,12 @@ messages pushed into the session:
 ```bash
 claude plugin marketplace add love-lena/sextant     # the repo is the marketplace; @vX.Y.Z pins a release
 claude plugin install sextant@sextant
-sextant clients register --self --name <agent-name> # one context per agent
 ```
+
+The session gets its **own** bus identity automatically — minted per session,
+reattached on resume, never your operator identity ([ADR-0029](docs/adr/0029-a-harness-speaks-as-itself.md));
+no agent `register` step. Pin a specific identity with `SEXTANT_CONTEXT` in the
+project's `.mcp.json` `env` if you need one.
 
 Channel push is a Claude Code research preview behind an allowlist — start
 sessions with `claude --dangerously-load-development-channels
