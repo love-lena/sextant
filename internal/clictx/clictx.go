@@ -192,3 +192,42 @@ func WriteCreds(name, creds string) (string, error) {
 	}
 	return path, nil
 }
+
+// ErrNoIdentity is the "you didn't say who to connect as" error: no explicit
+// creds, no named context, and no active context. The message doubles as the
+// recovery recipe; callers (the CLI, sextant-mcp) surface it verbatim.
+var ErrNoIdentity = errors.New("no credentials: pass --creds, set $SEXTANT_CREDS, or select a context with `sextant context use <name>` (create one with `sextant context add`)")
+
+// ResolvedConn is what Resolve picked: the creds path and bus URL to connect
+// with, and Context, the context name that supplied them ("" when explicit
+// creds won — then nothing was read from the store).
+type ResolvedConn struct {
+	Creds   string
+	URL     string
+	Context string
+}
+
+// Resolve picks the credentials and bus URL for a connection. Precedence:
+// explicit creds win (URL then comes from url or store discovery); otherwise a
+// context — contextName if non-empty, else the active one — supplies both creds
+// and URL. An explicit url still overrides a context's URL.
+func Resolve(creds, url, contextName string) (ResolvedConn, error) {
+	if creds != "" {
+		return ResolvedConn{Creds: creds, URL: url}, nil
+	}
+	name := contextName
+	if name == "" {
+		name = Active()
+	}
+	if name == "" {
+		return ResolvedConn{}, ErrNoIdentity
+	}
+	c, err := Load(name)
+	if err != nil {
+		return ResolvedConn{}, fmt.Errorf("context %q: %w", name, err)
+	}
+	if url == "" {
+		url = c.URL
+	}
+	return ResolvedConn{Creds: c.Creds, URL: url, Context: name}, nil
+}

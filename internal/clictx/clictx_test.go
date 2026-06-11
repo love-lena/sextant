@@ -190,3 +190,66 @@ func TestWriteCredsIsPrivate(t *testing.T) {
 		t.Fatalf("creds perm = %o, want 600", perm)
 	}
 }
+
+func TestResolve(t *testing.T) {
+	t.Setenv("SEXTANT_HOME", t.TempDir())
+	if err := clictx.Save(clictx.Context{Name: "alpha", URL: "nats://ctx:4222", Creds: "/tmp/alpha.creds"}); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("explicit creds win", func(t *testing.T) {
+		rc, err := clictx.Resolve("/tmp/explicit.creds", "nats://flag:4222", "alpha")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rc.Creds != "/tmp/explicit.creds" || rc.URL != "nats://flag:4222" || rc.Context != "" {
+			t.Fatalf("got %+v", rc)
+		}
+	})
+
+	t.Run("named context supplies creds and url", func(t *testing.T) {
+		rc, err := clictx.Resolve("", "", "alpha")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rc.Creds != "/tmp/alpha.creds" || rc.URL != "nats://ctx:4222" || rc.Context != "alpha" {
+			t.Fatalf("got %+v", rc)
+		}
+	})
+
+	t.Run("explicit url overrides context url", func(t *testing.T) {
+		rc, err := clictx.Resolve("", "nats://flag:4222", "alpha")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rc.URL != "nats://flag:4222" || rc.Creds != "/tmp/alpha.creds" {
+			t.Fatalf("got %+v", rc)
+		}
+	})
+
+	t.Run("active context is the fallback", func(t *testing.T) {
+		if err := clictx.SetActive("alpha"); err != nil {
+			t.Fatal(err)
+		}
+		rc, err := clictx.Resolve("", "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rc.Context != "alpha" {
+			t.Fatalf("got %+v", rc)
+		}
+	})
+
+	t.Run("missing named context errors", func(t *testing.T) {
+		if _, err := clictx.Resolve("", "", "ghost"); err == nil || !errors.Is(err, clictx.ErrNotFound) {
+			t.Fatalf("err = %v, want clictx.ErrNotFound", err)
+		}
+	})
+}
+
+func TestResolveNoIdentity(t *testing.T) {
+	t.Setenv("SEXTANT_HOME", t.TempDir()) // no contexts, no active
+	if _, err := clictx.Resolve("", "", ""); !errors.Is(err, clictx.ErrNoIdentity) {
+		t.Fatalf("err = %v, want clictx.ErrNoIdentity", err)
+	}
+}
