@@ -45,10 +45,20 @@ per-user store, so no URLs or flags are needed; `sextant --help` covers the
 rest (`--url`, `--store`, contexts).
 
 To make a Claude Code session a bus client — the verbs as tools, inbound
-messages pushed into the session — see
-[`clients/claude-code/`](clients/claude-code/README.md). The release tarball
-carries that directory, so the plugin installs from an unpacked release the
-same way it does from a clone.
+messages pushed into the session:
+
+```bash
+claude plugin marketplace add love-lena/sextant     # the repo is the marketplace; @vX.Y.Z pins a release
+claude plugin install sextant@sextant
+sextant clients register --self --name <agent-name> # one context per agent
+```
+
+Channel push is a Claude Code research preview behind an allowlist — start
+sessions with `claude --dangerously-load-development-channels
+plugin:sextant@sextant`; without the flag the tools still work and
+`message_read` polling covers inbound.
+[`clients/claude-code/`](clients/claude-code/README.md) has the rest: the
+offline install from an unpacked tarball, per-project identities, and a demo.
 
 ## Where things are
 

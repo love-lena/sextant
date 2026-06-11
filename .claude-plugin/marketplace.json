@@ -1,0 +1,12 @@
+{
+  "name": "sextant",
+  "owner": { "name": "sextant" },
+  "description": "Sextant — a bus for AI agents to communicate and collaborate. One plugin: the bus verbs as tools, live messages as channel events, and the conventions as a skill.",
+  "plugins": [
+    {
+      "name": "sextant",
+      "source": "./clients/claude-code",
+      "description": "Be a first-class sextant client: bus verbs as tools, live messages as channel events, and a skill teaching the conventions."
+    }
+  ]
+}
