@@ -1,17 +1,16 @@
 ---
 id: TASK-32.4
 title: 'Implementer pages: the Wire API + the backend interface'
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-06-08 22:42'
-updated_date: '2026-06-09 00:06'
+updated_date: '2026-06-11 00:03'
 labels:
   - docs
   - 'slug:docs-mdbook-implementer-pages'
   - P3
   - ready-for-agent
-dependencies:
-  - TASK-32.1
+dependencies: []
 parent_task_id: TASK-32
 priority: medium
 ordinal: 38000
@@ -41,4 +40,12 @@ PROSE/AGENT SPLIT: agent owns the nats-binding→canon refactor (relocating the 
 IMPLEMENTED in PR #97 (commit 05c01e6), CI green. Agent portion complete; remaining work is Lena's prose pages. Verified: docgen deterministic + CI drift-check, mdbook builds clean, quickstart compiles + runs against a live bus. NOTE: protocol/wire-api.md is new technical canon I authored (factored from nats-binding + methods.json); flagged for Lena since prose is normally hers.
 
 RESTRUCTURED (commit 736760b): backend-interface page still rendered from semantic-contract.md (factual, done). The Wire API page is now a PROSE BLANK for Lena — my authored protocol/wire-api.md was removed and nats-binding.md restored; the backend-neutral-transport factoring is deferred to when Lena writes that page (noted in the stub + docs/book/AUTHORING.md).
+
+Fixed in: PR #97; book pages removed by #98
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Both halves landed via #97 (all ACs ticked): the backend-neutral Wire API factored out of nats-binding.md into protocol/ canon, and the two book pages rendered. #98 then cut the 'For implementers' book section by canon decision — the protocol/ refactor (the durable half) stands; the book pages were deliberately removed, not lost.
+<!-- SECTION:FINAL_SUMMARY:END -->
