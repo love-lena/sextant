@@ -82,17 +82,32 @@ func Check(name, out string, force bool) error {
 // so it always activates — `context use` switches away. Returns the creds path
 // written.
 func Save(name, kind, url string, issued sextant.IssuedClient) (string, error) {
+	return writeContext(name, name, kind, url, issued, true)
+}
+
+// writeContext is the shared write path behind Save and EnrollAgent: it writes
+// the creds (0600), records a context carrying the bus-minted identity, and —
+// only when activate is set — makes it the active context. An agent identity
+// (activate=false) is recorded WITHOUT touching the operator's active context
+// (ADR-0029); a self-enroll (activate=true) takes over, as "I am now this
+// identity" implies. display defaults to name when empty.
+func writeContext(name, display, kind, url string, issued sextant.IssuedClient, activate bool) (string, error) {
+	if display == "" {
+		display = name
+	}
 	credsPath, err := clictx.WriteCreds(name, issued.Creds)
 	if err != nil {
 		return "", err
 	}
 	if err := clictx.Save(clictx.Context{
-		Name: name, URL: url, ID: issued.ID, Display: name, Kind: kind, Creds: credsPath,
+		Name: name, URL: url, ID: issued.ID, Display: display, Kind: kind, Creds: credsPath,
 	}); err != nil {
 		return "", err
 	}
-	if err := clictx.SetActive(name); err != nil {
-		return "", err
+	if activate {
+		if err := clictx.SetActive(name); err != nil {
+			return "", err
+		}
 	}
 	return credsPath, nil
 }
@@ -139,6 +154,24 @@ func Enroll(ctx context.Context, name, kind, url, store string, force bool) (Res
 	if name == "" {
 		name = SelfName()
 	}
+	return enroll(ctx, name, name, kind, url, store, force, true)
+}
+
+// EnrollAgent mints a dedicated agent identity and records it as a NON-active
+// context: the same mint as Enroll, but it never takes over the operator's
+// active context (ADR-0029). An MCP server provisions its own bus identity this
+// way so it speaks as itself, never as the human running the harness. display
+// is the (friendly) bus display name, distinct from name, the local context
+// handle (which is session-keyed and long). force is false: the caller derives
+// a fresh, deterministic handle and reattaches by Load when one already exists.
+func EnrollAgent(ctx context.Context, name, display, kind, url, store string) (Result, error) {
+	return enroll(ctx, name, display, kind, url, store, false, false)
+}
+
+// enroll is the shared mint path. activate decides whether the resulting
+// context becomes active (Save) or is recorded without disturbing the active
+// one (EnrollAgent).
+func enroll(ctx context.Context, name, display, kind, url, store string, force, activate bool) (Result, error) {
 	if err := Check(name, "", force); err != nil {
 		return Result{}, err
 	}
@@ -156,7 +189,7 @@ func Enroll(ctx context.Context, name, kind, url, store string, force bool) (Res
 		return Result{}, fmt.Errorf("selfenroll: register: %w", err)
 	}
 	busURL := ResolveBusURL(url, store)
-	credsPath, err := Save(name, kind, busURL, issued)
+	credsPath, err := writeContext(name, display, kind, busURL, issued, activate)
 	if err != nil {
 		return Result{}, err
 	}
