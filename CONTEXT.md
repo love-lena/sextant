@@ -94,6 +94,13 @@ name is a handle you choose (at register time it defaults to the display name),
 distinct from the identity's bus-minted ULID and its non-unique display name.
 _Avoid_: profile, account, session, environment
 
+**Channel**:
+The Claude Code harness push mechanism (a research-preview feature): the
+plugin adapter (`sextant-mcp`, ADR-0028) declares it and pushes inbound bus
+messages into the session as `<channel>` events. A harness construct, never a
+bus one — the bus-side concept is the *topic*.
+_Avoid_: using "channel" for anything bus-side
+
 **Workflow**:
 A multi-step collaboration, driven by a coordinator client.
 _Avoid_: pipeline, job, DAG (shapes a workflow may take, not the thing itself);
