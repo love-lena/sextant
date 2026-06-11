@@ -31,12 +31,18 @@ import (
 	"syscall"
 
 	"github.com/love-lena/sextant/internal/dash"
+	"github.com/love-lena/sextant/internal/version"
 )
 
 func main() {
 	fs := flag.NewFlagSet("sextant-dash", flag.ExitOnError)
 	flags := dash.AddFlags(fs)
+	ver := fs.Bool("version", false, "print version and exit")
 	_ = fs.Parse(os.Args[1:])
+	if *ver {
+		fmt.Println("sextant-dash " + version.String())
+		return
+	}
 
 	opts, err := flags.Resolve()
 	if err != nil {

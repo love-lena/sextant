@@ -20,11 +20,13 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/love-lena/sextant/internal/version"
 	"github.com/love-lena/sextant/pkg/sextant"
 )
 
@@ -42,8 +44,13 @@ func main() {
 
 	fs := flag.NewFlagSet("sextant-mcp", flag.ExitOnError)
 	cf := addConnFlags(fs)
+	ver := fs.Bool("version", false, "print version and exit")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
+	}
+	if *ver {
+		fmt.Println("sextant-mcp " + version.String())
+		return
 	}
 
 	if err := run(context.Background(), cf); err != nil {
@@ -53,7 +60,7 @@ func main() {
 
 func run(ctx context.Context, cf connFlags) error {
 	server := mcp.NewServer(
-		&mcp.Implementation{Name: serverName, Version: serverVersion},
+		&mcp.Implementation{Name: serverName, Version: version.String()},
 		&mcp.ServerOptions{
 			Instructions: instructions,
 			Capabilities: &mcp.ServerCapabilities{
@@ -82,5 +89,3 @@ func run(ctx context.Context, cf connFlags) error {
 
 	return server.Run(ctx, transport)
 }
-
-const serverVersion = "0.1.0"
