@@ -1,17 +1,16 @@
 ---
 id: TASK-32.3
 title: Go SDK getting-started + reference
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-06-08 22:42'
-updated_date: '2026-06-08 23:11'
+updated_date: '2026-06-11 00:03'
 labels:
   - docs
   - 'slug:docs-mdbook-sdk-reference'
   - P3
   - ready-for-agent
-dependencies:
-  - TASK-32.1
+dependencies: []
 parent_task_id: TASK-32
 priority: medium
 ordinal: 37000
@@ -39,4 +38,12 @@ Getting-started narrative is voice-sensitive (Lena's voice via writing-style); t
 PROSE/AGENT SPLIT: agent owns the runnable+verified Go program, the per-area SDK pages rendered from the (already-written) package doc comments, and the go-doc API reference. The getting-started narrative and the SDK Overview are Lena's pre-stubbed prose (branch docs-mdbook-scope).
 
 IMPLEMENTED in PR #97 (commit 05c01e6), CI green. Agent portion complete; remaining work is Lena's prose pages. Verified: docgen deterministic + CI drift-check, mdbook builds clean, quickstart compiles + runs against a live bus. getting-started narrative + SDK Overview remain Lena's prose.
+
+Fixed in: PR #97
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped via PR #97: per-area SDK pages leading with narrative doc comments, generated API reference wired, runnable getting-started example build-verified.
+<!-- SECTION:FINAL_SUMMARY:END -->

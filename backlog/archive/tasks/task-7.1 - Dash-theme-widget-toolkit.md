@@ -1,9 +1,10 @@
 ---
 id: TASK-7.1
 title: 'Dash: theme + widget toolkit'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-06 02:59'
+updated_date: '2026-06-10 23:58'
 labels: []
 milestone: 'M4: The dash (human UI)'
 dependencies: []
@@ -23,9 +24,9 @@ Foundation of the dash library (ADR-0023, ADR-0014), no SDK: a theme package (ba
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 theme: stock base16 light + dark + `Auto()` default; role/kind hue tokens; status glyphs; `DefaultKeymap()` + a working user-override path
-- [ ] #2 widgets (cursor list, stream viewport, detail pane) render only from theme tokens (incl. the idle/selected/active 3-state focus cue), no SDK import
-- [ ] #3 teatest goldens + a committed VHS `.tape` + a preview binary, PTY-verified; the rendered `.gif` attached to the PR for review
+- [x] #1 theme: stock base16 light + dark + `Auto()` default; role/kind hue tokens; status glyphs; `DefaultKeymap()` + a working user-override path
+- [x] #2 widgets (cursor list, stream viewport, detail pane) render only from theme tokens (incl. the idle/selected/active 3-state focus cue), no SDK import
+- [x] #3 teatest goldens + a committed VHS `.tape` + a preview binary, PTY-verified; the rendered `.gif` attached to the PR for review
 <!-- AC:END -->
 
 ## Implementation Notes
@@ -62,4 +63,14 @@ Interaction model (Lena 2026-06-08 — a *default*, expected to churn):
 Verify (AC = `.tape` + goldens): teatest goldens (focused/unfocused, narrow/wide reflow,
 empty/overflow) + a committed VHS `.tape`, preview binary driven in tmux; the rendered
 `.gif` goes in the PR — **Lena reviews the look there**.
+
+Implemented on feat/dash, PR #99 (https://github.com/love-lena/sextant/pull/99). All acceptance criteria met + verified via two-stage (spec + code-quality) review per subtask. Whole-module `go test ./...` green incl. the no-tag internal/dash e2e; PTY-verified in tmux. Status In Progress pending human sign-off (merge). Commits 405e472 (impl) + 414621d (review fixes).
+
+Fixed in: 4887258 (PR #99)
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in PR #99 (squash 4887258) as part of TASK-7.
+<!-- SECTION:FINAL_SUMMARY:END -->

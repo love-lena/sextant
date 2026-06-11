@@ -4,14 +4,13 @@ title: Protocol reference pages + the connection/auth/creds page
 status: In Progress
 assignee: []
 created_date: '2026-06-08 22:42'
-updated_date: '2026-06-09 00:06'
+updated_date: '2026-06-11 00:03'
 labels:
   - docs
   - 'slug:docs-mdbook-protocol-reference'
   - P3
   - ready-for-agent
-dependencies:
-  - TASK-32.1
+dependencies: []
 parent_task_id: TASK-32
 priority: medium
 ordinal: 36000
@@ -42,4 +41,6 @@ PROSE/AGENT SPLIT: this ticket fills only the generated draft slots (Operations,
 IMPLEMENTED in PR #97 (commit 05c01e6), CI green. Agent portion complete; remaining work is Lena's prose pages. Verified: docgen deterministic + CI drift-check, mdbook builds clean, quickstart compiles + runs against a live bus. Generated pages done (operations/lexicons/frame/registry); Epoch + Overview + Connection remain Lena's prose.
 
 RESTRUCTURED (fragments-in-prose, commit 736760b): the lexicon field tables are now generated *fragments* under docs/book/generated/, embedded by prose stub pages via {{#include}}. The frame/registry/records prose is Lena's; only the tables are generated. operations.md stays a full generated page.
+
+2026-06-10: ACs 1-4 shipped via #97. AC#5 outstanding: docs/book/src/protocol/epoch.md is still the Claude-outline stub banner-marked TODO for Lena (the overview/connection prose pages are also Lena's, per the AC's own carve-out).
 <!-- SECTION:NOTES:END -->
