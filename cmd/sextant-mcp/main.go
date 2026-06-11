@@ -24,6 +24,8 @@ import (
 	"os"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/love-lena/sextant/pkg/sextant"
 )
 
 const serverName = "sextant"
@@ -63,7 +65,22 @@ func run(ctx context.Context, cf connFlags) error {
 		},
 	)
 
-	return server.Run(ctx, &mcp.StdioTransport{})
+	conn := &connManager{cf: cf}
+	names := newNameCache(func(ctx context.Context) ([]sextant.ClientInfo, error) {
+		c, err := conn.get(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return c.ListClients(ctx)
+	})
+	transport := &capturingTransport{inner: &mcp.StdioTransport{}}
+	registerTools(server, &deps{
+		conn:  conn,
+		names: names,
+		hub:   newChannelHub(transport.notify, names),
+	})
+
+	return server.Run(ctx, transport)
 }
 
 const serverVersion = "0.1.0"

@@ -1,0 +1,237 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"sort"
+	"sync"
+
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/love-lena/sextant/pkg/sextant"
+)
+
+// channelMethod is the Claude Code channel notification (research preview):
+// the harness injects each one into the session as a <channel> event.
+const channelMethod = "notifications/claude/channel"
+
+// deliveryCaveat rides every subscribe result: the harness gives a server no
+// way to learn whether it was loaded as a channel — without the flag, pushes
+// drop silently. The `subscribed` notice that follows a subscribe is the
+// agent-side check (see the skill).
+const deliveryCaveat = "subscribed. CAVEAT: channel delivery cannot be verified server-side — " +
+	"a `subscribed` system notice should arrive as a <channel> event now; if it does not, " +
+	"this session was not started with --dangerously-load-development-channels (or org policy " +
+	"blocks channels) and you must poll with message_read instead."
+
+// capturingTransport stashes the Connection the server runs over, so the hub
+// can write channel notifications onto it. Connection.Write is documented
+// safe for concurrent use. (Proven against the live harness, 2026-06-10.)
+type capturingTransport struct {
+	inner mcp.Transport
+	mu    sync.Mutex
+	conn  mcp.Connection
+}
+
+func (t *capturingTransport) Connect(ctx context.Context) (mcp.Connection, error) {
+	conn, err := t.inner.Connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	t.mu.Lock()
+	t.conn = conn
+	t.mu.Unlock()
+	return conn, nil
+}
+
+func (t *capturingTransport) notify(ctx context.Context, method string, params any) error {
+	t.mu.Lock()
+	conn := t.conn
+	t.mu.Unlock()
+	if conn == nil {
+		return errors.New("transport not connected yet")
+	}
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return err
+	}
+	// A jsonrpc Request with a zero ID is a notification.
+	return conn.Write(ctx, &jsonrpc.Request{Method: method, Params: raw})
+}
+
+// channelHub owns the subject → subscription map and renders bus frames into
+// channel events. Meta keys are alphanumeric+underscore only — the harness
+// silently drops others.
+type channelHub struct {
+	notify func(ctx context.Context, method string, params any) error
+	names  *nameCache
+
+	mu   sync.Mutex
+	subs map[string]sextant.Subscription
+}
+
+func newChannelHub(notify func(ctx context.Context, method string, params any) error, names *nameCache) *channelHub {
+	return &channelHub{notify: notify, names: names, subs: map[string]sextant.Subscription{}}
+}
+
+// event pushes one channel notification; failures are logged, never fatal —
+// the bus subscription must outlive a harness hiccup.
+func (h *channelHub) event(content string, meta map[string]any) {
+	if err := h.notify(context.Background(), channelMethod, map[string]any{
+		"content": content,
+		"meta":    meta,
+	}); err != nil {
+		log.Printf("channel push failed: %v", err)
+	}
+}
+
+// frameEvent renders a delivered message. chat.message renders as its text;
+// any other lexicon as its compact JSON (content is opaque to the bus —
+// rendering is a courtesy, not policy).
+func (h *channelHub) frameEvent(m sextant.Message) {
+	content := string(m.Frame.Record)
+	var rec struct {
+		Type string `json:"$type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(m.Frame.Record, &rec); err == nil && rec.Type == "chat.message" {
+		content = rec.Text
+	}
+	h.event(content, map[string]any{
+		"subject":   m.Subject,
+		"sender":    h.names.displayName(context.Background(), m.Frame.Author),
+		"sender_id": m.Frame.Author,
+		"seq":       fmt.Sprint(m.Sequence),
+		"id":        m.Frame.ID,
+	})
+}
+
+// systemEvent is a notice from this server, not a bus frame: event names the
+// condition, and there are no frame attributes to carry.
+func (h *channelHub) systemEvent(event, subject, content string) {
+	meta := map[string]any{"event": event}
+	if subject != "" {
+		meta["subject"] = subject
+	}
+	h.event(content, meta)
+}
+
+// subscribe follows subject live, delivering via the channel. Duplicate
+// subscribes are idempotent. deliver="all" replays retained history first.
+func (h *channelHub) subscribe(ctx context.Context, c *sextant.Client, subject, deliver string) ([]string, error) {
+	h.mu.Lock()
+	_, exists := h.subs[subject]
+	h.mu.Unlock()
+	if exists {
+		return h.active(), nil
+	}
+
+	var opts []sextant.SubOption
+	if deliver == "all" {
+		opts = append(opts, sextant.DeliverAll())
+	}
+	// Resume failures must be loud (the silent delivers-nothing window is the
+	// failure mode this server exists to kill). The handler must not block:
+	// hand off to a goroutine.
+	opts = append(opts, sextant.OnError(func(err error) {
+		go h.resumeNotice(subject, err)
+	}))
+
+	sub, err := c.Subscribe(ctx, subject, h.frameEvent, opts...)
+	if err != nil {
+		return nil, err
+	}
+	h.mu.Lock()
+	h.subs[subject] = sub
+	h.mu.Unlock()
+
+	h.systemEvent("subscribed", subject, fmt.Sprintf("now following %s — frames arrive as channel events; reply with message_publish", subject))
+	return h.active(), nil
+}
+
+func (h *channelHub) resumeNotice(subject string, err error) {
+	if errors.Is(err, sextant.ErrResumeDeferred) {
+		h.systemEvent("resume_deferred", subject,
+			fmt.Sprintf("subscription to %s is paused by a transport blip; the SDK retries on the next reconnect — nothing delivers until then (%v)", subject, err))
+		return
+	}
+	// Fatal: the bus said the resume is impossible; the subscription is
+	// stopped. The tail is gone — the agent must re-read.
+	h.mu.Lock()
+	delete(h.subs, subject)
+	h.mu.Unlock()
+	h.systemEvent("resume_lost", subject,
+		fmt.Sprintf("subscription to %s is LOST (%v) — messages may have been missed; catch up with message_read from your last seen cursor, then message_subscribe again", subject, err))
+}
+
+// unsubscribe stops following subject; the remaining active list is returned.
+func (h *channelHub) unsubscribe(subject string) ([]string, error) {
+	h.mu.Lock()
+	sub, ok := h.subs[subject]
+	if ok {
+		delete(h.subs, subject)
+	}
+	h.mu.Unlock()
+	if !ok {
+		return nil, errNotSubscribed(subject, h.active())
+	}
+	sub.Stop()
+	return h.active(), nil
+}
+
+func (h *channelHub) active() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	subjects := make([]string, 0, len(h.subs))
+	for s := range h.subs {
+		subjects = append(subjects, s)
+	}
+	sort.Strings(subjects)
+	return subjects
+}
+
+type subscribeArgs struct {
+	Subject  string `json:"subject" jsonschema:"exact subject or wildcard to follow (e.g. msg.topic.plan)"`
+	Deliver  string `json:"deliver,omitempty" jsonschema:"new (default) = only messages from now on; all = replay retained history first"`
+	SinceSeq uint64 `json:"since_seq,omitempty" jsonschema:"unused yet; catch up explicitly with message_read instead"`
+}
+
+func registerMessageSubscribe(s *mcp.Server, d *deps) {
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "message_subscribe",
+		Description: "Follow a subject live: inbound frames are pushed into this session as <channel> events. Idempotent per subject. Reply path is message_publish.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args subscribeArgs) (*mcp.CallToolResult, any, error) {
+		c, err := d.conn.get(ctx)
+		if err != nil {
+			return toolError(err), nil, nil
+		}
+		active, err := d.hub.subscribe(context.Background(), c, args.Subject, args.Deliver)
+		if err != nil {
+			return toolError(err), nil, nil
+		}
+		res, err := jsonResult(map[string]any{"active_subscriptions": active, "note": deliveryCaveat})
+		return res, nil, err
+	})
+}
+
+type unsubscribeArgs struct {
+	Subject string `json:"subject" jsonschema:"the subject to stop following"`
+}
+
+func registerMessageUnsubscribe(s *mcp.Server, d *deps) {
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "message_unsubscribe",
+		Description: "Stop following a subject (the channel analogue of Ctrl-C on `sextant subscribe`).",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args unsubscribeArgs) (*mcp.CallToolResult, any, error) {
+		active, err := d.hub.unsubscribe(args.Subject)
+		if err != nil {
+			return toolError(err), nil, nil
+		}
+		res, err := jsonResult(map[string]any{"active_subscriptions": active})
+		return res, nil, err
+	})
+}
