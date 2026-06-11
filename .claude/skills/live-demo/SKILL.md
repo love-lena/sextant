@@ -66,7 +66,7 @@ for the PR, script for the sign-off.
 # One-command demo of <feature> (TASK-NN). Header: what it stages,
 # the reviewer's numbered steps, what exit prints.
 set -euo pipefail
-REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../.." && pwd)" # ../.. fits clients/<area>/; match the script's depth
 D="$(mktemp -d /tmp/<feature>-demo.XXXXXX)"
 say() { printf '\033[1;36m[demo]\033[0m %s\n' "$*"; }
 
@@ -74,6 +74,7 @@ say "building from $REPO" && mkdir -p "$D/bin"
 (cd "$REPO" && go build -o "$D/bin/<binary>" ./cmd/<binary>)
 # start infra; bounded readiness poll; register throwaway identities
 # background counterpart (cursor poll, capped replies); PID for cleanup
+PEER_PID="" INFRA_PID="" # init before the trap: set -u must not break the exit path
 trap 'kill "$PEER_PID" "$INFRA_PID" 2>/dev/null || true' EXIT
 
 say "1. <first step>   2. <what to type>   3. <what you should see>"
