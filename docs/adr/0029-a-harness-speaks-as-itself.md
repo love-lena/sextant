@@ -1,0 +1,71 @@
+---
+status: proposed
+date: 2026-06-10
+---
+
+# A harness speaks as itself, with a per-session identity
+
+An agent acting on the bus is its own actor, so its authorship should be its
+own. The plugin adapter ([ADR-0028](0028-byo-harnesses-join-through-a-plugin-adapter.md))
+therefore provisions its **own** bus identity for each harness session, rather
+than borrowing whoever the operator's CLI happens to be configured as.
+
+This revises one line of ADR-0028 — "identity resolves the way every client
+resolves it (creds → named context → active context)". For the adapter, the
+first two still hold, but the last does not: an MCP server **never** falls back
+to the operator's active context. A human's active selection is the human's;
+inheriting it would make the agent speak as the person running the harness, and
+bus authorship is unforgeable ([ADR-0020](0020-clients-are-bus-issued-identities.md)) —
+a misattribution can't be taken back.
+
+## Its own identity, one per session
+
+The adapter mints a dedicated identity on first bus use (lazily — a session
+that never touches the bus mints nothing) and records it as a **non-active**
+context, leaving the operator's active context untouched
+([ADR-0021](0021-saved-client-contexts.md)).
+
+The identity is keyed on the harness's session id (Claude Code sets
+`CLAUDE_CODE_SESSION_ID` on every spawned MCP server, stable across
+`--resume`/`--continue`). So a resumed conversation reattaches to the identity
+it minted before instead of returning as a stranger, and two concurrent
+sessions are two distinct identities — they never both answer the same message.
+This sharpens ADR-0028's "one context per agent across sessions" to **one
+identity per session, reattached on resume**.
+
+## Explicit wins; switching is deliberate and bounded
+
+Resolution precedence for the adapter:
+
+1. `$SEXTANT_CREDS` / `$SEXTANT_CONTEXT` (env or flag) — an operator who pins an
+   identity gets exactly it.
+2. A context the agent explicitly switched to in-session (the `context_use`
+   tool).
+3. This session's own identity — reattached by session id, else freshly minted.
+
+`context_use` lets an agent deliberately resume or assume a specific saved
+identity, but it refuses a context whose kind is `human`: the agent must not
+speak as a person, even when asked. The everyday CLI keeps its kubectl-style
+active-context fallback ([ADR-0021](0021-saved-client-contexts.md)); the
+divergence is the adapter's alone.
+
+## When it can't mint
+
+Minting needs the bus's enrollment credential and a reachable bus. When either
+is missing, the tool call returns the recovery recipe (pin a context, or start
+a bus) and the held-connection retry ([ADR-0028](0028-byo-harnesses-join-through-a-plugin-adapter.md))
+heals it once a bus is reachable. It never borrows an existing identity to
+paper over the gap — failing loud beats speaking as the wrong actor.
+
+## Consequences
+
+- Authorship is honest: a frame from the agent carries the agent's ULID, never
+  the operator's — the unforgeable-author guarantee ([ADR-0020](0020-clients-are-bus-issued-identities.md))
+  means what it says for harnesses too.
+- Zero-config: a fresh session on a machine with a local bus just works; no
+  register-first ritual, and resume keeps the same identity.
+- Identity count grows with conversations (one per session). Pruning stale
+  agent identities so the directory doesn't fill with offline `claude-*`
+  records is follow-up work (relates to TASK-46).
+- A non-Claude-Code host (no session id) gets a fresh identity per process,
+  with no resume key; it can pin `$SEXTANT_CONTEXT` for a stable identity.

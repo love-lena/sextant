@@ -22,17 +22,19 @@ One server process, one verified identity
 the server's lifetime — presence derives from that connection
 ([ADR-0020](0020-clients-are-bus-issued-identities.md)), so the session reads
 as online to collaborators between tool calls, not only during them. Identity
-resolves the way every client resolves it (creds → named context → active
-context, shared in `internal/clictx`), and resolution is retried per tool
-call rather than failing the server: an identity minted mid-session heals the
-adapter without a restart.
+resolves from explicit creds → named context, then — unlike the CLI — the
+adapter provisions its *own* per-session identity rather than falling back to
+the operator's active context ([ADR-0029](0029-a-harness-speaks-as-itself.md)).
+Resolution is retried per tool call rather than failing the server, so the
+adapter heals without a restart once a bus is reachable.
 
 The **session is the client**: subagents inside the harness share its
 identity, because the client boundary is the process and the bus does not
 look inside it — signal and cooperate, never track and manage. Worker
-attribution, where a workflow wants it, is record content. One context per
-agent is the convention across sessions; a session that genuinely needs two
-identities declares the adapter twice with different contexts.
+attribution, where a workflow wants it, is record content. Each session gets
+its own identity ([ADR-0029](0029-a-harness-speaks-as-itself.md)); a session
+that genuinely needs two at once declares the adapter twice with different
+contexts.
 
 ## Delivery maps by the verb's nature
 
