@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/love-lena/sextant/internal/version"
 	"github.com/love-lena/sextant/pkg/bus"
 	"github.com/love-lena/sextant/pkg/conninfo"
 )
@@ -41,6 +42,8 @@ func main() {
 		cmdArtifact(os.Args[2:])
 	case "dash":
 		cmdDash(os.Args[2:])
+	case "version", "--version":
+		fmt.Println("sextant " + version.String())
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -78,6 +81,9 @@ the dash (a cockpit of three master-detail browsers over the same SDK — ADR-00
   sextant dash      [--theme light|dark|auto] [--config F] [--name N]
                     (alias for the sextant-dash binary; same connection flags;
                     first run with no identity self-enrolls against a local bus)
+
+version:
+  sextant version                               print the build (release tag or dev + commit)
 
 environment (avoids repeating the flags):
   SEXTANT_STORE   default for --store (the bus store dir; discovery + creds)

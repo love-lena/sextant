@@ -1,0 +1,38 @@
+name: Release
+
+# Pushing a v* tag publishes a GitHub release whose tarballs are complete,
+# versioned installs — binaries + the Claude Code plugin (TASK-47). Dogfood
+# machines upgrade by release, never by branch state.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: build + publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: build tarballs
+        run: scripts/release.sh "$GITHUB_REF_NAME"
+      - name: smoke the linux binary
+        run: |
+          tar -xzf "dist/sextant_${GITHUB_REF_NAME}_linux_amd64.tar.gz" -C /tmp
+          v=$(/tmp/sextant_${GITHUB_REF_NAME}_linux_amd64/bin/sextant version)
+          echo "$v"
+          case "$v" in "sextant ${GITHUB_REF_NAME} ("*) ;; *) echo "version not stamped"; exit 1 ;; esac
+      - name: publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # A hyphen in the tag (v0.2.0-rc.1) is a semver prerelease — published
+        # flagged, never as "latest".
+        run: |
+          pre=""
+          case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz --generate-notes --verify-tag $pre
