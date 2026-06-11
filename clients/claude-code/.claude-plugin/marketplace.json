@@ -1,0 +1,11 @@
+{
+  "name": "sextant",
+  "owner": { "name": "sextant" },
+  "plugins": [
+    {
+      "name": "sextant",
+      "source": ".",
+      "description": "Be a first-class sextant client: bus verbs as tools, live messages as channel events, and a skill teaching the conventions."
+    }
+  ]
+}

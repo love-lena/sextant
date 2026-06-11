@@ -78,8 +78,8 @@ func TestResolveURLFlagOverridesContextURL(t *testing.T) {
 
 func TestResolveNoIdentityErrors(t *testing.T) {
 	t.Setenv("SEXTANT_HOME", t.TempDir())
-	if _, _, err := cf("", "/store", "", "").resolve(); !errors.Is(err, errNoIdentity) {
-		t.Fatalf("resolve() err = %v, want errNoIdentity", err)
+	if _, _, err := cf("", "/store", "", "").resolve(); !errors.Is(err, clictx.ErrNoIdentity) {
+		t.Fatalf("resolve() err = %v, want clictx.ErrNoIdentity", err)
 	}
 }
 
