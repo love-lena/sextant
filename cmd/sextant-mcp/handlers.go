@@ -30,8 +30,8 @@ func jsonResult(v any) (*mcp.CallToolResult, error) {
 }
 
 type publishArgs struct {
-	Subject string          `json:"subject" jsonschema:"the messages-space subject to publish on (msg.topic.<name> for a topic, msg.client.<id> for a DM)"`
-	Record  json.RawMessage `json:"record" jsonschema:"the lexicon record, e.g. {\"$type\":\"chat.message\",\"text\":\"...\"}"`
+	Subject string         `json:"subject" jsonschema:"the messages-space subject to publish on (msg.topic.<name> for a topic, msg.client.<id> for a DM)"`
+	Record  map[string]any `json:"record" jsonschema:"the lexicon record, e.g. {\"$type\":\"chat.message\",\"text\":\"...\"}"`
 }
 
 func registerMessagePublish(s *mcp.Server, d *deps) {
@@ -43,7 +43,7 @@ func registerMessagePublish(s *mcp.Server, d *deps) {
 		if err != nil {
 			return toolError(err), nil, nil
 		}
-		if err := c.Publish(ctx, args.Subject, args.Record); err != nil {
+		if err := c.Publish(ctx, args.Subject, mustRaw(args.Record)); err != nil {
 			return toolError(err), nil, nil
 		}
 		res, err := jsonResult(map[string]any{"published": args.Subject})
@@ -91,8 +91,8 @@ func registerMessageRead(s *mcp.Server, d *deps) {
 }
 
 type artifactCreateArgs struct {
-	Name   string          `json:"name" jsonschema:"artifact name"`
-	Record json.RawMessage `json:"record" jsonschema:"the lexicon record, e.g. {\"$type\":\"document\",\"title\":\"...\",\"body\":\"...\"}"`
+	Name   string         `json:"name" jsonschema:"artifact name"`
+	Record map[string]any `json:"record" jsonschema:"the lexicon record, e.g. {\"$type\":\"document\",\"title\":\"...\",\"body\":\"...\"}"`
 }
 
 func registerArtifactCreate(s *mcp.Server, d *deps) {
@@ -104,7 +104,7 @@ func registerArtifactCreate(s *mcp.Server, d *deps) {
 		if err != nil {
 			return toolError(err), nil, nil
 		}
-		rev, err := c.CreateArtifact(ctx, args.Name, wire.Lexicon(args.Record))
+		rev, err := c.CreateArtifact(ctx, args.Name, wire.Lexicon(mustRaw(args.Record)))
 		if err != nil {
 			return toolError(err), nil, nil
 		}
@@ -114,9 +114,9 @@ func registerArtifactCreate(s *mcp.Server, d *deps) {
 }
 
 type artifactUpdateArgs struct {
-	Name        string          `json:"name" jsonschema:"artifact name"`
-	Record      json.RawMessage `json:"record" jsonschema:"the full replacement record"`
-	ExpectedRev uint64          `json:"expected_rev" jsonschema:"the revision this update is based on (compare-and-swap; get the artifact first)"`
+	Name        string         `json:"name" jsonschema:"artifact name"`
+	Record      map[string]any `json:"record" jsonschema:"the full replacement record"`
+	ExpectedRev uint64         `json:"expected_rev" jsonschema:"the revision this update is based on (compare-and-swap; get the artifact first)"`
 }
 
 func registerArtifactUpdate(s *mcp.Server, d *deps) {
@@ -128,7 +128,7 @@ func registerArtifactUpdate(s *mcp.Server, d *deps) {
 		if err != nil {
 			return toolError(err), nil, nil
 		}
-		rev, err := c.UpdateArtifact(ctx, args.Name, wire.Lexicon(args.Record), args.ExpectedRev)
+		rev, err := c.UpdateArtifact(ctx, args.Name, wire.Lexicon(mustRaw(args.Record)), args.ExpectedRev)
 		if err != nil {
 			return toolError(err), nil, nil
 		}
@@ -217,4 +217,14 @@ func registerClientsList(s *mcp.Server, d *deps) {
 // errNotSubscribed keeps unsubscribe honest about what it can stop.
 func errNotSubscribed(subject string, active []string) error {
 	return fmt.Errorf("not subscribed to %q; active subscriptions: %v", subject, active)
+}
+
+// mustRaw re-marshals a validated tool argument; marshaling a map[string]any
+// that just unmarshaled cannot fail.
+func mustRaw(v map[string]any) json.RawMessage {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return b
 }
