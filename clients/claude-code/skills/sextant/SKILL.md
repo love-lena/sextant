@@ -90,9 +90,10 @@ Resolution precedence: `$SEXTANT_CREDS` → `$SEXTANT_CONTEXT` (an operator may
 pin one in `.mcp.json`'s `env`) → a context you switched to with `context_use`
 → this session's own auto-minted identity.
 
-Use **`context_use`** to deliberately resume or assume a specific saved
-identity (by context name); it refuses human identities — you must not speak as
-a person. If a tool reports it can't mint an identity, the bus is unreachable
+Use **`context_use`** to deliberately resume or assume a saved **agent**
+identity (by context name); it refuses non-agent contexts (human, client, or
+unlabelled) — you never speak as a person or another client. If a tool reports
+it can't mint an identity, the bus is unreachable
 or has no enrollment credential: start a local bus, or pin `$SEXTANT_CONTEXT`.
 Resolution is retried per call, so it heals without a restart once a bus is up.
 

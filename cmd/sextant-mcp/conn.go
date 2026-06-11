@@ -94,7 +94,10 @@ func (m *connManager) resolve(ctx context.Context) (clictx.ResolvedConn, error) 
 	if m.switched != "" {
 		return clictx.Resolve("", *m.cf.url, m.switched)
 	}
-	name, persistent := agentContextName()
+	name, persistent, err := agentContextName()
+	if err != nil {
+		return clictx.ResolvedConn{}, err
+	}
 	if persistent {
 		if c, err := clictx.Load(name); err == nil {
 			return clictx.ResolvedConn{Creds: c.Creds, URL: orStr(*m.cf.url, c.URL), Context: c.Name}, nil
@@ -144,8 +147,8 @@ func (m *connManager) use(name string) error {
 		}
 		return fmt.Errorf("%w\navailable contexts: %v", err, handles)
 	}
-	if c.Kind == "human" {
-		return fmt.Errorf("refusing to switch to %q: it is a human identity, and the agent must not speak as a person", name)
+	if c.Kind != agentKind {
+		return fmt.Errorf("refusing to switch to %q (kind %q): context_use attaches only to agent identities, so the agent never speaks as a person or another client — pin a specific identity explicitly via $SEXTANT_CONTEXT if you mean to", name, c.Kind)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -159,12 +162,22 @@ func (m *connManager) use(name string) error {
 
 // agentContextName is the local handle for this session's identity. It is keyed
 // on CLAUDE_CODE_SESSION_ID so a resumed session reattaches; absent that env
-// (a non-Claude-Code host) it is unique-per-process and not reattachable.
-func agentContextName() (name string, persistent bool) {
+// (a non-Claude-Code host) — or with a session id that can't be a context
+// handle — it is unique-per-process and not reattachable.
+func agentContextName() (name string, persistent bool, err error) {
 	if sid := os.Getenv(sessionEnv); sid != "" {
-		return "claude-" + sid, true
+		if h := "claude-" + sid; clictx.ValidName(h) == nil {
+			return h, true, nil
+		}
+		// An unusable session id can't be a context handle; fall through to a
+		// fresh per-process identity rather than failing every call with a
+		// misleading bus error.
 	}
-	return "claude-" + randHex(6), false
+	suffix, err := randHex(6)
+	if err != nil {
+		return "", false, fmt.Errorf("agent identity: %w", err)
+	}
+	return "claude-" + suffix, false, nil
 }
 
 // agentDisplay is the friendly bus display name behind the (long) handle.
@@ -176,14 +189,14 @@ func agentDisplay(name string) string {
 	return name
 }
 
-// randHex returns n random bytes as hex; crypto/rand failure is treated as
-// fatal-by-empty (the caller's name still has its "claude-" prefix).
-func randHex(n int) string {
+// randHex returns n random bytes as hex. A crypto/rand failure fails loud
+// rather than collapsing distinct sessions onto one empty-suffix handle.
+func randHex(n int) (string, error) {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
-		return ""
+		return "", fmt.Errorf("generate random handle: %w", err)
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }
 
 func orStr(a, b string) string {

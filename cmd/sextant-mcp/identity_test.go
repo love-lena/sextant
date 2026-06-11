@@ -87,7 +87,10 @@ func TestResolveNoPinsMintsAndIgnoresActive(t *testing.T) {
 func TestResolveReattachesSessionContext(t *testing.T) {
 	t.Setenv("SEXTANT_HOME", t.TempDir())
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-123")
-	name, _ := agentContextName()
+	name, _, err := agentContextName()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := clictx.Save(clictx.Context{Name: name, URL: "nats://s", ID: "01SESS", Creds: "/s.creds"}); err != nil {
 		t.Fatal(err)
 	}
@@ -123,23 +126,28 @@ func TestUseSwitchesIdentity(t *testing.T) {
 	}
 }
 
-// TestUseRefusesHuman: the agent must not assume a human identity, even when
-// explicitly asked to switch to one.
-func TestUseRefusesHuman(t *testing.T) {
+// TestUseRefusesNonAgent: context_use must refuse any non-agent identity — not
+// just kind "human" (the dash's label) but also "client", which is what
+// `register --self` mints for an operator. Otherwise the agent could switch
+// into the operator's own identity and speak as them — the very impersonation
+// ADR-0029 forbids.
+func TestUseRefusesNonAgent(t *testing.T) {
 	t.Setenv("SEXTANT_HOME", t.TempDir())
-	if err := clictx.Save(clictx.Context{Name: "lena", URL: "u", ID: "01H", Kind: "human", Creds: "/h.creds"}); err != nil {
-		t.Fatal(err)
-	}
-	m := &connManager{cf: cf("", t.TempDir(), "", "")}
-	err := m.use("lena")
-	if err == nil {
-		t.Fatal("use() switched to a human identity — must refuse")
-	}
-	if !strings.Contains(err.Error(), "human") {
-		t.Fatalf("error %q should explain the human-identity refusal", err)
-	}
-	if m.switched != "" {
-		t.Fatalf("switched set to %q despite refusal", m.switched)
+	for _, tc := range []struct{ name, kind string }{
+		{"lena-dash", "human"}, // dash-minted human
+		{"lena-cli", "client"}, // `register --self` default — an operator
+		{"unlabelled", ""},     // `context add` default
+	} {
+		if err := clictx.Save(clictx.Context{Name: tc.name, URL: "u", ID: "01" + tc.name, Kind: tc.kind, Creds: "/x.creds"}); err != nil {
+			t.Fatal(err)
+		}
+		m := &connManager{cf: cf("", t.TempDir(), "", "")}
+		if err := m.use(tc.name); err == nil {
+			t.Fatalf("use(%q) kind=%q succeeded — only agent identities may be switched to", tc.name, tc.kind)
+		}
+		if m.switched != "" {
+			t.Fatalf("switched set to %q despite refusal", m.switched)
+		}
 	}
 }
 
@@ -184,8 +192,11 @@ func TestResolveSwitchedContextSkipsMint(t *testing.T) {
 // and non-persistent (no resume key).
 func TestAgentContextName(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "abc-def")
-	n1, p1 := agentContextName()
-	n2, p2 := agentContextName()
+	n1, p1, err := agentContextName()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n2, p2, _ := agentContextName()
 	if !p1 || !p2 {
 		t.Fatal("a present session id must be persistent (reattachable)")
 	}
@@ -197,13 +208,20 @@ func TestAgentContextName(t *testing.T) {
 	}
 
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "xyz-999")
-	if n3, _ := agentContextName(); n3 == n1 {
+	if n3, _, _ := agentContextName(); n3 == n1 {
 		t.Fatal("different session ids must give different handles")
 	}
 
+	// A session id that can't be a context handle falls back to a fresh,
+	// non-persistent identity instead of producing an unusable handle.
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "bad/id")
+	if _, persistent, err := agentContextName(); err != nil || persistent {
+		t.Fatalf("an unusable session id should fall back to non-persistent: persistent=%v err=%v", persistent, err)
+	}
+
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
-	n4, p4 := agentContextName()
-	n5, p5 := agentContextName()
+	n4, p4, _ := agentContextName()
+	n5, p5, _ := agentContextName()
 	if p4 || p5 {
 		t.Fatal("no session id must be non-persistent")
 	}

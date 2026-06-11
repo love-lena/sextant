@@ -43,11 +43,15 @@ Resolution precedence for the adapter:
    tool).
 3. This session's own identity — reattached by session id, else freshly minted.
 
-`context_use` lets an agent deliberately resume or assume a specific saved
-identity, but it refuses a context whose kind is `human`: the agent must not
-speak as a person, even when asked. The everyday CLI keeps its kubectl-style
-active-context fallback ([ADR-0021](0021-saved-client-contexts.md)); the
-divergence is the adapter's alone.
+`context_use` lets an agent deliberately resume or assume a saved identity, but
+only an **agent** one (kind `agent`): it refuses any other kind — `human`,
+`client` (what `register --self` mints for a person), or unlabelled — so the
+agent never speaks as a person or another client at runtime, even when asked.
+An operator who genuinely wants the agent on a specific non-agent identity pins
+it explicitly via `$SEXTANT_CONTEXT` (precedence 1), a deliberate human act. The
+everyday CLI keeps its kubectl-style active-context fallback
+([ADR-0021](0021-saved-client-contexts.md)); the divergence is the adapter's
+alone.
 
 ## When it can't mint
 
