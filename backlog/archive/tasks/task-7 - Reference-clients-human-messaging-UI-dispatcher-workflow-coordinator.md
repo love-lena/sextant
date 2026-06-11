@@ -1,10 +1,10 @@
 ---
 id: TASK-7
 title: 'Reference client: the human-messaging dash'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-03 01:12'
-updated_date: '2026-06-04 18:11'
+updated_date: '2026-06-10 23:58'
 labels: []
 milestone: 'M4: The dash (human UI)'
 dependencies:
@@ -33,10 +33,10 @@ Dispatcher (TASK-25) + Workflow coordinator (TASK-26) are M5. MVP is manual-comm
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 `cmd/sextant-dash` (+ thin `sextant dash` alias) launches under a bus identity and assembles presence + message-stream + artifact into a cockpit default
-- [ ] #2 composable pane library: built-in presets + per-pane toggle + reflow + persisted config (btop-style); detail-on-demand (hidden, toggled)
-- [ ] #3 the in-tree library holds the widget ⊂ surface ⊂ dash strata; widgets/surfaces import only theme/SDK, never NATS or `internal/` (import checks pass)
-- [ ] #4 e2e (**the goal**): launch → see presence + a live message stream → send a message (round-trip, no optimistic echo) → open an artifact; recorded as a VHS `.tape` + PTY verify, with the rendered `.gif` attached to the PR
+- [x] #1 `cmd/sextant-dash` (+ thin `sextant dash` alias) launches under a bus identity and assembles presence + message-stream + artifact into a cockpit default
+- [x] #2 composable pane library: built-in presets + per-pane toggle + reflow + persisted config (btop-style); detail-on-demand (hidden, toggled)
+- [x] #3 the in-tree library holds the widget ⊂ surface ⊂ dash strata; widgets/surfaces import only theme/SDK, never NATS or `internal/` (import checks pass)
+- [x] #4 e2e (**the goal**): launch → see presence + a live message stream → send a message (round-trip, no optimistic echo) → open an artifact; recorded as a VHS `.tape` + PTY verify, with the rendered `.gif` attached to the PR
 <!-- AC:END -->
 
 ## Implementation Notes
@@ -64,4 +64,14 @@ worktree to avoid cross-writes; `gofumpt` before push; PRs into `main`.
 + teatest goldens (deterministic, CI-checkable). Each PR also attaches the rendered
 `.gif` as a proof-of-completion artifact for Lena to review — the `.tape`/goldens are
 the agent's AC; the `.gif` is the human-review surface. (7.2 is exempt — no render.)
+
+Implemented on feat/dash, PR #99 (https://github.com/love-lena/sextant/pull/99). All acceptance criteria met + verified via two-stage (spec + code-quality) review per subtask. Whole-module `go test ./...` green incl. the no-tag internal/dash e2e; PTY-verified in tmux. Status In Progress pending human sign-off (merge).
+
+Fixed in: 4887258 (PR #99)
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in PR #99 (squash 4887258): three master-detail browsers (ADR-0023/0024), zero-config first run, 38-commit review/fix stack, three adversarial review rounds to APPROVE.
+<!-- SECTION:FINAL_SUMMARY:END -->

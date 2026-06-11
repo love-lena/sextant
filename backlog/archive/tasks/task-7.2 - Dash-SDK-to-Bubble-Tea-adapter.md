@@ -1,9 +1,10 @@
 ---
 id: TASK-7.2
 title: 'Dash: SDK to Bubble Tea adapter'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-06 02:59'
+updated_date: '2026-06-10 23:58'
 labels: []
 milestone: 'M4: The dash (human UI)'
 dependencies:
@@ -25,9 +26,9 @@ The thin tea.Cmd adapter that bridges an SDK subscription into the Bubble Tea lo
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 a tea.Cmd subscribes via the SDK and re-yields each event as a tea.Msg
-- [ ] #2 round-trip merge: a sent message arrives via the same subscription (no optimistic echo)
-- [ ] #3 public SDK only, no bus/NATS types leak into the TUI; teardown cancels cleanly
+- [x] #1 a tea.Cmd subscribes via the SDK and re-yields each event as a tea.Msg
+- [x] #2 round-trip merge: a sent message arrives via the same subscription (no optimistic echo)
+- [x] #3 public SDK only, no bus/NATS types leak into the TUI; teardown cancels cleanly
 <!-- AC:END -->
 
 ## Implementation Notes
@@ -61,4 +62,14 @@ Locked decisions:
 Verify (no PTY — no render): integration test on an embedded/real bus — subscribe →
 publish → receive the same frame as `EventMsg`; `DeliverAll` gives backlog→live; `Stop`
 is goleak-clean; overflow fires `DroppedMsg`. Import lint proves public-SDK-only.
+
+Implemented on feat/dash, PR #99 (https://github.com/love-lena/sextant/pull/99). All acceptance criteria met + verified via two-stage (spec + code-quality) review per subtask. Whole-module `go test ./...` green incl. the no-tag internal/dash e2e; PTY-verified in tmux. Status In Progress pending human sign-off (merge). Commits f04cddb + 075c67c.
+
+Fixed in: 4887258 (PR #99)
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in PR #99 (squash 4887258) as part of TASK-7.
+<!-- SECTION:FINAL_SUMMARY:END -->

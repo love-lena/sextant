@@ -5,7 +5,7 @@ status: To Do
 assignee:
   - lena
 created_date: '2026-06-08 18:41'
-updated_date: '2026-06-08 22:50'
+updated_date: '2026-06-11 00:03'
 labels:
   - docs
 dependencies: []
@@ -32,4 +32,6 @@ Real human-facing reference for Sextant's core — the core module that ADR-0022
 SCOPED 2026-06-08 (umbrella). Covers the core protocol + the Go SDK; operator-guide and conventions (spawn/workflow) deferred as module docs. DECISION: generate the reference from canon (protocol/*.json + 'go doc'), never hand-write — drift-proof, matches conformance/schema-compat. IA (locked): Introduction · Getting started (install + first Go client) · The protocol (Overview · Operations · Records & lexicons · The frame · Clients registry & presence · Connection/auth/creds · Epoch) · The Go SDK (Overview · Messages · Artifacts · Clients & identity · API reference) · For implementers (Wire API · backend interface). Empty book + Pages deploy already shipped (PR #96, c2792dc). Breakdown: [[docs-mdbook-ia-render-pipeline]] (32.1, keystone) -> [[docs-mdbook-protocol-reference]] (32.2, closes AC#1+AC#2) · [[docs-mdbook-sdk-reference]] (32.3) · [[docs-mdbook-implementer-pages]] (32.4). 32.2-32.4 parallelize after 32.1. AC#3 (linked from AGENTS.md) lands with 32.1.
 
 PROSE/AGENT SPLIT (Lena 2026-06-08): agents do generation/rendering/verifiable work only; Lena writes all narrative prose. The IA + prose stubs (each marked 'Claude outline — TODO for Lena') shipped in the scoping PR (branch docs-mdbook-scope). Generated pages are the empty draft slots in SUMMARY.md.
+
+2026-06-10: the book is live (PRs #96-#98) and covers AC#1/#2 except the epoch stub (see 32.2). AC#3 half-done: docs/book exists but CLAUDE.md/AGENTS.md line 39 still says 'mdbook — *forthcoming*' — the link-up edit is the remaining work. 32.1/32.3/32.4 closed; 32.2 carries the epoch stub.
 <!-- SECTION:NOTES:END -->

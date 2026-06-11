@@ -1,10 +1,10 @@
 ---
 id: TASK-32.1
 title: Book IA + generate-from-canon render pipeline
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-06-08 22:41'
-updated_date: '2026-06-08 23:11'
+updated_date: '2026-06-11 00:03'
 labels:
   - docs
   - 'slug:docs-mdbook-ia-render-pipeline'
@@ -39,4 +39,12 @@ Umbrella: [[docs-mdbook-protocol-reference]] (32.2), [[docs-mdbook-sdk-reference
 PROSE/AGENT SPLIT (Lena 2026-06-08): agent owns the generator, the go-doc render, the CI drift-check, and make/CI wiring — NOT prose. The IA (SUMMARY.md) and all prose stubs already landed on branch docs-mdbook-scope (this scoping PR): Introduction, getting-started, protocol Overview + Connection, SDK Overview, Wire API — each carries a 'Claude outline — TODO for Lena' banner and is Lena's to write. The generated pages are the empty draft slots in SUMMARY (Operations · Records & lexicons · The frame · Clients registry & presence · Epoch · SDK Messages/Artifacts/Clients · API reference · backend interface). AC#1 (SUMMARY w/ locked IA) is satisfied by this PR; agent verifies + builds on it.
 
 IMPLEMENTED in PR #97 (commit 05c01e6), CI green. Agent portion complete; remaining work is Lena's prose pages. Verified: docgen deterministic + CI drift-check, mdbook builds clean, quickstart compiles + runs against a live bus.
+
+Fixed in: PR #96/#97
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped via PR #97 (book scaffold #96, core reference #97): locked IA, docgen generator (methods.json + lexicons → protocol pages; go doc → SDK reference), committed-generated guard, make book green. Note: the IA's 'For implementers' section was subsequently cut by #98 (canon decision).
+<!-- SECTION:FINAL_SUMMARY:END -->
