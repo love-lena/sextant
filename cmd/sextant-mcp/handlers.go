@@ -218,6 +218,29 @@ func registerClientsList(s *mcp.Server, d *deps) {
 	})
 }
 
+type contextUseArgs struct {
+	Context string `json:"context" jsonschema:"the saved context (by name) to attach this session's bus identity to; see 'sextant context list'"`
+}
+
+func registerContextUse(s *mcp.Server, d *deps) {
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "context_use",
+		Description: "Attach this session to an existing saved identity (context) by name, instead of the per-session identity minted by default. " +
+			"Use this to deliberately resume a previous identity or speak as a specific agent. It does not change the operator's active context, " +
+			"and refuses human identities.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args contextUseArgs) (*mcp.CallToolResult, any, error) {
+		if err := d.conn.use(args.Context); err != nil {
+			return toolError(err), nil, nil
+		}
+		c, err := d.conn.get(ctx)
+		if err != nil {
+			return toolError(err), nil, nil
+		}
+		res, err := jsonResult(map[string]any{"context": args.Context, "id": c.ID(), "display": c.DisplayName()})
+		return res, nil, err
+	})
+}
+
 // errNotSubscribed keeps unsubscribe honest about what it can stop.
 func errNotSubscribed(subject string, active []string) error {
 	return fmt.Errorf("not subscribed to %q; active subscriptions: %v", subject, active)

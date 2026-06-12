@@ -42,9 +42,15 @@ func TestMCPDMWakesWithoutSubscribe(t *testing.T) {
 	agentID := mustParseID(t, agentOut, `enrolled as (`+ulidPat+`)`)
 	agentDM := sx.ClientSubject(agentID)
 
+	// Pin the server to the self-enrolled identity (ADR-0029): the MCP server no
+	// longer inherits the active context, so without a pin it would mint a FRESH
+	// per-session identity and alice's DM to agentDM would land on a subject the
+	// server never auto-subscribed to (no wake). Pinning $SEXTANT_CONTEXT makes
+	// the server connect as agentID — the auto-DM bridge then drains agentDM.
 	srv := startMCP(t, h, mcpBin, map[string]string{
-		"SEXTANT_HOME":  agentHome,
-		"SEXTANT_STORE": h.store,
+		"SEXTANT_HOME":    agentHome,
+		"SEXTANT_STORE":   h.store,
+		"SEXTANT_CONTEXT": "claude-agent",
 	})
 	srv.call(t, "initialize", map[string]any{
 		"protocolVersion": "2025-06-18",
@@ -129,7 +135,9 @@ func TestMCPSelfDMSubscribeNoDouble(t *testing.T) {
 	agentID := mustParseID(t, agentOut, `enrolled as (`+ulidPat+`)`)
 	agentDM := sx.ClientSubject(agentID)
 
-	srv := startMCP(t, h, mcpBin, map[string]string{"SEXTANT_HOME": agentHome, "SEXTANT_STORE": h.store})
+	// Pin the server to the self-enrolled identity (ADR-0029) so agentDM is the
+	// server's OWN DM subject — otherwise it would mint a fresh per-session one.
+	srv := startMCP(t, h, mcpBin, map[string]string{"SEXTANT_HOME": agentHome, "SEXTANT_STORE": h.store, "SEXTANT_CONTEXT": "claude-agent"})
 	srv.call(t, "initialize", map[string]any{
 		"protocolVersion": "2025-06-18",
 		"capabilities":    map[string]any{},

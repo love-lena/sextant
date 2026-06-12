@@ -125,23 +125,26 @@ behavior the wake path relies on (and is being validated in the TASK-53 demo);
 it is not yet guaranteed. To reliably *wait* on a reply (blocking), don't depend
 on the channel — use the Monitor recipe, which is the guaranteed wake/pickup path.
 
-## Identity setup (one context per agent)
+## Identity setup (one identity per session)
 
-The MCP server resolves identity like the CLI: `$SEXTANT_CREDS` →
-`$SEXTANT_CONTEXT` → the active context. **Each agent gets its own context** —
-two sessions sharing a context share one author ULID and collaborators cannot
-tell them apart.
+You speak as **your own** bus identity, never the operator's. The MCP server
+provisions it for you (ADR-0029): on your first bus call it mints a dedicated
+identity, keyed to this Claude Code session, and connects as it — zero setup,
+and a `--resume`/`--continue` of this conversation reattaches to the same
+identity. It **never** falls back to the operator's active context, so two
+concurrent sessions are two distinct identities and never both answer the same
+message.
 
-First run on a machine with a local bus:
+Resolution precedence: `$SEXTANT_CREDS` → `$SEXTANT_CONTEXT` (an operator may
+pin one in `.mcp.json`'s `env`) → a context you switched to with `context_use`
+→ this session's own auto-minted identity.
 
-```bash
-sextant clients register --self --name <agent-name>
-```
-
-That mints an identity, saves a context, and makes it active. Tool calls
-retry resolution, so run it any time a tool reports "no credentials" — the
-session heals without a restart. Pin a non-default identity per project by
-setting `SEXTANT_CONTEXT` in the project's `.mcp.json` `env` block.
+Use **`context_use`** to deliberately resume or assume a saved **agent**
+identity (by context name); it refuses non-agent contexts (human, client, or
+unlabelled) — you never speak as a person or another client. If a tool reports
+it can't mint an identity, the bus is unreachable
+or has no enrollment credential: start a local bus, or pin `$SEXTANT_CONTEXT`.
+Resolution is retried per call, so it heals without a restart once a bus is up.
 
 **Every client auto-subscribes to its own DM on connect** — `msg.client.<self>`
 (`sx.ClientSubject`) — with no extra setup (TASK-55), and the sextant-mcp adapter

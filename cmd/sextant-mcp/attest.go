@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/love-lena/sextant/internal/attest"
-	"github.com/love-lena/sextant/internal/clictx"
 	"github.com/love-lena/sextant/pkg/sextant"
 	"github.com/love-lena/sextant/pkg/sx"
 )
@@ -19,9 +18,9 @@ import (
 // attest is the claude-code plugin's UserPromptSubmit hook body (ADR-0030,
 // TASK-56). The plugin's hooks.json invokes `sextant-mcp attest` — the SAME
 // installed binary as the MCP server, so it reuses the MCP server's per-session
-// identity/context resolution (clictx, ADR-0029): it connects as the same worker
-// identity, sees the same bus, and scans the worker's own always-on DM subject
-// (msg.client.<self>, the auto-subscribe from TASK-55).
+// identity resolution (connManager.resolve, ADR-0029): it connects as the same
+// worker identity, sees the same bus, and scans the worker's own always-on DM
+// subject (msg.client.<self>, the auto-subscribe from TASK-55).
 //
 // It reads NEW inbound frames since a persisted per-session cursor, stamps each by
 // its unforgeable bus-stamped author ULID with a trust level (attest.Classify),
@@ -56,8 +55,8 @@ const attestBudget = 5 * time.Second
 // runAttest is the hook entrypoint. It NEVER returns a non-zero exit for a bus
 // problem — degrade-to-silent is the contract. args is os.Args[2:] (after the
 // "attest" subcommand) so the hook can still pass --context/--store/--creds if a
-// deployment needs them; normally it relies on $SEXTANT_CONTEXT / the active
-// context, exactly as the MCP server does.
+// deployment needs them; normally it relies on this session's own per-session
+// identity (claude-<session-id>), exactly as the MCP server does (ADR-0029).
 func runAttest(args []string) int {
 	log.SetFlags(0)
 	log.SetOutput(os.Stderr)
@@ -120,15 +119,20 @@ func runAttest(args []string) int {
 // is still visible on the bus. Full deliver-then-confirm (a two-phase ack from the
 // harness) is deferred — not over-engineered for v1.
 func attestOnce(ctx context.Context, cf connFlags, sessionID string, emit func(string) error) error {
-	// FORWARD RISK B (integration item, do not fix on this branch — #107 isn't
-	// here): this resolve MUST select the SAME worker identity as the MCP
-	// server's connManager (conn.go), which calls clictx.Resolve symmetrically.
-	// Both paths resolve identically today. When this branch rebases onto a main
-	// carrying ADR-0029 / PR #107 (per-session identity keyed on
-	// CLAUDE_CODE_SESSION_ID), the session-keyed selection MUST route THROUGH
-	// clictx.Resolve (or a shared resolver both call) so attest and the server
-	// stay in lockstep — otherwise attest scans the wrong client's DM subject.
-	rc, err := clictx.Resolve(*cf.creds, *cf.url, *cf.context)
+	// Resolve the SAME per-session identity the MCP server connects as. attest is
+	// a separate process from the server, but the plugin spawns both with the same
+	// env (CLAUDE_CODE_SESSION_ID, $SEXTANT_HOME/--store, any pinned creds/context),
+	// so routing through the server's own connManager.resolve gives byte-identical
+	// precedence (ADR-0029): (1) pinned $SEXTANT_CREDS/$SEXTANT_CONTEXT, (2) an
+	// in-session context_use switch — never observable here, so it no-ops, (3)
+	// this session's own identity, reattached by the claude-<session-id> handle via
+	// clictx.Load. The handle and the on-disk context store are shared, so whichever
+	// process minted it first, both reattach to it — attest and the server stay in
+	// lockstep by construction and attest scans the worker's OWN DM subject, never a
+	// stranger's. Using resolve (not plain clictx.Resolve) is what closes the
+	// forward-risk the pre-#107 branch flagged here.
+	rm := &connManager{cf: cf}
+	rc, err := rm.resolve(ctx)
 	if err != nil {
 		return fmt.Errorf("resolve identity: %w", err)
 	}

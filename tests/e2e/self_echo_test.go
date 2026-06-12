@@ -62,10 +62,13 @@ func TestSelfEchoSuppression(t *testing.T) {
 		t.Fatalf("peer Subscribe: %v", err)
 	}
 
-	// Start the MCP server.
+	// Start the MCP server, pinned to the self-enrolled identity (ADR-0029): the
+	// server no longer inherits the active context, so pin $SEXTANT_CONTEXT to
+	// connect as echo-agent rather than minting a throwaway per-session identity.
 	srv := startMCP(t, h, mcpBin, map[string]string{
-		"SEXTANT_HOME":  agentHome,
-		"SEXTANT_STORE": h.store,
+		"SEXTANT_HOME":    agentHome,
+		"SEXTANT_STORE":   h.store,
+		"SEXTANT_CONTEXT": "echo-agent",
 	})
 	srv.call(t, "initialize", map[string]any{
 		"protocolVersion": "2025-06-18",

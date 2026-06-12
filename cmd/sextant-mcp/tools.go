@@ -36,6 +36,7 @@ var toolDefs = []toolDef{
 	{name: "artifact_list", op: "artifact.list", register: registerArtifactList},
 	{name: "artifact_delete", op: "artifact.delete", register: registerArtifactDelete},
 	{name: "clients_list", op: "clients.list", register: registerClientsList},
+	{name: "context_use", register: registerContextUse},
 }
 
 // excludedOps are operations deliberately not exposed as MCP tools, with the
@@ -48,10 +49,13 @@ var excludedOps = map[string]string{
 	"artifact.watch":   "deferred; future channel-delivered tool",
 }
 
-// declaredExtras are tools that map to no protocol operation: channel
-// control, the MCP analogue of Ctrl-C on `sextant subscribe`.
+// declaredExtras are tools that map to no protocol operation — session-local
+// control the bus has no verb for: channel control (message_unsubscribe, the
+// MCP analogue of Ctrl-C on `sextant subscribe`) and identity control
+// (context_use, switching which saved context this session speaks as).
 var declaredExtras = map[string]bool{
 	"message_unsubscribe": true,
+	"context_use":         true,
 }
 
 func registerTools(s *mcp.Server, d *deps) {

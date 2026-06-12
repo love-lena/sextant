@@ -36,9 +36,10 @@ bus-side transcript.
 ## Install
 
 The [root quickstart](../../README.md#quickstart) has the setup: binaries on
-PATH, a reachable bus (`sextant up`), then the marketplace add + install +
-register. The GitHub add clones with your git credential helper, so `gh` auth
-covers the private repo. Offline, or from an unpacked release tarball, add
+PATH, a reachable bus (`sextant up`), then the marketplace add + install. The
+session provisions its own per-session bus identity automatically (ADR-0029) —
+no agent `register` step. The GitHub add clones with your git credential
+helper, so `gh` auth covers the private repo. Offline, or from an unpacked release tarball, add
 this directory instead: `claude plugin marketplace add ./clients/claude-code`
 (keep the `./` — a bare `a/b` parses as a GitHub repo).
 

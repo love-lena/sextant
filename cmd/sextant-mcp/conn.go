@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,9 +13,20 @@ import (
 	"sync"
 
 	"github.com/love-lena/sextant/internal/clictx"
+	"github.com/love-lena/sextant/internal/selfenroll"
 	"github.com/love-lena/sextant/pkg/conninfo"
 	"github.com/love-lena/sextant/pkg/sextant"
 )
+
+// agentKind labels the identities the MCP server mints for itself, so the
+// clients directory tells an AI agent apart from a human or a worker.
+const agentKind = "agent"
+
+// sessionEnv is Claude Code's per-conversation id, set on every spawned stdio
+// MCP server and stable across `--resume`/`--continue`. The agent context
+// handle is keyed on it so a resumed session reattaches to the identity it
+// minted before, instead of coming back as a stranger (ADR-0029).
+const sessionEnv = "CLAUDE_CODE_SESSION_ID"
 
 // connFlags mirror the operator CLI's connection flags (cmd/sextant), so the
 // MCP server is configured the same way every other client is.
@@ -52,8 +65,8 @@ func (cf connFlags) connInfoPath() string {
 // connManager holds the one bus connection for the server's lifetime
 // (ADR-0012: one server, one verified identity; presence derives from the
 // live connection, ADR-0020). Identity problems defer rather than exit: every
-// get re-runs resolution, so a context minted mid-session (`sextant clients
-// register --self`) heals the server without a restart.
+// get re-runs resolution, so once a bus becomes reachable (or Claude switches
+// context) the server heals without a restart.
 type connManager struct {
 	cf connFlags
 
@@ -78,6 +91,138 @@ type connManager struct {
 
 	mu     sync.Mutex
 	client *sextant.Client
+	// switched is the context Claude explicitly attached to via context_use;
+	// empty means "use this session's own auto-provisioned identity".
+	switched string
+	// mint provisions a fresh agent identity. nil uses the real bus-backed
+	// implementation (mintAgent); tests inject a stub to exercise resolution
+	// branching without a bus.
+	mint func(ctx context.Context, name, display string) (clictx.ResolvedConn, error)
+}
+
+// resolve picks the identity to connect as — like the operator CLI for the
+// explicit cases, but it DELIBERATELY never falls back to clictx.Active(): an
+// MCP server must never inherit the human operator's identity (ADR-0029).
+// Precedence: explicit creds/context (env or flag) → a context Claude switched
+// to → this session's own dedicated identity (reattached by CLAUDE_CODE_SESSION_ID,
+// else freshly minted).
+func (m *connManager) resolve(ctx context.Context) (clictx.ResolvedConn, error) {
+	if *m.cf.creds != "" || *m.cf.context != "" {
+		return clictx.Resolve(*m.cf.creds, *m.cf.url, *m.cf.context)
+	}
+	if m.switched != "" {
+		return clictx.Resolve("", *m.cf.url, m.switched)
+	}
+	name, persistent, err := agentContextName()
+	if err != nil {
+		return clictx.ResolvedConn{}, err
+	}
+	if persistent {
+		if c, err := clictx.Load(name); err == nil {
+			return clictx.ResolvedConn{Creds: c.Creds, URL: orStr(*m.cf.url, c.URL), Context: c.Name}, nil
+		}
+	}
+	mint := m.mint
+	if mint == nil {
+		mint = m.mintAgent
+	}
+	return mint(ctx, name, agentDisplay(name))
+}
+
+// mintAgent self-enrolls a dedicated, non-active agent identity (the real mint
+// behind resolve). On the concurrent-mint race — two starts of the same
+// session — it reattaches to the context the winner wrote. When the bus is
+// unreachable or its enrollment credential is missing it returns an actionable
+// error rather than borrowing any existing identity; conn.get defers and
+// retries, so the server self-heals once a bus is reachable.
+func (m *connManager) mintAgent(ctx context.Context, name, display string) (clictx.ResolvedConn, error) {
+	res, err := selfenroll.EnrollAgent(ctx, name, display, agentKind, *m.cf.url, *m.cf.store)
+	if err != nil {
+		var exists *selfenroll.ErrContextExists
+		if errors.As(err, &exists) {
+			if c, lerr := clictx.Load(name); lerr == nil {
+				return clictx.ResolvedConn{Creds: c.Creds, URL: orStr(*m.cf.url, c.URL), Context: c.Name}, nil
+			}
+		}
+		return clictx.ResolvedConn{}, fmt.Errorf("could not provision an agent identity: %w\n"+
+			"sextant-mcp speaks as its own bus identity (never the operator's). Minting one needs the bus's enrollment credential at %s and a reachable bus.\n"+
+			"start a local bus, or pin an identity with $SEXTANT_CONTEXT=<context> or $SEXTANT_CREDS=<file>",
+			err, filepath.Join(*m.cf.store, "enroll.creds"))
+	}
+	return clictx.ResolvedConn{Creds: res.CredsPath, URL: res.URL, Context: res.Name}, nil
+}
+
+// use switches this session's identity to an existing saved context (the
+// context_use tool). It refuses a human context — the agent must never assume
+// a person's identity, even when asked — and drops the held connection so the
+// next call reconnects as the new identity.
+func (m *connManager) use(name string) error {
+	c, err := clictx.Load(name)
+	if err != nil {
+		names, _ := clictx.List()
+		handles := make([]string, 0, len(names))
+		for _, n := range names {
+			handles = append(handles, n.Name)
+		}
+		return fmt.Errorf("%w\navailable contexts: %v", err, handles)
+	}
+	if c.Kind != agentKind {
+		return fmt.Errorf("refusing to switch to %q (kind %q): context_use attaches only to agent identities, so the agent never speaks as a person or another client — pin a specific identity explicitly via $SEXTANT_CONTEXT if you mean to", name, c.Kind)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.switched = name
+	if m.client != nil {
+		_ = m.client.Close()
+		m.client = nil
+	}
+	return nil
+}
+
+// agentContextName is the local handle for this session's identity. It is keyed
+// on CLAUDE_CODE_SESSION_ID so a resumed session reattaches; absent that env
+// (a non-Claude-Code host) — or with a session id that can't be a context
+// handle — it is unique-per-process and not reattachable.
+func agentContextName() (name string, persistent bool, err error) {
+	if sid := os.Getenv(sessionEnv); sid != "" {
+		if h := "claude-" + sid; clictx.ValidName(h) == nil {
+			return h, true, nil
+		}
+		// An unusable session id can't be a context handle; fall through to a
+		// fresh per-process identity rather than failing every call with a
+		// misleading bus error.
+	}
+	suffix, err := randHex(6)
+	if err != nil {
+		return "", false, fmt.Errorf("agent identity: %w", err)
+	}
+	return "claude-" + suffix, false, nil
+}
+
+// agentDisplay is the friendly bus display name behind the (long) handle.
+func agentDisplay(name string) string {
+	const short = len("claude-") + 8
+	if len(name) > short {
+		return name[:short]
+	}
+	return name
+}
+
+// randHex returns n random bytes as hex. A crypto/rand failure fails loud
+// rather than collapsing distinct sessions onto one empty-suffix handle.
+func randHex(n int) (string, error) {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate random handle: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
+func orStr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }
 
 // get returns the held client, resolving identity and connecting if there is
@@ -101,11 +246,8 @@ func (m *connManager) get(ctx context.Context) (*sextant.Client, error) {
 		}
 	}
 
-	rc, err := clictx.Resolve(*m.cf.creds, *m.cf.url, *m.cf.context)
+	rc, err := m.resolve(ctx)
 	if err != nil {
-		if errors.Is(err, clictx.ErrNoIdentity) {
-			return nil, fmt.Errorf("%w\nfresh machine? mint an identity — `sextant clients register --self --name <agent-name>` — then retry this tool call; no restart needed", err)
-		}
 		return nil, err
 	}
 

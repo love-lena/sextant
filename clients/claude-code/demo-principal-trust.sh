@@ -203,11 +203,20 @@ say ""
 # "/sextant:startup" as the launch prompt is treated as literal text, so we
 # phrase it as an instruction that invokes the skill.)
 KICKOFF='Run your /sextant:startup routine now to begin operating as an unattended sextant worker.'
+# Pin the worker's identity explicitly via SEXTANT_CONTEXT (ADR-0029 precedence
+# 1). Under ADR-0029 the MCP adapter NEVER inherits the operator's active
+# context — left to its own devices it would mint a FRESH per-session identity
+# (claude-<session-id>), so the orchestrator (which DMs MIRA_ID from `register
+# --self`) would be talking to the wrong ULID. Pinning the context makes BOTH
+# the MCP server AND the `attest` hook (a separate process that inherits this
+# env) resolve `mira` deterministically and in lockstep — the hook reads the
+# same DM subject the server is woken on. SEXTANT_HOME already points both at
+# the context store where `register --self` saved `mira`.
 # NOTE: --dangerously-load-development-channels is VARIADIC — it consumes every
 # following arg as a (tagged) channel entry until a flag stops it. The trailing
 # `--` terminates option parsing so KICKOFF is taken as the positional prompt,
 # not swallowed as a bogus channel entry.
-(cd "$PROJ" && PATH="$BIN:$PATH" SEXTANT_HOME="$HOME_CTX" SEXTANT_STORE="$STORE" \
+(cd "$PROJ" && PATH="$BIN:$PATH" SEXTANT_HOME="$HOME_CTX" SEXTANT_STORE="$STORE" SEXTANT_CONTEXT="mira" \
   claude --model sonnet --dangerously-load-development-channels plugin:sextant@sextant \
   -- "$KICKOFF") || true
 

@@ -6,13 +6,14 @@
 // are pushed into the session as <channel> events. The reply path is the
 // message_publish tool.
 //
-// Identity resolves like the operator CLI (--creds/$SEXTANT_CREDS →
-// --context/$SEXTANT_CONTEXT → the active context) but lazily: the MCP
-// handshake always succeeds, and tool calls retry resolution + connection
-// until one works, so `sextant clients register --self` run mid-session
-// heals a fresh machine without a restart.
+// Identity is the server's own, never the operator's (ADR-0029): explicit
+// --creds/$SEXTANT_CREDS or --context/$SEXTANT_CONTEXT win, but with nothing
+// pinned the server provisions a dedicated per-session identity rather than
+// inheriting the operator's active context. Resolution is lazy and retried per
+// tool call, so the handshake always succeeds and the server heals once a bus
+// is reachable.
 //
-//	sextant-mcp                       # resolve the active context
+//	sextant-mcp                       # mint/reattach this session's own identity
 //	sextant-mcp --context my-agent    # a saved context (or $SEXTANT_CONTEXT)
 //	sextant-mcp --creds path/to.creds --store path/to/bus-store
 package main

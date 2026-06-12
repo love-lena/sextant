@@ -106,6 +106,35 @@ func TestSaveActivates(t *testing.T) {
 	}
 }
 
+// TestWriteContextNonActivating: an agent identity is written as a context but
+// must NOT become active — the MCP server provisions its own identity without
+// hijacking the operator's active context (ADR-0029). It also carries a display
+// distinct from its (long, session-keyed) context handle.
+func TestWriteContextNonActivating(t *testing.T) {
+	t.Setenv("SEXTANT_HOME", t.TempDir())
+	if err := clictx.Save(clictx.Context{Name: "operator", URL: "u", Creds: "c"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := clictx.SetActive("operator"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := writeContext("claude-sess", "claude", "agent", "nats://b",
+		sextant.IssuedClient{ID: "01AGENT", Creds: "AGENTCREDS"}, false)
+	if err != nil {
+		t.Fatalf("writeContext: %v", err)
+	}
+	if got := clictx.Active(); got != "operator" {
+		t.Fatalf("Active() = %q, want operator unchanged (agent write must not activate)", got)
+	}
+	c, err := clictx.Load("claude-sess")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Display != "claude" || c.ID != "01AGENT" {
+		t.Fatalf("context = %+v, want display=claude id=01AGENT", c)
+	}
+}
+
 // TestSelfName: the env override wins, so a harness can pin the name.
 func TestSelfName(t *testing.T) {
 	t.Setenv("SEXTANT_SELF_NAME", "pinned")

@@ -18,14 +18,17 @@ func resolved(url, ctxName string) clictx.ResolvedConn {
 	return clictx.ResolvedConn{URL: url, Context: ctxName}
 }
 
-func TestGetNoIdentityNamesChainAndRecipe(t *testing.T) {
+// TestGetNoBusNamesAgentMintRecipe: with nothing pinned and no reachable bus,
+// the server cannot mint its own identity — and must NOT borrow the operator's
+// (ADR-0029). The error is the recovery recipe (AC#7).
+func TestGetNoBusNamesAgentMintRecipe(t *testing.T) {
 	t.Setenv("SEXTANT_HOME", t.TempDir())
 	m := &connManager{cf: cf("", t.TempDir(), "", "")}
 	_, err := m.get(context.Background())
 	if err == nil {
-		t.Fatal("get() succeeded with no identity")
+		t.Fatal("get() succeeded with no identity and no bus")
 	}
-	for _, want := range []string{"--creds", "$SEXTANT_CREDS", "sextant context use", "register --self"} {
+	for _, want := range []string{"agent identity", "$SEXTANT_CONTEXT", "$SEXTANT_CREDS", "enroll.creds"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q missing %q", err, want)
 		}
