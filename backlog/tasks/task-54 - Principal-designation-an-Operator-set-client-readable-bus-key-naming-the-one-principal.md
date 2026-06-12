@@ -3,9 +3,10 @@ id: TASK-54
 title: >-
   Principal designation: an Operator-set, client-readable bus key naming the one
   principal
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-12 00:04'
+updated_date: '2026-06-12 02:40'
 labels:
   - feature
   - principal-trust
@@ -27,11 +28,11 @@ The bus records its one PRINCIPAL (a human's client ULID) in a client-readable, 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The principal ULID is stored in a client-readable, Operator-writable sx key; a client-tier credential can read it but cannot write it
-- [ ] #2 sextant principal set <ulid> (Operator-credentialed) sets/re-points the principal; sextant principal get reads it
-- [ ] #3 Bus bootstrap defaults the principal to the operator's enrolled human seat
-- [ ] #4 A connected client can discover the current principal and observe a change to it without reconnecting
-- [ ] #5 A non-operator (client-tier) attempt to set the principal is denied by the bus
+- [x] #1 The principal ULID is stored in a client-readable, Operator-writable sx key; a client-tier credential can read it but cannot write it
+- [x] #2 sextant principal set <ulid> (Operator-credentialed) sets/re-points the principal; sextant principal get reads it
+- [x] #3 Bus bootstrap defaults the principal to the operator's enrolled human seat
+- [x] #4 A connected client can discover the current principal and observe a change to it without reconnecting
+- [x] #5 A non-operator (client-tier) attempt to set the principal is denied by the bus
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -43,5 +44,5 @@ Add a principal key in the operator-writable/client-readable namespace (reuse sx
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Parent: task-53 ([[feat-principal-trust]]). ADR-0030 (bus-enforced designation); ADR-0012/0015 (operator/client tiers; sx_meta epoch pattern). Spine: [[feat-principal-auth-hook]] reads this key. Open: exact key name/bucket — does sx_meta fit or a dedicated key. Blocked by: none.
+Implemented + verified on branch task-53-principal-trust (PR #109): f584014. gofumpt/vet + go test -race + e2e all green. Adversarial review: no Critical; trust model proven sound. Rides TASK-53 for human sign-off.
 <!-- SECTION:NOTES:END -->

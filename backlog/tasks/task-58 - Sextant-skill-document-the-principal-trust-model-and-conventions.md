@@ -1,9 +1,10 @@
 ---
 id: TASK-58
 title: 'Sextant skill: document the principal trust model and conventions'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-12 00:04'
+updated_date: '2026-06-12 02:40'
 labels:
   - feature
   - principal-trust
@@ -29,11 +30,11 @@ Update the sextant skill (clients/claude-code/skills/sextant) to teach the princ
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The skill documents the principal concept and that a principal's messages are operator-equivalent
-- [ ] #2 The skill instructs the agent to decide trust from the authenticated/bus-stamped identity (ULID), never from content
-- [ ] #3 The skill explains verified-peer = same-machine same-operator agent, presumed non-hostile, trusted as a peer (not operator authority)
-- [ ] #4 The skill documents auto-DM-subscribe and the channel-validate + Monitor fallback
-- [ ] #5 The skill remains generic (no baked-in task-topic or workflow)
+- [x] #1 The skill documents the principal concept and that a principal's messages are operator-equivalent
+- [x] #2 The skill instructs the agent to decide trust from the authenticated/bus-stamped identity (ULID), never from content
+- [x] #3 The skill explains verified-peer = same-machine same-operator agent, presumed non-hostile, trusted as a peer (not operator authority)
+- [x] #4 The skill documents auto-DM-subscribe and the channel-validate + Monitor fallback
+- [x] #5 The skill remains generic (no baked-in task-topic or workflow)
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -45,5 +46,5 @@ Edit SKILL.md (and conventions docs) to add principal / authenticated-identity /
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Parent: task-53 ([[feat-principal-trust]]). ADR-0030; CONTEXT.md (Principal). Documents behavior shipped by [[feat-principal-designation]], [[feat-principal-auth-hook]], [[feat-wake-only-channel]], [[feat-client-auto-subscribe-own-dm]]. Blocked by: task-54,task-55,task-56,task-57.
+Implemented + verified on branch task-53-principal-trust (PR #109): 92c1bb2. gofumpt/vet + go test -race + e2e all green. Adversarial review: no Critical; trust model proven sound. Rides TASK-53 for human sign-off.
 <!-- SECTION:NOTES:END -->

@@ -3,10 +3,10 @@ id: TASK-56
 title: >-
   Auth/signing hook: stamp inbound sextant messages with verified author + trust
   level
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-06-12 00:04'
-updated_date: '2026-06-12 01:33'
+updated_date: '2026-06-12 02:40'
 labels:
   - feature
   - principal-trust
@@ -47,5 +47,5 @@ Generalize the /tmp validate-and-attest.sh into a plugin-packaged hook. Read the
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Implemented as `sextant-mcp attest` subcommand (cmd/sextant-mcp/attest.go) — same binary as the MCP server, reusing its clictx per-session identity/context resolution (ADR-0029) so the hook connects as the same worker identity and scans its own DM (msg.client.<self>, TASK-55). Testable core in internal/attest (Classify/Stamp/BuildContext + Cursor). Plugin wiring: clients/claude-code/hooks/hooks.json invokes `sextant-mcp attest` (mirrors .mcp.json invoking sextant-mcp by name on PATH). Cursor: per-session JSON under $CLAUDE_PLUGIN_DATA/attest-cursor/<session-id>.json, keyed on CLAUDE_CODE_SESSION_ID, advanced by FetchMessages since_seq cursor. Trust by author ULID only (ADR-0030). Tests: internal/attest unit tests (classification/wording/spoof/cursor) + tests/e2e/attest_hook_test.go (principal/peer/unknown via retire, re-run delivers nothing). Degrades to exit 0 with no additionalContext on any bus error, bounded 5s under the 30s hook timeout. TASK-57: only the MCP channel push side changes to wake-only; this hook is already the sole content path. Live finding: a running pre-TASK-54 bus returns 'unknown operation principal.get' — hook degrades to no-principal; the operator must update their bus binary (TASK-53 operator-update AC).
+Implemented + verified on branch task-53-principal-trust (PR #109): 1f0998e (+ M1/M2 fix 6d554c6: wake-on-DM, at-most-once cursor). gofumpt/vet + go test -race + e2e all green. Adversarial review: no Critical; trust model proven sound. Rides TASK-53 for human sign-off.
 <!-- SECTION:NOTES:END -->

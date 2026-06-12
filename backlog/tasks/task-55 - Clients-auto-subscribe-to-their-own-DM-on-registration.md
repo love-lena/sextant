@@ -1,9 +1,10 @@
 ---
 id: TASK-55
 title: Clients auto-subscribe to their own DM on registration
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-12 00:04'
+updated_date: '2026-06-12 02:40'
 labels:
   - feature
   - principal-trust
@@ -24,9 +25,9 @@ Every client should be reachable by direct message the moment it exists. On regi
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 On successful registration, a client is subscribed to msg.client.<self> with no explicit subscribe call
-- [ ] #2 A message published to a freshly-registered client's DM is delivered to it
-- [ ] #3 The auto-subscription survives the normal connect/resume path
+- [x] #1 On successful registration, a client is subscribed to msg.client.<self> with no explicit subscribe call
+- [x] #2 A message published to a freshly-registered client's DM is delivered to it
+- [x] #3 The auto-subscription survives the normal connect/resume path
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -38,5 +39,5 @@ In the SDK registration/connect path, issue the self-DM subscription automatical
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Parent: task-53 ([[feat-principal-trust]]). ADR-0030 (generic subscription; auto-DM). Enables DM-targeting of auto-minted clients (ULID discoverable via clients_list). Blocked by: none.
+Implemented + verified on branch task-53-principal-trust (PR #109): 0d6e37d (+ wake/teardown fix 6d554c6). gofumpt/vet + go test -race + e2e all green. Adversarial review: no Critical; trust model proven sound. Rides TASK-53 for human sign-off.
 <!-- SECTION:NOTES:END -->

@@ -3,9 +3,10 @@ id: TASK-52
 title: >-
   sextant-mcp: suppress self-echo of a just-published frame so an agent never
   spends a turn on its own message
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-11 19:59'
+updated_date: '2026-06-12 02:40'
 labels:
   - bug
   - mcp
@@ -27,10 +28,10 @@ When a client publishes via message_publish to a subject it is also subscribed t
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Publishing to a subject this session is subscribed to does NOT deliver the just-published frame back to the same session as a channel event
-- [ ] #2 The same frame is still delivered normally to OTHER subscribers (suppression is self-only)
-- [ ] #3 message_publish waits for the bus to acknowledge the publish (so the frame id is known) before returning its result
-- [ ] #4 The suppression set is bounded (recent published frame ids, e.g. a ring/LRU) and does not grow without limit over a long-lived session
+- [x] #1 Publishing to a subject this session is subscribed to does NOT deliver the just-published frame back to the same session as a channel event
+- [x] #2 The same frame is still delivered normally to OTHER subscribers (suppression is self-only)
+- [x] #3 message_publish waits for the bus to acknowledge the publish (so the frame id is known) before returning its result
+- [x] #4 The suppression set is bounded (recent published frame ids, e.g. a ring/LRU) and does not grow without limit over a long-lived session
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -42,5 +43,5 @@ In cmd/sextant-mcp: capture the frame id returned by each message_publish into a
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Discovered in: the inter-client principal-trust experiment, 2026-06-11 (self-publishes at seq 21/23/26 each returned through the channel and woke a turn). Context: docs/agents/claude-code-trust-behavior.md. Related: [[feat-mcp-sextant-server]] (TASK-22, the sextant-mcp server this changes), ADR-0028 (the channel/adapter), ADR-0030 (principal tasks ride topics heavily, so self-echo cost compounds under that workstream).
+Implemented + verified on branch task-53-principal-trust (PR #109): b7c99f5. gofumpt/vet + go test -race + e2e all green. Adversarial review: no Critical; trust model proven sound. Rides TASK-53 for human sign-off.
 <!-- SECTION:NOTES:END -->

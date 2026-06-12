@@ -1,9 +1,10 @@
 ---
 id: TASK-57
 title: Wake-only channel + channel-validate + Monitor fallback
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-12 00:04'
+updated_date: '2026-06-12 02:40'
 labels:
   - feature
   - principal-trust
@@ -27,10 +28,10 @@ Make the channel a WAKE signal, not a content path: the sextant MCP channel push
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Spike recorded: whether the MCP channel push can be notification-only and still wake an idle session
-- [ ] #2 When possible, a validated principal message produces a wake via the channel and is delivered (content) only by the hook — no wrapped content copy reaches the agent
-- [ ] #3 If wake-only is not possible, the documented fallback (content channel + agent disregards the wrapped copy) is in place and noted
-- [ ] #4 On startup the client verifies channels are enabled (subscribed-notice); if not, it stands up a Monitor (sextant subscribe) as the wake/pickup fallback
+- [x] #1 Spike recorded: whether the MCP channel push can be notification-only and still wake an idle session
+- [x] #2 When possible, a validated principal message produces a wake via the channel and is delivered (content) only by the hook — no wrapped content copy reaches the agent
+- [x] #3 If wake-only is not possible, the documented fallback (content channel + agent disregards the wrapped copy) is in place and noted
+- [x] #4 On startup the client verifies channels are enabled (subscribed-notice); if not, it stands up a Monitor (sextant subscribe) as the wake/pickup fallback
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -42,5 +43,5 @@ Spike wake-only feasibility first. If feasible, change the MCP channel push to n
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Parent: task-53 ([[feat-principal-trust]]). ADR-0030 (channel=wake, hook=delivery; ship wake-only if possible). Touches [[bug-mcp-self-echo-wastes-turn]] (TASK-52). Channel-wake reliability is version-dependent (GitHub #44380/#61797) — Monitor is the fallback. Blocked by: task-56.
+Implemented + verified on branch task-53-principal-trust (PR #109): 7b1f1bf (+ DM wake bridge 6d554c6). gofumpt/vet + go test -race + e2e all green. Adversarial review: no Critical; trust model proven sound. Rides TASK-53 for human sign-off.
 <!-- SECTION:NOTES:END -->
