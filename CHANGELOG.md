@@ -8,6 +8,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The principal claims itself on first enrollment** (ADR-0031) — a self-enrolling
+  human seat claims the still-unclaimed principal as part of `sextant clients
+  register --self`, so first-run needs no separate `principal set`; `--no-principal`
+  opts out. The bus enforces the human-only guarantee at the source: only a
+  non-agent seat may be claimed, so an auto-minting agent can never claim the
+  principal even though it shares the enrollment path. The enrollment credential
+  gains `principal.set`, bus-gated to claim-when-unclaimed only.
 - **`register --self` creates an active context** (ADR-0021) — self-enrollment now
   writes the new creds into the context store (`$SEXTANT_HOME`, not the bus
   `--store`), records a context carrying the bus-minted ULID, and makes it active,
@@ -219,6 +226,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Re-pointing an established principal now takes `--force`** (ADR-0031) — `sextant
+  principal set <ulid>` refuses to move an already-designated principal without
+  `--force`, and prints the `current → new` change; the first claim of an unclaimed
+  principal needs no flag. A move is announced through the existing `principal.watch`
+  relay and written to the bus log. The first designation and reads are unchanged.
 - **Client identity is now a bus-minted ULID + a `display_name`** (ADR-0019, the
   §3 review decision). `sextant token <display-name>` (was `<client-id>`) now
   mints a fresh ULID as the client's primary id — bus-owned, unforgeable — and
