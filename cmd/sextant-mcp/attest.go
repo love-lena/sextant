@@ -143,7 +143,14 @@ func attestOnce(ctx context.Context, cf connFlags, sessionID string, emit func(s
 	// divergence classes the independent-resolve path had. If the file is MISSING the
 	// server has not connected yet (e.g. turn 1, before the first tool call): degrade
 	// to silent — turn 1 has no inbound messages to attest anyway.
-	id, err := attest.LoadIdentity(dataDir, sessionID)
+	// Key the identity lookup on the SAME source the server wrote it under —
+	// os.Getenv(sessionEnv), exactly the server's m.sessionID — NOT the stdin
+	// session_id. This makes the lockstep hold by construction even if the
+	// harness ever diverged the stdin session_id from the env one (the M2 trap):
+	// both processes resolve the identity file from the identical env value. The
+	// cursor below stays keyed on the stdin sessionID (the hook's own per-session
+	// delivery tracking, which need not match the server).
+	id, err := attest.LoadIdentity(dataDir, os.Getenv(sessionEnv))
 	if err != nil {
 		if errors.Is(err, attest.ErrNoIdentity) {
 			log.Printf("sextant-mcp attest: no session identity yet (server not connected); nothing to attest")

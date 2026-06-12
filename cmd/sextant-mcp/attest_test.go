@@ -95,6 +95,9 @@ func newAttestFixture(t *testing.T) attestFixture {
 	}); err != nil {
 		t.Fatalf("seed identity file: %v", err)
 	}
+	// attestOnce keys the identity lookup on the env session id (the same source
+	// the MCP server writes under), so point it at the seeded session.
+	t.Setenv(sessionEnv, sessionID)
 
 	emptyCreds := ""
 	emptyCtx := ""
