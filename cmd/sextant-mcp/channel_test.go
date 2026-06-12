@@ -71,6 +71,14 @@ func msg(subject, author, record string, seq uint64) sextant.Message {
 	}
 }
 
+func msgID(id, subject, author, record string, seq uint64) sextant.Message {
+	return sextant.Message{
+		Frame:    wire.Frame{ID: id, Author: author, Kind: "message", Record: wire.Lexicon(record)},
+		Subject:  subject,
+		Sequence: seq,
+	}
+}
+
 var metaKeyRE = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
 
 func TestFrameEventRendersChatMessage(t *testing.T) {
@@ -157,6 +165,82 @@ func TestResumeNoticeDeferredVsLost(t *testing.T) {
 	for _, want := range []string{"message_read", "message_subscribe"} {
 		if !regexp.MustCompile(want).MatchString(content) {
 			t.Errorf("lost notice %q missing recovery step %q", content, want)
+		}
+	}
+}
+
+// TestSelfEchoSuppressed proves AC#1: a frame whose id was recorded as a
+// just-published self-echo is NOT emitted as a channel event.
+func TestSelfEchoSuppressed(t *testing.T) {
+	rec := &recorder{}
+	h := newChannelHub(rec.notify, staticNames(map[string]string{"01A": "alice"}))
+
+	// Simulate a publish: record the frame id in the echo set.
+	const echoID = "01ECHO_SELF_ID"
+	h.echo.record(echoID)
+
+	// Deliver the echo back, as the bus would relay it.
+	h.frameEvent(msgID(echoID, "msg.topic.plan", "01A", `{"$type":"chat.message","text":"my own message"}`, 1))
+
+	// The recorder must have captured no events (the echo was dropped).
+	rec.mu.Lock()
+	n := len(rec.events)
+	rec.mu.Unlock()
+	if n != 0 {
+		t.Errorf("self-echo delivered %d channel event(s), want 0 (AC#1)", n)
+	}
+}
+
+// TestNonEchoFrameDelivered proves the complementary case: a frame whose id is
+// NOT in the echo set is still emitted normally (other subscribers unaffected).
+func TestNonEchoFrameDelivered(t *testing.T) {
+	rec := &recorder{}
+	h := newChannelHub(rec.notify, staticNames(map[string]string{"01B": "bob"}))
+
+	h.echo.record("01SOME_OTHER_PUBLISHED_ID") // only this id is suppressed
+
+	// A different id from a different sender — must come through.
+	h.frameEvent(msgID("01DIFFERENT_ID", "msg.topic.plan", "01B", `{"$type":"chat.message","text":"hi"}`, 2))
+
+	rec.mu.Lock()
+	n := len(rec.events)
+	rec.mu.Unlock()
+	if n != 1 {
+		t.Errorf("non-echo frame emitted %d event(s), want 1", n)
+	}
+}
+
+// TestEchoSetBounded proves AC#4: after echoSetSize publishes the oldest id is
+// evicted and no longer treated as a self-echo, so the set does not grow
+// without limit.
+func TestEchoSetBounded(t *testing.T) {
+	s := newSelfEchoSet()
+
+	// Fill the ring exactly: ids "id-0" … "id-255".
+	ids := make([]string, echoSetSize)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("id-%d", i)
+		s.record(ids[i])
+	}
+	// All ids are present.
+	for _, id := range ids {
+		if !s.contains(id) {
+			t.Fatalf("id %q should be in the set before eviction", id)
+		}
+	}
+
+	// Record one more id — the oldest (ids[0]) should now be evicted.
+	s.record("id-overflow")
+	if s.contains(ids[0]) {
+		t.Errorf("oldest id %q should have been evicted after overflow (AC#4)", ids[0])
+	}
+	if !s.contains("id-overflow") {
+		t.Error("newly recorded id-overflow should be in the set")
+	}
+	// The rest (ids[1]…) are still present.
+	for _, id := range ids[1:] {
+		if !s.contains(id) {
+			t.Errorf("id %q evicted prematurely", id)
 		}
 	}
 }

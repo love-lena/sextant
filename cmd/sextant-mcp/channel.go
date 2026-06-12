@@ -69,13 +69,14 @@ func (t *capturingTransport) notify(ctx context.Context, method string, params a
 type channelHub struct {
 	notify func(ctx context.Context, method string, params any) error
 	names  *nameCache
+	echo   *selfEchoSet
 
 	mu   sync.Mutex
 	subs map[string]sextant.Subscription
 }
 
 func newChannelHub(notify func(ctx context.Context, method string, params any) error, names *nameCache) *channelHub {
-	return &channelHub{notify: notify, names: names, subs: map[string]sextant.Subscription{}}
+	return &channelHub{notify: notify, names: names, echo: newSelfEchoSet(), subs: map[string]sextant.Subscription{}}
 }
 
 // event pushes one channel notification; failures are logged, never fatal —
@@ -92,7 +93,16 @@ func (h *channelHub) event(content string, meta map[string]any) {
 // frameEvent renders a delivered message. chat.message renders as its text;
 // any other lexicon as its compact JSON (content is opaque to the bus —
 // rendering is a courtesy, not policy).
+//
+// Frames whose id is in the self-echo set are dropped: they are the result of
+// this session's own message_publish being relayed back through the
+// subscription (AC#1). Suppression is id-based, not author-based — a resumed
+// or co-identity session that holds a different selfEchoSet still sees its
+// own frames.
 func (h *channelHub) frameEvent(m sextant.Message) {
+	if h.echo.contains(m.Frame.ID) {
+		return // self-echo: this frame was published by this process; suppress it
+	}
 	content := string(m.Frame.Record)
 	var rec struct {
 		Type string `json:"$type"`

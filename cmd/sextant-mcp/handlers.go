@@ -43,9 +43,13 @@ func registerMessagePublish(s *mcp.Server, d *deps) {
 		if err != nil {
 			return toolError(err), nil, nil
 		}
-		if err := c.Publish(ctx, args.Subject, mustRaw(args.Record)); err != nil {
+		// PublishMsg waits for the bus ack (AC#3) and returns the bus-stamped
+		// frame id so we can suppress the self-echo on subscribed subjects (AC#1).
+		out, err := c.PublishMsg(ctx, args.Subject, mustRaw(args.Record))
+		if err != nil {
 			return toolError(err), nil, nil
 		}
+		d.hub.echo.record(out.ID)
 		res, err := jsonResult(map[string]any{"published": args.Subject})
 		return res, nil, err
 	})
