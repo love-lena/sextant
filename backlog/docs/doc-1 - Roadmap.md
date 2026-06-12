@@ -3,7 +3,7 @@ id: doc-1
 title: Roadmap
 type: other
 created_date: '2026-06-04 18:18'
-updated_date: '2026-06-12 10:41'
+updated_date: '2026-06-12 12:43'
 ---
 
 Thin map of Sextant's milestones — order, goal, definition-of-done, and the
@@ -94,6 +94,11 @@ milestone line.
   operator-designated **principal**'s bus messages as operator-equivalent, trust
   decided by the unforgeable author ULID (never content); verified peers cooperate
   without operator authority. The keystone for an AFK agent acting on the bus.
+- **Principal hardening** (ADR-0031, TASK-64, #114) — the designation gains the
+  asymmetry the operator asked for: a self-enrolling human seat **claims an
+  unclaimed principal** with no extra command, while **re-pointing an
+  established** one is operator-only and `--force`-gated (observable via
+  `principal.watch` + the bus audit log). Co-sign escalation (TASK-65) deferred.
 - **Repo public** (2026-06-11) — the source opened after a history identity-scrub;
   install is `brew tap` + `brew install` + the Claude Code plugin.
 

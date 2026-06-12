@@ -1,0 +1,48 @@
+---
+id: TASK-70
+title: >-
+  M5.1 spawn spike: PoC dispatcher that launches Claude + Codex agents onto the
+  bus
+status: To Do
+assignee: []
+created_date: '2026-06-12 21:07'
+labels:
+  - feature
+  - spawn
+  - m5
+  - orchestration
+  - spike
+  - 'slug:feat-m5-spawn-spike'
+  - P1
+  - ready-for-agent
+dependencies: []
+priority: high
+ordinal: 75000
+---
+
+## Description
+
+<!-- SECTION:DESCRIPTION:BEGIN -->
+De-risk the spawn milestone: prove that a dispatcher can launch an agent (claude -p, codex exec) that (a) joins the bus under its own identity via auto-mint, (b) runs a task (publish a hello on a topic), (c) returns its new client id + result, and (d) wakes and acts on a follow-up bus message (shape-1 supervisor: subscribe → re-invoke --resume on inbound DM). This is a PoC, not production code — the artefact is a working demo + per-harness design notes (launch recipe, identity seam, wake-loop, prompt injection, result plumbing) that feed M5.2 (the real dispatcher + mint-on-behalf). Research pre-done in m5-spawn-spike-research; this ticket turns it into running code. The client wrapper each harness hands to the SDK is its own self-contained client (implements the SDK) so it can grow without coupling to the dispatcher later.
+<!-- SECTION:DESCRIPTION:END -->
+
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [ ] #1 claude -p harness: a spawned Claude agent joins the bus under a keyed (resume-stable) identity, publishes a hello on msg.topic.demo, and its client id is returned to the dispatcher caller
+- [ ] #2 codex exec harness: a spawned Codex agent self-enrolls (store + enroll.creds in MCP env), joins the bus, publishes a hello, and its client id is returned
+- [ ] #3 Wake loop (shape 1): the PoC wraps one of the one-shots in a thin supervisor that subscribes to the agent's DM and re-invokes it (--resume / codex exec resume) on inbound — the agent wakes, reads the message, and acts on it
+- [ ] #4 Nicknames: each spawned agent (kind=agent) gets a human-readable nickname, not the claude-<hex> auto-mint placeholder
+- [ ] #5 Design notes written up (per harness): launch recipe, identity seam gaps vs mint-on-behalf, wake-loop shape, primer injection
+<!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+PoC only — no core protocol changes. Harness A: shell out to claude -p with --mcp-config pointing at sextant-mcp; capture session_id + result from JSON envelope. Harness B: codex exec with sextant-mcp in MCP config env (store + enroll.creds). Wake loop: a thin Go or shell supervisor that subscribes to msg.client.<spawned-id> via sextant subscribe (Monitor), re-invokes the harness with --resume on inbound. Nickname: pass a display name at spawn time (flag or env). Output: a demo script + design-notes doc. Feeds M5.2 dispatcher design.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Research: m5-spawn-spike-research artifact (rev 16). Lena approved on msg.topic.orchestration-m5 2026-06-12. Successor: [[feat-m5-client-standup]] (M5.2, mint-on-behalf). Parallel: [[feat-m5-sextant-run]] (M5.3).
+<!-- SECTION:NOTES:END -->
