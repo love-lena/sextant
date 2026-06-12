@@ -82,23 +82,55 @@ func runAttest(args []string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), attestBudget)
 	defer cancel()
 
-	out, err := attestOnce(ctx, cf, in.SessionID)
-	if err != nil {
+	// emit writes the trusted block to stdout. attestOnce calls this BEFORE
+	// advancing the cursor (M2): the cursor only moves once the
+	// operator-equivalent block is on its way to the harness. A write failure
+	// leaves the cursor untouched, so the next turn re-delivers — re-delivery
+	// beats a silent loss on the trust path. os.Stdout is an *os.File whose
+	// Write goes straight to the write(2) syscall (no userspace buffer), so a
+	// successful Fprintln is the durable hand-off; we do NOT fsync — the hook's
+	// stdout is a pipe to the harness, never a regular file, and Sync on a pipe
+	// fails with EBADF/EINVAL even though the bytes are already delivered.
+	emit := func(out string) error {
+		_, err := fmt.Fprintln(os.Stdout, out)
+		return err
+	}
+
+	if err := attestOnce(ctx, cf, in.SessionID, emit); err != nil {
 		log.Printf("sextant-mcp attest: %v (degrading: no context injected)", err)
 		return 0
-	}
-	if out != "" {
-		fmt.Println(out)
 	}
 	return 0
 }
 
-// attestOnce does the bus work and returns the hook stdout JSON (or "" when there
-// is nothing new). Every step that can hang is governed by ctx.
-func attestOnce(ctx context.Context, cf connFlags, sessionID string) (string, error) {
+// attestOnce does the bus work, emits the trusted hook block via emit (when there
+// is something new), and only THEN advances and persists the delivery cursor.
+// Every step that can hang is governed by ctx. emit must write the block to the
+// hook's stdout and confirm it is flushed; attestOnce treats an emit error as a
+// non-delivery and leaves the cursor where it was so the block re-delivers next
+// turn (M2: advance-after-emit, never before).
+//
+// Delivery guarantee: this is AT-MOST-ONCE on a SUCCESSFUL emit — once emit
+// returns nil, the cursor advances and the block is never re-delivered by this
+// hook. There is one residual window outside our control: the harness itself may
+// discard an injected additionalContext block after we have flushed it (we cannot
+// observe that from here, and we do NOT advance again to recover it). The recovery
+// path for that window is independent: a Monitor (`sextant subscribe
+// msg.client.<self>`) tails the same DM subject live, so a block the harness drops
+// is still visible on the bus. Full deliver-then-confirm (a two-phase ack from the
+// harness) is deferred — not over-engineered for v1.
+func attestOnce(ctx context.Context, cf connFlags, sessionID string, emit func(string) error) error {
+	// FORWARD RISK B (integration item, do not fix on this branch — #107 isn't
+	// here): this resolve MUST select the SAME worker identity as the MCP
+	// server's connManager (conn.go), which calls clictx.Resolve symmetrically.
+	// Both paths resolve identically today. When this branch rebases onto a main
+	// carrying ADR-0029 / PR #107 (per-session identity keyed on
+	// CLAUDE_CODE_SESSION_ID), the session-keyed selection MUST route THROUGH
+	// clictx.Resolve (or a shared resolver both call) so attest and the server
+	// stay in lockstep — otherwise attest scans the wrong client's DM subject.
 	rc, err := clictx.Resolve(*cf.creds, *cf.url, *cf.context)
 	if err != nil {
-		return "", fmt.Errorf("resolve identity: %w", err)
+		return fmt.Errorf("resolve identity: %w", err)
 	}
 	c, err := sextant.Connect(ctx, sextant.Options{
 		CredsPath:    rc.Creds,
@@ -107,7 +139,7 @@ func attestOnce(ctx context.Context, cf connFlags, sessionID string) (string, er
 		Logf:         log.Printf,
 	})
 	if err != nil {
-		return "", fmt.Errorf("connect: %w", err)
+		return fmt.Errorf("connect: %w", err)
 	}
 	defer c.Close()
 
@@ -143,7 +175,7 @@ func attestOnce(ctx context.Context, cf connFlags, sessionID string) (string, er
 	if dataDir == "" {
 		// No writable plugin data dir: we can still stamp, but can't persist a
 		// cursor, so we'd re-deliver. Refuse to spam — read nothing new.
-		return "", fmt.Errorf("CLAUDE_PLUGIN_DATA unset; cannot persist cursor")
+		return fmt.Errorf("CLAUDE_PLUGIN_DATA unset; cannot persist cursor")
 	}
 	cur, err := attest.LoadCursor(dataDir, sessionID)
 	if err != nil {
@@ -152,28 +184,45 @@ func attestOnce(ctx context.Context, cf connFlags, sessionID string) (string, er
 
 	frames, next, err := c.FetchMessages(ctx, subject, cur.Since(subject), 200)
 	if err != nil {
-		return "", fmt.Errorf("read %s: %w", subject, err)
+		return fmt.Errorf("read %s: %w", subject, err)
 	}
 
 	stamped := attest.Stamp(frames, self, principal, registered)
 	block := attest.BuildContext(stamped, principal)
 
-	// Advance + persist the cursor only after a successful read. We advance to the
-	// batch's next cursor regardless of whether any frame survived self-filtering,
-	// so our own echoes don't wedge the cursor.
-	cur.Advance(subject, next)
-	if err := cur.Save(); err != nil {
-		// Persist failure means a possible re-delivery next turn; surface it but
-		// still deliver this turn's stamp (the agent seeing it twice beats never).
-		log.Printf("sextant-mcp attest: cursor save: %v (may re-deliver next turn)", err)
+	// advanceCursor moves the cursor to the batch's next sequence and persists it.
+	// We advance to next regardless of whether any frame survived self-filtering,
+	// so our own echoes don't wedge the cursor. It runs only AFTER a successful
+	// emit (or when there is nothing to emit) — never before (M2).
+	advanceCursor := func() {
+		cur.Advance(subject, next)
+		if err := cur.Save(); err != nil {
+			// Persist failure means a possible re-delivery next turn; surface it.
+			// The block is already out, so the agent seeing it twice beats never.
+			log.Printf("sextant-mcp attest: cursor save: %v (may re-deliver next turn)", err)
+		}
 	}
 
+	// Nothing new (or only self-echoes): advance past them and return — there is
+	// no block to emit, so re-delivery is not a concern.
 	if block == "" {
-		return "", nil
+		advanceCursor()
+		return nil
 	}
+
 	b, err := attest.Marshal(block)
 	if err != nil {
-		return "", fmt.Errorf("marshal hook output: %w", err)
+		// Can't form the block: do NOT advance — re-read next turn.
+		return fmt.Errorf("marshal hook output: %w", err)
 	}
-	return string(b), nil
+
+	// Emit FIRST. Only once the block is written to stdout do we advance the
+	// cursor (M2). If emit fails, leave the cursor where it was so this batch
+	// re-delivers next turn — re-delivery beats a silent at-most-once loss on the
+	// operator-equivalent trust path.
+	if err := emit(string(b)); err != nil {
+		return fmt.Errorf("emit hook output (cursor not advanced, will re-deliver): %w", err)
+	}
+	advanceCursor()
+	return nil
 }

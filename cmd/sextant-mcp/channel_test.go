@@ -6,10 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/love-lena/sextant/pkg/sextant"
+	"github.com/love-lena/sextant/pkg/sx"
 	"github.com/love-lena/sextant/pkg/wire"
 )
 
@@ -243,6 +246,147 @@ func TestEchoSetBounded(t *testing.T) {
 			t.Errorf("id %q evicted prematurely", id)
 		}
 	}
+}
+
+// waitForEvents blocks until the recorder has at least n events or the deadline
+// passes, so the async drainLoop has time to forward through frameEvent.
+func (r *recorder) waitForEvents(t *testing.T, n int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		r.mu.Lock()
+		got := len(r.events)
+		r.mu.Unlock()
+		if got >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("recorder had %d events, want >= %d within deadline", got, n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func (r *recorder) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.events)
+}
+
+// TestDMDrainWakesContentMode proves M1 (review): a frame arriving on the auto-DM
+// channel (c.DMs(), TASK-55) is emitted as a channel event through frameEvent's
+// shared emit path — WITHOUT any explicit message_subscribe. This is the wake
+// path a principal DM rides; in CONTENT mode the body is pushed.
+func TestDMDrainWakesContentMode(t *testing.T) {
+	clearWakeOnly(t)
+
+	rec := &recorder{}
+	h := newChannelHub(rec.notify, staticNames(map[string]string{"01PRIN": "lena"}))
+
+	dms := make(chan sextant.Message, 1)
+	stop := make(chan struct{})
+	defer close(stop)
+	go h.drainLoop(dms, nil, stop)
+
+	dms <- msgID("01DM_CONTENT", sx.ClientSubject("01SELF"), "01PRIN",
+		`{"$type":"chat.message","text":"ship the v0.2 release"}`, 4)
+
+	rec.waitForEvents(t, 1)
+	content, meta := rec.last(t)
+	if content != "ship the v0.2 release" {
+		t.Errorf("DM wake content = %q, want the principal's message text", content)
+	}
+	if meta["sender"] != "lena" || meta["sender_id"] != "01PRIN" {
+		t.Errorf("DM wake meta = %+v, want sender lena / 01PRIN", meta)
+	}
+}
+
+// TestDMDrainWakesWakeOnlyMode proves the wake path composes with wake-only mode:
+// a DM produces a content-less wake (no body), via the same frameEvent branch.
+func TestDMDrainWakesWakeOnlyMode(t *testing.T) {
+	setWakeOnly(t)
+
+	rec := &recorder{}
+	h := newChannelHub(rec.notify, staticNames(map[string]string{"01PRIN": "lena"}))
+
+	dms := make(chan sextant.Message, 1)
+	stop := make(chan struct{})
+	defer close(stop)
+	go h.drainLoop(dms, nil, stop)
+
+	const body = "secret principal instruction"
+	dms <- msgID("01DM_WAKE", sx.ClientSubject("01SELF"), "01PRIN",
+		`{"$type":"chat.message","text":"`+body+`"}`, 9)
+
+	rec.waitForEvents(t, 1)
+	content, meta := rec.last(t)
+	if strings.Contains(content, body) {
+		t.Errorf("wake-only DM content %q must not carry the body", content)
+	}
+	if meta["wake"] != "1" {
+		t.Errorf("wake-only DM meta[wake] = %v, want \"1\"", meta["wake"])
+	}
+	if _, ok := meta["sender"]; ok {
+		t.Error("wake-only DM meta must not carry sender (no body)")
+	}
+}
+
+// TestDMDrainSuppressesSelfEcho proves a self-published DM is still dropped on the
+// drain path: self-echo is checked first in frameEvent, so a worker DMing itself
+// (or its own publish relayed back) produces no wake.
+func TestDMDrainSuppressesSelfEcho(t *testing.T) {
+	clearWakeOnly(t)
+
+	rec := &recorder{}
+	h := newChannelHub(rec.notify, staticNames(map[string]string{"01SELF": "me"}))
+
+	const echoID = "01DM_SELF_ECHO"
+	h.echo.record(echoID) // this id was just published by this process
+
+	dms := make(chan sextant.Message, 1)
+	stop := make(chan struct{})
+	defer close(stop)
+	go h.drainLoop(dms, nil, stop)
+
+	dms <- msgID(echoID, sx.ClientSubject("01SELF"), "01SELF",
+		`{"$type":"chat.message","text":"note to self"}`, 2)
+
+	// Give the drain a moment, then assert nothing was emitted.
+	time.Sleep(100 * time.Millisecond)
+	if n := rec.count(); n != 0 {
+		t.Errorf("self-echo DM emitted %d wake event(s), want 0", n)
+	}
+}
+
+// TestDMDrainStartIsIdempotent proves startDMDrain starts at most one drain per
+// client object: a second call for the same client is a no-op (it does not
+// double-relay every DM). It uses a nil-channel client stand-in by tracking the
+// registry directly, since startDMDrain only reads c.DMs()/c.Drained() lazily in
+// the goroutine.
+func TestDMDrainStartIsIdempotent(t *testing.T) {
+	h := newChannelHub((&recorder{}).notify, staticNames(nil))
+
+	var c sextant.Client // zero client: DMs()/Drained() return nil channels (block forever)
+	h.startDMDrain(&c)
+	h.startDMDrain(&c) // second call: must not register a second drain
+
+	h.dmMu.Lock()
+	n := len(h.dmDrains)
+	h.dmMu.Unlock()
+	if n != 1 {
+		t.Fatalf("dmDrains has %d entries, want 1 (idempotent per client)", n)
+	}
+
+	// stopDMDrain unblocks the (idle) goroutine and clears the entry.
+	h.stopDMDrain(&c)
+	h.dmMu.Lock()
+	n = len(h.dmDrains)
+	h.dmMu.Unlock()
+	if n != 0 {
+		t.Fatalf("dmDrains has %d entries after stop, want 0", n)
+	}
+	// A double stop is safe.
+	h.stopDMDrain(&c)
 }
 
 type stubSub struct{}

@@ -74,10 +74,95 @@ type channelHub struct {
 
 	mu   sync.Mutex
 	subs map[string]sextant.Subscription
+
+	// dmDrains tracks one DM-drain goroutine per live client object, so the
+	// drain starts exactly once per connection (idempotent) and can be stopped
+	// when the connManager discards that client.
+	dmMu     sync.Mutex
+	dmDrains map[*sextant.Client]chan struct{}
 }
 
 func newChannelHub(notify func(ctx context.Context, method string, params any) error, names *nameCache) *channelHub {
-	return &channelHub{notify: notify, names: names, echo: newSelfEchoSet(), subs: map[string]sextant.Subscription{}}
+	return &channelHub{
+		notify:   notify,
+		names:    names,
+		echo:     newSelfEchoSet(),
+		subs:     map[string]sextant.Subscription{},
+		dmDrains: map[*sextant.Client]chan struct{}{},
+	}
+}
+
+// startDMDrain bridges the SDK's auto-DM channel (c.DMs(), TASK-55) into the
+// SAME channel-wake path an explicit message_subscribe uses (frameEvent), so a
+// principal's DM to msg.client.<self> WAKES the session (ADR-0030, review M1).
+// This is the production consumer of c.DMs(); without it a DM lands in the
+// durable stream but nothing wakes the worker, and the trust hook — which can
+// only run on an already-woken turn — never fires until some unrelated turn.
+//
+// It does NOT open a second bus subscription: TASK-55 already auto-subscribes
+// to msg.client.<self> and fans frames into c.DMs(); a second subscribe would
+// double-relay every DM. We only give that existing channel a real reader.
+//
+// Idempotent + reconnect-safe + leak-free:
+//   - One drain per client object: a repeat call for the same client is a no-op,
+//     so the connManager calling this on every get() starts it exactly once.
+//   - The SDK re-establishes the auto-DM subscription across reconnect on the
+//     same client object (startResumePass → reestablishSubs), so c.DMs() keeps
+//     flowing and this one drain spans the whole cached-client lifecycle.
+//   - The goroutine exits on c.Drained() (a cooperative bus drain) or when
+//     stopDMDrain closes its stop channel (the connManager discarding the
+//     client). It never blocks the SDK delivery goroutine: frameEvent's push is
+//     non-fatal and bounded.
+func (h *channelHub) startDMDrain(c *sextant.Client) {
+	h.dmMu.Lock()
+	if _, running := h.dmDrains[c]; running {
+		h.dmMu.Unlock()
+		return
+	}
+	stop := make(chan struct{})
+	h.dmDrains[c] = stop
+	h.dmMu.Unlock()
+
+	go func() {
+		// Warm the name cache before draining so the first DM resolves its
+		// sender to a display name instead of a raw id. Done here, off the
+		// connManager's get() critical section (a refresh re-enters get()), and
+		// off the hot path (frameEvent stays cached-only on the delivery side).
+		h.names.refresh(context.Background())
+		h.drainLoop(c.DMs(), c.Drained(), stop)
+	}()
+}
+
+// drainLoop forwards each DM into the shared emit path (frameEvent) until the
+// connection drains or stop fires. Split out from startDMDrain so the bridge
+// behavior is unit-testable with plain channels, independent of a live client.
+func (h *channelHub) drainLoop(dms <-chan sextant.Message, drained <-chan struct{}, stop <-chan struct{}) {
+	for {
+		select {
+		case m := <-dms:
+			// Same emit logic as an explicit subscription: self-echo drop
+			// first, then the wake-vs-content branch.
+			h.frameEvent(m)
+		case <-drained:
+			return
+		case <-stop:
+			return
+		}
+	}
+}
+
+// stopDMDrain stops the drain for a client the connManager is discarding (a
+// drained connection it is about to replace). Idempotent; safe if no drain ran.
+func (h *channelHub) stopDMDrain(c *sextant.Client) {
+	h.dmMu.Lock()
+	stop, ok := h.dmDrains[c]
+	if ok {
+		delete(h.dmDrains, c)
+	}
+	h.dmMu.Unlock()
+	if ok {
+		close(stop)
+	}
 }
 
 // event pushes one channel notification; failures are logged, never fatal —

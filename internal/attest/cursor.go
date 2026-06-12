@@ -18,6 +18,11 @@ import (
 // The on-disk form is a flat map of subject -> next sequence. "next sequence" is
 // the FetchMessages cursor contract: the value to pass as `since` on the following
 // read to get no gaps and no duplicates.
+//
+// Concurrency: concurrent same-session hook runs are NOT locked. Claude Code
+// serializes turns within a session, so two attest invocations never race the
+// same cursor file in practice; the atomic write-temp-then-rename in Save only
+// guards against a crash mid-write, not against concurrent writers.
 type Cursor struct {
 	path string
 	// Next maps a bus subject to the next sequence to read from it.

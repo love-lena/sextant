@@ -696,6 +696,11 @@ func TestSiblingResumePassesDedupe(t *testing.T) {
 // that outlives Close. The seam parks a spawn exactly inside that window while
 // Close runs to completion; the released spawn must observe closed and spawn
 // nothing.
+//
+// Note: this test's goleak baseline (IgnoreCurrent after Connect) now includes
+// the auto-DM relay goroutines, so it does NOT catch an auto-DM SDK-goroutine
+// leak. TestCloseMidResumePassIsClean is the test that does — its baseline is
+// taken before the client exists, so a leaked auto-DM bridge would fail it.
 func TestCloseConcurrentWithPassSpawnIsSafe(t *testing.T) {
 	b := startBus(t)
 

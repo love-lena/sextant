@@ -7,6 +7,12 @@ import "sync"
 // publishes before the oldest ids evict — far beyond any realistic session
 // cadence. The ring is per-process, so it is tightly scoped and never
 // communicated externally.
+//
+// Caveat: if a session publishes >256 frames before an early frame's own relay
+// delivery lands, that early id can evict before frameEvent sees its echo — so
+// the echo re-surfaces. In CONTENT mode that wastes a turn (the agent sees its
+// own message); trust is unaffected, because the attest hook independently drops
+// any frame whose author == self.
 const echoSetSize = 256
 
 // selfEchoSet is a bounded ring of recently-published frame ids. When

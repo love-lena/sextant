@@ -79,7 +79,7 @@ func run(ctx context.Context, cf connFlags) error {
 		},
 	)
 
-	conn := &connManager{cf: cf}
+	conn := &connManager{cf: cf, base: ctx}
 	names := newNameCache(func(ctx context.Context) ([]sextant.ClientInfo, error) {
 		c, err := conn.get(ctx)
 		if err != nil {
@@ -88,10 +88,18 @@ func run(ctx context.Context, cf connFlags) error {
 		return c.ListClients(ctx)
 	})
 	transport := &capturingTransport{inner: &mcp.StdioTransport{}}
+	hub := newChannelHub(transport.notify, names)
+	// Bridge the SDK auto-DM channel into the channel-wake path (ADR-0030, M1):
+	// once connected, a DM to msg.client.<self> wakes the session via the same
+	// emit logic an explicit subscription uses. Connect is lazy (first tool
+	// call), so the drain begins after the worker's first sextant interaction —
+	// acceptable for v1; eager connect-at-startup would fail before the bus is up.
+	conn.onConnect = hub.startDMDrain
+	conn.onDiscard = hub.stopDMDrain
 	registerTools(server, &deps{
 		conn:  conn,
 		names: names,
-		hub:   newChannelHub(transport.notify, names),
+		hub:   hub,
 	})
 
 	return server.Run(ctx, transport)

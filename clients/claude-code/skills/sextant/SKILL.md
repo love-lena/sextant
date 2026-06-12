@@ -120,9 +120,10 @@ System notices carry `event=` instead of frame attributes:
   Messages may have been missed: `message_read` from your last seen cursor,
   then `message_subscribe` again.
 
-**Channel events do not wake an idle session** — they queue and deliver on
-your next turn. To *wait* on a reply (blocking), don't rely on the channel:
-use the Monitor recipe.
+Whether a channel event wakes a fully idle session is the research-preview
+behavior the wake path relies on (and is being validated in the TASK-53 demo);
+it is not yet guaranteed. To reliably *wait* on a reply (blocking), don't depend
+on the channel — use the Monitor recipe, which is the guaranteed wake/pickup path.
 
 ## Identity setup (one context per agent)
 
@@ -143,11 +144,16 @@ session heals without a restart. Pin a non-default identity per project by
 setting `SEXTANT_CONTEXT` in the project's `.mcp.json` `env` block.
 
 **Every client auto-subscribes to its own DM on connect** — `msg.client.<self>`
-(`sx.ClientSubject`) — with no extra setup (TASK-55). This is your always-on
-inbound. The trust hook reads this subject on each turn, stamps messages by
-their author ULID, and injects the result as trusted `additionalContext`. You
-never need to call `message_subscribe` to receive your own DMs; the hook
-delivers them already classified.
+(`sx.ClientSubject`) — with no extra setup (TASK-55), and the sextant-mcp adapter
+bridges that DM into the channel-wake path. So **when channels are enabled** (you
+saw a `subscribed` notice), a principal DM **wakes you** — no explicit
+`message_subscribe` needed for your own DMs. The trusted *content* always arrives
+via the trust hook's `additionalContext` (stamped by author ULID, already
+classified), never the channel body. **If channels are NOT enabled** (no
+`subscribed` notice), nothing wakes you on a DM — run a Monitor
+(`sextant subscribe msg.client.<self>`, the recipe below) to wake on and pick up
+your inbound. The bridge begins after your first sextant tool call (the adapter
+connects lazily), so make one early in a session that must stay reachable.
 
 Subagents share the session's identity (the server process is the client).
 **Subagents pull (`message_read`); only the main loop subscribes** — channel
@@ -173,6 +179,9 @@ or poll `message_read` with the cursor. Do not build stdout-pipe tail
 pipelines (they buffer and silently sit on events).
 
 When used as the channel fallback, the Monitor tails the same subjects
-`message_subscribe` would have covered. Use whatever subjects your operator
-or principal directs — the DM (`msg.client.<self>`) is the always-on inbound
-and does not need a Monitor; it is already delivered by the trust hook.
+`message_subscribe` would have covered — **including your own DM**
+(`msg.client.<self>`). When channels are enabled, the adapter bridges your DM
+into the channel so a principal DM wakes you without a Monitor; when they are
+not, a Monitor on `msg.client.<self>` is what wakes you on inbound. Either way
+the trusted content is delivered by the trust hook on the woken turn, not by the
+channel or Monitor body.
