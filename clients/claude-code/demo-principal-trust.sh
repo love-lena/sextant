@@ -203,9 +203,13 @@ say ""
 # "/sextant:startup" as the launch prompt is treated as literal text, so we
 # phrase it as an instruction that invokes the skill.)
 KICKOFF='Run your /sextant:startup routine now to begin operating as an unattended sextant worker.'
+# NOTE: --dangerously-load-development-channels is VARIADIC — it consumes every
+# following arg as a (tagged) channel entry until a flag stops it. The trailing
+# `--` terminates option parsing so KICKOFF is taken as the positional prompt,
+# not swallowed as a bogus channel entry.
 (cd "$PROJ" && PATH="$BIN:$PATH" SEXTANT_HOME="$HOME_CTX" SEXTANT_STORE="$STORE" \
-  claude --dangerously-load-development-channels plugin:sextant@sextant \
-  "$KICKOFF") || true
+  claude --model sonnet --dangerously-load-development-channels plugin:sextant@sextant \
+  -- "$KICKOFF") || true
 
 # ---------------- self-validating epilogue (evidence from the bus) ----------
 say ""
