@@ -4,7 +4,7 @@ title: 'Sextant skill: document the principal trust model and conventions'
 status: Done
 assignee: []
 created_date: '2026-06-12 00:04'
-updated_date: '2026-06-12 02:40'
+updated_date: '2026-06-12 17:47'
 labels:
   - feature
   - principal-trust
@@ -13,11 +13,7 @@ labels:
   - 'slug:feat-sextant-skill-principal-trust'
   - P3
   - ready-for-agent
-dependencies:
-  - TASK-54
-  - TASK-55
-  - TASK-56
-  - TASK-57
+dependencies: []
 priority: low
 ordinal: 64000
 ---

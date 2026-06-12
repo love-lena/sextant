@@ -6,7 +6,7 @@ title: >-
 status: Done
 assignee: []
 created_date: '2026-06-12 00:04'
-updated_date: '2026-06-12 02:40'
+updated_date: '2026-06-12 17:47'
 labels:
   - feature
   - principal-trust
@@ -16,8 +16,7 @@ labels:
   - 'slug:feat-principal-auth-hook'
   - P2
   - ready-for-agent
-dependencies:
-  - TASK-54
+dependencies: []
 priority: medium
 ordinal: 62000
 ---

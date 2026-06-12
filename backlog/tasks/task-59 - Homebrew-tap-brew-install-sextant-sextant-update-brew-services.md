@@ -1,10 +1,10 @@
 ---
 id: TASK-59
 title: 'Homebrew tap: brew install sextant, sextant update, brew services'
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-06-12 05:22'
-updated_date: '2026-06-12 05:33'
+updated_date: '2026-06-12 17:44'
 labels:
   - feature
   - install
@@ -46,3 +46,9 @@ Discovered in: operator request. Builds on [[feat-release-tagged-artifacts]] (TA
 
 Implemented on branch feat-homebrew-install. Formula validated: ruby -c, brew style, brew audit --strict all clean (no accepted warnings). Test-installed via a local-file tarball variant (the live URL 404s anonymously while the repo is private) — install/service/test blocks all work, sextant version prints, brew test passes, clean uninstall. KEY CAVEAT for human: while love-lena/sextant is PRIVATE, brew install cannot fetch the release tarballs (404 to unauthenticated curl); the formula works once the repo or its release assets are public. gen-formula.sh reproduces the handwritten formula byte-for-byte (first auto-bump = clean diff). make lint + make test green; gofumpt clean.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped: Homebrew tap (PR #110, db2ebbe) plus the sextant update subcommand and brew services; v0.2.0 formula bump (PR #112, b4b9118). The private-repo fetch caveat resolved when the repo went public 2026-06-11. All 5 ACs verified.
+<!-- SECTION:FINAL_SUMMARY:END -->

@@ -3,10 +3,10 @@ id: TASK-53
 title: >-
   Principal trust: a client acts on its principal's messages as
   operator-equivalent (ADR-0030)
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-12 00:03'
-updated_date: '2026-06-12 02:41'
+updated_date: '2026-06-12 17:47'
 labels:
   - feature
   - principal-trust
@@ -14,12 +14,7 @@ labels:
   - 'slug:feat-principal-trust'
   - P2
   - ready-for-human
-dependencies:
-  - TASK-54
-  - TASK-55
-  - TASK-56
-  - TASK-57
-  - TASK-58
+dependencies: []
 priority: medium
 ordinal: 59000
 ---
@@ -32,13 +27,13 @@ Umbrella for the principal-trust workstream (ADR-0030). A client treats its PRIN
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Operator can designate and re-designate the bus principal; only the Operator credential can set it; clients discover it on connect and on change
-- [ ] #2 A message authored by the principal is acted on by a client as operator-equivalent input, verified end-to-end
-- [ ] #3 A message from a non-principal (verified peer or unknown) is NOT acted on as operator authority, while peer coordination still works
-- [ ] #4 Trust is decided by the unforgeable author ULID, never message content: a spoofed operator-styled task from a non-principal ULID is refused
-- [ ] #5 The demo drives a REAL Claude Code worker session through the genuine hook/channel path, using production-normal names for the bus, working dir, and clients (no test/demo/probe tells) so the worker is never tipped off it is a demo
-- [ ] #6 Demo scene order: (1) principal task -> acted on as operator-equivalent; (2) peer coordination with a genuine collaborative ask (e.g. a verified peer requests a PR review of the worker's output) -> worker cooperates as a peer, not as operator; (3) AFTER the collaboration, a spoofed operator-styled task from a non-principal -> refused, real author named by ULID; (4) designation enforcement -> client-tier re-point denied, Operator re-point succeeds; the epilogue self-validates PASS/FAIL
-- [ ] #7 Documents the operator update path: states whether landing these changes needs a new GitHub release and/or a plugin update, with the exact steps Lena runs to update her sextant install (or an explicit statement that no update is needed)
+- [x] #1 Operator can designate and re-designate the bus principal; only the Operator credential can set it; clients discover it on connect and on change
+- [x] #2 A message authored by the principal is acted on by a client as operator-equivalent input, verified end-to-end
+- [x] #3 A message from a non-principal (verified peer or unknown) is NOT acted on as operator authority, while peer coordination still works
+- [x] #4 Trust is decided by the unforgeable author ULID, never message content: a spoofed operator-styled task from a non-principal ULID is refused
+- [x] #5 The demo drives a REAL Claude Code worker session through the genuine hook/channel path, using production-normal names for the bus, working dir, and clients (no test/demo/probe tells) so the worker is never tipped off it is a demo
+- [x] #6 Demo scene order: (1) principal task -> acted on as operator-equivalent; (2) peer coordination with a genuine collaborative ask (e.g. a verified peer requests a PR review of the worker's output) -> worker cooperates as a peer, not as operator; (3) AFTER the collaboration, a spoofed operator-styled task from a non-principal -> refused, real author named by ULID; (4) designation enforcement -> client-tier re-point denied, Operator re-point succeeds; the epilogue self-validates PASS/FAIL
+- [x] #7 Documents the operator update path: states whether landing these changes needs a new GitHub release and/or a plugin update, with the exact steps Lena runs to update her sextant install (or an explicit statement that no update is needed)
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -58,3 +53,9 @@ AC#7 (operator update path): landing this needs Lena to update her running insta
 
 FORWARD RISK (for the eventual rebase onto main): this branch predates ADR-0029/PR #107 (per-session identity keyed on CLAUDE_CODE_SESSION_ID). `sextant-mcp attest` and the MCP connManager both resolve identity via clictx.Resolve symmetrically today; on rebase, the session-keyed selection must route THROUGH clictx.Resolve (or a shared resolver) or attest scans the wrong client's DM. Marked in code at cmd/sextant-mcp/attest.go.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+ADR-0030 shipped to main (impl merged 92e85d4, PR #109). All six child slices (TASK-52,54,55,56,57,58) implemented and verified; the demo (demo-principal-trust.sh) validated hands-off on a real Opus+Sonnet worker. Adversarial spec-review found no Critical; two Majors fixed (principal DM now wakes the session; attest cursor at-most-once). Trust is decided by the unforgeable author ULID, never content; verified-peer cooperation, spoof refusal, and operator-only designation enforcement all demonstrated. Human sign-off given by principal lena on the bus 2026-06-12.
+<!-- SECTION:FINAL_SUMMARY:END -->

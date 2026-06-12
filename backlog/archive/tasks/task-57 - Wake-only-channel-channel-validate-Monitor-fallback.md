@@ -4,7 +4,7 @@ title: Wake-only channel + channel-validate + Monitor fallback
 status: Done
 assignee: []
 created_date: '2026-06-12 00:04'
-updated_date: '2026-06-12 02:40'
+updated_date: '2026-06-12 17:47'
 labels:
   - feature
   - principal-trust
@@ -14,8 +14,7 @@ labels:
   - 'slug:feat-wake-only-channel'
   - P2
   - ready-for-agent
-dependencies:
-  - TASK-56
+dependencies: []
 priority: medium
 ordinal: 63000
 ---
