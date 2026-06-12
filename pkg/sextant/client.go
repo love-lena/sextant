@@ -29,6 +29,7 @@ import (
 
 	"github.com/love-lena/sextant/internal/wireapi"
 	"github.com/love-lena/sextant/pkg/conninfo"
+	"github.com/love-lena/sextant/pkg/sx"
 	"github.com/love-lena/sextant/pkg/wire"
 	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nats.go"
@@ -111,6 +112,19 @@ type Client struct {
 	// section, so a test can hold a spawn exactly inside the window that races
 	// Close. Always nil in production.
 	passSpawnHook func()
+
+	// dms is the inbound direct-message channel: messages published to
+	// msg.client.<self> are delivered here by the auto-subscription that
+	// Connect establishes (ADR-0030). Buffered so a burst of inbound DMs
+	// does not block the SDK delivery goroutine; a slow consumer loses
+	// messages once the buffer is full (identical to a slow explicit
+	// Subscribe handler). Read with DMs().
+	dms chan Message
+	// dmSub is the auto-DM subscription established by subscribeDM. Close
+	// tears it down synchronously (before nc.Close) so the bus-side relay
+	// goroutines do not outlive the client. Nil when subscribeDM has not
+	// run (e.g. in tests that construct a Client directly without Connect).
+	dmSub *subscription
 }
 
 // Connect dials the bus and runs the connect handshake. ctx governs the
@@ -156,6 +170,7 @@ func Connect(ctx context.Context, opts Options) (*Client, error) {
 		logf:        logf,
 		drained:     make(chan struct{}),
 		closed:      make(chan struct{}),
+		dms:         make(chan Message, 64),
 	}
 
 	nc, err := nats.Connect(
@@ -200,6 +215,10 @@ func Connect(ctx context.Context, opts Options) (*Client, error) {
 		return nil, err
 	}
 	if err := c.watchDrain(ctx); err != nil {
+		nc.Close()
+		return nil, err
+	}
+	if err := c.subscribeDM(ctx); err != nil {
 		nc.Close()
 		return nil, err
 	}
@@ -297,6 +316,43 @@ func (c *Client) ID() string { return c.id }
 // It may be empty for a credential minted without one.
 func (c *Client) DisplayName() string { return c.displayName }
 
+// DMs returns the inbound direct-message channel: messages published to this
+// client's own DM subject (msg.client.<self>) arrive here without any explicit
+// Subscribe call. The channel is buffered (64 messages); a receiver that falls
+// behind will have messages dropped — the same behavior as a slow explicit
+// Subscribe handler. A sender DMing this client need not know whether the
+// client is subscribed: the bus delivers to the relay the auto-subscription
+// establishes on connect, and the SDK fans the frame into this channel.
+func (c *Client) DMs() <-chan Message { return c.dms }
+
+// subscribeDM sets up the auto-subscription to msg.client.<self>. It is called
+// once during Connect, after the hello handshake, so a client is reachable by
+// direct message the instant it exists (ADR-0030). The subscription pointer is
+// stored in c.dmSub so Close can call teardown synchronously (before nc.Close)
+// ensuring the bus-side relay goroutines exit before the connection drops.
+//
+// The handler delivers into c.dms with a non-blocking send: a full buffer drops
+// the message rather than stalling the SDK delivery goroutine.
+//
+// The reconnect re-establishment path (startResumePass → reestablishSubs) covers
+// this subscription exactly like any explicit Subscribe call — it is registered in
+// the same c.subs set — so AC#3 (survives reconnect) is satisfied automatically.
+func (c *Client) subscribeDM(ctx context.Context) error {
+	subject := sx.ClientSubject(c.id)
+	sub, err := c.Subscribe(ctx, subject, func(m Message) {
+		select {
+		case c.dms <- m:
+		default:
+			c.logf("sextant: DM channel full; dropping message on %s from %s", subject, m.Frame.Author)
+		}
+	})
+	if err != nil {
+		return fmt.Errorf("sextant: auto-subscribe DM (%s): %w", subject, err)
+	}
+	c.dmSub = sub.(*subscription)
+	return nil
+}
+
 // Principal is the bus-designated principal's client ULID (ADR-0030) as the
 // client last learned it: at connect (the hello handshake) and from any
 // principal.watch delivery since. A client compares an inbound message's
@@ -328,6 +384,19 @@ func (c *Client) setPrincipal(p string) {
 // a silent hang): if a pass somehow does not stop in time, Close logs and
 // returns — the pass's own per-rotation deadlines still bound its exit.
 func (c *Client) Close() error {
+	// Tear down the auto-DM subscription synchronously before closing nc.
+	// teardown (via once.Do) calls OpSubscriptionStop while nc is still open,
+	// stopping the bus-side relay and its goroutines before they would
+	// otherwise linger until nc.Close()'s disconnection. After teardown we
+	// cancel the bridge goroutine's context so it exits rather than leaking;
+	// the bridge's own teardown call is a no-op (once.Do) if it races our
+	// synchronous one. deregisterSub is idempotent across both paths.
+	if c.dmSub != nil {
+		c.dmSub.stopped.Store(true)
+		c.dmSub.teardown()
+		c.dmSub.cancel()
+		c.deregisterSub(c.dmSub)
+	}
 	// Under passMu so the closed signal is atomic with any in-flight spawn's
 	// {closed re-check, passWG.Add}: after this critical section, no resume
 	// pass can be added to the WaitGroup the drain below waits on.
