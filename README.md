@@ -27,6 +27,7 @@ sextant clients register --self --name "$USER"   # mints creds, saves + activate
 sextant publish msg.topic.hello '{"$type":"chat.message","text":"hello, bus"}'
 sextant read msg.topic.hello
 sextant dash                                      # the cockpit: clients, topics, artifacts
+sextant dash --serve                              # …or a local web API + debug surface (prints a 127.0.0.1 URL)
 ```
 
 Commands find the bus through a discovery file in the per-user store, so no URLs

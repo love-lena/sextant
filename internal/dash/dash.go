@@ -92,6 +92,22 @@ type Options struct {
 	// ConfigPath is where the layout config is loaded from and persisted to. Empty
 	// disables persistence (a fresh DefaultConfig each run).
 	ConfigPath string
+
+	// Serve runs the dash as a local HTTP API + web debug surface
+	// (`--serve`, ADR-0032) instead of the terminal UI: the same one bus
+	// identity, exposed on 127.0.0.1 for a browser, with the Go process the
+	// sole bus client.
+	Serve bool
+	// Port is the loopback port the API binds when Serve is set (default 8765; 0
+	// picks a free port). The host is always 127.0.0.1 — the API is local-only,
+	// so only the port is configurable.
+	Port int
+	// AllowedOrigins are extra browser origins the API accepts beyond localhost
+	// (always allowed), for a separate dev server hosting the UI (D2).
+	AllowedOrigins []string
+	// UIDir, when set, serves a custom frontend directory instead of the
+	// built-in zero-design debug surface (the D2 hook).
+	UIDir string
 }
 
 // launchTimeout bounds each launch I/O step — the whole first-run
@@ -108,6 +124,9 @@ const launchTimeout = 10 * time.Second
 // cancel it (or quit the dash) to wind down. On return the config has been
 // persisted and the client closed.
 func Run(ctx context.Context, opts Options) error {
+	if opts.Serve {
+		return runServe(ctx, opts, os.Stdout)
+	}
 	if err := ensureIdentity(ctx, &opts, os.Stderr); err != nil {
 		return err
 	}
