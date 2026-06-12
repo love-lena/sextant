@@ -507,17 +507,24 @@ func (b *Bus) opPrincipalGet(ctx context.Context) (json.RawMessage, error) {
 	return json.Marshal(wireapi.PrincipalGetOutput{Principal: principal})
 }
 
-// opPrincipalSet re-points the principal (ADR-0030). It is OPERATOR-ONLY: the bus
-// rejects any caller that is not the reserved operator identity, mirroring
-// clients.retire's gate. This is the write-operator half of the key's shape,
-// enforced at the bus — an agent can never claim or alter the designation. The
-// value is stored verbatim (the bus does not resolve it against the directory):
-// the designation is a two-way door, and a wrong value is corrected by another
-// set.
+// opPrincipalSet points the principal at a client seat (ADR-0030, ADR-0031). Its
+// authorization is asymmetric around whether the principal is still unclaimed —
+// the bus enforces both halves:
+//
+//   - Claiming the unclaimed default (the bootstrap operator seat) is open to the
+//     bootstrap tier (operator or enrollment credential) and only to a kind=client
+//     target. This is what makes `register --self` self-designating, and it keeps
+//     the human-only guarantee at the source: an agent (kind=agent) can never be
+//     claimed, even by the bootstrap tier.
+//   - Re-pointing an established principal is operator-only and force-gated, so
+//     moving operator-equivalence takes intent rather than a casual overwrite. A
+//     client-tier ULID caller can do neither — an agent can never claim or alter
+//     the designation (the spine of ADR-0030).
+//
+// The write is a compare-and-set at the revision read, so a concurrent first
+// claim resolves to a single winner. The value is stored verbatim on a re-point
+// (the two-way door — a wrong value is corrected by another set).
 func (b *Bus) opPrincipalSet(ctx context.Context, callerID string, data []byte) (json.RawMessage, error) {
-	if callerID != wireapi.OperatorID {
-		return nil, fmt.Errorf("bus: principal.set: only the operator may set the principal")
-	}
 	var in wireapi.PrincipalSetInput
 	if err := json.Unmarshal(data, &in); err != nil {
 		return nil, fmt.Errorf("bus: principal.set: bad input: %w", err)
@@ -525,10 +532,70 @@ func (b *Bus) opPrincipalSet(ctx context.Context, callerID string, data []byte) 
 	if in.Principal == "" {
 		return nil, errors.New("bus: principal.set: principal is required")
 	}
-	if _, err := b.backend.Put(ctx, sx.BucketMeta, sx.MetaKeyPrincipal, []byte(in.Principal)); err != nil {
+	cur, rev, err := b.backend.Get(ctx, sx.BucketMeta, sx.MetaKeyPrincipal)
+	if err != nil {
+		return nil, fmt.Errorf("bus: principal.set: read current designation: %w", err)
+	}
+	current := string(cur)
+
+	if current == wireapi.OperatorID {
+		// Unclaimed: a frictionless first claim by the bootstrap tier.
+		switch callerID {
+		case wireapi.OperatorID:
+			// The operator claims verbatim — its two-way door (ADR-0030).
+		case wireapi.EnrollID:
+			// The open enroll path (what `register --self` rides): enforce the
+			// human-only guarantee at the source, so an auto-enrolling agent can
+			// never claim itself.
+			if err := b.requireNonAgentSeat(ctx, in.Principal); err != nil {
+				return nil, err
+			}
+		default:
+			return nil, fmt.Errorf("bus: principal.set: only the operator or enrollment credential may claim the principal")
+		}
+	} else {
+		// Established: a deliberate re-point — operator only, force-gated.
+		if callerID != wireapi.OperatorID {
+			return nil, fmt.Errorf("bus: principal.set: only the operator may re-point an established principal")
+		}
+		if current != in.Principal && !in.Force {
+			return nil, fmt.Errorf("bus: principal.set: principal is already designated (%s); pass force to re-point", current)
+		}
+	}
+
+	if _, err := b.backend.CompareAndSet(ctx, sx.BucketMeta, sx.MetaKeyPrincipal, []byte(in.Principal), rev); err != nil {
 		return nil, fmt.Errorf("bus: principal.set: %w", err)
 	}
+	if current != in.Principal {
+		// The audit half of "loud": connected clients also observe the move live via
+		// principal.watch; this records who moved it and from where.
+		b.logf("bus: principal designation %s -> %s (by %s)", current, in.Principal, callerID)
+	}
 	return json.Marshal(wireapi.PrincipalSetOutput{Principal: in.Principal})
+}
+
+// requireNonAgentSeat verifies id names a registered, non-agent seat — the
+// human-only guarantee enforced at the source (ADR-0031). The principal is a
+// human's seat; kinds are otherwise open (a fork may label human seats
+// "client", "human", a role, …), so the bus rejects exactly one kind here: an
+// auto-minting agent (KindAgent) can never be claimed as the principal, even via
+// the open enrollment path.
+func (b *Bus) requireNonAgentSeat(ctx context.Context, id string) error {
+	val, _, err := b.backend.Get(ctx, sx.BucketClients, id)
+	if err != nil {
+		if errors.Is(err, backend.ErrNotFound) {
+			return fmt.Errorf("bus: principal.set: %q is not a registered client", id)
+		}
+		return fmt.Errorf("bus: principal.set: look up %q: %w", id, err)
+	}
+	var e wireapi.ClientEntry
+	if err := json.Unmarshal(val, &e); err != nil {
+		return fmt.Errorf("bus: principal.set: decode client %q: %w", id, err)
+	}
+	if e.Kind == wireapi.KindAgent {
+		return fmt.Errorf("bus: principal.set: %q is an agent, not a human seat; an agent can never be the principal", id)
+	}
+	return nil
 }
 
 // onlineSubjects returns the set of authenticated public keys with a live

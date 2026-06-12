@@ -15,6 +15,7 @@ registered alice as <ULID:alice>
 enrolled as <ULID:bob>
  creds: <HOME>/creds/bob.creds
  context: bob (now active)
+ principal: this seat is now the bus principal
 
 ### 1b — bob's self-enroll created an active context
 * bob <ULID:bob> <URL>

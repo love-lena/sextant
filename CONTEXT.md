@@ -21,12 +21,15 @@ _Avoid_: participant, service, node, agent (when you mean the process)
 **Principal**:
 The one human's client, per bus, that is the root of authority — the identity
 whose messages other clients act on as their own operator's direct input (the
-trust model is ADR-0030). Designated at **bootstrap by the operator and
-bus-enforced**: only the bus owner sets or changes it, so the **human-only**
-guarantee holds at the source; other clients (including auto-minting agents)
-discover and adopt it, and can never claim it. An opinionated **extension** over
-the locked core, not a core-protocol concept — the universal protocol stays
-principal-free and open among authenticated clients (ADR-0012, ADR-0022).
+trust model is ADR-0030). **Claimed frictionlessly, re-pointed deliberately**
+(ADR-0031): the first human seat to self-enroll claims the still-unclaimed
+designation with no extra command, while re-pointing an *established* principal
+is operator-only and takes an explicit `--force`. The **human-only** guarantee
+holds at the source — the bus refuses to claim the principal for an agent seat,
+so auto-minting agents discover and adopt the principal but can never become it.
+An opinionated **extension** over the locked core, not a core-protocol concept —
+the universal protocol stays principal-free and open among authenticated clients
+(ADR-0012, ADR-0022).
 Distinct from the bus-owner **Operator** tier (ADR-0012/0015) and from a plain
 **Client**.
 _Avoid_: super user, sudo, owner; operator (that is the bus-owner credential

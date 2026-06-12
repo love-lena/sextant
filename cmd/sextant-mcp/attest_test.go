@@ -66,7 +66,7 @@ func newAttestFixture(t *testing.T) attestFixture {
 		t.Fatalf("ConnectIssuer (operator): %v", err)
 	}
 	defer func() { _ = iss.Close() }()
-	if err := iss.SetPrincipal(t.Context(), princID); err != nil {
+	if err := iss.SetPrincipal(t.Context(), princID, false); err != nil {
 		t.Fatalf("SetPrincipal: %v", err)
 	}
 

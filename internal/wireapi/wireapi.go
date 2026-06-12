@@ -138,6 +138,17 @@ const (
 	EnrollID   = "enroll"
 )
 
+// Client kinds — the self-declared role a registration carries (RegisterInput.Kind).
+// Kind is open (a fork may use any label), but one is load-bearing in the
+// reference bus: KindAgent marks an auto-minting harness identity (ADR-0029) —
+// the one kind that may NEVER be named the principal, which the bus rejects on
+// the open enrollment claim path (ADR-0031), keeping agents off the principal by
+// construction. KindClient is the default human-seat label (`register --self`).
+const (
+	KindClient = "client"
+	KindAgent  = "agent"
+)
+
 // DrainSubID is the reserved sub-id for the cooperative-drain delivery on a
 // client's push space (sx.deliver.<id>.drain). It is not a real relay, so a
 // client may not use it as a message/artifact subscription id.
@@ -432,12 +443,19 @@ type PrincipalGetOutput struct {
 	Principal string `json:"principal"`
 }
 
-// PrincipalSetInput re-points the principal to a client ULID (operator-only,
-// enforced by the bus). The bus stores the value verbatim; it is the operator's
-// responsibility to name a real client identity (the designation is a two-way
-// door — a wrong value is corrected by another set).
+// PrincipalSetInput points the principal at a client ULID (ADR-0030, ADR-0031).
+// Authorization is asymmetric around whether the principal is still unclaimed:
+// claiming the bootstrap default is open to the bootstrap tier and a kind=client
+// target; re-pointing an established principal is operator-only and needs Force.
+// The bus stores the value verbatim on a re-point (the two-way door — a wrong
+// value is corrected by another set).
 type PrincipalSetInput struct {
 	Principal string `json:"principal"`
+	// Force authorizes re-pointing an ALREADY-established principal. It is
+	// ignored while the principal is still unclaimed (the first claim never needs
+	// it). The bus rejects a re-point to a different ULID unless Force is set, so
+	// moving operator-equivalence takes intent, not a casual overwrite.
+	Force bool `json:"force,omitempty"`
 }
 
 // PrincipalSetOutput confirms the new principal.
