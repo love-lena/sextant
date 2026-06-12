@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"sort"
 	"sync"
 
@@ -90,6 +91,38 @@ func (h *channelHub) event(content string, meta map[string]any) {
 	}
 }
 
+// wakeOnlyMode reports whether SEXTANT_MCP_WAKE_ONLY=1 is set. In wake-only
+// mode frameEvent pushes a content-less notification (subject + wake marker +
+// seq) instead of the message body. The auth hook (TASK-56) is then the sole
+// delivery path for message content.
+func wakeOnlyMode() bool {
+	return os.Getenv("SEXTANT_MCP_WAKE_ONLY") == "1"
+}
+
+// SPIKE (TASK-57): Wake-only channel mode
+// Whether a content-less MCP channel notification wakes an idle Claude Code
+// session is unproven — MCP channel notifications may require a non-empty
+// content payload to trigger the harness. WAKE_ONLY mode
+// (SEXTANT_MCP_WAKE_ONLY=1) is implemented here behind a toggle. Live
+// validation is deferred to the TASK-53 demo.
+// Fallback: CONTENT mode (default) + TASK-56's hook being authoritative (the
+// hook stamps and injects the trusted copy; the agent is instructed to
+// disregard the channel-delivered wrapped copy and trust only the
+// hook-injected additionalContext).
+//
+// Channel-validate + Monitor fallback (AC#4):
+// The subscribe() method below emits a systemEvent("subscribed", subject, ...)
+// immediately after the bus subscription succeeds. This notice arrives at the
+// agent as a <channel> event with meta event="subscribed" and subject=<subject>.
+// TASK-58's skill must instruct the agent: if the "subscribed" channel event
+// does NOT arrive within a turn of calling message_subscribe, fall back to
+// running `sextant subscribe <subject>` as a background Monitor process (the
+// CLI tails live frames to stdout). The agent drives it via the harness Monitor
+// tool or tmux. This is the channel-validate + Monitor fallback path.
+// CLI syntax: sextant subscribe <subject>            (live tail, Ctrl-C to stop)
+//
+//	sextant subscribe <subject> --all         (replay history first, then live)
+
 // frameEvent renders a delivered message. chat.message renders as its text;
 // any other lexicon as its compact JSON (content is opaque to the bus —
 // rendering is a courtesy, not policy).
@@ -99,10 +132,36 @@ func (h *channelHub) event(content string, meta map[string]any) {
 // subscription (AC#1). Suppression is id-based, not author-based — a resumed
 // or co-identity session that holds a different selfEchoSet still sees its
 // own frames.
+//
+// In WAKE_ONLY mode (SEXTANT_MCP_WAKE_ONLY=1) the push carries only a wake
+// marker, the subject, and the message sequence — no message body. The auth
+// hook (TASK-56) is then the sole content delivery path. In CONTENT mode
+// (default, env var absent or not "1") the full frame body is pushed as
+// before.
 func (h *channelHub) frameEvent(m sextant.Message) {
+	// Self-echo check is always first, before any wake/content branching.
 	if h.echo.contains(m.Frame.ID) {
 		return // self-echo: this frame was published by this process; suppress it
 	}
+
+	if wakeOnlyMode() {
+		// Wake-only: push a minimal notification — no message body. The auth
+		// hook (TASK-56) delivers the trusted, signed content as additionalContext.
+		wake, _ := json.Marshal(map[string]any{
+			"wake":    true,
+			"subject": m.Subject,
+			"seq":     m.Sequence,
+		})
+		h.event(string(wake), map[string]any{
+			"subject": m.Subject,
+			"seq":     fmt.Sprint(m.Sequence),
+			"id":      m.Frame.ID,
+			"wake":    "1",
+		})
+		return
+	}
+
+	// CONTENT mode (default): push the full frame body.
 	content := string(m.Frame.Record)
 	var rec struct {
 		Type string `json:"$type"`

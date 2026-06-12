@@ -103,6 +103,12 @@ System notices carry `event=` instead of frame attributes:
 your next turn. To *wait* on a reply (blocking), don't rely on the channel:
 use the Monitor recipe.
 
+> **TASK-58 TODO**: When channels are not enabled (the `subscribed` system
+> notice does not arrive), fall back to `sextant subscribe <subject>` as a
+> background Monitor. See `cmd/sextant-mcp/channel.go` for the
+> subscribed-notice contract. (TASK-58 will fill in the full skill
+> instruction.)
+
 ## Identity setup (one context per agent)
 
 The MCP server resolves identity like the CLI: `$SEXTANT_CREDS` →
