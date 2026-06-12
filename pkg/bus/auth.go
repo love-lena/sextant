@@ -369,14 +369,21 @@ func operatorCredPermissions() jwt.Permissions {
 	return p
 }
 
-// enrollCredPermissions is the bootstrap/enrollment authority (ADR-0020): the
-// tightest possible allow-list. The enrollment identity may ONLY call
-// clients.register (to self-enroll) and receive that one reply — it cannot publish
-// messages, retire, or even read the directory. This is the enrollment connection
-// tier: how an identity-less local process reaches the issuance path at all.
+// enrollCredPermissions is the bootstrap/enrollment authority (ADR-0020, ADR-0031):
+// a deliberately narrow allow-list. The enrollment identity may call exactly two
+// operations and receive their replies — clients.register (to self-enroll) and
+// principal.set (to claim the still-unclaimed principal as the first human seat
+// self-enrolls, ADR-0031). The bus gates the latter to a claim: enroll can point
+// an unclaimed principal at a non-agent seat, never re-point an established one.
+// It still cannot publish messages, retire, or read the directory. This is the
+// enrollment connection tier: how an identity-less local process reaches the
+// bootstrap path at all.
 func enrollCredPermissions() jwt.Permissions {
 	var p jwt.Permissions
-	p.Pub.Allow = []string{wireapi.CallSubject(wireapi.EnrollID, wireapi.OpClientsRegister)}
+	p.Pub.Allow = []string{
+		wireapi.CallSubject(wireapi.EnrollID, wireapi.OpClientsRegister),
+		wireapi.CallSubject(wireapi.EnrollID, wireapi.OpPrincipalSet),
+	}
 	p.Sub.Allow = []string{wireapi.InboxPrefix(wireapi.EnrollID) + ".>"}
 	return p
 }

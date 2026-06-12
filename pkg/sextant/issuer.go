@@ -105,13 +105,14 @@ func (i *Issuer) ListClients(ctx context.Context) ([]ClientInfo, error) {
 	return listClients(ctx, i.call)
 }
 
-// SetPrincipal re-points the bus's principal designation to a client ULID
-// (ADR-0030), as a principal.set call. It is operator-only, enforced by the bus:
-// the call rides the operator credential, and the bus rejects principal.set from
-// any other identity — so an agent can never claim or alter the designation. This
-// is the two-way door: the operator can re-designate at any time.
-func (i *Issuer) SetPrincipal(ctx context.Context, principal string) error {
-	return i.call(ctx, wireapi.OpPrincipalSet, wireapi.PrincipalSetInput{Principal: principal}, nil)
+// SetPrincipal points the bus's principal designation at a client ULID
+// (ADR-0030, ADR-0031), as a principal.set call. force authorizes re-pointing an
+// ALREADY-established principal; it is ignored on a first claim. The bus enforces
+// the asymmetry — only the bootstrap tier may claim an unclaimed principal (and
+// the enrollment path only to a client seat), and only the operator may re-point
+// an established one — so an agent can never claim or alter the designation.
+func (i *Issuer) SetPrincipal(ctx context.Context, principal string, force bool) error {
+	return i.call(ctx, wireapi.OpPrincipalSet, wireapi.PrincipalSetInput{Principal: principal, Force: force}, nil)
 }
 
 // GetPrincipal reads the current principal ULID (ADR-0030) over the operator

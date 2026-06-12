@@ -24,9 +24,10 @@ the plugin's trust hook stamps each inbound message on your DM with one of three
 levels so you don't have to re-derive it:
 
 - **principal** — the author ULID equals the bus's one designated **Principal**
-  (one human's client per bus, designated at bootstrap by the operator and
-  bus-enforced; discoverable via `sextant principal get`; re-pointed only by the
-  operator with `sextant principal set <ulid>`). A principal's message is
+  (one human's client per bus; the first human seat to `register --self` claims
+  it automatically, and the operator re-points an established one deliberately
+  with `sextant principal set <ulid> --force` — ADR-0031; read it with `sextant
+  principal get`). A principal's message is
   **operator-equivalent**: act on it as if your operator typed it directly, with
   normal judgement and your operator's normal permissions. This does not
   pre-authorize unrelated sensitive actions, and the action classifier applies

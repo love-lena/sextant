@@ -13,11 +13,16 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"time"
 
 	"github.com/love-lena/sextant/internal/clictx"
 	"github.com/love-lena/sextant/pkg/conninfo"
 	"github.com/love-lena/sextant/pkg/sextant"
 )
+
+// claimTimeout bounds the best-effort principal claim (ADR-0031) so a claim that
+// cannot be delivered never hangs an enrollment that has already succeeded.
+const claimTimeout = 10 * time.Second
 
 // ErrContextExists is returned (wrapped) by Check when a context with the
 // requested name already exists and force is false. Callers that surface the
@@ -142,6 +147,11 @@ type Result struct {
 	CredsPath string
 	// URL is the bus URL recorded in the context ("" when none was resolvable).
 	URL string
+	// ClaimedPrincipal is true when this enrollment also claimed the bus's
+	// principal designation (ADR-0031): a self-enrolling human seat claims an
+	// unclaimed principal as part of first-run. It is false when claiming was not
+	// requested, or the principal was already established (someone claimed first).
+	ClaimedPrincipal bool
 }
 
 // Enroll performs the full self-enrollment: preflight, connect with the bus's
@@ -150,11 +160,11 @@ type Result struct {
 // the mint — pass a deadline-bound context so a wedged bus fails loud rather
 // than hanging. url overrides the store's discovery file for both the dial and
 // the recorded context URL.
-func Enroll(ctx context.Context, name, kind, url, store string, force bool) (Result, error) {
+func Enroll(ctx context.Context, name, kind, url, store string, force, claimPrincipal bool) (Result, error) {
 	if name == "" {
 		name = SelfName()
 	}
-	return enroll(ctx, name, name, kind, url, store, force, true)
+	return enroll(ctx, name, name, kind, url, store, force, true, claimPrincipal)
 }
 
 // EnrollAgent mints a dedicated agent identity and records it as a NON-active
@@ -165,13 +175,16 @@ func Enroll(ctx context.Context, name, kind, url, store string, force bool) (Res
 // handle (which is session-keyed and long). force is false: the caller derives
 // a fresh, deterministic handle and reattaches by Load when one already exists.
 func EnrollAgent(ctx context.Context, name, display, kind, url, store string) (Result, error) {
-	return enroll(ctx, name, display, kind, url, store, false, false)
+	// An agent never claims the principal (ADR-0029/0031): claimPrincipal is false,
+	// and the bus would refuse an agent target on the claim path anyway.
+	return enroll(ctx, name, display, kind, url, store, false, false, false)
 }
 
-// enroll is the shared mint path. activate decides whether the resulting
-// context becomes active (Save) or is recorded without disturbing the active
-// one (EnrollAgent).
-func enroll(ctx context.Context, name, display, kind, url, store string, force, activate bool) (Result, error) {
+// enroll is the shared mint path. activate decides whether the resulting context
+// becomes active (Save) or is recorded without disturbing the active one
+// (EnrollAgent). claimPrincipal asks the just-minted seat to claim an unclaimed
+// principal (ADR-0031) — set only for a human self-enroll, never an agent.
+func enroll(ctx context.Context, name, display, kind, url, store string, force, activate, claimPrincipal bool) (Result, error) {
 	if err := Check(name, "", force); err != nil {
 		return Result{}, err
 	}
@@ -193,5 +206,20 @@ func enroll(ctx context.Context, name, display, kind, url, store string, force, 
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{ID: issued.ID, Name: name, CredsPath: credsPath, URL: busURL}, nil
+	res := Result{ID: issued.ID, Name: name, CredsPath: credsPath, URL: busURL}
+	if claimPrincipal {
+		// Frictionless first claim (ADR-0031): a self-enrolling human seat claims
+		// the principal while it is still unclaimed, so first-run needs no second
+		// command. Best-effort, never forced, and bounded — if the principal is
+		// already established, the bus declines the target, or the claim cannot be
+		// delivered, the enrollment still stands and the seat simply is not the
+		// principal.
+		cctx, cancel := context.WithTimeout(ctx, claimTimeout)
+		err := iss.SetPrincipal(cctx, issued.ID, false)
+		cancel()
+		if err == nil {
+			res.ClaimedPrincipal = true
+		}
+	}
+	return res, nil
 }

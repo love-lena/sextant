@@ -66,7 +66,7 @@ func TestPrincipalDiscoveredOnConnect(t *testing.T) {
 	b, store := startBusAt(t)
 	iss := connectOperator(t, b, store)
 	target := "01HZZZCLIENTULIDXXXXXXXXXX"
-	if err := iss.SetPrincipal(t.Context(), target); err != nil {
+	if err := iss.SetPrincipal(t.Context(), target, false); err != nil {
 		t.Fatalf("SetPrincipal: %v", err)
 	}
 	// A client that connects AFTER the set discovers the new value at hello.
@@ -90,17 +90,20 @@ func TestPrincipalSetGetRoundTrip(t *testing.T) {
 	iss := connectOperator(t, b, store)
 
 	first := "01HZZZFIRSTPRINCIPALXXXXXX"
-	if err := iss.SetPrincipal(t.Context(), first); err != nil {
+	if err := iss.SetPrincipal(t.Context(), first, false); err != nil {
 		t.Fatalf("SetPrincipal(first): %v", err)
 	}
 	if got, err := iss.GetPrincipal(t.Context()); err != nil || got != first {
 		t.Fatalf("GetPrincipal after first set = %q, %v; want %q", got, err, first)
 	}
 
-	// Re-point (the two-way door).
+	// Re-point (the two-way door) — deliberate, so it takes --force (ADR-0031).
 	second := "01HZZZSECONDPRINCIPALXXXXX"
-	if err := iss.SetPrincipal(t.Context(), second); err != nil {
-		t.Fatalf("SetPrincipal(second): %v", err)
+	if err := iss.SetPrincipal(t.Context(), second, false); err == nil {
+		t.Fatal("re-pointing an established principal without force must be refused")
+	}
+	if err := iss.SetPrincipal(t.Context(), second, true); err != nil {
+		t.Fatalf("SetPrincipal(second, force): %v", err)
 	}
 	if got, err := iss.GetPrincipal(t.Context()); err != nil || got != second {
 		t.Fatalf("GetPrincipal after re-point = %q, %v; want %q", got, err, second)
@@ -146,7 +149,7 @@ func TestPrincipalWatchObservesChange(t *testing.T) {
 	// The operator re-points; the watcher observes it without reconnecting.
 	iss := connectOperator(t, b, store)
 	target := "01HZZZWATCHEDPRINCIPALXXXX"
-	if err := iss.SetPrincipal(t.Context(), target); err != nil {
+	if err := iss.SetPrincipal(t.Context(), target, false); err != nil {
 		t.Fatalf("SetPrincipal: %v", err)
 	}
 	if got := recvWithin(t, changes, 5*time.Second); got != target {

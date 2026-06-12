@@ -257,6 +257,7 @@ func clientsRegister(args []string) {
 	url := fs.String("url", "", "bus URL (default: discovery file under --store)")
 	out := fs.String("out", "", "held mode: write the new creds here (default: <store>/<name>.creds)")
 	force := fs.Bool("force", false, "with --self: re-enroll, replacing an existing context of the same name")
+	noPrincipal := fs.Bool("no-principal", false, "with --self: do not claim the bus principal, even if it is still unclaimed (ADR-0031)")
 	_ = fs.Parse(args)
 	if *nameFlag != "" {
 		name = *nameFlag
@@ -281,11 +282,14 @@ func clientsRegister(args []string) {
 		if selfenroll.ResolveBusURL(*url, *store) == "" {
 			fmt.Fprintln(os.Stderr, "warning: no bus URL recorded (no --url and no discovery file under --store)")
 		}
-		res, err := selfenroll.Enroll(ctx, name, *kind, *url, *store, *force)
+		res, err := selfenroll.Enroll(ctx, name, *kind, *url, *store, *force, !*noPrincipal)
 		if err != nil {
 			fatal("%v", err)
 		}
 		fmt.Printf("enrolled as %s\n  creds:   %s\n  context: %s (now active)\n", res.ID, res.CredsPath, res.Name)
+		if res.ClaimedPrincipal {
+			fmt.Printf("  principal: this seat is now the bus principal\n")
+		}
 		return
 	}
 

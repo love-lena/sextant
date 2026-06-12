@@ -207,7 +207,10 @@ func ensureIdentity(ctx context.Context, opts *Options, notice io.Writer) error 
 	}
 	ectx, cancel := context.WithTimeout(ctx, launchTimeout)
 	defer cancel()
-	res, err := selfenroll.Enroll(ectx, opts.Name, "human", info.URL, opts.Store, false)
+	// The dash's first-run enrolls the operator's own human seat, so it also
+	// claims the bus principal while it is still unclaimed (ADR-0031): zero-config
+	// first run leaves the operator as the principal, no second command.
+	res, err := selfenroll.Enroll(ectx, opts.Name, "human", info.URL, opts.Store, false, true)
 	if err != nil {
 		var ce *selfenroll.ErrContextExists
 		if errors.As(err, &ce) {

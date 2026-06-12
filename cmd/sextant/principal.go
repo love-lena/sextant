@@ -40,9 +40,11 @@ func cmdPrincipal(args []string) {
 	}
 }
 
-// principalSet re-points the principal (operator-only). It connects with the
-// operator credential and asks the bus to set the designation; the bus enforces
-// that only the operator may write it.
+// principalSet points the principal at a client ULID (operator-only). It
+// connects with the operator credential and asks the bus to set the designation.
+// Re-pointing an already-established principal is deliberate: the bus refuses it
+// without --force (ADR-0031), and the command prints the current → new move so a
+// re-point is never silent at the keyboard either.
 func principalSet(args []string) {
 	var ulid string
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
@@ -51,9 +53,10 @@ func principalSet(args []string) {
 	fs := flag.NewFlagSet("principal set", flag.ExitOnError)
 	store := fs.String("store", defaultStore(), "bus store dir: discovery + operator credential (or set $SEXTANT_STORE)")
 	url := fs.String("url", "", "bus URL (default: discovery file under --store)")
+	force := fs.Bool("force", false, "re-point an already-established principal (required to move it; not needed for the first claim)")
 	_ = fs.Parse(args)
 	if ulid == "" {
-		fatal("usage: sextant principal set <ulid> [--store DIR] [--url U]")
+		fatal("usage: sextant principal set <ulid> [--force] [--store DIR] [--url U]")
 	}
 
 	ctx := context.Background()
@@ -66,10 +69,15 @@ func principalSet(args []string) {
 		fatal("connect: %v", err)
 	}
 	defer iss.Close()
-	if err := iss.SetPrincipal(ctx, ulid); err != nil {
+	current, _ := iss.GetPrincipal(ctx) // best-effort, for the print; the set is what matters
+	if err := iss.SetPrincipal(ctx, ulid, *force); err != nil {
 		fatal("%v", err)
 	}
-	fmt.Printf("principal set to %s\n", ulid)
+	if current != "" && current != ulid {
+		fmt.Printf("principal: %s -> %s\n", current, ulid)
+	} else {
+		fmt.Printf("principal set to %s\n", ulid)
+	}
 }
 
 // principalGet reads the current principal as any client (proof of the

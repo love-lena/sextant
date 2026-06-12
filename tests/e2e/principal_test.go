@@ -95,8 +95,9 @@ func TestPrincipalDesignation(t *testing.T) {
 	if got := recv(t, changes); got != humanID {
 		t.Fatalf("first watch delivery = %q, want current %q", got, humanID)
 	}
-	// Re-point to the agent via the CLI; the still-connected watcher observes it.
-	if out, code := h.run(nil, "principal", "set", agentID, "--store", h.store); code != 0 {
+	// Re-point to the agent via the CLI — deliberate, so it takes --force
+	// (ADR-0031); the still-connected watcher observes it.
+	if out, code := h.run(nil, "principal", "set", agentID, "--force", "--store", h.store); code != 0 {
 		t.Fatalf("principal re-point exited %d: %s", code, out)
 	}
 	if got := recv(t, changes); got != agentID {
@@ -148,8 +149,8 @@ func assertClientSetDenied(t *testing.T, h *harness, clientCreds, clientID, atte
 	if resp.Error == "" {
 		t.Fatal("a client-tier principal.set must be DENIED by the bus, but it succeeded")
 	}
-	if !strings.Contains(resp.Error, "only the operator may set the principal") {
-		t.Fatalf("expected the operator-only gate error, got: %s", resp.Error)
+	if !strings.Contains(resp.Error, "only the operator may re-point an established principal") {
+		t.Fatalf("expected the operator-only re-point gate error, got: %s", resp.Error)
 	}
 }
 
@@ -187,4 +188,112 @@ func lastLine(out string) string {
 		}
 	}
 	return ""
+}
+
+// principalReader mints a client credential just to READ the principal, and
+// returns a closure that runs `principal get` and returns the current value.
+func (h *harness) principalReader(t *testing.T) func() string {
+	t.Helper()
+	creds := h.operatorReadCreds(t)
+	return func() string {
+		out, code := h.run(nil, "principal", "get", "--store", h.store, "--creds", creds)
+		if code != 0 {
+			t.Fatalf("principal get exited %d: %s", code, out)
+		}
+		return lastLine(out)
+	}
+}
+
+// TestPrincipalClaimOnSelfEnroll is the ADR-0031 definition-of-done driven
+// through the built binary: a human self-enroll claims an unclaimed principal
+// with no second command; a LATER self-enroll does not (already established);
+// and re-pointing an established principal takes --force.
+func TestPrincipalClaimOnSelfEnroll(t *testing.T) {
+	h := newHarness(t)
+	h.startBus()
+	principal := h.principalReader(t)
+
+	// Bootstrap: unclaimed (the operator seat).
+	if got := principal(); got != wireapi.OperatorID {
+		t.Fatalf("bootstrap principal = %q, want %q", got, wireapi.OperatorID)
+	}
+
+	// A human self-enroll claims the unclaimed principal — no second command.
+	out, code := h.run(map[string]string{"SEXTANT_HOME": t.TempDir(), "USER": "alice"},
+		"clients", "register", "--self", "--store", h.store)
+	if code != 0 {
+		t.Fatalf("register --self (alice) exited %d: %s", code, out)
+	}
+	if !strings.Contains(out, "this seat is now the bus principal") {
+		t.Fatalf("a first self-enroll should claim the principal; got: %s", out)
+	}
+	aliceID := mustParseID(t, out, `enrolled as (`+ulidPat+`)`)
+	if got := principal(); got != aliceID {
+		t.Fatalf("principal after self-enroll = %q, want the new seat %q", got, aliceID)
+	}
+
+	// A LATER self-enroll does not claim — the principal is already established.
+	out, code = h.run(map[string]string{"SEXTANT_HOME": t.TempDir(), "USER": "bob"},
+		"clients", "register", "--self", "--store", h.store)
+	if code != 0 {
+		t.Fatalf("register --self (bob) exited %d: %s", code, out)
+	}
+	if strings.Contains(out, "this seat is now the bus principal") {
+		t.Fatalf("a second self-enroll must NOT claim an established principal; got: %s", out)
+	}
+	bobID := mustParseID(t, out, `enrolled as (`+ulidPat+`)`)
+	if got := principal(); got != aliceID {
+		t.Fatalf("principal after a second self-enroll = %q, want unchanged %q", got, aliceID)
+	}
+
+	// Re-pointing an established principal takes --force: without it the CLI fails
+	// and the designation is unchanged; with it, the move proceeds.
+	if out, code := h.run(nil, "principal", "set", bobID, "--store", h.store); code == 0 {
+		t.Fatalf("re-point without --force must fail; got success: %s", out)
+	}
+	if got := principal(); got != aliceID {
+		t.Fatalf("principal after a forceless re-point = %q, want unchanged %q", got, aliceID)
+	}
+	if out, code := h.run(nil, "principal", "set", bobID, "--force", "--store", h.store); code != 0 {
+		t.Fatalf("forced re-point exited %d: %s", code, out)
+	}
+	if got := principal(); got != bobID {
+		t.Fatalf("principal after forced re-point = %q, want %q", got, bobID)
+	}
+}
+
+// TestPrincipalNoClaimPaths drives the two self-enroll paths that must NOT claim
+// the principal even when it is unclaimed: --no-principal (the explicit opt-out)
+// and an agent seat (kind=agent — human-only at the source, enforced by the bus).
+func TestPrincipalNoClaimPaths(t *testing.T) {
+	h := newHarness(t)
+	h.startBus()
+	principal := h.principalReader(t)
+
+	// --no-principal: a human self-enroll that opts out leaves the principal unclaimed.
+	out, code := h.run(map[string]string{"SEXTANT_HOME": t.TempDir(), "USER": "carol"},
+		"clients", "register", "--self", "--no-principal", "--store", h.store)
+	if code != 0 {
+		t.Fatalf("register --self --no-principal exited %d: %s", code, out)
+	}
+	if strings.Contains(out, "this seat is now the bus principal") {
+		t.Fatalf("--no-principal must not claim; got: %s", out)
+	}
+	if got := principal(); got != wireapi.OperatorID {
+		t.Fatalf("principal after --no-principal = %q, want unclaimed %q", got, wireapi.OperatorID)
+	}
+
+	// An agent self-enroll never claims, even as the first seat: the bus rejects an
+	// agent target on the claim path, so the principal stays unclaimed.
+	out, code = h.run(map[string]string{"SEXTANT_HOME": t.TempDir(), "USER": "agent-x"},
+		"clients", "register", "--self", "--kind", "agent", "--store", h.store)
+	if code != 0 {
+		t.Fatalf("register --self --kind agent exited %d: %s", code, out)
+	}
+	if strings.Contains(out, "this seat is now the bus principal") {
+		t.Fatalf("an agent self-enroll must not claim; got: %s", out)
+	}
+	if got := principal(); got != wireapi.OperatorID {
+		t.Fatalf("principal after agent self-enroll = %q, want unclaimed %q", got, wireapi.OperatorID)
+	}
 }

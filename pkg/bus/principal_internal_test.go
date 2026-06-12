@@ -13,9 +13,10 @@ import (
 // client-tier caller's principal.set is DENIED by the bus. It mirrors
 // TestRegularClientCannotMint — the allow-list lets the client PUBLISH the call
 // under its own prefix, so the request reaches the bus; the bus then rejects it
-// on authorization (callerID != operator). Proving the gate at the bus, not the
-// absence of a CLI command, is the point: the spine of ADR-0030 is that an agent
-// can never claim or alter the designation.
+// on authorization (a client ULID is neither the operator nor the enrollment
+// credential). Proving the gate at the bus, not the absence of a CLI command, is
+// the point: the spine of ADR-0030/0031 is that an agent or peer can never claim
+// or alter the designation.
 func TestPrincipalSetIsOperatorOnly(t *testing.T) {
 	b := startTestBus(t)
 	nc, id := connectClient(t, b, "agent-noset")
@@ -24,8 +25,8 @@ func TestPrincipalSetIsOperatorOnly(t *testing.T) {
 	if resp.Error == "" {
 		t.Fatal("a client-tier caller must not be authorized to set the principal")
 	}
-	if !strings.Contains(resp.Error, "only the operator may set the principal") {
-		t.Errorf("expected the operator-only gate error, got: %s", resp.Error)
+	if !strings.Contains(resp.Error, "only the operator or enrollment credential may claim the principal") {
+		t.Errorf("expected the bootstrap-tier claim gate error, got: %s", resp.Error)
 	}
 
 	// The designation is unchanged: still the bootstrap default (the operator seat).
