@@ -50,15 +50,17 @@ class Sextant < Formula
     bin.install "bin/sextant-dash"
   end
 
-  # The bus is a per-user daemon. Pin a stable store under the Homebrew var dir
-  # so the service survives restarts and does not depend on a login session's
-  # config dir; `sextant up` writes its discovery file + key material there.
+  # The bus is a per-user daemon. Run it with NO --store override so it uses
+  # sextant's default per-user store (UserConfigDir/sextant/jetstream) — the
+  # SAME store the bare CLI and the plugin's MCP discover. Pinning a Homebrew
+  # var dir here made `sextant dash` (and the plugin) look in the wrong place
+  # and report "no servers" out of the box (TASK-60). A user LaunchAgent has
+  # $HOME, so the default store resolves.
   service do
-    run [opt_bin/"sextant", "up", "--store", var/"sextant"]
+    run [opt_bin/"sextant", "up"]
     keep_alive true
     log_path var/"log/sextant.log"
     error_log_path var/"log/sextant.log"
-    working_dir var/"sextant"
   end
 
   test do
