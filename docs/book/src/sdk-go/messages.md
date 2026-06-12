@@ -77,3 +77,5 @@ func (c *Client) Subscribe(ctx context.Context, subject string, h Handler, opts 
 
 Subscribe delivers messages matching subject (an exact subject or a wildcard, e.g. sx.TopicSubject("plan") or "msg.>") to h as a message.subscribe call: the bus relays matching frames to this client's private delivery subject (sx.deliver.\<id>.\<sub>), and the SDK fans them out to h (ADR-0019). Replay is client-controlled (see DeliverAll); the bus owns the cursor, so it keeps no per-subscriber state beyond the live relay. Each delivered frame is re-checked against the wire contract (structure, epoch) and the bus clock, and quarantined (skipped + logged) on a violation (ADR-0006, ADR-0010). The subscription runs until Stop is called or ctx is cancelled, whichever comes first.
 
+A Subscription survives a reconnect — a bus restart of the same store or a plain network blip (ADR-0027): on reconnect the SDK re-establishes the server-side relay, resuming from the last delivered sequence so no messages are missed or duplicated. If re-establishment is impossible (e.g. the store was wiped), the OnError handler is called and the subscription is stopped — never silent.
+

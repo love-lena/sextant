@@ -131,10 +131,16 @@ func (b *Bus) dispatch(ctx context.Context, clientID, op string, data []byte) (j
 		return b.opClientsRetire(ctx, clientID, data)
 	case wireapi.OpClientsHello:
 		return b.opClientsHello(ctx, clientID)
+	case wireapi.OpPrincipalGet:
+		return b.opPrincipalGet(ctx)
+	case wireapi.OpPrincipalSet:
+		return b.opPrincipalSet(ctx, clientID, data)
 	case wireapi.OpMessageSubscribe:
 		return b.opSubscribe(clientID, data)
 	case wireapi.OpArtifactWatch:
 		return b.opArtifactWatch(clientID, data)
+	case wireapi.OpPrincipalWatch:
+		return b.opPrincipalWatch(clientID, data)
 	case wireapi.OpSubscriptionStop:
 		return b.opSubscriptionStop(clientID, data)
 	default:
@@ -480,7 +486,49 @@ func (b *Bus) opClientsHello(ctx context.Context, callerID string) (json.RawMess
 	if err != nil {
 		return nil, fmt.Errorf("bus: clients.hello: %w", err)
 	}
-	return json.Marshal(wireapi.HelloOutput{BusEpoch: epoch, ServerTime: nowRFC3339()})
+	// Fold the principal designation into the handshake so a client discovers it
+	// on connect (ADR-0030), the same way it learns the epoch — one round-trip,
+	// no separate read. A connected client then keeps it current with
+	// principal.watch (it never reads the KV directly; the allow-list forbids it).
+	principal, err := b.readPrincipal(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("bus: clients.hello: %w", err)
+	}
+	return json.Marshal(wireapi.HelloOutput{BusEpoch: epoch, ServerTime: nowRFC3339(), Principal: principal})
+}
+
+// opPrincipalGet returns the current principal ULID (ADR-0030). Any authenticated
+// caller may read it — the read-open half of the key's shape.
+func (b *Bus) opPrincipalGet(ctx context.Context) (json.RawMessage, error) {
+	principal, err := b.readPrincipal(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("bus: principal.get: %w", err)
+	}
+	return json.Marshal(wireapi.PrincipalGetOutput{Principal: principal})
+}
+
+// opPrincipalSet re-points the principal (ADR-0030). It is OPERATOR-ONLY: the bus
+// rejects any caller that is not the reserved operator identity, mirroring
+// clients.retire's gate. This is the write-operator half of the key's shape,
+// enforced at the bus — an agent can never claim or alter the designation. The
+// value is stored verbatim (the bus does not resolve it against the directory):
+// the designation is a two-way door, and a wrong value is corrected by another
+// set.
+func (b *Bus) opPrincipalSet(ctx context.Context, callerID string, data []byte) (json.RawMessage, error) {
+	if callerID != wireapi.OperatorID {
+		return nil, fmt.Errorf("bus: principal.set: only the operator may set the principal")
+	}
+	var in wireapi.PrincipalSetInput
+	if err := json.Unmarshal(data, &in); err != nil {
+		return nil, fmt.Errorf("bus: principal.set: bad input: %w", err)
+	}
+	if in.Principal == "" {
+		return nil, errors.New("bus: principal.set: principal is required")
+	}
+	if _, err := b.backend.Put(ctx, sx.BucketMeta, sx.MetaKeyPrincipal, []byte(in.Principal)); err != nil {
+		return nil, fmt.Errorf("bus: principal.set: %w", err)
+	}
+	return json.Marshal(wireapi.PrincipalSetOutput{Principal: in.Principal})
 }
 
 // onlineSubjects returns the set of authenticated public keys with a live
@@ -566,6 +614,20 @@ func (b *Bus) readEpoch(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("bad epoch %q: %w", val, err)
 	}
 	return n, nil
+}
+
+// readPrincipal reads the bus's principal designation from the public meta bucket
+// (ADR-0030). An absent key (a fork that never defaulted it, or one cleared by an
+// operator) is not an error — it reads as the empty string, "no principal".
+func (b *Bus) readPrincipal(ctx context.Context) (string, error) {
+	val, _, err := b.backend.Get(ctx, sx.BucketMeta, sx.MetaKeyPrincipal)
+	if errors.Is(err, backend.ErrNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read principal: %w", err)
+	}
+	return string(val), nil
 }
 
 func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339) }

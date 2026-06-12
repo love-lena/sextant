@@ -105,6 +105,26 @@ func (i *Issuer) ListClients(ctx context.Context) ([]ClientInfo, error) {
 	return listClients(ctx, i.call)
 }
 
+// SetPrincipal re-points the bus's principal designation to a client ULID
+// (ADR-0030), as a principal.set call. It is operator-only, enforced by the bus:
+// the call rides the operator credential, and the bus rejects principal.set from
+// any other identity — so an agent can never claim or alter the designation. This
+// is the two-way door: the operator can re-designate at any time.
+func (i *Issuer) SetPrincipal(ctx context.Context, principal string) error {
+	return i.call(ctx, wireapi.OpPrincipalSet, wireapi.PrincipalSetInput{Principal: principal}, nil)
+}
+
+// GetPrincipal reads the current principal ULID (ADR-0030) over the operator
+// connection, for an operator-credentialed `principal get` (the operator is not a
+// directory client, so it cannot run the full Client handshake).
+func (i *Issuer) GetPrincipal(ctx context.Context) (string, error) {
+	var out wireapi.PrincipalGetOutput
+	if err := i.call(ctx, wireapi.OpPrincipalGet, wireapi.PrincipalGetInput{}, &out); err != nil {
+		return "", err
+	}
+	return out.Principal, nil
+}
+
 // Close closes the issuer connection.
 func (i *Issuer) Close() error {
 	i.nc.Close()

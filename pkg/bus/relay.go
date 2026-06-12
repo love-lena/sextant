@@ -215,6 +215,57 @@ func (b *Bus) runArtifactRelay(clientID, subID, name, deliver string, ch <-chan 
 	}
 }
 
+// opPrincipalWatch starts a principal.watch relay (ADR-0030): the current
+// principal first, then each re-designation, into the caller's delivery subject.
+// It is how a connected client observes a change without reconnecting — the
+// allow-list forbids a client from watching the sx_meta KV directly, so the bus
+// relays the change through the client's own delivery space (the same shape as
+// artifact.watch and message.subscribe). Any authenticated client may watch; only
+// the operator may cause a change (principal.set).
+func (b *Bus) opPrincipalWatch(clientID string, data []byte) (json.RawMessage, error) {
+	var in wireapi.PrincipalWatchInput
+	if err := json.Unmarshal(data, &in); err != nil {
+		return nil, fmt.Errorf("bus: principal.watch: bad input: %w", err)
+	}
+	if err := validSubID(in.SubID); err != nil {
+		return nil, fmt.Errorf("bus: principal.watch: %w", err)
+	}
+	relayCtx, err := b.registerRelay(clientID, in.SubID)
+	if err != nil {
+		return nil, fmt.Errorf("bus: principal.watch: %w", err)
+	}
+	ch, err := b.backend.Watch(relayCtx, sx.BucketMeta, sx.MetaKeyPrincipal)
+	if err != nil {
+		b.stopRelay(clientID, in.SubID)
+		return nil, fmt.Errorf("bus: principal.watch: %w", err)
+	}
+	deliver := wireapi.DeliverSubject(clientID, in.SubID)
+	go b.runPrincipalRelay(clientID, in.SubID, deliver, ch)
+	return json.Marshal(wireapi.PrincipalWatchOutput{DeliverSubject: deliver})
+}
+
+// runPrincipalRelay forwards each principal change to the delivery subject until
+// the watch closes (stop or shutdown). The principal value is the raw KV value (a
+// ULID string); a delete reads as the empty string ("no principal"). It is a
+// plain datum, not a stamped frame, so there is nothing to decode or quarantine.
+func (b *Bus) runPrincipalRelay(clientID, subID, deliver string, ch <-chan backend.Change) {
+	defer b.stopRelay(clientID, subID)
+	for c := range ch {
+		principal := ""
+		if !c.Deleted {
+			principal = string(c.Value)
+		}
+		payload, err := json.Marshal(wireapi.PrincipalDelivery{SubID: subID, Principal: principal})
+		if err != nil {
+			b.logf("bus: principal relay %s: dropping change at revision %d: encode delivery: %v", subID, c.Revision, err)
+			continue
+		}
+		if err := b.opConn.Publish(deliver, payload); err != nil {
+			return // operator connection gone (shutdown); stop relaying
+		}
+	}
+}
+
 // opSubscriptionStop ends a subscription the caller owns. It is keyed under the
 // caller's own clientID, so a client can only stop its own subscriptions, and a
 // SubID the bus no longer tracks is a success (idempotent teardown).

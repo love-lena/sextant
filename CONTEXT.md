@@ -18,6 +18,20 @@ A process that speaks the Sextant protocol — the universal unit. A harness,
 monitor, dispatcher, human UI, or workflow coordinator is each a client.
 _Avoid_: participant, service, node, agent (when you mean the process)
 
+**Principal**:
+The one human's client, per bus, that is the root of authority — the identity
+whose messages other clients act on as their own operator's direct input (the
+trust model is ADR-0030). Designated at **bootstrap by the operator and
+bus-enforced**: only the bus owner sets or changes it, so the **human-only**
+guarantee holds at the source; other clients (including auto-minting agents)
+discover and adopt it, and can never claim it. An opinionated **extension** over
+the locked core, not a core-protocol concept — the universal protocol stays
+principal-free and open among authenticated clients (ADR-0012, ADR-0022).
+Distinct from the bus-owner **Operator** tier (ADR-0012/0015) and from a plain
+**Client**.
+_Avoid_: super user, sudo, owner; operator (that is the bus-owner credential
+tier, a different concept)
+
 **SDK**:
 The library you build a client with.
 _Avoid_: client library
@@ -139,6 +153,11 @@ _Avoid_: kill (reserve that for forcing a process from the outside)
   connection table.
 - A **client** makes a **call** to invoke an **operation** on the **bus**; the bus
   stamps a **frame** around the record and stores or relays it via the **backend**.
+- A **bus** has at most one **principal** (a human's client), designated at
+  bootstrap by the operator and **bus-enforced**; other clients discover and
+  adopt it. It is an opinionated extension over the core — the universal protocol
+  has no principal. A client that is not the principal is just a **client**;
+  there is no separate role for the trusting side.
 
 ## Flagged ambiguities
 

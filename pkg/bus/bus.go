@@ -269,6 +269,25 @@ func (b *Bus) bootstrap(ctx context.Context) error {
 		return fmt.Errorf("bus: write protocol epoch: %w", err)
 	}
 
+	// Default the principal designation to the operator's seat (ADR-0030). At
+	// bootstrap no human client ULID exists yet — the operator self-enrolls their
+	// seat AFTER the bus is up — so the seat that exists here is the reserved
+	// operator identity (the bus-owner credential tier, ADR-0015/0020). It is the
+	// root of authority by construction, which is exactly what the principal is.
+	// The operator re-points it to the human's minted client ULID with
+	// `sextant principal set <ulid>` once enrolled (the two-way door). Unlike the
+	// epoch this is a default, not an authority the bus owns: only write it if
+	// absent, so a re-designation survives a bus restart of the same store.
+	// (b.backend is not wired until startServing, so this reads the meta KV
+	// directly, as the epoch write above does.)
+	if _, err := meta.Get(ctx, sx.MetaKeyPrincipal); errors.Is(err, jetstream.ErrKeyNotFound) {
+		if _, err := meta.Put(ctx, sx.MetaKeyPrincipal, []byte(wireapi.OperatorID)); err != nil {
+			return fmt.Errorf("bus: write principal designation: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("bus: read principal designation: %w", err)
+	}
+
 	// The durable Messages stream. Clients can't create streams (guardrail), so
 	// the operator provisions it. Retention is a lean 7 days (an open item).
 	if _, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{

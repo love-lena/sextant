@@ -85,10 +85,22 @@ func OnError(h func(error)) SubOption {
 // appends it to the durable log, replying once the log has it (ADR-0019). The
 // client supplies only the subject and record.
 func (c *Client) Publish(ctx context.Context, subject string, record json.RawMessage) error {
+	_, err := c.PublishMsg(ctx, subject, record)
+	return err
+}
+
+// PublishMsg is Publish with the bus-stamped frame id and sequence returned.
+// Callers that need to suppress self-echo (e.g. the MCP server) use this to
+// record the published id before it can arrive back on a subscription.
+func (c *Client) PublishMsg(ctx context.Context, subject string, record json.RawMessage) (wireapi.PublishOutput, error) {
 	if !strings.HasPrefix(subject, sx.MessagePrefix) {
-		return fmt.Errorf("sextant: publish subject %q is not in the messages space (%s*)", subject, sx.MessagePrefix)
+		return wireapi.PublishOutput{}, fmt.Errorf("sextant: publish subject %q is not in the messages space (%s*)", subject, sx.MessagePrefix)
 	}
-	return c.call(ctx, wireapi.OpMessagePublish, wireapi.PublishInput{Subject: subject, Record: record}, nil)
+	var out wireapi.PublishOutput
+	if err := c.call(ctx, wireapi.OpMessagePublish, wireapi.PublishInput{Subject: subject, Record: record}, &out); err != nil {
+		return wireapi.PublishOutput{}, err
+	}
+	return out, nil
 }
 
 // FetchMessages pulls a batch of retained messages on subject (an exact subject

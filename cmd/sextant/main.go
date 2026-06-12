@@ -36,6 +36,8 @@ func main() {
 		cmdRead(os.Args[2:])
 	case "clients":
 		cmdClients(os.Args[2:])
+	case "principal":
+		cmdPrincipal(os.Args[2:])
 	case "context":
 		cmdContext(os.Args[2:])
 	case "artifact":
@@ -64,6 +66,10 @@ identities (the bus is the sole minter; keys never leave it — ADR-0020):
   sextant clients register --self  [--kind K]   bootstrap/enrollment: mint for self
   sextant clients retire   <id>                 decommission an identity (operator)
   sextant clients list     [--json]             the directory (online + offline)
+
+the principal (the one human's client whose messages are operator-equivalent — ADR-0030):
+  sextant principal set <ulid>                  re-point the principal (operator-only)
+  sextant principal get                         read the current principal (any client)
 
 contexts (saved URL+identity+creds, so operations need no flags — ADR-0021):
   sextant context add <name> --creds F          save a context (and activate it)
