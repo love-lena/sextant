@@ -1,0 +1,45 @@
+---
+id: TASK-66
+title: >-
+  Brief workstream: a review/convention layer over artifacts (approve +
+  companion topic)
+status: To Do
+assignee: []
+created_date: '2026-06-12 19:43'
+labels:
+  - feature
+  - artifacts
+  - ux
+  - 'slug:feat-brief-workstream-convention'
+  - P2
+  - ready-for-human
+dependencies: []
+priority: medium
+ordinal: 72000
+---
+
+## Description
+
+<!-- SECTION:DESCRIPTION:BEGIN -->
+The per-artifact feedback topic plus mark-approved affordances are conventions layered on the core artifact primitive, not changes to the core artifact convention (primitives-not-policy). lena named the layer 'brief workstream' (working name). Surfaced 2026-06-12 by repeatedly hand-creating a feedback topic per artifact (frontend-dash, orchestration-m5, principal-hardening-summary) during planning, and wanting an easy approve-this-artifact action.
+<!-- SECTION:DESCRIPTION:END -->
+
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [ ] #1 An artifact can carry an approved review-state by convention (over the record/labels), not baked into the core primitive
+- [ ] #2 An artifact gets a default companion discussion topic by convention (same id maps to a msg subject) so commenting needs no manual topic setup
+- [ ] #3 The dash/UI exposes an easy mark-approved affordance
+- [ ] #4 The core artifact operations (create/get/update/list/watch) and protocol/methods.json are unchanged
+<!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Define a brief-workstream convention over artifacts: a review-state plus a derived companion-topic naming rule plus UI affordances; keep it out of the core artifact primitive.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Provenance: 2026-06-12 planning, lena on msg.topic.helm. Naming and scope are lena's design call (ready-for-human).
+<!-- SECTION:NOTES:END -->
