@@ -38,6 +38,7 @@ human has signed off — see
 | [0029](0029-a-harness-speaks-as-itself.md) | A harness speaks as itself, with a per-session identity | proposed (revises 0028's identity resolution) |
 | [0030](0030-clients-act-on-a-principals-messages-as-operator-input.md) | A client acts on its principal's messages as operator-equivalent input | proposed |
 | [0031](0031-claiming-the-principal-is-frictionless-re-pointing-is-deliberate.md) | Claiming the principal is frictionless; re-pointing it is deliberate | proposed (extends 0030) |
+| [0032](0032-the-web-dash-is-a-face-on-a-local-api.md) | The web dash is a face on a local API | proposed |
 
 ## Review batches
 - **Batch 1 — substrate:** 0004–0007 — *accepted*
@@ -53,3 +54,4 @@ human has signed off — see
 - **0029 — a harness speaks as itself** — *proposed* (revises 0028's identity resolution: the MCP adapter mints its own per-session identity, never the operator's active context; PR #107)
 - **0030 — a client acts on its principal's messages as operator input** — *proposed* (the principal trust model; grilled in-session 2026-06-11)
 - **0031 — claiming the principal is frictionless; re-pointing it is deliberate** — *proposed* (extends 0030: the first human seat claims the principal on `register --self`; re-pointing an established one is operator-only + `--force`; TASK-64)
+- **0032 — the web dash is a face on a local API** — *proposed* (`sextant dash --serve` exposes the dash's one bus identity as a token-gated local HTTP API + SSE on 127.0.0.1, with a zero-design web debug surface; the browser never touches the bus; D1 of TASK-68)

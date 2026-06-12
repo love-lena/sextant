@@ -1,0 +1,126 @@
+<!doctype html>
+<!--
+  Zero-design debug surface for `sextant dash --serve` (D1, TASK-68).
+
+  Deliberately undesigned: raw HTML + vanilla JS, no framework, no theme, no
+  layout opinion. It exists to (a) verify the local API end-to-end from a real
+  browser and (b) be a clean, opinion-free starting point — the intentionally
+  designed UI (D2) is a separate pass built fresh on this same API. Do not add
+  styling or design decisions here.
+
+  It reads the per-launch token from its own URL (?token=...), which `sextant
+  dash --serve` prints, and uses it for every API call and the live stream.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>sextant dash (debug surface)</title>
+</head>
+<body>
+  <h1>sextant dash — debug surface</h1>
+  <p id="self">connecting…</p>
+  <p id="status"></p>
+
+  <h2>clients <button onclick="loadClients()">refresh</button></h2>
+  <pre id="clients"></pre>
+
+  <h2>artifacts <button onclick="loadArtifacts()">refresh</button></h2>
+  <pre id="artifacts"></pre>
+
+  <h2>publish</h2>
+  <form id="publish-form" onsubmit="return doPublish(event)">
+    <input id="pub-subject" placeholder="msg.topic.plan" size="30">
+    <input id="pub-text" placeholder="message text" size="40">
+    <button type="submit">publish</button>
+  </form>
+
+  <h2>live messages</h2>
+  <form id="sub-form" onsubmit="return startStream(event)">
+    <input id="sub-subject" value="msg.>" size="30">
+    <button type="submit">subscribe</button>
+  </form>
+  <pre id="messages"></pre>
+
+  <script>
+    // The token gates every API call; the launcher prints the URL that carries it.
+    const token = new URLSearchParams(location.search).get("token") || "";
+    const authHeaders = { "Authorization": "Bearer " + token };
+
+    function setStatus(msg) { document.getElementById("status").textContent = msg; }
+
+    async function api(path) {
+      const r = await fetch(path, { headers: authHeaders });
+      if (!r.ok) throw new Error(path + " -> " + r.status + " " + (await r.text()));
+      return r.json();
+    }
+
+    async function loadSelf() {
+      try {
+        const s = await api("/api/self");
+        document.getElementById("self").textContent =
+          "you are " + (s.display_name || "?") + " (" + s.id + ")" +
+          " · principal: " + (s.principal || "(none)");
+      } catch (e) { setStatus(String(e)); }
+    }
+
+    async function loadClients() {
+      try {
+        const cs = await api("/api/clients");
+        document.getElementById("clients").textContent =
+          cs.map(c => [c.Online ? "online " : "offline", c.ID, c.DisplayName, c.Kind].join("  ")).join("\n")
+          || "(none)";
+      } catch (e) { setStatus(String(e)); }
+    }
+
+    async function loadArtifacts() {
+      try {
+        const as = await api("/api/artifacts");
+        document.getElementById("artifacts").textContent =
+          as.map(a => ["rev=" + a.Revision, a.Name].join("  ")).join("\n") || "(none)";
+      } catch (e) { setStatus(String(e)); }
+    }
+
+    async function doPublish(ev) {
+      ev.preventDefault();
+      const subject = document.getElementById("pub-subject").value;
+      const text = document.getElementById("pub-text").value;
+      try {
+        const r = await fetch("/api/publish", {
+          method: "POST",
+          headers: Object.assign({ "Content-Type": "application/json" }, authHeaders),
+          body: JSON.stringify({ subject, record: { "$type": "chat.message", text } }),
+        });
+        if (!r.ok) throw new Error("publish -> " + r.status + " " + (await r.text()));
+        setStatus("published to " + subject);
+        document.getElementById("pub-text").value = "";
+      } catch (e) { setStatus(String(e)); }
+      return false;
+    }
+
+    let stream = null;
+    function startStream(ev) {
+      if (ev) ev.preventDefault();
+      if (stream) stream.close();
+      const subject = document.getElementById("sub-subject").value;
+      // EventSource cannot set headers, so the token rides as a query param.
+      stream = new EventSource("/api/stream?subject=" + encodeURIComponent(subject) + "&token=" + encodeURIComponent(token));
+      const box = document.getElementById("messages");
+      box.textContent = "subscribed to " + subject + "…\n";
+      stream.onmessage = (m) => {
+        try {
+          const ev = JSON.parse(m.data);
+          const text = (ev.frame && ev.frame.record) ? JSON.stringify(ev.frame.record) : m.data;
+          box.textContent += "[" + ev.subject + "] <" + (ev.frame ? ev.frame.author : "?") + "> " + text + "\n";
+        } catch (_) { box.textContent += m.data + "\n"; }
+      };
+      stream.onerror = () => setStatus("stream error (is the dash still running?)");
+      return false;
+    }
+
+    loadSelf();
+    loadClients();
+    loadArtifacts();
+    startStream(null);
+  </script>
+</body>
+</html>
