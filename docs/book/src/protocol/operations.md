@@ -51,7 +51,7 @@ Fetch a batch of retained messages from a cursor. Cursor 0 means the beginning; 
 
 **Delivery:** push-stream
 
-Stream messages matching a subject until stopped.
+Stream messages matching a subject until stopped. A subscription can resume after a reconnect: since_seq restarts delivery from a stream sequence, and a sequence the log no longer retains fails the call rather than skipping silently (ADR-0027).
 
 **Input**
 
@@ -59,6 +59,7 @@ Stream messages matching a subject until stopped.
 |---|---|
 | `subject` | string (exact or wildcard) |
 | `deliver` | new \| all |
+| `since_seq` | uint64 (optional; resume delivery from this stream sequence, inclusive — takes priority over deliver. Set by the SDK on reconnect to last-delivered+1; additive, protocol epoch unchanged) |
 
 **Output**
 
@@ -128,6 +129,22 @@ Read an artifact's current value and bus-stamped metadata.
 | `revision` | uint64 |
 | `createdAt` | datetime |
 | `updatedAt` | datetime |
+
+## `artifact.list`
+
+**Delivery:** one-shot
+
+List the artifacts directory: the name and bus-stamped metadata of every artifact in the ARTIFACTS bucket, sorted by name. Discovery of existing state the bus already owns (ADR-0016) — a client lists, then artifact.gets the one it wants. Deleted artifacts are not listed; an empty bucket is an empty list, not an error.
+
+**Input**
+
+_None._
+
+**Output**
+
+| Field | Type |
+|---|---|
+| `artifacts` | ArtifactInfo[] |
 
 ## `artifact.delete`
 

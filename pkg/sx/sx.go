@@ -13,9 +13,12 @@ const (
 	// BucketWorkflows holds workflow state envelopes, keyed by workflow id.
 	BucketWorkflows = "sx_workflows"
 	// BucketMeta holds public protocol metadata that clients read at connect —
-	// currently just the protocol epoch. It is client-readable by design: the
-	// only system datum so far is public, so it lives in a client-readable
-	// bucket, not an operator-only one (ADR-0015).
+	// the protocol epoch and the principal designation. It is client-readable by
+	// design: these system data are public, so they live in a client-readable
+	// bucket, not an operator-only one (ADR-0015). Write is still operator-only:
+	// clients reach the bucket only through bus operations, never directly, so the
+	// read-open / write-operator shape is enforced by the per-client allow-list
+	// (ADR-0019) plus the operator-only gate on the writing operation.
 	BucketMeta = "sx_meta"
 )
 
@@ -23,6 +26,16 @@ const (
 // decimal string. The bus writes it at bootstrap; clients read and hard-gate on
 // it at connect (ADR-0010).
 const MetaKeyEpoch = "epoch"
+
+// MetaKeyPrincipal is the key in BucketMeta holding the bus's one principal: the
+// ULID of the human's client whose messages other clients act on as their own
+// operator's direct input (ADR-0030). It is a sibling of MetaKeyEpoch — same
+// client-readable / operator-writable shape — defaulted at bootstrap to the
+// operator's seat and re-pointed by an Operator-credentialed command (the
+// two-way door). The principal designation is an opinionated extension over the
+// locked core (ADR-0022, ADR-0030), not a core-protocol concept; the universal
+// protocol stays principal-free. A fork may omit it.
+const MetaKeyPrincipal = "principal"
 
 // Operator-only system state is deferred: v1 has no operator-only bucket (the
 // only system datum, the protocol epoch, is public — it lives in BucketMeta).

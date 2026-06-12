@@ -66,6 +66,13 @@ type Client struct {
 	drainOnce sync.Once
 	drained   chan struct{}
 
+	// principalMu guards principal: the bus-designated principal ULID (ADR-0030).
+	// It is set from the connect handshake (hello) and advanced by a
+	// principal.watch delivery, so a connected client observes a re-designation
+	// without reconnecting. Read with Principal().
+	principalMu sync.RWMutex
+	principal   string
+
 	// subsMu guards subs. Subscriptions register themselves on creation and
 	// deregister on teardown; the reconnect handler snapshots the set under the
 	// lock so it can re-establish each relay without holding the lock. The set
@@ -250,6 +257,10 @@ func (c *Client) hello(ctx context.Context, tol time.Duration) error {
 			c.logf("sextant: clock skew %s vs the bus exceeds %s; messages may be rejected — sync NTP", skew, tol)
 		}
 	}
+	// Discover the principal designation in the same round-trip (ADR-0030). A
+	// connected client keeps it current with WatchPrincipal; a one-shot read is
+	// GetPrincipal.
+	c.setPrincipal(out.Principal)
 	return nil
 }
 
@@ -285,6 +296,26 @@ func (c *Client) ID() string { return c.id }
 // DisplayName is this client's human-readable label, minted with its credential.
 // It may be empty for a credential minted without one.
 func (c *Client) DisplayName() string { return c.displayName }
+
+// Principal is the bus-designated principal's client ULID (ADR-0030) as the
+// client last learned it: at connect (the hello handshake) and from any
+// principal.watch delivery since. A client compares an inbound message's
+// bus-stamped author against this to decide whether the message is its
+// principal's — operator-equivalent input. Empty means no principal is
+// designated. It never blocks; it reads the locally cached value.
+func (c *Client) Principal() string {
+	c.principalMu.RLock()
+	defer c.principalMu.RUnlock()
+	return c.principal
+}
+
+// setPrincipal records the latest principal designation (from hello or a watch
+// delivery). It is the single writer path for the cached value.
+func (c *Client) setPrincipal(p string) {
+	c.principalMu.Lock()
+	c.principal = p
+	c.principalMu.Unlock()
+}
 
 // Close closes the connection. It does NOT retire the identity (ADR-0020): a
 // clean close just drops presence to offline — the durable identity persists, so

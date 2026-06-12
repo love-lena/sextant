@@ -34,6 +34,19 @@ type ArtifactChange struct {
 
 ArtifactChange is a change delivered to a WatchArtifact handler: the artifact at this revision, plus whether the change was a deletion. On a delete the Record is empty and Deleted is true — so a watcher can tell a removal from a write rather than inferring it from an empty record.
 
+## type `ArtifactInfo`
+
+```go
+type ArtifactInfo struct {
+	Name     string
+	Revision uint64
+	Created  time.Time
+	Updated  time.Time
+}
+```
+
+ArtifactInfo is one entry in the artifacts directory: an artifact's name and bus-stamped metadata, but not its Record. It is what ListArtifacts returns — enough to show what exists and pick one, with the contents fetched on demand by GetArtifact. Revision is the artifact's current revision; Created and Updated are the bus's stamped times (ADR-0016).
+
 ## type `Client`
 
 ```go
@@ -59,6 +72,8 @@ func (c *Client) Close() error
 ```
 
 Close closes the connection. It does NOT retire the identity (ADR-0020): a clean close just drops presence to offline — the durable identity persists, so the same client can reconnect later under the same id. Decommissioning for good is an explicit operator \`clients retire\`, never an implicit consequence of Close.
+
+Close also winds down any in-flight resume pass: the closed signal stops it at its next subscription boundary, and closing the connection fails its in-flight rotation call promptly. The drain wait is bounded and loud (never a silent hang): if a pass somehow does not stop in time, Close logs and returns — the pass's own per-rotation deadlines still bound its exit.
 
 ### func `(*Client) CreateArtifact`
 
@@ -108,6 +123,14 @@ func (c *Client) GetArtifact(ctx context.Context, name string) (Artifact, error)
 
 GetArtifact reads an artifact's current value and bus-stamped metadata as an artifact.get call.
 
+### func `(*Client) GetPrincipal`
+
+```go
+func (c *Client) GetPrincipal(ctx context.Context) (string, error)
+```
+
+GetPrincipal reads the current principal ULID as a one-shot principal.get call. Empty means no principal is designated. A connected client usually reads the cached value with Principal() instead; GetPrincipal is the explicit re-read (e.g. a CLI \`principal get\`).
+
 ### func `(*Client) ID`
 
 ```go
@@ -116,6 +139,14 @@ func (c *Client) ID() string
 
 ID is this client's identity: the bus-minted ULID (its registry key and frame author).
 
+### func `(*Client) ListArtifacts`
+
+```go
+func (c *Client) ListArtifacts(ctx context.Context) ([]ArtifactInfo, error)
+```
+
+ListArtifacts returns the artifacts directory — the name and bus-stamped metadata of every artifact, sorted by name — via the artifact.list operation. It is discovery, not contents: a client lists, then GetArtifacts the one it wants. Deleted artifacts are not listed, and an empty bucket is an empty slice, not an error.
+
 ### func `(*Client) ListClients`
 
 ```go
@@ -123,6 +154,14 @@ func (c *Client) ListClients(ctx context.Context) ([]ClientInfo, error)
 ```
 
 ListClients returns the clients directory: every issued identity — online and offline — sorted by id, via the clients.list operation. The bus reads the durable records and stamps each with a presence derived from the live connection (ADR-0020). An empty directory is an empty slice, not an error.
+
+### func `(*Client) Principal`
+
+```go
+func (c *Client) Principal() string
+```
+
+Principal is the bus-designated principal's client ULID (ADR-0030) as the client last learned it: at connect (the hello handshake) and from any principal.watch delivery since. A client compares an inbound message's bus-stamped author against this to decide whether the message is its principal's — operator-equivalent input. Empty means no principal is designated. It never blocks; it reads the locally cached value.
 
 ### func `(*Client) Publish`
 
@@ -140,6 +179,8 @@ func (c *Client) Subscribe(ctx context.Context, subject string, h Handler, opts 
 
 Subscribe delivers messages matching subject (an exact subject or a wildcard, e.g. sx.TopicSubject("plan") or "msg.>") to h as a message.subscribe call: the bus relays matching frames to this client's private delivery subject (sx.deliver.\<id>.\<sub>), and the SDK fans them out to h (ADR-0019). Replay is client-controlled (see DeliverAll); the bus owns the cursor, so it keeps no per-subscriber state beyond the live relay. Each delivered frame is re-checked against the wire contract (structure, epoch) and the bus clock, and quarantined (skipped + logged) on a violation (ADR-0006, ADR-0010). The subscription runs until Stop is called or ctx is cancelled, whichever comes first.
 
+A Subscription survives a reconnect — a bus restart of the same store or a plain network blip (ADR-0027): on reconnect the SDK re-establishes the server-side relay, resuming from the last delivered sequence so no messages are missed or duplicated. If re-establishment is impossible (e.g. the store was wiped), the OnError handler is called and the subscription is stopped — never silent.
+
 ### func `(*Client) UpdateArtifact`
 
 ```go
@@ -155,6 +196,14 @@ func (c *Client) WatchArtifact(ctx context.Context, name string, h func(Artifact
 ```
 
 WatchArtifact calls h on each change to name as an artifact.watch call: the bus relays changes to this client's private delivery subject, starting with the current value if present, and the SDK fans them out to h. Deletes are delivered too (with Deleted set). The watch runs until Stop is called or ctx is cancelled, whichever comes first.
+
+### func `(*Client) WatchPrincipal`
+
+```go
+func (c *Client) WatchPrincipal(ctx context.Context, h func(principal string)) (Watch, error)
+```
+
+WatchPrincipal calls h on each principal designation as a principal.watch call: the bus relays the current value first, then each re-designation, to this client's private delivery subject, and the SDK fans them out to h. Every delivery also advances the client's cached value, so Principal() stays current for the life of the watch. The watch runs until Stop is called or ctx is cancelled, whichever comes first.
 
 ## type `ClientInfo`
 
@@ -229,6 +278,14 @@ func (i *Issuer) Close() error
 
 Close closes the issuer connection.
 
+### func `(*Issuer) GetPrincipal`
+
+```go
+func (i *Issuer) GetPrincipal(ctx context.Context) (string, error)
+```
+
+GetPrincipal reads the current principal ULID (ADR-0030) over the operator connection, for an operator-credentialed \`principal get\` (the operator is not a directory client, so it cannot run the full Client handshake).
+
 ### func `(*Issuer) ListClients`
 
 ```go
@@ -252,6 +309,14 @@ func (i *Issuer) Retire(ctx context.Context, id string) error
 ```
 
 Retire decommissions an identity for good (operator-only, enforced by the bus): it leaves the directory and any live connection is dropped. Distinct from a disconnect, which only goes offline.
+
+### func `(*Issuer) SetPrincipal`
+
+```go
+func (i *Issuer) SetPrincipal(ctx context.Context, principal string) error
+```
+
+SetPrincipal re-points the bus's principal designation to a client ULID (ADR-0030), as a principal.set call. It is operator-only, enforced by the bus: the call rides the operator credential, and the bus rejects principal.set from any other identity — so an agent can never claim or alter the designation. This is the two-way door: the operator can re-designate at any time.
 
 ## type `Message`
 
@@ -305,6 +370,21 @@ func DeliverAll() SubOption
 ```
 
 DeliverAll replays the full backlog on the subject before live messages. Without it, a subscription delivers only messages published after it starts.
+
+### func `OnError`
+
+```go
+func OnError(h func(error)) SubOption
+```
+
+OnError registers a handler that is called when a reconnect-time resume fails. A subscription that was live when the connection dropped will attempt to resume on reconnect; the handler then sees one of two distinguishable errors:
+
+  - Fatal: the bus answered that the resume is impossible (e.g. the store was wiped and the sequence is gone). The subscription is stopped.
+  - Non-fatal: the resume failed on transport — the bus never answered — and wraps ErrResumeDeferred (check errors.Is). The subscription stays registered and the next reconnect retries it; until then it delivers nothing, which the notice makes visible.
+
+Without OnError, either case is only logged — the handler receives nothing, forever. Registering an OnError makes that silence visible.
+
+The handler runs on the SDK's resume-pass goroutine. It should not block — a blocking handler stalls the remaining subscriptions' resumes behind it — and it should not make calls on this client (mid-reconnect they time out, stalling the pass further). Hand the error off to a channel and return.
 
 ## type `Subscription`
 
