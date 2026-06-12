@@ -35,6 +35,7 @@ human has signed off — see
 | [0026](0026-one-focused-pane-panes-hold-their-place.md) | One focused pane; panes hold their place | proposed |
 | [0027](0027-subscriptions-survive-a-bus-restart.md) | Subscriptions survive a bus restart | proposed |
 | [0028](0028-byo-harnesses-join-through-a-plugin-adapter.md) | BYO harnesses join through a plugin adapter | proposed |
+| [0030](0030-clients-act-on-a-principals-messages-as-operator-input.md) | A client acts on its principal's messages as operator-equivalent input | proposed |
 
 ## Review batches
 - **Batch 1 — substrate:** 0004–0007 — *accepted*
@@ -47,3 +48,4 @@ human has signed off — see
 - **0024 — the dash is three master-detail browsers** — *proposed* (refines 0023's composition after M4 dogfooding; grilled in-session 2026-06-08)
 - **0025 — the bus keeps its address across restarts** — *proposed* (stable-address guarantee for enrolled contexts; TASK-35)
 - **0026 — one focused pane; panes hold their place** — *proposed* (tmux-style focus replacing 0023's step-in/out; decided in-session 2026-06-09)
+- **0030 — a client acts on its principal's messages as operator input** — *proposed* (the principal trust model; grilled in-session 2026-06-11; `0029` reserved for in-flight PR #107)
