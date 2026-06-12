@@ -9,11 +9,14 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/love-lena/sextant/pkg/sextant"
+	"github.com/love-lena/sextant/pkg/sx"
 )
 
 // channelMethod is the Claude Code channel notification (research preview):
@@ -71,6 +74,7 @@ type channelHub struct {
 	notify func(ctx context.Context, method string, params any) error
 	names  *nameCache
 	echo   *selfEchoSet
+	selfID atomic.Pointer[string] // this client's ULID, set on connect (self-echo timing grace)
 
 	mu   sync.Mutex
 	subs map[string]sextant.Subscription
@@ -114,6 +118,11 @@ func newChannelHub(notify func(ctx context.Context, method string, params any) e
 //     client). It never blocks the SDK delivery goroutine: frameEvent's push is
 //     non-fatal and bounded.
 func (h *channelHub) startDMDrain(c *sextant.Client) {
+	// Record this client's id for the self-echo timing grace (frameEvent). Set
+	// on every connect (same id across reconnect); cheap and idempotent.
+	id := c.ID()
+	h.selfID.Store(&id)
+
 	h.dmMu.Lock()
 	if _, running := h.dmDrains[c]; running {
 		h.dmMu.Unlock()
@@ -208,6 +217,31 @@ func wakeOnlyMode() bool {
 //
 //	sextant subscribe <subject> --all         (replay history first, then live)
 
+// isSelfEcho reports whether a delivered frame is this process's own publish
+// echoing back on a subscribed subject. The id-based echo set (TASK-52) is the
+// source of truth, but there is a race: the bus can relay a self-published
+// frame back (via the auto-DM bridge or an explicit subscription) before
+// message_publish has finished recording its id in the set. So when a frame is
+// authored by THIS client but its id is not yet in the set, briefly wait for
+// the record to land before concluding it is not ours. The wait is bounded and
+// the final decision stays id-based: a genuine co-identity frame (one this
+// process never published, so its id never lands) is delivered after the grace,
+// preserving TASK-52's "a co-identity session still sees frames it didn't
+// publish". Frames authored by anyone else take the fast path (no wait).
+func (h *channelHub) isSelfEcho(id, author string) bool {
+	if h.echo.contains(id) {
+		return true
+	}
+	self := h.selfID.Load()
+	if self == nil || *self == "" || author != *self {
+		return false
+	}
+	for i := 0; i < 25 && !h.echo.contains(id); i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	return h.echo.contains(id)
+}
+
 // frameEvent renders a delivered message. chat.message renders as its text;
 // any other lexicon as its compact JSON (content is opaque to the bus —
 // rendering is a courtesy, not policy).
@@ -225,8 +259,8 @@ func wakeOnlyMode() bool {
 // before.
 func (h *channelHub) frameEvent(m sextant.Message) {
 	// Self-echo check is always first, before any wake/content branching.
-	if h.echo.contains(m.Frame.ID) {
-		return // self-echo: this frame was published by this process; suppress it
+	if h.isSelfEcho(m.Frame.ID, m.Frame.Author) {
+		return // our own publish echoing back; suppress it
 	}
 
 	if wakeOnlyMode() {
@@ -280,6 +314,19 @@ func (h *channelHub) systemEvent(event, subject, content string) {
 // subscribe follows subject live, delivering via the channel. Duplicate
 // subscribes are idempotent. deliver="all" replays retained history first.
 func (h *channelHub) subscribe(ctx context.Context, c *sextant.Client, subject, deliver string) ([]string, error) {
+	// The client's own DM is already delivered to the channel by the auto-DM
+	// bridge (startDMDrain, TASK-55/M1). Opening a second relay here would push
+	// every DM into the session twice. Treat an explicit subscribe to it as
+	// already-active: emit the subscribed notice (so the channels-enabled check
+	// still confirms) but do NOT open a redundant relay.
+	if subject == sx.ClientSubject(c.ID()) {
+		h.systemEvent("subscribed", subject, fmt.Sprintf("now following %s (your own DM — delivered automatically on connect); frames arrive as channel events", subject))
+		// Report it as active (it IS being delivered, via the bridge) without a
+		// second relay. active() reads h.subs, which never holds the self-DM, so
+		// this can't duplicate across repeated calls.
+		return append(h.active(), subject), nil
+	}
+
 	h.mu.Lock()
 	_, exists := h.subs[subject]
 	h.mu.Unlock()

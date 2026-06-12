@@ -103,3 +103,56 @@ func assertNoEvent(t *testing.T, p *mcpProc, match func(channelEvent) bool) {
 		}
 	}
 }
+
+// TestMCPSelfDMSubscribeNoDouble guards the fix for the double-delivery bug: the
+// worker's own DM is already delivered by the auto-DM bridge, so an EXPLICIT
+// message_subscribe to it must NOT open a second relay — otherwise every DM is
+// pushed into the session twice. A DM must produce exactly ONE channel event
+// even after the worker explicitly subscribes to its own DM.
+func TestMCPSelfDMSubscribeNoDouble(t *testing.T) {
+	h := newHarness(t)
+	h.startBus()
+	mcpBin := buildMCPBinary(t)
+
+	aliceOut, code := h.run(nil, "clients", "register", "alice", "--store", h.store)
+	if code != 0 {
+		t.Fatalf("register alice exited %d: %s", code, aliceOut)
+	}
+	aliceCreds := h.store + "/alice.creds"
+
+	agentHome := t.TempDir()
+	agentOut, code := h.run(map[string]string{"SEXTANT_HOME": agentHome, "USER": "claude-agent"},
+		"clients", "register", "--self", "--store", h.store)
+	if code != 0 {
+		t.Fatalf("register --self exited %d: %s", code, agentOut)
+	}
+	agentID := mustParseID(t, agentOut, `enrolled as (`+ulidPat+`)`)
+	agentDM := sx.ClientSubject(agentID)
+
+	srv := startMCP(t, h, mcpBin, map[string]string{"SEXTANT_HOME": agentHome, "SEXTANT_STORE": h.store})
+	srv.call(t, "initialize", map[string]any{
+		"protocolVersion": "2025-06-18",
+		"capabilities":    map[string]any{},
+		"clientInfo":      map[string]any{"name": "e2e", "version": "0"},
+	})
+	srv.notify(t, "notifications/initialized", map[string]any{})
+
+	// Connect (arms the auto-DM bridge), THEN explicitly subscribe the own DM —
+	// the redundant case. It should report the DM active without a 2nd relay.
+	if out := srv.tool(t, "clients_list", `{}`); !strings.Contains(out, "claude-agent") {
+		t.Fatalf("clients_list (connect trigger): %s", out)
+	}
+	if out := srv.tool(t, "message_subscribe", `{"subject":"`+agentDM+`"}`); !strings.Contains(out, agentDM) {
+		t.Fatalf("explicit self-DM subscribe should report it active: %s", out)
+	}
+
+	// alice DMs once.
+	if out, code := h.run(nil, "publish", agentDM, `{"$type":"chat.message","text":"hello once"}`,
+		"--creds", aliceCreds, "--store", h.store); code != 0 {
+		t.Fatalf("alice DM publish exited %d: %s", code, out)
+	}
+
+	// Exactly one channel event: wait for the first, then assert no duplicate.
+	_ = srv.waitEvent(t, func(ev channelEvent) bool { return ev.Content == "hello once" })
+	assertNoEvent(t, srv, func(ev channelEvent) bool { return ev.Content == "hello once" })
+}
