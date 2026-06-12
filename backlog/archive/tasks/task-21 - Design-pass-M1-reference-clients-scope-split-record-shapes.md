@@ -4,12 +4,10 @@ title: 'Design pass: M1 reference clients (scope, split, record shapes)'
 status: Done
 assignee: []
 created_date: '2026-06-04 05:43'
-updated_date: '2026-06-06 03:02'
+updated_date: '2026-06-12 17:47'
 labels: []
 milestone: 'M4: The dash (human UI)'
-dependencies:
-  - TASK-3
-  - TASK-6
+dependencies: []
 references:
   - docs/adr/0009-spawn.md
   - docs/adr/0011-workflows.md

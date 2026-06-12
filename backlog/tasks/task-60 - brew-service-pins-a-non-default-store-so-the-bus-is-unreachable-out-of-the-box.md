@@ -3,9 +3,10 @@ id: TASK-60
 title: >-
   brew service pins a non-default store, so the bus is unreachable out of the
   box
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-12 07:03'
+updated_date: '2026-06-12 17:44'
 labels:
   - bug
   - install
@@ -25,10 +26,10 @@ The Homebrew formula's service runs 'sextant up --store /opt/homebrew/var/sextan
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 the brew service runs the bus on sextant's default store (no --store override)
-- [ ] #2 after brew install + brew services start, 'sextant clients register --self' + 'sextant dash' connect with no $SEXTANT_STORE
-- [ ] #3 the plugin's MCP server finds the bus with no env
-- [ ] #4 gen-formula.sh regenerates the matching (no --store) service so release bumps don't reintroduce the override
+- [x] #1 the brew service runs the bus on sextant's default store (no --store override)
+- [x] #2 after brew install + brew services start, 'sextant clients register --self' + 'sextant dash' connect with no $SEXTANT_STORE
+- [x] #3 the plugin's MCP server finds the bus with no env
+- [x] #4 gen-formula.sh regenerates the matching (no --store) service so release bumps don't reintroduce the override
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -42,3 +43,9 @@ Drop --store var/sextant from the formula service (and gen-formula.sh) so 'sexta
 <!-- SECTION:NOTES:BEGIN -->
 Discovered in the first brew dogfood (2026-06-12). Related: [[feat-homebrew-install]] (TASK-59). Fixed in the same PR.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Fixed in PR #111 (27ca0c7): the brew service drops --store so the bus uses the sextant default store, and gen-formula.sh regenerates the matching service. Bus reachable out of the box after brew install plus brew services start.
+<!-- SECTION:FINAL_SUMMARY:END -->

@@ -4,11 +4,10 @@ title: 'TypeScript SDK peer: the same domain-verb surface'
 status: To Do
 assignee: []
 created_date: '2026-06-03 01:12'
-updated_date: '2026-06-11 00:02'
+updated_date: '2026-06-12 17:47'
 labels: []
 milestone: Future
-dependencies:
-  - TASK-4
+dependencies: []
 references:
   - docs/adr/0008-clients-are-processes.md
   - docs/adr/0013-multi-backend.md

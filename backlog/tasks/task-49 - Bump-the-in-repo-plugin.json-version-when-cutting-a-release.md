@@ -4,13 +4,14 @@ title: Bump the in-repo plugin.json version when cutting a release
 status: To Do
 assignee: []
 created_date: '2026-06-11 04:01'
+updated_date: '2026-06-12 17:45'
 labels:
   - bug
   - release
   - claude-code
   - 'slug:bug-plugin-version-not-bumped-in-git'
   - P3
-  - needs-triage
+  - ready-for-human
 dependencies: []
 priority: low
 ordinal: 55000
@@ -31,4 +32,6 @@ With the repo-as-marketplace install (TASK-48), the in-repo clients/claude-code/
 
 <!-- SECTION:NOTES:BEGIN -->
 Discovered in: TASK-48 self-review (2026-06-10). Related: [[bug-plugin-readme-bare-marketplace-path]], [[feat-release-artifacts-pipeline]]. Not user-visible yet: v0.1.1 is the first tag with the root marketplace manifest, so no one has crossed a tag boundary.
+
+2026-06-12 (canopus survey): premise now live. v0.1.2 (#108) and v0.2.0 shipped, crossing tag boundaries, so the in-repo plugin.json version is load-bearing. #108 bumped it to 0.1.2, but the workflow-enforcement AC remains open -- needs the decision: enforce (release fails when the tag and plugin.json disagree) vs drop the version field (commit SHA becomes the version).
 <!-- SECTION:NOTES:END -->
