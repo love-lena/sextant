@@ -8,6 +8,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`sextant dash --serve`: a local web API + debug surface** (ADR-0032) — runs the
+  dash's one bus identity as a token-gated HTTP API on `127.0.0.1` (the Go process
+  stays the single bus client; the browser never touches the bus). REST/JSON reads
+  mirror the CLI (`/api/self`, `/api/clients`, `/api/messages`, `/api/artifacts`,
+  `/api/artifacts/{name}`), with a `POST /api/publish` command and a Server-Sent
+  Events live stream (`/api/stream`). It serves a built-in zero-design web debug
+  surface (raw HTML/JS — the verification harness and the opinion-free baseline for
+  a later designed UI); `--ui <dir>` serves a custom frontend instead. Guards:
+  loopback bind, a per-launch access token printed in the URL, and a configurable
+  allowed-origin (localhost always allowed). A one-command self-validating demo
+  lives at `docs/demos/dash-serve-demo.sh`. This is a client-side face — the bus
+  protocol and epoch are untouched.
 - **The principal claims itself on first enrollment** (ADR-0031) — a self-enrolling
   human seat claims the still-unclaimed principal as part of `sextant clients
   register --self`, so first-run needs no separate `principal set`; `--no-principal`
