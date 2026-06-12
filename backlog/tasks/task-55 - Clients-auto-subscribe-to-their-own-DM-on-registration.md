@@ -1,0 +1,43 @@
+---
+id: TASK-55
+title: Clients auto-subscribe to their own DM on registration
+status: Done
+assignee: []
+created_date: '2026-06-12 00:04'
+updated_date: '2026-06-12 02:40'
+labels:
+  - feature
+  - principal-trust
+  - sdk
+  - 'slug:feat-client-auto-subscribe-own-dm'
+  - P3
+  - ready-for-agent
+dependencies: []
+priority: low
+ordinal: 61000
+---
+
+## Description
+
+<!-- SECTION:DESCRIPTION:BEGIN -->
+Every client should be reachable by direct message the moment it exists. On registration a client automatically subscribes to its own DM subject msg.client.<self> — zero-config inbound, so a principal (or any sender) can DM a client without the agent manually subscribing. Generic: no task-topic convention; the DM is the always-on inbound. Part of ADR-0030's generic-subscription decision.
+<!-- SECTION:DESCRIPTION:END -->
+
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [x] #1 On successful registration, a client is subscribed to msg.client.<self> with no explicit subscribe call
+- [x] #2 A message published to a freshly-registered client's DM is delivered to it
+- [x] #3 The auto-subscription survives the normal connect/resume path
+<!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+In the SDK registration/connect path, issue the self-DM subscription automatically once identity is established. Idempotent with an explicit subscribe.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented + verified on branch task-53-principal-trust (PR #109): 0d6e37d (+ wake/teardown fix 6d554c6). gofumpt/vet + go test -race + e2e all green. Adversarial review: no Critical; trust model proven sound. Rides TASK-53 for human sign-off.
+<!-- SECTION:NOTES:END -->

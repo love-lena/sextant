@@ -278,6 +278,12 @@ func TestSubscribeFailureLeavesNoRegistration(t *testing.T) {
 	b := startBus(t)
 	c := dialClient(t, b, "register-window")
 
+	// Snapshot the baseline: the auto-DM subscription (msg.client.<self>) is
+	// established by Connect and counts as one live registration.
+	c.subsMu.Lock()
+	baseline := len(c.subs)
+	c.subsMu.Unlock()
+
 	// The bus rejects a subject outside the messages space — a call failure
 	// that lands after the registration happened.
 	if _, err := c.Subscribe(t.Context(), "sx.control.nope", func(Message) {}); err == nil {
@@ -287,8 +293,8 @@ func TestSubscribeFailureLeavesNoRegistration(t *testing.T) {
 	c.subsMu.Lock()
 	n := len(c.subs)
 	c.subsMu.Unlock()
-	if n != 0 {
-		t.Fatalf("a failed Subscribe left %d subscription(s) registered; want 0", n)
+	if n != baseline {
+		t.Fatalf("a failed Subscribe left %d extra subscription(s) registered; want 0 extra (baseline=%d, got=%d)", n-baseline, baseline, n)
 	}
 }
 
@@ -690,9 +696,13 @@ func TestSiblingResumePassesDedupe(t *testing.T) {
 // that outlives Close. The seam parks a spawn exactly inside that window while
 // Close runs to completion; the released spawn must observe closed and spawn
 // nothing.
+//
+// Note: this test's goleak baseline (IgnoreCurrent after Connect) now includes
+// the auto-DM relay goroutines, so it does NOT catch an auto-DM SDK-goroutine
+// leak. TestCloseMidResumePassIsClean is the test that does — its baseline is
+// taken before the client exists, so a leaked auto-DM bridge would fail it.
 func TestCloseConcurrentWithPassSpawnIsSafe(t *testing.T) {
 	b := startBus(t)
-	ignore := goleak.IgnoreCurrent() // bus goroutines are baseline; the client must not outlive the test body
 
 	reconnected := make(chan struct{}, 4)
 	c, err := Connect(t.Context(), Options{
@@ -710,6 +720,12 @@ func TestCloseConcurrentWithPassSpawnIsSafe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
+	// Baseline after Connect: includes the bus goroutines AND the auto-DM relay
+	// goroutines. The test goal is that CLIENT goroutines (SDK goroutines created
+	// by Connect and by subscribe) do not outlive Close — the baseline includes
+	// bus relay goroutines since they are bus-side ephemeral goroutines owned by
+	// the relay, torn down by Close's synchronous teardown.
+	ignore := goleak.IgnoreCurrent()
 
 	arrived := make(chan struct{})
 	release := make(chan struct{})
@@ -778,6 +794,175 @@ func TestCloseVersusPassSpawnHammer(t *testing.T) {
 		}()
 		close(start)
 		wg.Wait()
+	}
+}
+
+// TestAutoDMSubscribedOnConnect pins AC#1 (TASK-55): a freshly-connected client
+// is automatically subscribed to its own DM subject (msg.client.<self>) without
+// any explicit Subscribe call. It verifies both the subject and that DMs()
+// delivers messages published there.
+func TestAutoDMSubscribedOnConnect(t *testing.T) {
+	b := startBus(t)
+	// receiver: the client under test — just connected, no explicit Subscribe.
+	receiver := dialClient(t, b, "dm-receiver")
+	// sender: a separate client that publishes to receiver's DM subject.
+	sender := dialClient(t, b, "dm-sender")
+
+	dmSubject := sx.ClientSubject(receiver.ID())
+
+	// AC#1: the client must already be subscribed — no Subscribe call here.
+	// AC#2: a DM published now must arrive on DMs().
+	if err := sender.Publish(t.Context(), dmSubject, json.RawMessage(`{"hello":"dm"}`)); err != nil {
+		t.Fatalf("Publish DM: %v", err)
+	}
+
+	select {
+	case m := <-receiver.DMs():
+		if m.Subject != dmSubject {
+			t.Errorf("DM subject = %q, want %q", m.Subject, dmSubject)
+		}
+		if m.Frame.Author != sender.ID() {
+			t.Errorf("DM author = %q, want sender %q", m.Frame.Author, sender.ID())
+		}
+		if string(m.Frame.Record) != `{"hello":"dm"}` {
+			t.Errorf("DM record = %s", m.Frame.Record)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("no DM delivery: auto-subscription may not be established or DMs() not receiving")
+	}
+}
+
+// TestAutoDMIdempotentWithExplicitSubscribe verifies that a caller who also
+// subscribes to their own DM subject gets a second, independent subscription:
+// two handlers each see the message (no double-delivery to a single handler,
+// two separate relays each doing their job). This is the natural behavior of the
+// existing Subscribe path — no special idempotency gate is needed.
+func TestAutoDMIdempotentWithExplicitSubscribe(t *testing.T) {
+	b := startBus(t)
+	receiver := dialClient(t, b, "dm-idempotent")
+	sender := dialClient(t, b, "dm-sender2")
+
+	dmSubject := sx.ClientSubject(receiver.ID())
+
+	// Explicit second subscription to the same subject.
+	explicit := make(chan Message, 4)
+	sub, err := receiver.Subscribe(t.Context(), dmSubject, func(m Message) { explicit <- m })
+	if err != nil {
+		t.Fatalf("explicit Subscribe: %v", err)
+	}
+	defer sub.Stop()
+
+	if err := sender.Publish(t.Context(), dmSubject, json.RawMessage(`{"n":1}`)); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	// Both the auto-DM channel and the explicit subscription receive the message.
+	select {
+	case <-receiver.DMs():
+	case <-time.After(10 * time.Second):
+		t.Fatal("auto-DM channel did not receive the message")
+	}
+	select {
+	case <-explicit:
+	case <-time.After(10 * time.Second):
+		t.Fatal("explicit subscription did not receive the message")
+	}
+}
+
+// TestAutoDMSurvivesReconnect pins AC#3 (TASK-55): the auto-DM subscription
+// survives the normal connect/resume path. It mirrors the approach of
+// TestResumeTransportFailureDefersUntilNextReconnect: shut the bus down and back
+// up, then assert the DM relay was re-established and a post-restart DM arrives.
+func TestAutoDMSurvivesReconnect(t *testing.T) {
+	store := t.TempDir()
+	b1 := startBusOnStore(t, store)
+
+	// Mint credentials before the outage: they are durable in the store.
+	receiverCreds, _, err := b1.MintClient(t.Context(), "dm-reconnect-recv", "test")
+	if err != nil {
+		t.Fatalf("MintClient receiver: %v", err)
+	}
+	senderCreds, _, err := b1.MintClient(t.Context(), "dm-reconnect-send", "test")
+	if err != nil {
+		t.Fatalf("MintClient sender: %v", err)
+	}
+
+	reconnected := make(chan struct{}, 4)
+	receiver, err := Connect(t.Context(), Options{
+		URL:       b1.ClientURL(),
+		CredsPath: writeCreds(t, receiverCreds),
+		Logf: func(format string, args ...any) {
+			if strings.Contains(fmt.Sprintf(format, args...), "reconnected to the bus") {
+				select {
+				case reconnected <- struct{}{}:
+				default:
+				}
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Connect receiver: %v", err)
+	}
+	t.Cleanup(func() { _ = receiver.Close() })
+
+	sender, err := Connect(t.Context(), Options{
+		URL:       b1.ClientURL(),
+		CredsPath: writeCreds(t, senderCreds),
+		Logf:      func(string, ...any) {},
+	})
+	if err != nil {
+		t.Fatalf("Connect sender: %v", err)
+	}
+	t.Cleanup(func() { _ = sender.Close() })
+
+	dmSubject := sx.ClientSubject(receiver.ID())
+
+	// Pre-restart: confirm the auto-DM subscription is live.
+	if err := sender.Publish(t.Context(), dmSubject, json.RawMessage(`{"n":1}`)); err != nil {
+		t.Fatalf("pre-restart Publish: %v", err)
+	}
+	select {
+	case m := <-receiver.DMs():
+		if string(m.Frame.Record) != `{"n":1}` {
+			t.Fatalf("pre-restart DM = %s, want {\"n\":1}", m.Frame.Record)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("pre-restart DM not delivered")
+	}
+
+	// Restart the bus: shut down, free port, start again on the same store.
+	stopBusAndFreePort(t, b1)
+	b2, err := bus.Start(t.Context(), bus.Config{StoreDir: store})
+	if err != nil {
+		t.Fatalf("second bus.Start: %v", err)
+	}
+	t.Cleanup(b2.Shutdown)
+
+	// Wait for the receiver to reconnect (its resume pass re-establishes the
+	// auto-DM relay via the normal reestablishSubs path).
+	select {
+	case <-reconnected:
+	case <-time.After(20 * time.Second):
+		t.Fatal("receiver did not reconnect within 20s")
+	}
+
+	// AC#3: post-restart DM must arrive on the auto-subscription.
+	if err := sender.Publish(t.Context(), dmSubject, json.RawMessage(`{"n":2}`)); err != nil {
+		t.Fatalf("post-restart Publish: %v", err)
+	}
+	select {
+	case m := <-receiver.DMs():
+		if string(m.Frame.Record) != `{"n":2}` {
+			t.Fatalf("post-restart DM = %s, want {\"n\":2} (no duplicate replay)", m.Frame.Record)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("post-restart DM not delivered: auto-subscription relay was not re-established")
+	}
+	// No stale duplicate of n=1 trailing behind.
+	select {
+	case m := <-receiver.DMs():
+		t.Fatalf("unexpected duplicate DM after reconnect: %s", m.Frame.Record)
+	case <-time.After(500 * time.Millisecond):
 	}
 }
 

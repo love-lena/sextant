@@ -89,6 +89,28 @@ const (
 // server-side relay it started.
 const OpSubscriptionStop = "subscription.stop"
 
+// OpPrincipalGet, OpPrincipalSet, and OpPrincipalWatch are the principal-
+// designation ops (ADR-0030). They are an opinionated EXTENSION over the locked
+// core — not protocol operations: they are not in methods.json (the universal
+// protocol stays principal-free, ADR-0012/0022) and have no conformance entry. A
+// fork may omit them.
+//
+//   - principal.get reads the current principal ULID (the client-readable side of
+//     the sx_meta/principal key). Any authenticated caller may read it.
+//   - principal.set re-points the principal. It is OPERATOR-ONLY: the bus rejects
+//     any caller that is not the reserved operator identity, mirroring
+//     clients.retire's gate — so the write-operator half of the key's shape is
+//     enforced at the bus, never inferred from a forgeable field.
+//   - principal.watch is a push-stream (like artifact.watch): it relays the
+//     current value first, then each later change, into the caller's delivery
+//     space — so a connected client observes a re-designation without
+//     reconnecting (the discover-on-connect half rides clients.hello).
+const (
+	OpPrincipalGet   = "principal.get"
+	OpPrincipalSet   = "principal.set"
+	OpPrincipalWatch = "principal.watch"
+)
+
 // OpClientsHello is the internal connect-handshake op (ADR-0020). It is bus
 // plumbing, not one of the protocol's operations (not in methods.json, no
 // CLI/MCP surface): the SDK calls it once on Connect to confirm the caller is a
@@ -387,10 +409,58 @@ type RetireInput struct {
 type HelloInput struct{}
 
 // HelloOutput returns the bus's protocol epoch (the SDK exact-matches it, failing
-// loud on mismatch) and the bus-stamped server time (the SDK clock-skew-checks
-// against it). The handshake asserts no presence — online/offline is derived from
-// the connection itself.
+// loud on mismatch), the bus-stamped server time (the SDK clock-skew-checks
+// against it), and the current principal ULID (so a client discovers the
+// designation in the same round-trip it confirms its identity — ADR-0030). The
+// handshake asserts no presence — online/offline is derived from the connection
+// itself.
 type HelloOutput struct {
 	BusEpoch   int    `json:"bus_epoch"`
 	ServerTime string `json:"server_time"`
+	Principal  string `json:"principal,omitempty"`
+}
+
+// --- principal.get / principal.set (ADR-0030 extension) ---
+
+// PrincipalGetInput carries no fields: the principal is a single bus-wide datum.
+type PrincipalGetInput struct{}
+
+// PrincipalGetOutput is the current principal ULID. It is empty when no principal
+// is designated (the bus defaults one at bootstrap, so an empty value is only
+// seen if a fork or an operator cleared it).
+type PrincipalGetOutput struct {
+	Principal string `json:"principal"`
+}
+
+// PrincipalSetInput re-points the principal to a client ULID (operator-only,
+// enforced by the bus). The bus stores the value verbatim; it is the operator's
+// responsibility to name a real client identity (the designation is a two-way
+// door — a wrong value is corrected by another set).
+type PrincipalSetInput struct {
+	Principal string `json:"principal"`
+}
+
+// PrincipalSetOutput confirms the new principal.
+type PrincipalSetOutput struct {
+	Principal string `json:"principal"`
+}
+
+// --- principal.watch (push-stream over sx.deliver.<id>.<sub_id>) ---
+
+// PrincipalWatchInput starts a push-stream watch of the principal designation.
+// SubID is the client-generated ULID naming the delivery subject.
+type PrincipalWatchInput struct {
+	SubID string `json:"sub_id"`
+}
+
+// PrincipalWatchOutput confirms the watch and echoes the delivery subject.
+type PrincipalWatchOutput struct {
+	DeliverSubject string `json:"deliver_subject"`
+}
+
+// PrincipalDelivery is one pushed principal change: the current value first, then
+// each re-designation. Principal is the ULID now in effect.
+type PrincipalDelivery struct {
+	SubID     string `json:"sub_id"`
+	Principal string `json:"principal"`
 }
