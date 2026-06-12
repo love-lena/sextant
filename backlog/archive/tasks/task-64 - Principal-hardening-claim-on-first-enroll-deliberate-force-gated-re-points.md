@@ -1,10 +1,10 @@
 ---
 id: TASK-64
 title: 'Principal hardening: claim on first enroll, deliberate force-gated re-points'
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-06-12 18:40'
-updated_date: '2026-06-12 18:40'
+updated_date: '2026-06-12 19:54'
 labels:
   - feature
   - principal
@@ -43,8 +43,6 @@ The whole claim/re-point story lives in `principal.set` (an extension over the l
 - [x] #8 make lint and make test (race) and go test -tags e2e ./tests/e2e/ all green.
 <!-- AC:END -->
 
-
-
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
@@ -61,3 +59,9 @@ As implemented (commit ab21f7a, branch worktree-task-61-principal-hardening):
 <!-- SECTION:NOTES:BEGIN -->
 Implemented on branch worktree-task-61-principal-hardening (commit ab21f7a); PR pending principal sign-off. ADR-0031. Builds on [[feat-principal-designation]] (TASK-54) and [[feat-principal-trust]] (TASK-53, ADR-0030). Co-sign escalation: [[feat-principal-repoint-cosign]] (TASK-65). Renumbered from a transient TASK-61 (canon #113 took 61/62/63).
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in 274dd5a (#114, ADR-0031): a self-enrolling human seat claims an unclaimed principal frictionlessly; re-pointing an established principal is operator-only + --force, observable via principal.watch + bus audit log. Conformance-pinned clients.register untouched.
+<!-- SECTION:FINAL_SUMMARY:END -->
