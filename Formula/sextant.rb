@@ -1,0 +1,67 @@
+# Sextant — a protocol + SDK for AI agents to collaborate over a bus.
+#
+# This formula installs the prebuilt release binaries (sextant, sextant-mcp,
+# sextant-dash) from the GitHub release tarballs; it does not compile from
+# source. The version + the four per-platform sha256 lines below are
+# regenerated automatically by .github/workflows/release.yml on each v* tag
+# (see scripts/gen-formula.sh) — keep their shape stable so the bump diff is
+# clean.
+#
+# Install:
+#   brew tap love-lena/sextant https://github.com/love-lena/sextant
+#   brew install sextant
+# Run the bus as a managed daemon:
+#   brew services start sextant
+class Sextant < Formula
+  desc "Protocol + SDK + CLI for AI agents to collaborate over a bus"
+  homepage "https://github.com/love-lena/sextant"
+  # No LICENSE file ships in the repo yet, so `license` is intentionally
+  # omitted (TODO: add once the repo declares one).
+  version "0.1.2"
+
+  on_macos do
+    if Hardware::CPU.arm?
+      url "https://github.com/love-lena/sextant/releases/download/v0.1.2/sextant_v0.1.2_darwin_arm64.tar.gz"
+      sha256 "09d31e0e9e9171f89371088c3cd8e93eef61b6a6d777a3d552d6cf9b239b8039" # darwin_arm64
+    end
+    if Hardware::CPU.intel?
+      url "https://github.com/love-lena/sextant/releases/download/v0.1.2/sextant_v0.1.2_darwin_amd64.tar.gz"
+      sha256 "cb6af418a808bc1601745f451cd9769fba64e0eb83f077e7c004683c189f64e5" # darwin_amd64
+    end
+  end
+
+  on_linux do
+    if Hardware::CPU.arm?
+      url "https://github.com/love-lena/sextant/releases/download/v0.1.2/sextant_v0.1.2_linux_arm64.tar.gz"
+      sha256 "10217fe2e247555be53b65ddce69adc165e08ec33874249cca3a72c0f7e9714a" # linux_arm64
+    end
+    if Hardware::CPU.intel?
+      url "https://github.com/love-lena/sextant/releases/download/v0.1.2/sextant_v0.1.2_linux_amd64.tar.gz"
+      sha256 "3b51e2d19280d79c5baea0109cb124f28d3ea62272d671933874662cbcc0f747" # linux_amd64
+    end
+  end
+
+  def install
+    # Each tarball unpacks to a single top-level dir (Homebrew cds into it) with
+    # bin/{sextant,sextant-mcp,sextant-dash}. Those three are the user-facing
+    # binaries; install them all.
+    bin.install "bin/sextant"
+    bin.install "bin/sextant-mcp"
+    bin.install "bin/sextant-dash"
+  end
+
+  # The bus is a per-user daemon. Pin a stable store under the Homebrew var dir
+  # so the service survives restarts and does not depend on a login session's
+  # config dir; `sextant up` writes its discovery file + key material there.
+  service do
+    run [opt_bin/"sextant", "up", "--store", var/"sextant"]
+    keep_alive true
+    log_path var/"log/sextant.log"
+    error_log_path var/"log/sextant.log"
+    working_dir var/"sextant"
+  end
+
+  test do
+    assert_match "sextant v#{version}", shell_output("#{bin}/sextant version")
+  end
+end
