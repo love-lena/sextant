@@ -15,9 +15,11 @@ import (
 )
 
 // attestFixture stands up an in-process bus, a worker whose DM the hook scans,
-// and a principal publisher whose DM lands on the worker's subject. It returns
-// the connFlags pinned to the worker's creds + the bus URL (so clictx.Resolve
-// short-circuits to them) and the writable plugin data dir for the cursor.
+// and a principal publisher whose DM lands on the worker's subject. The hook now
+// FOLLOWS the server's identity via the per-session identity file (it no longer
+// re-resolves), so the fixture SEEDS that file with the worker's creds + URL via
+// attest.SaveIdentity — the exact call the MCP server makes on connect. cf
+// carries only the store/url for discovery; identity comes from the file.
 type attestFixture struct {
 	cf        connFlags
 	dataDir   string
@@ -82,11 +84,24 @@ func newAttestFixture(t *testing.T) attestFixture {
 
 	dataDir := t.TempDir()
 	sessionID := "attest-unit-session"
+
+	// Seed the per-session identity file the hook follows — exactly what the MCP
+	// server writes on connect. The hook reads {creds, url} from here and connects
+	// as the worker, so it scans the worker's own DM (where the principal's DM landed).
+	if err := attest.SaveIdentity(dataDir, sessionID, attest.Identity{
+		Creds: workerCredsPath,
+		URL:   url,
+		ID:    workerID,
+	}); err != nil {
+		t.Fatalf("seed identity file: %v", err)
+	}
+
+	emptyCreds := ""
 	emptyCtx := ""
 	storeCp := store
 	urlCp := url
 	return attestFixture{
-		cf:        connFlags{creds: &workerCredsPath, store: &storeCp, url: &urlCp, context: &emptyCtx},
+		cf:        connFlags{creds: &emptyCreds, store: &storeCp, url: &urlCp, context: &emptyCtx},
 		dataDir:   dataDir,
 		sessionID: sessionID,
 		cursorPth: filepath.Join(dataDir, "attest-cursor", sessionID+".json"),

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -17,10 +18,16 @@ import (
 
 // attest is the claude-code plugin's UserPromptSubmit hook body (ADR-0030,
 // TASK-56). The plugin's hooks.json invokes `sextant-mcp attest` — the SAME
-// installed binary as the MCP server, so it reuses the MCP server's per-session
-// identity resolution (connManager.resolve, ADR-0029): it connects as the same
-// worker identity, sees the same bus, and scans the worker's own always-on DM
-// subject (msg.client.<self>, the auto-subscribe from TASK-55).
+// installed binary as the MCP server, but a SEPARATE process. It does NOT
+// re-resolve identity (that diverges from the server in the unpinned default
+// path — a context_use switch the hook can't observe, a concurrent first-turn
+// mint, a session-id source mismatch). Instead it FOLLOWS the server: the server
+// records the identity it connected as to a per-session file (attest.Identity,
+// keyed on CLAUDE_CODE_SESSION_ID under CLAUDE_PLUGIN_DATA, written on every
+// (re)connect), and the hook loads those exact creds and connects co-identity. So
+// it scans the SAME worker's always-on DM subject (msg.client.<self>, the
+// auto-subscribe from TASK-55) the server is on — lockstep by construction, in
+// every case (pinned creds/context, a context_use switch, or a per-session mint).
 //
 // It reads NEW inbound frames since a persisted per-session cursor, stamps each by
 // its unforgeable bus-stamped author ULID with a trust level (attest.Classify),
@@ -54,9 +61,10 @@ const attestBudget = 5 * time.Second
 
 // runAttest is the hook entrypoint. It NEVER returns a non-zero exit for a bus
 // problem — degrade-to-silent is the contract. args is os.Args[2:] (after the
-// "attest" subcommand) so the hook can still pass --context/--store/--creds if a
-// deployment needs them; normally it relies on this session's own per-session
-// identity (claude-<session-id>), exactly as the MCP server does (ADR-0029).
+// "attest" subcommand). --store/--url still tune discovery, but identity is NOT
+// re-resolved here: the hook reads the per-session identity file the MCP server
+// wrote (the server is the sole identity resolver, ADR-0029) and connects as
+// exactly that identity, so it can never diverge from the server.
 func runAttest(args []string) int {
 	log.SetFlags(0)
 	log.SetOutput(os.Stderr)
@@ -119,31 +127,44 @@ func runAttest(args []string) int {
 // is still visible on the bus. Full deliver-then-confirm (a two-phase ack from the
 // harness) is deferred — not over-engineered for v1.
 func attestOnce(ctx context.Context, cf connFlags, sessionID string, emit func(string) error) error {
-	// Resolve the SAME per-session identity the MCP server connects as. attest is
-	// a separate process from the server, but the plugin spawns both with the same
-	// env (CLAUDE_CODE_SESSION_ID, $SEXTANT_HOME/--store, any pinned creds/context),
-	// so routing through the server's own connManager.resolve gives byte-identical
-	// precedence (ADR-0029): (1) pinned $SEXTANT_CREDS/$SEXTANT_CONTEXT, (2) an
-	// in-session context_use switch — never observable here, so it no-ops, (3)
-	// this session's own identity, reattached by the claude-<session-id> handle via
-	// clictx.Load. The handle and the on-disk context store are shared, so whichever
-	// process minted it first, both reattach to it — attest and the server stay in
-	// lockstep by construction and attest scans the worker's OWN DM subject, never a
-	// stranger's. Using resolve (not plain clictx.Resolve) is what closes the
-	// forward-risk the pre-#107 branch flagged here.
-	rm := &connManager{cf: cf}
-	rc, err := rm.resolve(ctx)
+	// The cursor and the identity file share the writable plugin-data dir, keyed
+	// on the session id. Without it we can neither follow the server's identity
+	// nor persist a cursor — degrade to silent rather than re-resolve or re-deliver.
+	dataDir := os.Getenv("CLAUDE_PLUGIN_DATA")
+	if dataDir == "" {
+		return fmt.Errorf("CLAUDE_PLUGIN_DATA unset; cannot follow the server identity or persist a cursor")
+	}
+
+	// FOLLOW the server's identity, never re-resolve it (ADR-0029/0030). The MCP
+	// server is the only process that resolves/mints; it records what it connected
+	// as to a per-session file, and we connect as exactly that. This is lockstep by
+	// construction — pinned creds/context, a context_use switch, and a per-session
+	// mint all land on the same identity the server is live on, killing the C1/C2/M2
+	// divergence classes the independent-resolve path had. If the file is MISSING the
+	// server has not connected yet (e.g. turn 1, before the first tool call): degrade
+	// to silent — turn 1 has no inbound messages to attest anyway.
+	id, err := attest.LoadIdentity(dataDir, sessionID)
 	if err != nil {
-		return fmt.Errorf("resolve identity: %w", err)
+		if errors.Is(err, attest.ErrNoIdentity) {
+			log.Printf("sextant-mcp attest: no session identity yet (server not connected); nothing to attest")
+			return nil
+		}
+		return fmt.Errorf("load session identity: %w", err)
+	}
+	// Prefer the URL the server resolved; fall back to --url, then to discovery
+	// under --store (the same connInfoPath the server uses).
+	url := id.URL
+	if url == "" {
+		url = *cf.url
 	}
 	c, err := sextant.Connect(ctx, sextant.Options{
-		CredsPath:    rc.Creds,
-		URL:          rc.URL,
+		CredsPath:    id.Creds,
+		URL:          url,
 		ConnInfoPath: cf.connInfoPath(),
 		Logf:         log.Printf,
 	})
 	if err != nil {
-		return fmt.Errorf("connect: %w", err)
+		return fmt.Errorf("connect as the server's identity (%s): %w", id.Creds, err)
 	}
 	defer c.Close()
 
@@ -174,13 +195,9 @@ func attestOnce(ctx context.Context, cf connFlags, sessionID string, emit func(s
 		log.Printf("sextant-mcp attest: client list failed, peers will read as UNKNOWN: %v", err)
 	}
 
-	// The cursor: read only what's new since this session last looked.
-	dataDir := os.Getenv("CLAUDE_PLUGIN_DATA")
-	if dataDir == "" {
-		// No writable plugin data dir: we can still stamp, but can't persist a
-		// cursor, so we'd re-deliver. Refuse to spam — read nothing new.
-		return fmt.Errorf("CLAUDE_PLUGIN_DATA unset; cannot persist cursor")
-	}
+	// The cursor: read only what's new since this session last looked. It keys on
+	// the stdin session_id (sessionID) under the same plugin-data dir as the
+	// identity file, so identity and delivery resume together.
 	cur, err := attest.LoadCursor(dataDir, sessionID)
 	if err != nil {
 		log.Printf("sextant-mcp attest: cursor load: %v (starting clean)", err)

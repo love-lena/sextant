@@ -25,9 +25,11 @@ import (
 //     the registry no longer resolves (an "unknown", simulated by retiring its
 //     client after it publishes — the durable frame survives, the registry entry
 //     does not).
-//   - Running the hook (with the worker's identity + the hook env) emits one
-//     trusted additionalContext block stamping each by its bus-stamped author ULID:
-//     PRINCIPAL / VERIFIED PEER / UNKNOWN (AC#1/#2/#3).
+//   - Running the hook (which FOLLOWS the server's identity via the per-session
+//     identity file under CLAUDE_PLUGIN_DATA — here seeded with the worker's creds
+//     through attest.SaveIdentity, the exact call the server makes on connect)
+//     emits one trusted additionalContext block stamping each by its bus-stamped
+//     author ULID: PRINCIPAL / VERIFIED PEER / UNKNOWN (AC#1/#2/#3).
 //   - The spoof proof (AC#4): the peer's content is operator-styled, yet it is
 //     stamped VERIFIED PEER — never PRINCIPAL — because the ULID decides.
 //   - The delivery is hookSpecificOutput.additionalContext, no untrusted wrapper
@@ -90,12 +92,24 @@ func TestAttestHookStampsByVerifiedAuthor(t *testing.T) {
 		t.Fatalf("retire ghost exited %d: %s", code, out)
 	}
 
-	// The hook env: worker identity via SEXTANT_CREDS + store, the writable plugin
-	// data dir for the cursor, and a stable session id (the cursor key).
+	// The hook FOLLOWS the server's identity (ADR-0029/0030): it reads the
+	// per-session identity file the server writes on connect, not its own
+	// resolution. This test exercises the hook's stamping/classification, so we
+	// seed that file directly with the worker's creds via attest.SaveIdentity —
+	// the exact call the MCP server makes on connect (the server-actually-writes-it
+	// path is the unpinned-default e2e, TestAttestHookFollowsMintedIdentity). The
+	// hook env carries only the plugin data dir (identity + cursor) and the stable
+	// session id (their key) — NO SEXTANT_CREDS pin: identity comes from the file.
 	pluginData := t.TempDir()
 	sessionID := "e2e-attest-session-0001"
+	if err := attest.SaveIdentity(pluginData, sessionID, attest.Identity{
+		Creds: workerCreds,
+		URL:   bURL,
+		ID:    workerID,
+	}); err != nil {
+		t.Fatalf("seed identity file: %v", err)
+	}
 	hookEnv := map[string]string{
-		"SEXTANT_CREDS":          workerCreds,
 		"SEXTANT_STORE":          h.store,
 		"CLAUDE_PLUGIN_DATA":     pluginData,
 		"CLAUDE_CODE_SESSION_ID": sessionID,
@@ -143,6 +157,93 @@ func TestAttestHookStampsByVerifiedAuthor(t *testing.T) {
 	assertFileExists(t, cursorPath)
 }
 
+// TestAttestHookFollowsMintedIdentity is the load-bearing UNPINNED-DEFAULT proof
+// (the M1 coverage gap): the path the plugin actually ships, where NOTHING is
+// pinned and the MCP server mints its OWN per-session identity. It proves the
+// hook FOLLOWS that minted identity via the per-session identity file the SERVER
+// writes on connect — never re-resolving (which would diverge: C1/C2/M2).
+//
+// End to end, with the MCP server actually running:
+//   - Start the bare server (NO SEXTANT_CONTEXT/SEXTANT_CREDS pin) with a fixed
+//     CLAUDE_CODE_SESSION_ID + CLAUDE_PLUGIN_DATA + SEXTANT_HOME/STORE.
+//   - One tool call triggers the lazy connect: the server mints its per-session
+//     identity AND writes the identity file (the new behavior under test).
+//   - Discover the minted worker ULID (selfID), designate a SEPARATE human seat as
+//     the principal, and have that principal DM the worker's OWN subject.
+//   - Run the bare `sextant-mcp attest` hook with the SAME session id + plugin data
+//     dir (still NO pin). It reads the server-written file, connects as the minted
+//     identity, scans the worker's DM, and stamps the principal's message PRINCIPAL
+//     naming the human author — proving lockstep with the server's mint.
+func TestAttestHookFollowsMintedIdentity(t *testing.T) {
+	h := newHarness(t)
+	h.startBus()
+	mcpBin := buildMCPBinary(t)
+	bURL := busURL(t, h.store)
+
+	// The principal: a separate human seat (the worker is NOT the principal, so a
+	// principal DM to the worker is genuinely inbound, not a self-echo).
+	humanOut, code := h.run(nil, "clients", "register", "human", "--kind", "human", "--store", h.store)
+	if code != 0 {
+		t.Fatalf("register human exited %d: %s", code, humanOut)
+	}
+	humanID := mustParseID(t, humanOut, `registered human as (`+ulidPat+`)`)
+	humanCreds := filepath.Join(h.store, "human.creds")
+	if out, code := h.run(nil, "principal", "set", humanID, "--store", h.store); code != 0 {
+		t.Fatalf("principal set exited %d: %s", code, out)
+	}
+
+	// The server's session env — UNPINNED. agentHome is its own context store
+	// (where it mints + writes the minted creds); pluginData + sessionID key the
+	// identity file the hook will follow. No SEXTANT_CONTEXT / SEXTANT_CREDS.
+	agentHome := t.TempDir()
+	pluginData := t.TempDir()
+	sessionID := "e2e-unpinned-session-0001"
+	srv := startMCP(t, h, mcpBin, map[string]string{
+		"SEXTANT_HOME":           agentHome,
+		"SEXTANT_STORE":          h.store,
+		"CLAUDE_PLUGIN_DATA":     pluginData,
+		"CLAUDE_CODE_SESSION_ID": sessionID,
+	})
+	initMCP(t, srv)
+
+	// Trigger the lazy connect: the server mints its per-session identity and
+	// writes the identity file. selfID returns the minted, bus-stamped worker ULID.
+	workerID := srv.selfID(t, "msg.topic.unpinned-probe")
+	if workerID == humanID {
+		t.Fatalf("precondition: the minted worker %s must differ from the principal %s", workerID, humanID)
+	}
+
+	// The server wrote the identity file under CLAUDE_PLUGIN_DATA, keyed on the
+	// session id — the lockstep artifact the hook follows.
+	identityPath := filepath.Join(pluginData, "attest-identity", sessionID+".json")
+	assertFileExists(t, identityPath)
+
+	// The principal DMs the worker's OWN subject. This is the inbound the hook
+	// must stamp PRINCIPAL (operator-equivalent).
+	dm := sx.ClientSubject(workerID)
+	publishDM(t, h, dm, humanCreds, `{"$type":"chat.message","text":"ship the v0.2 release"}`)
+
+	// Run the bare hook with the SAME session id + plugin data dir — still NO pin.
+	// It must follow the server's minted identity (the file), not re-resolve.
+	hookEnv := map[string]string{
+		"SEXTANT_STORE":          h.store,
+		"CLAUDE_PLUGIN_DATA":     pluginData,
+		"CLAUDE_CODE_SESSION_ID": sessionID,
+	}
+	hookStdin := `{"session_id":"` + sessionID + `","cwd":"/tmp","hook_event_name":"UserPromptSubmit","prompt":"continue"}`
+	out := runAttestHook(t, mcpBin, hookEnv, bURL, hookStdin)
+	block := parseAdditionalContext(t, out)
+
+	// The hook followed the minted identity: it saw the worker's DM and stamped the
+	// principal's message PRINCIPAL / operator-equivalent, naming the human author.
+	// (If it had re-resolved to a DIFFERENT identity it would scan a different DM
+	// subject and emit nothing — parseAdditionalContext would have failed above.)
+	assertContains(t, block, humanID)
+	assertContains(t, block, "PRINCIPAL")
+	assertContains(t, block, "OPERATOR-EQUIVALENT")
+	assertContains(t, block, "ship the v0.2 release")
+}
+
 // publishDM publishes a record to a DM subject as the given creds.
 func publishDM(t *testing.T, h *harness, subject, creds, record string) {
 	t.Helper()
@@ -160,8 +261,12 @@ func runAttestHook(t *testing.T, bin string, env map[string]string, busURL, stdi
 	cmd := exec.Command(bin, "attest", "--url", busURL)
 	base := []string{}
 	for _, kv := range os.Environ() {
-		if strings.HasPrefix(kv, "SEXTANT_") {
-			continue // hermetic: no developer context leaks in
+		// Hermetic: no developer SEXTANT_* context or CLAUDE_* session/plugin env
+		// leaks in — the test supplies the session id + plugin data dir explicitly.
+		if strings.HasPrefix(kv, "SEXTANT_") ||
+			strings.HasPrefix(kv, "CLAUDE_CODE_SESSION_ID=") ||
+			strings.HasPrefix(kv, "CLAUDE_PLUGIN_DATA=") {
+			continue
 		}
 		base = append(base, kv)
 	}

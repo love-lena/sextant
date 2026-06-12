@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/love-lena/sextant/internal/attest"
 	"github.com/love-lena/sextant/internal/clictx"
 	"github.com/love-lena/sextant/internal/selfenroll"
 	"github.com/love-lena/sextant/pkg/conninfo"
@@ -88,6 +89,16 @@ type connManager struct {
 	// are optional — nil in unit tests that exercise resolution/provenance only.
 	onConnect func(*sextant.Client)
 	onDiscard func(*sextant.Client)
+
+	// pluginData is the writable CLAUDE_PLUGIN_DATA dir; sessionID is the stable
+	// CLAUDE_CODE_SESSION_ID. When both are set, every successful (re)connect
+	// records the connected identity to a per-session file (attest.SaveIdentity)
+	// so the attest hook — a SEPARATE process — FOLLOWS the server's identity
+	// instead of re-resolving it (ADR-0029/0030: the server is the sole identity
+	// resolver). Empty in unit tests / non-Claude-Code hosts: the write is then a
+	// logged no-op and the hook degrades to silent.
+	pluginData string
+	sessionID  string
 
 	mu     sync.Mutex
 	client *sextant.Client
@@ -270,6 +281,21 @@ func (m *connManager) get(ctx context.Context) (*sextant.Client, error) {
 	}
 	m.client = c
 	log.Printf("connected to %s as %s (%s)", rc.URL, c.DisplayName(), c.ID())
+	// Record the identity we connected as, so the attest hook (a separate
+	// process) follows it instead of re-resolving (ADR-0029/0030). We write the
+	// resolved creds/url (rc) and the bus-stamped id we actually got (c.ID()).
+	// Written on EVERY connect — including the reconnect a context_use switch
+	// forces (use() drops the held client) — so a switch refreshes the file. A
+	// write failure never fails the connect: the hook degrades to silent.
+	if m.pluginData != "" {
+		if err := attest.SaveIdentity(m.pluginData, m.sessionID, attest.Identity{
+			Creds: rc.Creds,
+			URL:   rc.URL,
+			ID:    c.ID(),
+		}); err != nil {
+			log.Printf("sextant-mcp: record session identity for the attest hook: %v (hook will degrade)", err)
+		}
+	}
 	// Start the DM drain for this fresh client: bridges c.DMs() into the
 	// channel-wake path so a principal DM wakes the session (ADR-0030, M1).
 	// Idempotent in the hub, so a transient retry path can't double-start it.

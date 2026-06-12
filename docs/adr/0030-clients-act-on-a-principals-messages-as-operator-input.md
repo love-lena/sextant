@@ -37,7 +37,7 @@ What makes that safe rather than reckless:
   owner can set or change it. "Human-only" is therefore guaranteed **at the
   source** (only the operator who bootstraps the bus can set the principal), not
   inferred from the forgeable `kind`. Later clients — including agents that
-  auto-mint their identity ([ADR-0029](0029-mcp-adapter-per-session-identity.md))
+  auto-mint their identity ([ADR-0029](0029-a-harness-speaks-as-itself.md))
   — **discover** the existing principal and adopt it; an agent can never claim or
   alter it. This is a **two-way door**: the operator can re-designate, and the
   mechanism is expected to evolve. The designation reuses the existing two tiers

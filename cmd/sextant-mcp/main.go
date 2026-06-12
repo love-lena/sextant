@@ -80,7 +80,15 @@ func run(ctx context.Context, cf connFlags) error {
 		},
 	)
 
-	conn := &connManager{cf: cf, base: ctx}
+	conn := &connManager{
+		cf:   cf,
+		base: ctx,
+		// Record the connected identity per session so the attest hook follows
+		// it (ADR-0029/0030). Both come from the same env Claude Code sets on the
+		// hook process, so the hook reads the file this server writes.
+		pluginData: os.Getenv("CLAUDE_PLUGIN_DATA"),
+		sessionID:  os.Getenv(sessionEnv),
+	}
 	names := newNameCache(func(ctx context.Context) ([]sextant.ClientInfo, error) {
 		c, err := conn.get(ctx)
 		if err != nil {
