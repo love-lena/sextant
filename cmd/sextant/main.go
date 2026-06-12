@@ -44,6 +44,8 @@ func main() {
 		cmdArtifact(os.Args[2:])
 	case "dash":
 		cmdDash(os.Args[2:])
+	case "update":
+		cmdUpdate(os.Args[2:])
 	case "version", "--version":
 		fmt.Println("sextant " + version.String())
 	case "-h", "--help", "help":
@@ -87,6 +89,9 @@ the dash (a cockpit of three master-detail browsers over the same SDK — ADR-00
   sextant dash      [--theme light|dark|auto] [--config F] [--name N]
                     (alias for the sextant-dash binary; same connection flags;
                     first run with no identity self-enrolls against a local bus)
+
+staying current (Homebrew installs — see the README for taps + the plugin):
+  sextant update                                brew update && brew upgrade the tap formula
 
 version:
   sextant version                               print the build (release tag or dev + commit)

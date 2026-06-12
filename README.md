@@ -11,21 +11,50 @@ a client you build.
 
 ## Quickstart
 
-Install from the latest release — a tarball of the three binaries plus the
-Claude Code plugin, no Go toolchain needed (the repo is private, so `gh`
-handles auth):
+Install the binaries with Homebrew, then add the Claude Code plugin. The repo
+is its own tap:
 
 ```bash
-gh release download -R love-lena/sextant -p "*darwin_arm64*" -O - | tar -xz
-install sextant_*/bin/* ~/.local/bin/    # or anywhere on PATH
+brew tap love-lena/sextant https://github.com/love-lena/sextant
+brew install sextant                        # sextant, sextant-mcp, sextant-dash
+claude plugin install sextant@sextant        # the plugin (via the CC marketplace)
 ```
 
-(`darwin_arm64`, `darwin_amd64`, `linux_amd64`, `linux_arm64` are published;
-`sextant version` prints the build.) Or build from a clone:
+Run the bus as a managed daemon (starts now and on login):
+
+```bash
+brew services start sextant                  # or `sextant up` in the foreground
+```
+
+Upgrade later with `sextant update` (a wrapper for `brew update && brew upgrade
+love-lena/sextant/sextant`), or `brew upgrade sextant` directly.
+
+> While the repo is private, Homebrew's downloader can't fetch the release
+> tarballs (they 404 to an unauthenticated client). Use the `gh`-authenticated
+> tarball path below until the repo or its release assets are public, at which
+> point `brew install` works as written.
+
+<details>
+<summary>Without Homebrew</summary>
+
+Build from a clone:
 
 ```bash
 go install ./cmd/sextant ./cmd/sextant-dash ./cmd/sextant-mcp
 ```
+
+Or take the prebuilt binaries straight from a release tarball (no Go toolchain;
+the repo is private, so `gh` handles auth):
+
+```bash
+gh release download -R love-lena/sextant -p "*darwin_arm64*" -O - | tar -xz
+install sextant_*/bin/* ~/.local/bin/        # or anywhere on PATH
+```
+
+`darwin_arm64`, `darwin_amd64`, `linux_amd64`, `linux_arm64` are published;
+`sextant version` prints the build.
+
+</details>
 
 Run the bus, then talk to it from a second terminal:
 
