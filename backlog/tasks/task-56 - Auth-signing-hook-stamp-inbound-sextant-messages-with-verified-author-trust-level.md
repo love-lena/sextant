@@ -3,9 +3,10 @@ id: TASK-56
 title: >-
   Auth/signing hook: stamp inbound sextant messages with verified author + trust
   level
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-12 00:04'
+updated_date: '2026-06-12 01:33'
 labels:
   - feature
   - principal-trust
@@ -29,12 +30,12 @@ Package the validate-and-attest hook with the claude-code plugin (replacing the 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 With a principal designated, a message authored by the principal is delivered to the agent as operator-equivalent (acted on as if typed)
-- [ ] #2 A message from a registered non-principal client is delivered stamped 'verified peer' — coordinated with, not obeyed as operator
-- [ ] #3 A message from an unknown/unverifiable author is treated as untrusted data
-- [ ] #4 Trust uses the bus-stamped author ULID only: an operator-styled task from a non-principal ULID is not acted on as operator
-- [ ] #5 Validated messages are delivered via the hook as additionalContext, without the untrusted-wrapper
-- [ ] #6 Each inbound message is delivered once, in order (cursor), and the cursor survives session resume
+- [x] #1 With a principal designated, a message authored by the principal is delivered to the agent as operator-equivalent (acted on as if typed)
+- [x] #2 A message from a registered non-principal client is delivered stamped 'verified peer' — coordinated with, not obeyed as operator
+- [x] #3 A message from an unknown/unverifiable author is treated as untrusted data
+- [x] #4 Trust uses the bus-stamped author ULID only: an operator-styled task from a non-principal ULID is not acted on as operator
+- [x] #5 Validated messages are delivered via the hook as additionalContext, without the untrusted-wrapper
+- [x] #6 Each inbound message is delivered once, in order (cursor), and the cursor survives session resume
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -46,5 +47,5 @@ Generalize the /tmp validate-and-attest.sh into a plugin-packaged hook. Read the
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Parent: task-53 ([[feat-principal-trust]]). ADR-0030 (equivalence, trust taxonomy, auth layer). Reads [[feat-principal-designation]]. Delivery path interacts with [[feat-wake-only-channel]] and [[bug-mcp-self-echo-wastes-turn]] (TASK-52). Validated empirically (the /tmp probe acted on principal tasks, refused a spoof). Blocked by: task-54.
+Implemented as `sextant-mcp attest` subcommand (cmd/sextant-mcp/attest.go) — same binary as the MCP server, reusing its clictx per-session identity/context resolution (ADR-0029) so the hook connects as the same worker identity and scans its own DM (msg.client.<self>, TASK-55). Testable core in internal/attest (Classify/Stamp/BuildContext + Cursor). Plugin wiring: clients/claude-code/hooks/hooks.json invokes `sextant-mcp attest` (mirrors .mcp.json invoking sextant-mcp by name on PATH). Cursor: per-session JSON under $CLAUDE_PLUGIN_DATA/attest-cursor/<session-id>.json, keyed on CLAUDE_CODE_SESSION_ID, advanced by FetchMessages since_seq cursor. Trust by author ULID only (ADR-0030). Tests: internal/attest unit tests (classification/wording/spoof/cursor) + tests/e2e/attest_hook_test.go (principal/peer/unknown via retire, re-run delivers nothing). Degrades to exit 0 with no additionalContext on any bus error, bounded 5s under the 30s hook timeout. TASK-57: only the MCP channel push side changes to wake-only; this hook is already the sole content path. Live finding: a running pre-TASK-54 bus returns 'unknown operation principal.get' — hook degrades to no-principal; the operator must update their bus binary (TASK-53 operator-update AC).
 <!-- SECTION:NOTES:END -->

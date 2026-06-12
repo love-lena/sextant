@@ -42,6 +42,13 @@ func main() {
 	log.SetFlags(0)
 	log.SetOutput(os.Stderr)
 
+	// The `attest` subcommand is the claude-code plugin's UserPromptSubmit hook
+	// body (ADR-0030, TASK-56) — same binary, so it reuses the per-session
+	// identity/context resolution. Dispatch it before the server flag parse.
+	if len(os.Args) > 1 && os.Args[1] == "attest" {
+		os.Exit(runAttest(os.Args[2:]))
+	}
+
 	fs := flag.NewFlagSet("sextant-mcp", flag.ExitOnError)
 	cf := addConnFlags(fs)
 	ver := fs.Bool("version", false, "print version and exit")

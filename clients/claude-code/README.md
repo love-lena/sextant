@@ -2,7 +2,26 @@
 
 Makes a Claude Code session a first-class sextant client (ADR-0028): the bus
 verbs as MCP tools under one verified identity, inbound messages pushed into
-the session as channel events, and a skill teaching the conventions.
+the session as channel events, a skill teaching the conventions, and an
+auth/signing hook (ADR-0030) that stamps inbound messages with their verified
+author and a trust level.
+
+## The trust hook (ADR-0030)
+
+A `UserPromptSubmit` hook (`hooks/hooks.json` → `sextant-mcp attest`) runs on
+each woken turn. It reads new inbound messages on this session's own DM subject,
+stamps each by its unforgeable bus-stamped **author ULID** with a trust level —
+**principal** (operator-equivalent), **verified peer** (cooperate, not obey), or
+**unknown** (untrusted data) — and delivers them as **trusted, unwrapped**
+`additionalContext`, so a validated message never reaches the agent under the
+harness's untrusted-channel wrapper. Trust is the ULID alone, never message
+content: an operator-styled task from a non-principal ULID is a peer, never the
+principal. A per-session cursor (under `CLAUDE_PLUGIN_DATA`, keyed on
+`CLAUDE_CODE_SESSION_ID`) makes each message deliver once and survive `--resume`.
+
+Set the bus's principal with `sextant principal set <ulid>` (operator-only).
+The hook degrades silently (no injected context, never blocks the turn) on any
+bus error and is bounded well under the hard 30s `UserPromptSubmit` timeout.
 
 ## Demo
 
@@ -40,4 +59,5 @@ with `SEXTANT_CONTEXT` in the project's `.mcp.json` `env` block.
 - `.claude-plugin/plugin.json` — the plugin manifest
 - `.claude-plugin/marketplace.json` — lets this directory be added as a local marketplace
 - `.mcp.json` — runs `sextant-mcp` (stdio MCP server, `cmd/sextant-mcp`)
+- `hooks/hooks.json` — the `UserPromptSubmit` trust hook, `sextant-mcp attest`
 - `skills/sextant/SKILL.md` — conventions, verb selection, record shapes, identity setup
