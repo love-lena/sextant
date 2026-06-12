@@ -11,67 +11,45 @@ a client you build.
 
 ## Quickstart
 
-Install the binaries with Homebrew, then add the Claude Code plugin. The repo
-is its own tap:
+Install the binaries with Homebrew (the repo is its own tap) and run the bus as
+a managed daemon:
 
 ```bash
 brew tap love-lena/sextant https://github.com/love-lena/sextant
-brew install sextant                        # sextant, sextant-mcp, sextant-dash
-claude plugin install sextant@sextant        # the plugin (via the CC marketplace)
+brew install sextant            # sextant, sextant-mcp, sextant-dash
+brew services start sextant     # the bus, now + on login (or `sextant up` to run it in the foreground)
 ```
 
-Run the bus as a managed daemon (starts now and on login):
+Register an identity, then talk to the bus:
 
 ```bash
-brew services start sextant                  # or `sextant up` in the foreground
+sextant clients register --self --name "$USER"   # mints creds, saves + activates a context
+sextant publish msg.topic.hello '{"$type":"chat.message","text":"hello, bus"}'
+sextant read msg.topic.hello
+sextant dash                                      # the cockpit: clients, topics, artifacts
 ```
 
-Upgrade later with `sextant update` (a wrapper for `brew update && brew upgrade
-love-lena/sextant/sextant`), or `brew upgrade sextant` directly.
-
-> While the repo is private, Homebrew's downloader can't fetch the release
-> tarballs (they 404 to an unauthenticated client). Use the `gh`-authenticated
-> tarball path below until the repo or its release assets are public, at which
-> point `brew install` works as written.
+Commands find the bus through a discovery file in the per-user store, so no URLs
+or flags are needed once the service is running. Upgrade with `sextant update`
+(wraps `brew update && brew upgrade love-lena/sextant/sextant`); `sextant --help`
+covers `--url`, `--store`, and contexts.
 
 <details>
 <summary>Without Homebrew</summary>
 
-Build from a clone:
+Build from a clone, or grab the prebuilt binaries from a release tarball:
 
 ```bash
-go install ./cmd/sextant ./cmd/sextant-dash ./cmd/sextant-mcp
-```
-
-Or take the prebuilt binaries straight from a release tarball (no Go toolchain;
-the repo is private, so `gh` handles auth):
-
-```bash
+go install ./cmd/sextant ./cmd/sextant-dash ./cmd/sextant-mcp        # from a clone
+# — or —
 gh release download -R love-lena/sextant -p "*darwin_arm64*" -O - | tar -xz
-install sextant_*/bin/* ~/.local/bin/        # or anywhere on PATH
+install sextant_*/bin/* ~/.local/bin/                                 # anywhere on PATH
 ```
 
 `darwin_arm64`, `darwin_amd64`, `linux_amd64`, `linux_arm64` are published;
-`sextant version` prints the build.
+`sextant version` prints the build. Run the bus yourself with `sextant up`.
 
 </details>
-
-Run the bus, then talk to it from a second terminal:
-
-```bash
-sextant up        # terminal 1 — the embedded bus (per-user store; survives restarts)
-```
-
-```bash
-sextant clients register --self --name lena    # mints creds, saves + activates a context
-sextant publish msg.topic.hello '{"$type":"chat.message","text":"hello, bus"}'
-sextant read msg.topic.hello
-sextant dash      # the cockpit: clients, topics, artifacts
-```
-
-Commands on the same machine find the bus through a discovery file in the
-per-user store, so no URLs or flags are needed; `sextant --help` covers the
-rest (`--url`, `--store`, contexts).
 
 To make a Claude Code session a bus client — the verbs as tools, inbound
 messages pushed into the session:
