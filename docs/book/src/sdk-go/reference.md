@@ -83,6 +83,14 @@ func (c *Client) CreateArtifact(ctx context.Context, name string, record wire.Le
 
 CreateArtifact creates a new artifact from a Lexicon record as an artifact.create call: the bus stamps the frame (id, author, timestamps) and stores it. It fails if name already exists or record is not a valid lexicon.
 
+### func `(*Client) DMs`
+
+```go
+func (c *Client) DMs() <-chan Message
+```
+
+DMs returns the inbound direct-message channel: messages published to this client's own DM subject (msg.client.\<self>) arrive here without any explicit Subscribe call. The channel is buffered (64 messages); a receiver that falls behind will have messages dropped — the same behavior as a slow explicit Subscribe handler. A sender DMing this client need not know whether the client is subscribed: the bus delivers to the relay the auto-subscription establishes on connect, and the SDK fans the frame into this channel.
+
 ### func `(*Client) DeleteArtifact`
 
 ```go
@@ -170,6 +178,14 @@ func (c *Client) Publish(ctx context.Context, subject string, record json.RawMes
 ```
 
 Publish sends record to subject, which must be in the messages space (msg.\*), as a message.publish call: the bus stamps the frame (id, author, epoch) and appends it to the durable log, replying once the log has it (ADR-0019). The client supplies only the subject and record.
+
+### func `(*Client) PublishMsg`
+
+```go
+func (c *Client) PublishMsg(ctx context.Context, subject string, record json.RawMessage) (wireapi.PublishOutput, error)
+```
+
+PublishMsg is Publish with the bus-stamped frame id and sequence returned. Callers that need to suppress self-echo (e.g. the MCP server) use this to record the published id before it can arrive back on a subscription.
 
 ### func `(*Client) Subscribe`
 
