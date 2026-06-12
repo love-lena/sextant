@@ -57,10 +57,11 @@ func runServe(ctx context.Context, opts Options, out io.Writer) error {
 		return fmt.Errorf("mint access token: %w", err)
 	}
 
-	// Force loopback: the API is local-only, never bound to a routable address.
-	addr := opts.Addr
-	if addr == "" {
-		addr = defaultServeAddr
+	// Force loopback: the API is local-only, never bound to a routable address,
+	// whatever host --addr named (ADR-0032).
+	addr, err := loopbackAddr(opts.Addr)
+	if err != nil {
+		return err
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -101,6 +102,22 @@ func runServe(ctx context.Context, opts Options, out io.Writer) error {
 	case err := <-serveErr:
 		return err
 	}
+}
+
+// loopbackAddr forces addr's host to 127.0.0.1, preserving the port, so the
+// --serve API can never bind a routable interface no matter what --addr names
+// (ADR-0032: the API is local-only). An empty addr uses the loopback default; a
+// port-less or otherwise malformed addr is a loud error rather than a surprising
+// bind.
+func loopbackAddr(addr string) (string, error) {
+	if addr == "" {
+		return defaultServeAddr, nil
+	}
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", fmt.Errorf("invalid --addr %q (want host:port, e.g. 127.0.0.1:8765 or :0): %w", addr, err)
+	}
+	return net.JoinHostPort("127.0.0.1", port), nil
 }
 
 // newToken mints a per-launch bearer token: 32 bytes of crypto-random entropy,

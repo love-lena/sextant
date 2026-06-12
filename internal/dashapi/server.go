@@ -11,6 +11,7 @@ package dashapi
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -159,16 +160,25 @@ func (s *Server) gate(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// authorized reports whether r carries the valid per-launch token. An empty
-// server token is never authorized.
+// authorized reports whether r carries the valid per-launch token, as a
+// `Authorization: Bearer <token>` header or a `?token=` query value. An empty
+// server token is never authorized. The comparison is constant-time so a token
+// can't be recovered by timing the response.
 func (s *Server) authorized(r *http.Request) bool {
 	if s.token == "" {
 		return false
 	}
-	if h := r.Header.Get("Authorization"); h == "Bearer "+s.token {
+	if bearer, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok && tokenEqual(bearer, s.token) {
 		return true
 	}
-	return r.URL.Query().Get("token") == s.token
+	return tokenEqual(r.URL.Query().Get("token"), s.token)
+}
+
+// tokenEqual compares two tokens in constant time (subtle.ConstantTimeCompare
+// returns 0 for unequal lengths, which only reveals length — fine for a
+// fixed-size token).
+func tokenEqual(got, want string) bool {
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
 // handleSelf reports who this dash is on the bus and the current principal — the

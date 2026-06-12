@@ -72,6 +72,32 @@ func TestRunServeServesAPI(t *testing.T) {
 	}
 }
 
+// TestLoopbackAddrForcesLoopback: the --serve API is local-only (ADR-0032), so
+// whatever host --addr names, the bound address is forced to 127.0.0.1 with the
+// port preserved — `0.0.0.0`/a LAN IP can never expose it to the network.
+func TestLoopbackAddrForcesLoopback(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", defaultServeAddr},
+		{":0", "127.0.0.1:0"},
+		{"127.0.0.1:8765", "127.0.0.1:8765"},
+		{"0.0.0.0:8765", "127.0.0.1:8765"},
+		{"192.168.1.5:9000", "127.0.0.1:9000"},
+		{"[::]:7000", "127.0.0.1:7000"},
+	}
+	for _, tc := range cases {
+		got, err := loopbackAddr(tc.in)
+		if err != nil {
+			t.Fatalf("loopbackAddr(%q): %v", tc.in, err)
+		}
+		if got != tc.want {
+			t.Fatalf("loopbackAddr(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+	if _, err := loopbackAddr("8765"); err == nil {
+		t.Fatal(`loopbackAddr("8765") should error — no host:port separator`)
+	}
+}
+
 // waitForServeURL polls out until runServe has printed its URL line, returning
 // the base (scheme://host:port) and the token query value.
 func waitForServeURL(t *testing.T, out *syncBuffer) (base, token string) {
