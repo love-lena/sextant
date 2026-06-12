@@ -4,11 +4,10 @@ title: 'Clients registry convention: self-register directory + ListClients read 
 status: Done
 assignee: []
 created_date: '2026-06-03 01:12'
-updated_date: '2026-06-04 05:35'
+updated_date: '2026-06-12 17:47'
 labels: []
 milestone: 'M1: Core protocol + SDK'
-dependencies:
-  - TASK-3
+dependencies: []
 references:
   - docs/adr/0004-conventions-are-optional.md
   - docs/adr/0008-clients-are-processes.md

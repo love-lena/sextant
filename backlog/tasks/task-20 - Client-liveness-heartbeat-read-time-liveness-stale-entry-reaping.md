@@ -4,11 +4,10 @@ title: 'Client liveness: heartbeat + read-time liveness + stale-entry reaping'
 status: To Do
 assignee: []
 created_date: '2026-06-04 04:26'
-updated_date: '2026-06-04 21:38'
+updated_date: '2026-06-12 17:47'
 labels: []
 milestone: Future
-dependencies:
-  - TASK-6
+dependencies: []
 references:
   - docs/adr/0006-wire-atom.md
   - docs/adr/0008-clients-are-processes.md

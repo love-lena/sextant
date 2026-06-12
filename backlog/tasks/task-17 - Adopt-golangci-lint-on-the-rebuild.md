@@ -1,11 +1,12 @@
 ---
 id: TASK-17
 title: Adopt golangci-lint on the rebuild
-status: In Progress
+status: To Do
 assignee: []
 created_date: '2026-06-03 22:59'
-updated_date: '2026-06-11 00:07'
-labels: []
+updated_date: '2026-06-12 17:45'
+labels:
+  - ready-for-human
 milestone: Future
 dependencies: []
 references:
@@ -42,4 +43,6 @@ Calibration audit of the new rules against PR #99 (feat/dash, ~10k LOC TUI) — 
 4. LOCKED wrapping policy ('libraries return root errors') contradicts the whole tree (pkg/bus wraps ~60×, dash wraps too) — reword toward 'libraries wrap for the call chain, cmd/ owns presentation' or file migration tickets.
 5. Smaller: consider errorlint/unconvert in test-file exclusions; staticcheck QF1001 on tests is noise; godot/revive-exported produced zero noise. Skill is silent on Elm/Bubble Tea conventions, golden-test policy, and the imports_test.go layer-enforcement pattern (worth naming).
 Also pending Lena's call: pre-commit hook runs full make check incl. -race; Codex suggests a fast subset (fmt/tidy/build/lint) since CI is authoritative.
+
+2026-06-12 (canopus survey): reclassified In Progress -> To Do + ready-for-human. The work is parked (PR #100 open, awaiting Lena sign-off), not actively in progress. Unblocking needs the 5 calibration decisions above: containedctx exclusion for TUI model pkgs, gochecknoglobals allowance for immutable lookup tables, the pkg/tui no-new-pkg rule, the error-wrapping policy reword, and test-file exclusions.
 <!-- SECTION:NOTES:END -->
