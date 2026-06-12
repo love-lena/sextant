@@ -98,10 +98,10 @@ type Options struct {
 	// identity, exposed on 127.0.0.1 for a browser, with the Go process the
 	// sole bus client.
 	Serve bool
-	// Addr is the loopback address the API binds when Serve is set (default
-	// 127.0.0.1:8765; 127.0.0.1:0 picks a free port). The host is forced to
-	// loopback regardless — the API is local-only.
-	Addr string
+	// Port is the loopback port the API binds when Serve is set (default 8765; 0
+	// picks a free port). The host is always 127.0.0.1 — the API is local-only,
+	// so only the port is configurable.
+	Port int
 	// AllowedOrigins are extra browser origins the API accepts beyond localhost
 	// (always allowed), for a separate dev server hosting the UI (D2).
 	AllowedOrigins []string

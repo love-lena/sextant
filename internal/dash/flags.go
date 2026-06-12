@@ -33,7 +33,7 @@ type Flags struct {
 	name   *string
 
 	serve       *bool
-	addr        *string
+	port        *int
 	allowOrigin *string
 	ui          *string
 }
@@ -53,7 +53,7 @@ func AddFlags(fs *flag.FlagSet) *Flags {
 		name:   fs.String("name", "", "display name a first-run self-enrollment registers under (default: $USER)"),
 
 		serve:       fs.Bool("serve", false, "run a local HTTP API + web debug surface (127.0.0.1) instead of the terminal UI"),
-		addr:        fs.String("addr", defaultServeAddr, "loopback address for --serve (host forced to 127.0.0.1; :0 picks a free port)"),
+		port:        fs.Int("port", defaultServePort, "port for the --serve API on 127.0.0.1 (0 picks a free port); the API is loopback-only"),
 		allowOrigin: fs.String("allow-origin", "", "comma-separated extra browser origins the --serve API accepts (localhost is always allowed)"),
 		ui:          fs.String("ui", "", "serve a custom frontend directory with --serve instead of the built-in debug surface"),
 	}
@@ -106,7 +106,7 @@ func (f *Flags) Resolve() (Options, error) {
 		Theme:          th,
 		ConfigPath:     *f.config,
 		Serve:          *f.serve,
-		Addr:           *f.addr,
+		Port:           *f.port,
 		AllowedOrigins: splitOrigins(*f.allowOrigin),
 		UIDir:          *f.ui,
 	}, nil

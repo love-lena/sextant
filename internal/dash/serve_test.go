@@ -40,7 +40,7 @@ func TestRunServeServesAPI(t *testing.T) {
 			CredsPath: credsPath,
 			URL:       b.ClientURL(),
 			Serve:     true,
-			Addr:      "127.0.0.1:0", // ephemeral port — no conflicts in tests
+			Port:      0, // ephemeral port — no conflicts in tests
 		}, out)
 	}()
 
@@ -72,29 +72,22 @@ func TestRunServeServesAPI(t *testing.T) {
 	}
 }
 
-// TestLoopbackAddrForcesLoopback: the --serve API is local-only (ADR-0032), so
-// whatever host --addr names, the bound address is forced to 127.0.0.1 with the
-// port preserved — `0.0.0.0`/a LAN IP can never expose it to the network.
-func TestLoopbackAddrForcesLoopback(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"", defaultServeAddr},
-		{":0", "127.0.0.1:0"},
-		{"127.0.0.1:8765", "127.0.0.1:8765"},
-		{"0.0.0.0:8765", "127.0.0.1:8765"},
-		{"192.168.1.5:9000", "127.0.0.1:9000"},
-		{"[::]:7000", "127.0.0.1:7000"},
+// TestServeAddrIsLoopback: the --serve API is local-only (ADR-0032). Only the
+// port is configurable; the host is always 127.0.0.1, so a routable bind (e.g.
+// 0.0.0.0) can never be expressed — the foot-gun isn't reachable by design.
+func TestServeAddrIsLoopback(t *testing.T) {
+	cases := []struct {
+		port int
+		want string
+	}{
+		{defaultServePort, "127.0.0.1:8765"},
+		{0, "127.0.0.1:0"},
+		{9000, "127.0.0.1:9000"},
 	}
 	for _, tc := range cases {
-		got, err := loopbackAddr(tc.in)
-		if err != nil {
-			t.Fatalf("loopbackAddr(%q): %v", tc.in, err)
+		if got := serveAddr(tc.port); got != tc.want {
+			t.Fatalf("serveAddr(%d) = %q, want %q", tc.port, got, tc.want)
 		}
-		if got != tc.want {
-			t.Fatalf("loopbackAddr(%q) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-	if _, err := loopbackAddr("8765"); err == nil {
-		t.Fatal(`loopbackAddr("8765") should error — no host:port separator`)
 	}
 }
 

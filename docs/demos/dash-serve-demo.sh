@@ -44,7 +44,7 @@ for _ in $(seq 1 80); do [ -f "$STORE/bus.json" ] && break; sleep 0.1; done
 "$BIN" clients register peer --kind worker --store "$STORE" >/dev/null 2>&1
 
 say "starting dash --serve (zero-config first run: self-enrolls, claims the principal)"
-"$BIN" dash --serve --store "$STORE" --addr 127.0.0.1:0 >"$D/dash.log" 2>&1 & DASH_PID=$!
+"$BIN" dash --serve --store "$STORE" --port 0 >"$D/dash.log" 2>&1 & DASH_PID=$!
 URL=""
 for _ in $(seq 1 80); do
   URL=$(grep -oE 'http://127\.0\.0\.1:[0-9]+/\?token=[a-f0-9]+' "$D/dash.log" | head -1 || true)

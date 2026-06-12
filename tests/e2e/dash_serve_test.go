@@ -32,7 +32,7 @@ func TestDashServeAPI(t *testing.T) {
 
 	// `dash --serve`: zero-config first run self-enrolls the human seat, claims
 	// the still-unclaimed principal (ADR-0031), and serves the local API.
-	dash := h.startBg(nil, "dash", "--serve", "--store", h.store, "--addr", "127.0.0.1:0")
+	dash := h.startBg(nil, "dash", "--serve", "--store", h.store, "--port", "0")
 	urlLine := dash.waitStdout(t, "token=")
 	m := regexp.MustCompile(`(http://127\.0\.0\.1:\d+)/\?token=(\S+)`).FindStringSubmatch(urlLine)
 	if m == nil {
