@@ -113,6 +113,14 @@ except Exception:
     sys.exit(1)
 sys.exit(0 if d.get("k",0)>=1 and d.get("art") and not d.get("homeRow") else 1)' 2>/dev/null
   check "designed UI mounts + renders the live artifact, with home hidden" $?
+  # dark mode: clicking the topbar toggle flips #app.dark. Click then wait (React
+  # state/effect are async), and compare before/after so it's state-independent.
+  b4=$(agent-browser eval 'document.getElementById("app").classList.contains("dark")?1:0' 2>/dev/null | tail -1 | tr -dc '01')
+  agent-browser eval '(function(){var b=[...document.querySelectorAll(".sx-icon-btn")].find(x=>/mode/i.test(x.title||""));if(b)b.click();})()' >/dev/null 2>&1
+  agent-browser wait 800 >/dev/null 2>&1
+  af=$(agent-browser eval 'document.getElementById("app").classList.contains("dark")?1:0' 2>/dev/null | tail -1 | tr -dc '01')
+  [ -n "$b4" ] && [ -n "$af" ] && [ "$b4" != "$af" ]
+  check "dark-mode toggle flips the cockpit theme" $?
   agent-browser close --all >/dev/null 2>&1 || true
 else
   say "(agent-browser not on PATH — skipping the headless UI render check)"
