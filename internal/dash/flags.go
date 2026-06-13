@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/love-lena/sextant/internal/clictx"
 )
@@ -30,6 +31,11 @@ type Flags struct {
 	theme  *string
 	config *string
 	name   *string
+
+	serve       *bool
+	port        *int
+	allowOrigin *string
+	ui          *string
 }
 
 // AddFlags registers the dash flags on fs, defaulting from the environment the
@@ -45,6 +51,11 @@ func AddFlags(fs *flag.FlagSet) *Flags {
 		theme:  fs.String("theme", "auto", "cockpit theme: light, dark, or auto (re-detect the terminal background each launch); an explicit value is persisted, otherwise the saved choice applies"),
 		config: fs.String("config", defaultConfigPath(), "layout config file (preset, hidden panes, theme); persisted on quit"),
 		name:   fs.String("name", "", "display name a first-run self-enrollment registers under (default: $USER)"),
+
+		serve:       fs.Bool("serve", false, "run a local HTTP API + web debug surface (127.0.0.1) instead of the terminal UI"),
+		port:        fs.Int("port", defaultServePort, "port for the --serve API on 127.0.0.1 (0 picks a free port); the API is loopback-only"),
+		allowOrigin: fs.String("allow-origin", "", "comma-separated extra browser origins the --serve API accepts (localhost is always allowed)"),
+		ui:          fs.String("ui", "", "serve a custom frontend directory with --serve instead of the built-in debug surface"),
 	}
 }
 
@@ -88,13 +99,32 @@ func (f *Flags) Resolve() (Options, error) {
 		}
 	}
 	return Options{
-		CredsPath:  creds,
-		URL:        url,
-		Store:      *f.store,
-		Name:       *f.name,
-		Theme:      th,
-		ConfigPath: *f.config,
+		CredsPath:      creds,
+		URL:            url,
+		Store:          *f.store,
+		Name:           *f.name,
+		Theme:          th,
+		ConfigPath:     *f.config,
+		Serve:          *f.serve,
+		Port:           *f.port,
+		AllowedOrigins: splitOrigins(*f.allowOrigin),
+		UIDir:          *f.ui,
 	}, nil
+}
+
+// splitOrigins parses the comma-separated --allow-origin value into a trimmed,
+// non-empty list (empty input yields nil).
+func splitOrigins(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var origins []string
+	for _, o := range strings.Split(s, ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			origins = append(origins, o)
+		}
+	}
+	return origins
 }
 
 // explicitlySet reports whether the named flag was passed on the command line
