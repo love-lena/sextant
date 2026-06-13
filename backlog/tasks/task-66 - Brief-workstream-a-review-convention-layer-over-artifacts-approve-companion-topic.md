@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-12 19:43'
+updated_date: '2026-06-13 03:24'
 labels:
   - feature
   - artifacts
@@ -26,10 +27,10 @@ The per-artifact feedback topic plus mark-approved affordances are conventions l
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 An artifact can carry an approved review-state by convention (over the record/labels), not baked into the core primitive
-- [ ] #2 An artifact gets a default companion discussion topic by convention (same id maps to a msg subject) so commenting needs no manual topic setup
-- [ ] #3 The dash/UI exposes an easy mark-approved affordance
-- [ ] #4 The core artifact operations (create/get/update/list/watch) and protocol/methods.json are unchanged
+- [x] #1 An artifact can carry an approved review-state by convention (over the record/labels), not baked into the core primitive
+- [x] #2 An artifact gets a default companion discussion topic by convention (same id maps to a msg subject) so commenting needs no manual topic setup
+- [x] #3 The dash/UI exposes an easy mark-approved affordance
+- [x] #4 The core artifact operations (create/get/update/list/watch) and protocol/methods.json are unchanged
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -42,4 +43,8 @@ Define a brief-workstream convention over artifacts: a review-state plus a deriv
 
 <!-- SECTION:NOTES:BEGIN -->
 Provenance: 2026-06-12 planning, lena on msg.topic.helm. Naming and scope are lena's design call (ready-for-human).
+
+Dash-side implemented as a convention in D2 (TASK-71, ADR-0033): review-state as a review block in the artifact record (POST /api/artifacts/{name}/review, read-merge-CAS); companion topic msg.topic.artifact.<name>; Approve/Request-changes/Archive/Reject + Reopen affordances; core artifact ops unchanged. All 4 ACs met on the dash side. A CLI affordance (e.g. sextant artifact review) is the remaining optional piece. Status/closure is lena's call (ready-for-human).
+
+2026-06-12: Convention: an artifact's author should subscribe to msg.topic.artifact.<name> so they receive discussion/review events on their own artifact.
 <!-- SECTION:NOTES:END -->
