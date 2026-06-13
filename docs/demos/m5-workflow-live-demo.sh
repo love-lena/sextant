@@ -55,9 +55,12 @@ printf '{"mcpServers":{"sextant":{"command":"%s","env":{"SEXTANT_CREDS":"%s","SE
 EV=$(printf '%s' "$SX_PROMPT" | sed -n 's/.*WF_EVENTS=\([^ ]*\).*/\1/p')
 ST=$(printf '%s' "$SX_PROMPT" | sed -n 's/.*WF_STEP=\([^ ]*\).*/\1/p')
 TASK=$(printf '%s' "$SX_PROMPT" | sed 's/[[:space:]]*WF_EVENTS=.*//')
-PRIMER="You are a sextant bus worker named $SX_CHILD_NICK handling one workflow step. Use ONLY the sextant MCP tools; if a tool call returns 'No such tool available', call it again, retrying up to 8 times while the server connects. Your task: $TASK. When the task is done you MUST report completion by publishing this EXACT record on subject $EV using the message publish tool: {\"\$type\":\"workflow.event\",\"step\":\"$ST\",\"status\":\"done\"}. Then stop."
-exec claude -p "$PRIMER" --bare --strict-mcp-config --mcp-config "$MCP" \
-  --permission-mode bypassPermissions --output-format json </dev/null
+PRIMER="You are sextant worker $SX_CHILD_NICK doing one workflow step: $TASK Your ONLY action: call the sextant message publish tool to publish this EXACT record on subject $EV -- {\"\$type\":\"workflow.event\",\"step\":\"$ST\",\"status\":\"done\"}. Call the tool immediately; do NOT first check whether it is available or list tools. If the call errors with 'No such tool available', the MCP server is still connecting, so wait a moment and call it again, up to 10 times. Do not use any other tool, do not explain -- just publish, then stop."
+# Scoped + cheap: only the sextant publish tool is pre-allowed (no blanket
+# bypass), and the model is haiku. --strict-mcp-config + --bare keep it isolated.
+exec claude -p "$PRIMER" --model claude-haiku-4-5 --bare --strict-mcp-config --mcp-config "$MCP" \
+  --permission-mode default --allowedTools "mcp__sextant__message_publish" \
+  --output-format json </dev/null
 EOF
 chmod +x "$P/live-harness.sh"
 export SEXTANT_MCP_BIN="$SXMCP"  # inherited by the dispatcher and on into each harness
