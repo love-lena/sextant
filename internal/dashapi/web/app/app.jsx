@@ -170,6 +170,16 @@
           if(!Array.isArray(subs)) return;
           setConvos(prev=>{ let changed=false; const next={...prev}; for(const s of subs){ if(s&&s.subject&&!next[s.subject]){ next[s.subject]={msgs:[],last:0,lastText:""}; changed=true; } } return changed?next:prev; });
         }).catch(()=>{});
+        // Home config + agent presence have no push either — poll them so the
+        // Home page (greeting/agenda) and Agent status hot-reload with no input.
+        apiGet("/api/artifacts/home").then(a=>{
+          const rec=(a&&a.Record)||null;
+          setHome(prev => JSON.stringify(prev)===JSON.stringify(rec) ? prev : rec);
+        }).catch(()=>{});
+        apiGet("/api/clients").then(cs=>{
+          if(!Array.isArray(cs)) return;
+          setClients(prev => JSON.stringify(prev)===JSON.stringify(cs) ? prev : cs);
+        }).catch(()=>{});
       }, 4000);
       return ()=>clearInterval(id);
     },[]);

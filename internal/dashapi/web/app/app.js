@@ -202,6 +202,16 @@
           });
         }).catch(() => {
         });
+        apiGet("/api/artifacts/home").then((a) => {
+          const rec = a && a.Record || null;
+          setHome((prev) => JSON.stringify(prev) === JSON.stringify(rec) ? prev : rec);
+        }).catch(() => {
+        });
+        apiGet("/api/clients").then((cs) => {
+          if (!Array.isArray(cs)) return;
+          setClients((prev) => JSON.stringify(prev) === JSON.stringify(cs) ? prev : cs);
+        }).catch(() => {
+        });
       }, 4e3);
       return () => clearInterval(id);
     }, []);
