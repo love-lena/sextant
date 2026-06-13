@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@orion'
 created_date: '2026-06-13 01:12'
-updated_date: '2026-06-13 02:51'
+updated_date: '2026-06-13 03:15'
 labels:
   - feature
   - dash
@@ -59,4 +59,6 @@ Progress 2026-06-12: served from dash --serve at / (debug moved to /debug), embe
 Review polish DONE: review convention adds rejected+archived states and records review.rev (the revision reviewed against). Header demotes version (updated-time primary + muted 'rev N'; 'approved at vN'); Archive/Reject terminal states with Reopen; archived/rejected drop into their own groups out of the active flow. Verified: handler tests + throwaway smoke. Per lena: also see TASK-72 (sent/received/seen delivery status) — protocol/SDK feature, dash surfaces it later; not faked in D2. Deferred: robust 'changed since approved' stale-flag (needs content-vs-metadata distinction).
 
 Batch fixes (lena nits): (1) hide special-cased home artifact from the list; (2) conversation depth — Watch subscribes with DeliverAll so /api/subjects + conversation list show all retained subjects on load (not just since dash start); (3) conversation view scrolls to bottom on open + on new message; (4) hide/unhide conversations (per-operator localStorage) + 'N hidden — show' toggle. All verified on throwaway bus (replay, home-hide, scroll atBottom, hide). Note: DeliverAll replays full history each start — fine at current scale, may want a stream subject-list API later. task-72 (sent/received/seen) is a separate protocol effort; task-73 (personal-topic/outbox) noted.
+
+HARDENED (PR phase): vendored React/ReactDOM/marked + precompiled JSX via scripts/build-dash-ui.sh (no runtime CDN, no in-browser Babel); --ui hot-reload (Cache-Control:no-store, stable URL). Self-validating demo docs/demos/dash-d2-demo.sh = 7/7. ADR-0033 records the conventions. Full validation green: go test ./internal/... -race, e2e (-tags e2e, 47s), gofumpt+vet clean (make lint noise is the gitignored .claude/worktrees, absent in CI). Opening PR.
 <!-- SECTION:NOTES:END -->
