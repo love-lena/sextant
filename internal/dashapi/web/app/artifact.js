@@ -2,7 +2,7 @@
   function MarkdownArtifact({ record, name }) {
     const body = record && typeof record.body === "string" ? record.body : "";
     const title = record && record.title || name || "";
-    const html = body && window.marked ? window.marked.parse(body) : "";
+    const html = body && window.marked && window.DOMPurify ? window.DOMPurify.sanitize(window.marked.parse(body)) : "";
     return /* @__PURE__ */ React.createElement("article", { className: "md-doc" }, /* @__PURE__ */ React.createElement("style", null, MD_CSS), /* @__PURE__ */ React.createElement("div", { className: "md-inner" }, title && /* @__PURE__ */ React.createElement("div", { className: "md-kicker" }, title), html ? /* @__PURE__ */ React.createElement("div", { dangerouslySetInnerHTML: { __html: html } }) : record ? /* @__PURE__ */ React.createElement("pre", { className: "md-raw" }, JSON.stringify(record, null, 2)) : /* @__PURE__ */ React.createElement("p", { className: "md-lede" }, "Loading\u2026")));
   }
   const MD_CSS = `

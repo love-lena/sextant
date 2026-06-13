@@ -29,6 +29,7 @@ type fakeBus struct {
 	artifactErr error
 	publishErr  error
 	subErr      error
+	failUpdates int // when >0, UpdateArtifact returns errConflict and decrements (exercises the CAS retry)
 
 	mu             sync.Mutex
 	published      []publishedMsg
@@ -83,6 +84,10 @@ func (f *fakeBus) UpdateArtifact(_ context.Context, name string, record json.Raw
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failUpdates > 0 {
+		f.failUpdates--
+		return 0, errConflict
+	}
 	a, ok := f.artifact[name]
 	if !ok {
 		return 0, errNotFound

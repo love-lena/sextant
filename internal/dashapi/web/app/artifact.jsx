@@ -8,7 +8,10 @@
   function MarkdownArtifact({ record, name }) {
     const body = record && typeof record.body === "string" ? record.body : "";
     const title = (record && record.title) || name || "";
-    const html = (body && window.marked) ? window.marked.parse(body) : "";
+    // Sanitize the rendered markdown before injecting it: artifact bodies come
+    // from the bus, and the cockpit page holds the API token — unsanitized HTML
+    // would be a token-exfil XSS. Require DOMPurify; without it, fall back to raw.
+    const html = (body && window.marked && window.DOMPurify) ? window.DOMPurify.sanitize(window.marked.parse(body)) : "";
     return (
       <article className="md-doc">
         <style>{MD_CSS}</style>

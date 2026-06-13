@@ -99,3 +99,39 @@ func TestArtifactReviewMissingArtifactIs404(t *testing.T) {
 		t.Fatalf("status = %d, want 404", rec.Code)
 	}
 }
+
+// TestArtifactReviewRetriesOnConflict: a single compare-and-set conflict is retried
+// and the second attempt persists.
+func TestArtifactReviewRetriesOnConflict(t *testing.T) {
+	bus := reviewBus()
+	bus.failUpdates = 1
+	rec := postReview(t, newServer(bus, "tok"), "brief", `{"state":"approved"}`, "tok")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 after a one-conflict retry (%s)", rec.Code, rec.Body.String())
+	}
+	if bus.artifact["brief"].Revision != 4 {
+		t.Fatalf("revision = %d, want 4 (retry persisted)", bus.artifact["brief"].Revision)
+	}
+}
+
+// TestArtifactReviewReports502OnPersistentFailure: exhausting the retry budget is a 502.
+func TestArtifactReviewReports502OnPersistentFailure(t *testing.T) {
+	bus := reviewBus()
+	bus.failUpdates = 5 // more than the handler's retry budget
+	rec := postReview(t, newServer(bus, "tok"), "brief", `{"state":"approved"}`, "tok")
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 after exhausting retries", rec.Code)
+	}
+}
+
+// TestArtifactReviewRejectsNonObjectRecord: a record that isn't a JSON object is a 422,
+// so the review merge never silently drops content.
+func TestArtifactReviewRejectsNonObjectRecord(t *testing.T) {
+	bus := &fakeBus{id: "01ME", artifact: map[string]sextant.Artifact{
+		"weird": {Name: "weird", Record: wire.Lexicon(`"just a string"`), Revision: 1},
+	}}
+	rec := postReview(t, newServer(bus, "tok"), "weird", `{"state":"approved"}`, "tok")
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422 for a non-object record", rec.Code)
+	}
+}
