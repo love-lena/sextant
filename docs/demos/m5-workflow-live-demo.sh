@@ -55,7 +55,7 @@ printf '{"mcpServers":{"sextant":{"command":"%s","env":{"SEXTANT_CREDS":"%s","SE
 EV=$(printf '%s' "$SX_PROMPT" | sed -n 's/.*WF_EVENTS=\([^ ]*\).*/\1/p')
 ST=$(printf '%s' "$SX_PROMPT" | sed -n 's/.*WF_STEP=\([^ ]*\).*/\1/p')
 TASK=$(printf '%s' "$SX_PROMPT" | sed 's/[[:space:]]*WF_EVENTS=.*//')
-PRIMER="You are sextant worker $SX_CHILD_NICK doing one workflow step: $TASK Your ONLY action: call the sextant message publish tool to publish this EXACT record on subject $EV -- {\"\$type\":\"workflow.event\",\"step\":\"$ST\",\"status\":\"done\"}. Call the tool immediately; do NOT first check whether it is available or list tools. If the call errors with 'No such tool available', the MCP server is still connecting, so wait a moment and call it again, up to 10 times. Do not use any other tool, do not explain -- just publish, then stop."
+PRIMER="You are sextant worker $SX_CHILD_NICK doing one workflow step: $TASK Use the sextant message publish tool TWICE. (1) Publish to subject msg.topic.demo the record {\"\$type\":\"chat.message\",\"text\":\"$SX_CHILD_NICK: <one short sentence saying what you did>\"} -- write a real sentence in place of the placeholder. (2) Publish to subject $EV the EXACT record {\"\$type\":\"workflow.event\",\"step\":\"$ST\",\"status\":\"done\"}. Call the tool immediately; do NOT check availability first or list tools. If a call errors with 'No such tool available', the MCP server is still connecting -- wait a moment and retry, up to 10 times. Use no other tool, do not explain -- publish both, then stop."
 # Scoped + cheap: only the sextant publish tool is pre-allowed (no blanket
 # bypass), and the model is haiku. --strict-mcp-config + --bare keep it isolated.
 exec claude -p "$PRIMER" --model claude-haiku-4-5 --bare --strict-mcp-config --mcp-config "$MCP" \
@@ -96,5 +96,12 @@ else
 fi
 wait $WF 2>/dev/null; WF=""
 
+echo
+echo "== what the agents actually did (their own words on the bus) =="
+reads msg.topic.demo | sed 's/.*<\([^>]*\)> {.*"text":"\([^"]*\)".*/  [\1] \2/'
+echo "-- workflow event stream (coordinator + agents) --"
+reads msg.workflow.wflive.events | sed 's/.*<[^>]*> //'
+
+echo
 echo "== result: $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]
