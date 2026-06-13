@@ -88,6 +88,7 @@
     const [clients, setClients] = useState([]);          // raw ClientInfo[]
     const [artifacts, setArtifacts] = useState([]);      // raw ArtifactInfo[]
     const [records, setRecords] = useState({});          // name -> Record (status + instant open)
+    const [home, setHome] = useState(null);              // curated Home config (the 'home' artifact, TASK-71 #2)
     const [convos, setConvos] = useState({});            // subject -> {msgs:[{id,author,text,ts}], last, lastText}
     const [activity, setActivity] = useState([]);        // recent frames across all subjects
     const [activeArtifact, setActiveArtifact] = useState("");
@@ -104,6 +105,7 @@
       apiGet("/api/self").then(setSelf).catch(()=>{});
       apiGet("/api/clients").then(cs=>setClients(Array.isArray(cs)?cs:[])).catch(()=>{});
       apiGet("/api/artifacts").then(as=>setArtifacts(Array.isArray(as)?as:[])).catch(()=>{});
+      apiGet("/api/artifacts/home").then(a=>setHome((a&&a.Record)||null)).catch(()=>{});
     },[]);
 
     // prefetch artifact records so the sidebar can group by review-state and an
@@ -239,7 +241,7 @@
       conversations:convList, activeConvo, stageMode, onOpenConvo:openConvo, onExpandConvo:expandConvo,
       messages, draft, setDraft, onSend:send, onArtifactRef:openArtifact,
       artifacts:artItems, activeArtifact, onOpenArtifact:openArtifact,
-      goals:GOALS, agents, activity:homeActivity, self, onGoHome:goHome,
+      goals:GOALS, agents, activity:homeActivity, self, onGoHome:goHome, home,
     };
 
     const hasAuthor = artifact.author && artifact.author.name;

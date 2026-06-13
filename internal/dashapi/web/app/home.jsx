@@ -251,7 +251,10 @@
 
   /* ---------- page ---------- */
   function HomePage({ ctx }) {
-    const cfg = HOME_CONFIG;
+    // The curated config comes from the 'home' artifact when present (the
+    // assistant owns it); otherwise the built-in default. Only switch to a
+    // fetched config when it's complete, so a malformed artifact can't blank Home.
+    const cfg = (ctx && ctx.home && ctx.home.greeting && ctx.home.banner && Array.isArray(ctx.home.blocks)) ? ctx.home : HOME_CONFIG;
     const g = cfg.greeting;
     // agenda is the prominent "needs you" band; the rest fill a fixed bento grid.
     const agenda = cfg.blocks.find(b=>b.type==="agenda");

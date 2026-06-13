@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@orion'
 created_date: '2026-06-13 01:12'
-updated_date: '2026-06-13 01:12'
+updated_date: '2026-06-13 02:20'
 labels:
   - feature
   - dash
@@ -47,4 +47,10 @@ Embed the designed UI assets in internal/dashapi (go:embed); serve at / with the
 
 <!-- SECTION:NOTES:BEGIN -->
 Provenance: 2026-06-12 frontend-dash topic; lena handed off the Claude Design bundle (Sextant App.html + chats) and said implement the relevant aspects. Bundle extracted to /tmp/sextant-design/sextant-webapp (chats carry the intent; chat5 is the final minimalist pass). Builds on [[feat-dash-serve-web-api-debug-surface]] (TASK-68, D1, ADR-0032). Artifact status/approve/companion-topic back onto [[feat-brief-workstream-convention]] (TASK-66, ready-for-human, unstarted). Assigned orion.
+
+Progress 2026-06-12: served from dash --serve at / (debug moved to /debug), embedded via go:embed. First cut on seed data, then wired to live D1 API. Live: /api/self, /api/clients to agents+presence, /api/artifacts + document render via marked, SSE on msg.> driving activity feed + conversation discovery, composer publish. Stubbed+labelled: review-status/approve (TASK-66), goal metrics, curated Home greeting/agenda. Verified against the real bus with an agent-browser headless smoke (app mounts, real agents+artifacts render, artifact docs render). Branch worktree-task-71-frontend-dash-d2 (8867ae6 serve, 10f6abe wiring). Preview handed to lena. Pending: lena visual feedback; PR brief + self-validating demo before review; vendor/precompile to drop runtime CDN dep (AC#7).
+
+#1 review loop DONE (commit 7d3dc5d): review-state convention (review block in artifact record; absent=review), POST /api/artifacts/{name}/review (read-merge-CAS, unit-tested), Bus interface += UpdateArtifact, sidebar groups by review-state, approve/request-changes persist + post to companion topic msg.topic.artifact.<name>, Discussion link. Verified full approve flow via agent-browser on a throwaway bus. Open Q for lena: default review-state for un-reviewed artifacts (currently review; she may want draft-until-submitted). Next: #2 curated Home as artifact.
+
+#2 curated Home DONE: Home greeting/agenda/links/note read from a home artifact (assistant-owned) when present, else built-in default; live blocks (pinned/goals/agents/activity) stay live. Created the home artifact on the real bus as orion (rev 25). Verified via agent-browser (curated heading+agenda render, live agents present, old fake greeting gone). Noted: bus Revision is a global write-sequence not a per-doc version; flagged to lena re relabeling the v<n> display.
 <!-- SECTION:NOTES:END -->
