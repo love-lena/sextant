@@ -99,6 +99,7 @@
     const [draft, setDraft] = useState("");
     const convBodyRef = useRef(null);
     const [hidden, setHidden] = useState(()=>{ try{ return new Set(JSON.parse(localStorage.getItem("sx-hidden-convos")||"[]")); }catch(_){ return new Set(); } });
+    const [dark, setDark] = useState(()=>{ try{ return localStorage.getItem("sx-dark")==="1"; }catch(_){ return false; } });
 
     const nameOf = useCallback((id)=>{ const c=clients.find(c=>c.ID===id); return c?c.DisplayName:(id||"").slice(0,8); },[clients]);
     const kindOf = useCallback((id)=>{ const c=clients.find(c=>c.ID===id); return c?c.Kind:"agent"; },[clients]);
@@ -115,6 +116,13 @@
         setConvos(prev=>{ const next={...prev}; for(const s of subs){ if(s&&s.subject&&!next[s.subject]) next[s.subject]={msgs:[],last:0,lastText:""}; } return next; });
       }).catch(()=>{});
     },[]);
+
+    // dark mode: toggle the class on #app + persist (topbar toggle)
+    useEffect(()=>{
+      const r=document.getElementById("app");
+      if(r) r.classList.toggle("dark", dark);
+      try{ localStorage.setItem("sx-dark", dark?"1":"0"); }catch(_){}
+    },[dark]);
 
     // prefetch artifact records so the sidebar can group by review-state and an
     // open is instant. Fine at dash scale; a very large bucket would want paging.
@@ -328,6 +336,7 @@
             </div>
             <div className="sx-stage-tools">
               <span className="sx-live"><span className="sx-live-dot" />live</span>
+              <button className="sx-icon-btn" title={dark?"Light mode":"Dark mode"} onClick={()=>setDark(d=>!d)}>{dark?"☀":"☾"}</button>
               <button className="sx-icon-btn" title="Fullscreen">⤢</button>
             </div>
           </div>

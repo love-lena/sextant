@@ -374,3 +374,52 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 @media(max-width:1080px){
   .sx-side{width:340px;flex-basis:340px;}
 }
+
+/* ============ DARK MODE (#app.dark) — topbar toggle, persisted ============ */
+#app.dark{
+  /* stage → dark */
+  --paper:#15171c; --paper-edge:#2a2d33; --ink:#eceae4; --ink-2:#9a9da4; --hair:rgba(255,255,255,.10);
+  /* force the sidebar charcoal even when tone-paper is set */
+  --sbg:#101216; --sbg2:#16181d; --sbg3:#20242b; --stx:#eceae4; --smut:#9a9da4; --sfai:#6a6e75;
+  --shair:rgba(255,255,255,.085); --shair2:rgba(255,255,255,.05);
+  /* black primary buttons would vanish on dark — lift them */
+  --act:#2a2d33; --act-strong:#3a3f47;
+}
+/* stage surfaces that were hardcoded white */
+#app.dark .sx-page,
+#app.dark .sx-page--home,
+#app.dark .sx-page--doc{background:#15171c;}
+#app.dark .sx-icon-btn,
+#app.dark .sx-viewseg,
+#app.dark .sx-verpick,
+#app.dark .sx-vermenu,
+#app.dark .sx-sbtn-req{background:#1a1d23;}
+#app.dark .sx-conv-light{--stx:#eceae4;--smut:#9a9da4;--sfai:#6a6e75;--sbg:#15171c;--sbg2:#1a1d23;--shair:rgba(255,255,255,.10);--shair2:rgba(255,255,255,.05);}
+
+/* Home cards + text */
+#app.dark .hm-card,#app.dark .hm-agenda{background:#1a1d23;border-color:#2a2d33;}
+#app.dark .hm-heading{color:#f0efe9;}
+#app.dark .hm-lede,#app.dark .hm-note-body{color:#b8bcc2;}
+#app.dark .hm-card-title{color:#cfd3d9;}
+#app.dark .hm-agenda-text,#app.dark .hm-pin-name,#app.dark .hm-agent-name,#app.dark .hm-link-label{color:#e3e5ea;}
+#app.dark .hm-agenda-row,#app.dark .hm-feed-row{border-top-color:#262a31;}
+#app.dark .hm-feed-text{color:#b8bcc2;} #app.dark .hm-feed-text b{color:#e3e5ea;}
+#app.dark .hm-pin-ic{background:#22262d;color:#9aa0a6;}
+#app.dark .hm-pin:hover,#app.dark .hm-link:hover{background:#22262d;}
+#app.dark .hm-goal-label,#app.dark .hm-goal-val{color:#cfd3d9;}
+#app.dark .hm-bar{background:#2a2d33;} #app.dark .hm-bar-fill{background:#cfd3d9;}
+#app.dark .hm-act.is-approve,#app.dark .hm-act.is-review,#app.dark .hm-act.is-reply{background:var(--brand);color:#06231f;border-color:var(--brand);}
+#app.dark .hm-act.is-approve:hover,#app.dark .hm-act.is-review:hover,#app.dark .hm-act.is-reply:hover{background:var(--brand);filter:brightness(1.08);}
+
+/* Markdown document */
+#app.dark .md-doc{color:#cdd0d6;}
+#app.dark .md-doc h1,#app.dark .md-doc h2,#app.dark .md-doc h3,#app.dark .md-doc strong,#app.dark .md-doc td:first-child{color:#f0efe9;}
+#app.dark .md-doc h2{border-top-color:#2a2d33;}
+#app.dark .md-lede{color:#b8bcc2;}
+#app.dark .md-doc code{background:#22262d;color:#cdd0d6;}
+#app.dark .md-doc th{color:#f0efe9;border-bottom-color:#2a2d33;}
+#app.dark .md-doc td{color:#b8bcc2;border-bottom-color:#23272e;}
+#app.dark .md-doc blockquote{background:rgba(255,255,255,.04);}
+#app.dark .md-step{background:#1a1d23;border-color:#2a2d33;} #app.dark .md-step b{color:#f0efe9;}
+#app.dark .md-tag{border-color:#2a2d33;color:#9aa0a6;}
+#app.dark .md-raw{background:#1a1d23;color:#cdd0d6;}
