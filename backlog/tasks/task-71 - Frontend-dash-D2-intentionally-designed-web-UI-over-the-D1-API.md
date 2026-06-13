@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@orion'
 created_date: '2026-06-13 01:12'
-updated_date: '2026-06-13 03:15'
+updated_date: '2026-06-13 03:35'
 labels:
   - feature
   - dash
@@ -61,4 +61,6 @@ Review polish DONE: review convention adds rejected+archived states and records 
 Batch fixes (lena nits): (1) hide special-cased home artifact from the list; (2) conversation depth — Watch subscribes with DeliverAll so /api/subjects + conversation list show all retained subjects on load (not just since dash start); (3) conversation view scrolls to bottom on open + on new message; (4) hide/unhide conversations (per-operator localStorage) + 'N hidden — show' toggle. All verified on throwaway bus (replay, home-hide, scroll atBottom, hide). Note: DeliverAll replays full history each start — fine at current scale, may want a stream subject-list API later. task-72 (sent/received/seen) is a separate protocol effort; task-73 (personal-topic/outbox) noted.
 
 HARDENED (PR phase): vendored React/ReactDOM/marked + precompiled JSX via scripts/build-dash-ui.sh (no runtime CDN, no in-browser Babel); --ui hot-reload (Cache-Control:no-store, stable URL). Self-validating demo docs/demos/dash-d2-demo.sh = 7/7. ADR-0033 records the conventions. Full validation green: go test ./internal/... -race, e2e (-tags e2e, 47s), gofumpt+vet clean (make lint noise is the gitignored .claude/worktrees, absent in CI). Opening PR.
+
+Follow-ups filed (per lena): TASK-78 vendor Google Fonts; TASK-79 'changed since approved' staleness flag; TASK-80 goal-metrics real source; TASK-81 live artifact-change stream (vs 4s poll); TASK-82 conversation unread/participant counts. Already tracked: TASK-66 (review convention/CLI), TASK-72 (sent/received/seen), TASK-73 (personal-topic/outbox).
 <!-- SECTION:NOTES:END -->

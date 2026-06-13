@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-12 19:43'
-updated_date: '2026-06-13 03:15'
+updated_date: '2026-06-13 03:24'
 labels:
   - feature
   - artifacts
@@ -45,4 +45,6 @@ Define a brief-workstream convention over artifacts: a review-state plus a deriv
 Provenance: 2026-06-12 planning, lena on msg.topic.helm. Naming and scope are lena's design call (ready-for-human).
 
 Dash-side implemented as a convention in D2 (TASK-71, ADR-0033): review-state as a review block in the artifact record (POST /api/artifacts/{name}/review, read-merge-CAS); companion topic msg.topic.artifact.<name>; Approve/Request-changes/Archive/Reject + Reopen affordances; core artifact ops unchanged. All 4 ACs met on the dash side. A CLI affordance (e.g. sextant artifact review) is the remaining optional piece. Status/closure is lena's call (ready-for-human).
+
+2026-06-12: Convention: an artifact's author should subscribe to msg.topic.artifact.<name> so they receive discussion/review events on their own artifact.
 <!-- SECTION:NOTES:END -->
