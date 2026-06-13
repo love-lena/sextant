@@ -86,6 +86,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/artifacts/{name}", s.gate(s.handleArtifactGet))
 	s.mux.HandleFunc("POST /api/publish", s.gate(s.handlePublish))
 	s.mux.HandleFunc("GET /api/stream", s.gate(s.handleStream))
+	s.mux.HandleFunc("GET /debug", s.handleDebug)
 	s.mux.HandleFunc("GET /", s.handleRoot)
 }
 
