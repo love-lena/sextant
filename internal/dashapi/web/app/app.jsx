@@ -97,6 +97,8 @@
     const [activeConvo, setActiveConvo] = useState("");
     const [stageMode, setStageMode] = useState("home");  // home | artifact | conversation
     const [draft, setDraft] = useState("");
+    const convBodyRef = useRef(null);
+    const [hidden, setHidden] = useState(()=>{ try{ return new Set(JSON.parse(localStorage.getItem("sx-hidden-convos")||"[]")); }catch(_){ return new Set(); } });
 
     const nameOf = useCallback((id)=>{ const c=clients.find(c=>c.ID===id); return c?c.DisplayName:(id||"").slice(0,8); },[clients]);
     const kindOf = useCallback((id)=>{ const c=clients.find(c=>c.ID===id); return c?c.Kind:"agent"; },[clients]);
@@ -171,7 +173,8 @@
 
     // derived: artifacts in the component shape (topic/author stay stubbed — no
     // primitive yet; status now comes from the review convention)
-    const artItems = useMemo(()=>artifacts.map(a=>({
+    // 'home' is special-cased as the curated Home page, so hide it from the list.
+    const artItems = useMemo(()=>artifacts.filter(a=>a.Name!=="home").map(a=>({
       name:a.Name, version:a.Revision, status:statusOf(a.Name), topic:"", type:"markdown",
       id:a.Name, author:{ name:"", kind:"agent" }, updated:relTime(a.Updated),
     })),[artifacts, statusOf]);
@@ -209,6 +212,14 @@
     const status = artifact.status;
     const reviewRev = (artRecord && artRecord.review && artRecord.review.rev) || 0;
     const convo = convList.find(c=>c.key===activeConvo) || convList[0] || { type:"topic", name:"", participants:0 };
+
+    // keep the conversation pinned to the newest message: scroll to the bottom on
+    // open and whenever a message arrives.
+    useEffect(()=>{
+      if(stageMode!=="conversation") return;
+      const el = convBodyRef.current;
+      if(el) el.scrollTop = el.scrollHeight;
+    },[messages, stageMode, activeConvo]);
 
     function openArtifact(name){
       setActiveArtifact(name); setStageMode("artifact");
@@ -252,12 +263,17 @@
     // pair, so both ends derive the same one (distinct from the one-way inbox).
     function dmSubject(a,b){ return "msg.topic.dm."+[a,b].sort().join("."); }
     function startDM(otherId){ if(!self.id||!otherId) return; expandConvo(dmSubject(self.id, otherId)); }
+    // hiding a conversation is a per-operator view preference (local only).
+    function persistHidden(set){ try{ localStorage.setItem("sx-hidden-convos", JSON.stringify([...set])); }catch(_){} }
+    function hideConvo(key){ setHidden(prev=>{ const n=new Set(prev); n.add(key); persistHidden(n); return n; }); }
+    function unhideConvo(key){ setHidden(prev=>{ const n=new Set(prev); n.delete(key); persistHidden(n); return n; }); }
 
     const ctx = {
       conversations:convList, activeConvo, stageMode, onOpenConvo:openConvo, onExpandConvo:expandConvo,
       messages, draft, setDraft, onSend:send, onArtifactRef:openArtifact,
       artifacts:artItems, activeArtifact, onOpenArtifact:openArtifact,
       goals:GOALS, agents, activity:homeActivity, self, onGoHome:goHome, home, onDM:startDM,
+      hidden, onHide:hideConvo, onUnhide:unhideConvo,
     };
 
     const hasAuthor = artifact.author && artifact.author.name;
@@ -339,7 +355,7 @@
                     <span className="sx-convstage-title">{convo.type==="topic"?"# ":"@ "}{convo.name}</span>
                     <span className="sx-convstage-meta">live on the bus</span>
                   </div>
-                  <div className="sx-convstage-body">
+                  <div className="sx-convstage-body" ref={convBodyRef}>
                     <MessageList messages={messages} onArtifactRef={openArtifact} />
                   </div>
                   <Composer draft={draft} setDraft={setDraft} onSend={send} placeholder={"Message "+(convo.type==="topic"?"#":"@")+convo.name} />

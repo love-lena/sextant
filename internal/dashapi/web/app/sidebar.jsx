@@ -71,25 +71,42 @@
   }
 
   /* ---------- views ---------- */
-  function ConversationsView({ conversations, activeConvo, stageMode, onExpandConvo }) {
+  function ConversationsView({ conversations, activeConvo, stageMode, onExpandConvo, hidden, onHide, onUnhide }) {
+    const [showHidden, setShowHidden] = useState(false);
+    const hid = hidden || new Set();
+    const visible = conversations.filter((c) => showHidden || !hid.has(c.key));
+    const hiddenCount = conversations.reduce((n, c) => n + (hid.has(c.key) ? 1 : 0), 0);
     return (
       <div className="sx-clist">
-        {conversations.map((c) =>
-        <button key={c.key} className={"sx-citem" + (c.key === activeConvo && stageMode === "conversation" ? " is-on" : "")}
-        onClick={() => onExpandConvo(c.key)}>
-            {c.type === "topic" ?
-          <span className="sx-cglyph">#</span> :
-          <Avatar name={c.name} kind="agent" size={26} />}
-            <div className="sx-cmain">
-              <div className="sx-ctop">
-                <span className="sx-cname">{c.type === "topic" ? c.name : c.name}</span>
-                <span className="sx-ctime">{c.time}</span>
+        {visible.map((c) => {
+          const isHidden = hid.has(c.key);
+          return (
+            <div key={c.key} role="button"
+            className={"sx-citem" + (c.key === activeConvo && stageMode === "conversation" ? " is-on" : "")}
+            style={{ opacity: isHidden ? 0.5 : 1 }}
+            onClick={() => onExpandConvo(c.key)}>
+              {c.type === "topic" ?
+              <span className="sx-cglyph">#</span> :
+              <Avatar name={c.name} kind="agent" size={26} />}
+              <div className="sx-cmain">
+                <div className="sx-ctop">
+                  <span className="sx-cname">{c.name}</span>
+                  <span className="sx-ctime">{c.time}</span>
+                </div>
+                <div className="sx-csnip">{c.snippet}</div>
               </div>
-              <div className="sx-csnip">{c.snippet}</div>
-            </div>
-            {c.unread > 0 && <span className="sx-unread">{c.unread}</span>}
-          </button>
-        )}
+              {c.unread > 0 && <span className="sx-unread">{c.unread}</span>}
+              <span className="sx-chide" title={isHidden ? "Unhide" : "Hide"}
+              onClick={(e) => { e.stopPropagation(); if (isHidden) { onUnhide && onUnhide(c.key); } else { onHide && onHide(c.key); } }}>
+                {isHidden ? "↩" : "×"}
+              </span>
+            </div>);
+
+        })}
+        {hiddenCount > 0 &&
+        <button className="sx-cshowhidden" onClick={() => setShowHidden((v) => !v)}>
+            {showHidden ? "— hide hidden" : hiddenCount + " hidden — show"}
+          </button>}
       </div>);
 
   }

@@ -283,6 +283,11 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 .sx-cexpand{flex:0 0 auto;color:var(--sfai);font-size:13px;opacity:0;padding:0 2px;}
 .sx-citem:hover .sx-cexpand{opacity:1;}
 .sx-cexpand:hover{color:var(--stx);}
+.sx-chide{flex:0 0 auto;color:var(--sfai);font-size:15px;line-height:1;padding:2px 6px;border-radius:6px;opacity:0;cursor:pointer;}
+.sx-citem:hover .sx-chide{opacity:1;}
+.sx-chide:hover{background:var(--shair2);color:var(--stx);}
+.sx-cshowhidden{display:block;width:calc(100% - 16px);margin:2px 8px 4px;background:none;border:none;color:var(--sfai);font-family:var(--font-mono);font-size:10.5px;letter-spacing:.04em;text-align:left;cursor:pointer;padding:4px 10px;border-radius:7px;}
+.sx-cshowhidden:hover{color:var(--stx);background:var(--shair2);}
 
 /* chat */
 .sx-chat{flex:1;min-height:0;display:flex;flex-direction:column;}

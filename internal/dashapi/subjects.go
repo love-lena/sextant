@@ -25,7 +25,7 @@ func (s *Server) Watch(ctx context.Context) error {
 		s.subjMu.Lock()
 		s.subjects[m.Subject]++
 		s.subjMu.Unlock()
-	})
+	}, sextant.DeliverAll())
 	if err != nil {
 		return err
 	}
