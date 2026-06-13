@@ -10,9 +10,9 @@ import (
 )
 
 // TestPrincipalSetIsOperatorOnly (AC#5) is the security-critical one: a
-// client-tier caller's principal.set is DENIED by the bus. It mirrors
-// TestRegularClientCannotMint — the allow-list lets the client PUBLISH the call
-// under its own prefix, so the request reaches the bus; the bus then rejects it
+// client-tier caller's principal.set is DENIED by the bus. The pattern mirrors
+// clients.retire's operator-only gate — the allow-list lets the client PUBLISH the
+// call under its own prefix, so the request reaches the bus; the bus then rejects it
 // on authorization (a client ULID is neither the operator nor the enrollment
 // credential). Proving the gate at the bus, not the absence of a CLI command, is
 // the point: the spine of ADR-0030/0031 is that an agent or peer can never claim
