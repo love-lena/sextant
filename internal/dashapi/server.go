@@ -34,6 +34,9 @@ type Bus interface {
 	FetchMessages(ctx context.Context, subject string, since uint64, limit int) ([]wire.Frame, uint64, error)
 	ListArtifacts(ctx context.Context) ([]sextant.ArtifactInfo, error)
 	GetArtifact(ctx context.Context, name string) (sextant.Artifact, error)
+	// UpdateArtifact compare-and-sets an artifact's record (expectedRev guards a
+	// concurrent write); the dash uses it to persist the review-state convention.
+	UpdateArtifact(ctx context.Context, name string, record json.RawMessage, expectedRev uint64) (uint64, error)
 	Publish(ctx context.Context, subject string, record json.RawMessage) error
 	Subscribe(ctx context.Context, subject string, h sextant.Handler, opts ...sextant.SubOption) (sextant.Subscription, error)
 }
@@ -84,6 +87,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/messages", s.gate(s.handleMessages))
 	s.mux.HandleFunc("GET /api/artifacts", s.gate(s.handleArtifacts))
 	s.mux.HandleFunc("GET /api/artifacts/{name}", s.gate(s.handleArtifactGet))
+	s.mux.HandleFunc("POST /api/artifacts/{name}/review", s.gate(s.handleArtifactReview))
 	s.mux.HandleFunc("POST /api/publish", s.gate(s.handlePublish))
 	s.mux.HandleFunc("GET /api/stream", s.gate(s.handleStream))
 	s.mux.HandleFunc("GET /debug", s.handleDebug)

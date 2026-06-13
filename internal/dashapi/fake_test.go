@@ -77,6 +77,25 @@ func (f *fakeBus) GetArtifact(_ context.Context, name string) (sextant.Artifact,
 	return a, nil
 }
 
+func (f *fakeBus) UpdateArtifact(_ context.Context, name string, record json.RawMessage, expectedRev uint64) (uint64, error) {
+	if f.artifactErr != nil {
+		return 0, f.artifactErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	a, ok := f.artifact[name]
+	if !ok {
+		return 0, errNotFound
+	}
+	if a.Revision != expectedRev {
+		return 0, errConflict
+	}
+	a.Record = wire.Lexicon(record)
+	a.Revision++
+	f.artifact[name] = a
+	return a.Revision, nil
+}
+
 func (f *fakeBus) Publish(_ context.Context, subject string, record json.RawMessage) error {
 	if f.publishErr != nil {
 		return f.publishErr
@@ -150,6 +169,10 @@ func (s *fakeSub) isStopped() bool {
 // errNotFound is the fake's "no such artifact" — its message mirrors what the
 // bus returns so a handler test can assert the 404 path without a real bus.
 var errNotFound = &fakeError{"artifact not found"}
+
+// errConflict is the fake's compare-and-set failure — a stand-in for the bus
+// rejecting an UpdateArtifact whose expectedRev no longer matches.
+var errConflict = &fakeError{"revision conflict"}
 
 type fakeError struct{ msg string }
 

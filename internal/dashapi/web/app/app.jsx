@@ -3,10 +3,13 @@
    live stream; the Go process stays the single bus client and the browser only
    ever talks to this local API.
 
-   Concepts with no bus primitive yet stay stubbed and are marked as such:
-   - artifact review-status / approve / companion-topic  → TASK-66 (brief workstream)
-   - goal metrics                                        → no primitive
-   - the curated Home greeting / banner / links / note   → assistant-owned, static here
+   Review loop (TASK-66): an artifact's review-state lives as a `review` block in
+   its record (absent ⇒ "review"); approve / request-changes persist it via
+   POST /api/artifacts/{name}/review and post an event to the companion topic
+   msg.topic.artifact.<name>.
+
+   Still stubbed and labelled: goal metrics (no primitive), the curated Home
+   greeting / banner / links (assistant-owned, static here).
 */
 (function () {
   const { useState, useRef, useEffect, useMemo, useCallback } = React;
@@ -35,13 +38,19 @@
     if (!r.ok) throw new Error(path + " -> " + r.status);
     return r.json();
   }
-  function apiPublish(subject, record){
-    return fetch("/api/publish", {
+  function apiPost(path, body){
+    return fetch(path, {
       method: "POST",
       headers: Object.assign({ "Content-Type": "application/json" }, AUTH),
-      body: JSON.stringify({ subject, record }),
-    }).then(r => { if (!r.ok) throw new Error("publish -> " + r.status); });
+      body: JSON.stringify(body),
+    }).then(r => { if (!r.ok) throw new Error(path + " -> " + r.status); });
   }
+  function apiPublish(subject, record){ return apiPost("/api/publish", { subject, record }); }
+  function apiReview(name, state){ return apiPost("/api/artifacts/"+encodeURIComponent(name)+"/review", { state }); }
+
+  // The review convention (TASK-66): states + the per-artifact companion topic.
+  const REVIEW_STATES = ["review","approved","changes","draft"];
+  function companionTopic(name){ return "msg.topic.artifact." + name; }
 
   // ---- helpers ----
   function relMs(ms){
@@ -78,10 +87,11 @@
     const [self, setSelf] = useState({ id:"", display_name:"", principal:"" });
     const [clients, setClients] = useState([]);          // raw ClientInfo[]
     const [artifacts, setArtifacts] = useState([]);      // raw ArtifactInfo[]
+    const [records, setRecords] = useState({});          // name -> Record (status + instant open)
     const [convos, setConvos] = useState({});            // subject -> {msgs:[{id,author,text,ts}], last, lastText}
     const [activity, setActivity] = useState([]);        // recent frames across all subjects
     const [activeArtifact, setActiveArtifact] = useState("");
-    const [artRecord, setArtRecord] = useState(null);    // active artifact Record {$type,title,body}
+    const [artRecord, setArtRecord] = useState(null);    // active artifact Record
     const [activeConvo, setActiveConvo] = useState("");
     const [stageMode, setStageMode] = useState("home");  // home | artifact | conversation
     const [draft, setDraft] = useState("");
@@ -95,6 +105,16 @@
       apiGet("/api/clients").then(cs=>setClients(Array.isArray(cs)?cs:[])).catch(()=>{});
       apiGet("/api/artifacts").then(as=>setArtifacts(Array.isArray(as)?as:[])).catch(()=>{});
     },[]);
+
+    // prefetch artifact records so the sidebar can group by review-state and an
+    // open is instant. Fine at dash scale; a very large bucket would want paging.
+    useEffect(()=>{
+      let cancelled=false;
+      Promise.all(artifacts.map(a=>apiGet("/api/artifacts/"+encodeURIComponent(a.Name))
+        .then(r=>[a.Name,(r&&r.Record)||null]).catch(()=>[a.Name,null])))
+        .then(pairs=>{ if(!cancelled) setRecords(Object.fromEntries(pairs)); });
+      return ()=>{ cancelled=true; };
+    },[artifacts]);
 
     // live stream over msg.> → activity feed + conversation discovery
     useEffect(()=>{
@@ -134,11 +154,19 @@
       meta:(c.Kind||"agent")+(c.Online?" · online":" · offline"),
     })),[clients]);
 
-    // derived: artifacts in the component shape (status/topic/author stubbed — TASK-66)
+    // review-state from the artifact's record (convention); absent ⇒ "review"
+    const statusOf = useCallback((name)=>{
+      const rec = records[name];
+      const st = rec && rec.review && rec.review.state;
+      return REVIEW_STATES.indexOf(st)>=0 ? st : "review";
+    },[records]);
+
+    // derived: artifacts in the component shape (topic/author stay stubbed — no
+    // primitive yet; status now comes from the review convention)
     const artItems = useMemo(()=>artifacts.map(a=>({
-      name:a.Name, version:a.Revision, status:"draft", topic:"", type:"markdown",
+      name:a.Name, version:a.Revision, status:statusOf(a.Name), topic:"", type:"markdown",
       id:a.Name, author:{ name:"", kind:"agent" }, updated:relTime(a.Updated),
-    })),[artifacts]);
+    })),[artifacts, statusOf]);
 
     // derived: conversation list from discovered subjects (newest first)
     const convList = useMemo(()=>Object.entries(convos)
@@ -164,13 +192,17 @@
     })),[activity, nameOf]);
 
     const artifact = artItems.find(a=>a.name===activeArtifact) || artItems[0] ||
-      { name:"", version:0, status:"draft", topic:"", author:{name:"",kind:"agent"}, updated:"" };
+      { name:"", version:0, status:"review", topic:"", author:{name:"",kind:"agent"}, updated:"" };
     const status = artifact.status;
     const convo = convList.find(c=>c.key===activeConvo) || convList[0] || { type:"topic", name:"", participants:0 };
 
     function openArtifact(name){
-      setActiveArtifact(name); setStageMode("artifact"); setArtRecord(null);
-      apiGet("/api/artifacts/"+encodeURIComponent(name)).then(a=>setArtRecord((a&&a.Record)||null)).catch(()=>setArtRecord(null));
+      setActiveArtifact(name); setStageMode("artifact");
+      const cached = records[name];
+      setArtRecord(cached!==undefined ? cached : null);
+      apiGet("/api/artifacts/"+encodeURIComponent(name)).then(a=>{
+        const rec=(a&&a.Record)||null; setArtRecord(rec); setRecords(prev=>({...prev,[name]:rec}));
+      }).catch(()=>{});
     }
     function goHome(){ setStageMode("home"); }
     function backfill(subj){
@@ -185,12 +217,22 @@
         });
       }).catch(()=>{});
     }
-    function openConvo(key){ setActiveConvo(key); backfill(key); }
-    function expandConvo(key){ setActiveConvo(key); setStageMode("conversation"); backfill(key); }
+    function ensureConvo(subj){ setConvos(prev=>prev[subj]?prev:{ ...prev, [subj]:{ msgs:[], last:Date.now(), lastText:"" } }); }
+    function openConvo(key){ ensureConvo(key); setActiveConvo(key); backfill(key); }
+    function expandConvo(key){ ensureConvo(key); setActiveConvo(key); setStageMode("conversation"); backfill(key); }
     function send(){
       if(!draft.trim()||!activeConvo) return;
       const text=draft.trim();
       apiPublish(activeConvo,{ "$type":"chat.message", text }).then(()=>setDraft("")).catch(()=>{});
+    }
+    // approve / request-changes: persist the review-state, refresh the record,
+    // and post an event to the artifact's companion discussion topic.
+    function setReview(name, state){
+      apiReview(name, state)
+        .then(()=>apiGet("/api/artifacts/"+encodeURIComponent(name)))
+        .then(a=>{ const rec=(a&&a.Record)||null; setRecords(prev=>({...prev,[name]:rec})); if(name===activeArtifact) setArtRecord(rec); })
+        .then(()=>apiPublish(companionTopic(name),{ "$type":"chat.message", text:(state==="approved"?"approved ":"requested changes on ")+name }))
+        .catch(()=>{});
     }
 
     const ctx = {
@@ -256,6 +298,13 @@
                 </div>
                 <div className="sx-arthead-r">
                   <StatusPill status={status} big />
+                  {status==="review" && (
+                    <React.Fragment>
+                      <button className="sx-sbtn sx-sbtn-approve" onClick={()=>setReview(artifact.name,"approved")}>✓ Approve v{artifact.version}</button>
+                      <button className="sx-sbtn sx-sbtn-req" onClick={()=>setReview(artifact.name,"changes")}>Request changes</button>
+                    </React.Fragment>
+                  )}
+                  <button className="sx-sbtn sx-sbtn-req" onClick={()=>expandConvo(companionTopic(artifact.name))}>Discussion ↗</button>
                 </div>
               </div>
               <div className="sx-canvas">
