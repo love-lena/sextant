@@ -14,7 +14,10 @@ import (
 // the UI; this endpoint only persists the state.
 
 // reviewStates are the states the convention recognises.
-var reviewStates = map[string]bool{"review": true, "approved": true, "changes": true, "draft": true}
+var reviewStates = map[string]bool{
+	"review": true, "approved": true, "changes": true, "draft": true,
+	"rejected": true, "archived": true,
+}
 
 type reviewRequest struct {
 	State string `json:"state"`
@@ -26,6 +29,7 @@ type reviewBlock struct {
 	State string `json:"state"`
 	By    string `json:"by"`
 	At    string `json:"at"`
+	Rev   uint64 `json:"rev"` // the artifact revision this review was made against
 }
 
 // handleArtifactReview persists an artifact's review-state by merging a `review`
@@ -40,7 +44,7 @@ func (s *Server) handleArtifactReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !reviewStates[req.State] {
-		writeError(w, http.StatusBadRequest, "state must be one of: review, approved, changes, draft")
+		writeError(w, http.StatusBadRequest, "state must be one of: review, approved, changes, draft, rejected, archived")
 		return
 	}
 
@@ -52,7 +56,7 @@ func (s *Server) handleArtifactReview(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		merged, err := mergeReview(art.Record, reviewBlock{
-			State: req.State, By: s.bus.ID(), At: time.Now().UTC().Format(time.RFC3339),
+			State: req.State, By: s.bus.ID(), At: time.Now().UTC().Format(time.RFC3339), Rev: art.Revision,
 		})
 		if err != nil {
 			writeError(w, http.StatusUnprocessableEntity, "artifact record is not a JSON object")

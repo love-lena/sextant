@@ -20,7 +20,8 @@
   }
   const ST = {
     review: { t: "Needs review", c: "review" }, approved: { t: "Approved", c: "approved" },
-    changes: { t: "Changes requested", c: "changes" }, draft: { t: "Draft", c: "draft" }
+    changes: { t: "Changes requested", c: "changes" }, draft: { t: "Draft", c: "draft" },
+    rejected: { t: "Rejected", c: "changes" }, archived: { t: "Archived", c: "draft" }
   };
   function StatusPill({ status, big, dot }) {
     const s = ST[status] || ST.draft;
@@ -96,7 +97,8 @@
   function ArtifactsView({ artifacts, activeArtifact, onOpenArtifact }) {
     const groups = [
     ["review", "Needs review"], ["changes", "Changes requested"],
-    ["draft", "Draft"], ["approved", "Approved"]];
+    ["draft", "Draft"], ["approved", "Approved"],
+    ["rejected", "Rejected"], ["archived", "Archived"]];
 
     return (
       <div className="sx-alist">
@@ -112,7 +114,7 @@
                   <span className="sx-aicon">{a.type === "markdown" ? "❡" : a.type === "sheet" ? "▦" : "◆"}</span>
                   <div className="sx-amain">
                     <div className="sx-aname">{a.name}</div>
-                    <div className="sx-ameta">{a.topic && <span className="sx-achip"># {a.topic}</span>}<span className="mono">v{a.version}</span>{a.updated && <span>· {a.updated}</span>}</div>
+                    <div className="sx-ameta">{a.topic && <span className="sx-achip"># {a.topic}</span>}{a.updated && <span>{a.updated}</span>}</div>
                   </div>
                   {a.author && a.author.name && <Avatar name={a.author.name} kind={a.author.kind} size={20} />}
                 </button>

@@ -57,8 +57,21 @@ func TestArtifactReviewSetsStateInRecord(t *testing.T) {
 	if !strings.Contains(string(rmap["review"]), "01OPERATOR") {
 		t.Fatalf("review.by not stamped with the dash identity: %s", got.Record)
 	}
+	if !strings.Contains(string(rmap["review"]), `"rev":3`) {
+		t.Fatalf("review.rev not recorded against the approved revision (3): %s", got.Record)
+	}
 	if !strings.Contains(string(rmap["$type"]), "document") || !strings.Contains(string(rmap["body"]), "hello") {
 		t.Fatalf("original record fields clobbered: %s", got.Record)
+	}
+}
+
+// TestArtifactReviewAcceptsArchiveAndReject: the terminal states are valid.
+func TestArtifactReviewAcceptsArchiveAndReject(t *testing.T) {
+	for _, st := range []string{"archived", "rejected"} {
+		rec := postReview(t, newServer(reviewBus(), "tok"), "brief", `{"state":"`+st+`"}`, "tok")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("state %q: status = %d, want 200 (%s)", st, rec.Code, rec.Body.String())
+		}
 	}
 }
 

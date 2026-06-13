@@ -49,7 +49,8 @@
   function apiReview(name, state){ return apiPost("/api/artifacts/"+encodeURIComponent(name)+"/review", { state }); }
 
   // The review convention (TASK-66): states + the per-artifact companion topic.
-  const REVIEW_STATES = ["review","approved","changes","draft"];
+  const REVIEW_STATES = ["review","approved","changes","draft","rejected","archived"];
+  const REVIEW_VERB = { approved:"approved", changes:"requested changes on", rejected:"rejected", archived:"archived", review:"reopened", draft:"reset to draft" };
   function companionTopic(name){ return "msg.topic.artifact." + name; }
 
   // ---- helpers ----
@@ -206,6 +207,7 @@
     const artifact = artItems.find(a=>a.name===activeArtifact) || artItems[0] ||
       { name:"", version:0, status:"review", topic:"", author:{name:"",kind:"agent"}, updated:"" };
     const status = artifact.status;
+    const reviewRev = (artRecord && artRecord.review && artRecord.review.rev) || 0;
     const convo = convList.find(c=>c.key===activeConvo) || convList[0] || { type:"topic", name:"", participants:0 };
 
     function openArtifact(name){
@@ -243,7 +245,7 @@
       apiReview(name, state)
         .then(()=>apiGet("/api/artifacts/"+encodeURIComponent(name)))
         .then(a=>{ const rec=(a&&a.Record)||null; setRecords(prev=>({...prev,[name]:rec})); if(name===activeArtifact) setArtRecord(rec); })
-        .then(()=>apiPublish(companionTopic(name),{ "$type":"chat.message", text:(state==="approved"?"approved ":"requested changes on ")+name }))
+        .then(()=>apiPublish(companionTopic(name),{ "$type":"chat.message", text:(REVIEW_VERB[state]||state)+" "+name }))
         .catch(()=>{});
     }
     // a DM is a 2-participant topic with a canonical subject from the sorted
@@ -305,19 +307,21 @@
                 <div className="sx-arthead-l">
                   <div className="sx-arthead-title">{artifact.name}</div>
                   <div className="sx-arthead-meta">
-                    <span className="mono sx-arthead-v">v{artifact.version}</span>
-                    {hasAuthor && <span className="sx-dotsep">·</span>}
-                    {hasAuthor && <Avatar name={artifact.author.name} kind={artifact.author.kind} size={18} />}
-                    {hasAuthor && <span className="sx-arthead-by">{artifact.author.name}</span>}
-                    {artifact.updated && <span className="sx-arthead-time">· updated {artifact.updated} ago</span>}
+                    {artifact.updated && <span className="sx-arthead-time">updated {artifact.updated} ago</span>}
+                    {status==="approved" && reviewRev>0 && <span className="sx-arthead-time">· approved at v{reviewRev}</span>}
+                    <span className="sx-arthead-v mono" style={{opacity:.5}}>· rev {artifact.version}</span>
                   </div>
                 </div>
                 <div className="sx-arthead-r">
                   <StatusPill status={status} big />
-                  {status==="review" && (
+                  {(status==="archived"||status==="rejected") ? (
+                    <button className="sx-sbtn sx-sbtn-req" onClick={()=>setReview(artifact.name,"review")}>Reopen</button>
+                  ) : (
                     <React.Fragment>
-                      <button className="sx-sbtn sx-sbtn-approve" onClick={()=>setReview(artifact.name,"approved")}>✓ Approve v{artifact.version}</button>
-                      <button className="sx-sbtn sx-sbtn-req" onClick={()=>setReview(artifact.name,"changes")}>Request changes</button>
+                      {status!=="approved" && <button className="sx-sbtn sx-sbtn-approve" onClick={()=>setReview(artifact.name,"approved")}>✓ Approve</button>}
+                      {status!=="changes" && <button className="sx-sbtn sx-sbtn-req" onClick={()=>setReview(artifact.name,"changes")}>Request changes</button>}
+                      <button className="sx-sbtn sx-sbtn-req" onClick={()=>setReview(artifact.name,"archived")}>Archive</button>
+                      <button className="sx-sbtn sx-sbtn-req" onClick={()=>setReview(artifact.name,"rejected")}>Reject</button>
                     </React.Fragment>
                   )}
                   <button className="sx-sbtn sx-sbtn-req" onClick={()=>expandConvo(companionTopic(artifact.name))}>Discussion ↗</button>

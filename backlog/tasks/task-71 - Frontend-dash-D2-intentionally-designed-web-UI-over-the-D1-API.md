@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@orion'
 created_date: '2026-06-13 01:12'
-updated_date: '2026-06-13 02:31'
+updated_date: '2026-06-13 02:38'
 labels:
   - feature
   - dash
@@ -55,4 +55,6 @@ Progress 2026-06-12: served from dash --serve at / (debug moved to /debug), embe
 #2 curated Home DONE: Home greeting/agenda/links/note read from a home artifact (assistant-owned) when present, else built-in default; live blocks (pinned/goals/agents/activity) stay live. Created the home artifact on the real bus as orion (rev 25). Verified via agent-browser (curated heading+agenda render, live agents present, old fake greeting gone). Noted: bus Revision is a global write-sequence not a per-doc version; flagged to lena re relabeling the v<n> display.
 
 #3 conversation depth DONE: server subject registry (Server.Watch standing msg.> subscription, GET /api/subjects, unit-tested; wired in serve.go); UI seeds conversations from /api/subjects on load + classifies inbox (msg.client.<id>, one-way) vs DM (msg.topic.dm.<sorted pair>, 2-party, shows other participant) vs topic; click an agent in Agent status to open a DM. Verified end-to-end on throwaway bus. Per lena: DMs are 2-party topics, inboxes are one-way drops.
+
+Review polish DONE: review convention adds rejected+archived states and records review.rev (the revision reviewed against). Header demotes version (updated-time primary + muted 'rev N'; 'approved at vN'); Archive/Reject terminal states with Reopen; archived/rejected drop into their own groups out of the active flow. Verified: handler tests + throwaway smoke. Per lena: also see TASK-72 (sent/received/seen delivery status) — protocol/SDK feature, dash surfaces it later; not faked in D2. Deferred: robust 'changed since approved' stale-flag (needs content-vs-metadata distinction).
 <!-- SECTION:NOTES:END -->
