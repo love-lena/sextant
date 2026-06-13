@@ -1,0 +1,17 @@
+{
+  "lexicon": 1,
+  "id": "workflow.control",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "A cooperative control message for a workflow (ADR-0011), published on msg.workflow.<id>.control. Control ASKS, it does not compel: the coordinator honours it at the next safe point; force-stopping a wedged coordinator is the OS's job via its launcher.",
+      "record": {
+        "type": "object",
+        "required": ["verb"],
+        "properties": {
+          "verb": { "type": "string", "description": "pause | resume | cancel | approve." }
+        }
+      }
+    }
+  }
+}
