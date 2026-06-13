@@ -41,6 +41,25 @@ func (c *Client) ListClients(ctx context.Context) ([]ClientInfo, error) {
 	return listClients(ctx, c.call)
 }
 
+// Register asks the bus to mint a NEW child identity over THIS client's own
+// connection — mint-on-behalf (ADR-0033). Unlike Issuer.Register (held-identity
+// or bootstrap authority), this is authorized only when the calling client is a
+// registered dispatcher (KindDispatcher); the bus forces every minted identity to
+// kind=agent. A reference dispatcher uses it to stand up its children with its
+// own authority and no operator credential. The returned creds are secret
+// material (they ride this client's per-client inbox) — write them to a file and
+// hand them to the child.
+func (c *Client) Register(ctx context.Context, displayName, kind string) (IssuedClient, error) {
+	var out wireapi.RegisterOutput
+	if err := c.call(ctx, wireapi.OpClientsRegister, wireapi.RegisterInput{
+		DisplayName: displayName,
+		Kind:        kind,
+	}, &out); err != nil {
+		return IssuedClient{}, err
+	}
+	return IssuedClient{ID: out.ID, Creds: out.Creds}, nil
+}
+
 // listClients is the shared implementation behind Client.ListClients and
 // Issuer.ListClients — both make the same clients.list call, differing only in
 // which connection (and thus which call subject) carries it.

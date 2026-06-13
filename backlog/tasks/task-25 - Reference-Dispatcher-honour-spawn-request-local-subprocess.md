@@ -1,10 +1,10 @@
 ---
 id: TASK-25
 title: 'Reference Dispatcher: honour spawn-request (local subprocess)'
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-04 18:05'
-updated_date: '2026-06-12 21:16'
+updated_date: '2026-06-13 02:29'
 labels:
   - 'slug:feat-m5-client-standup'
 milestone: 'M5: Orchestration (spawn + workflows)'
@@ -23,16 +23,20 @@ M5.2 of the approved M5 breakdown (artifact orchestration-m5-effort, signed off 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 spawn-request message kind defined (with job/parent lineage)
-- [ ] #2 Dispatcher subscribes to spawn-request and launches a client (local subprocess)
-- [ ] #3 The spawned client connects under its own identity and participates
-- [ ] #4 Recursion works: a spawned client can itself publish spawn-requests
-- [ ] #5 Supervisor / agent-runner is its OWN bus client (implements the SDK; starts as a simple re-invoker, grows into a richer client): subscribes to the spawned agent DM/topics and re-invokes the one-shot harness (claude -p --resume / codex exec resume) on inbound -- the wake loop that makes a one-shot a persistent bus citizen
-- [ ] #6 mint-on-behalf op provisions SCOPED per-agent creds (bus = sole minter, ADR-0020): the dispatcher knows the spawned id up front (for spawn.ack/lifecycle), the id is resume-stable, and each spawned agent (kind=agent) gets a memorable NICKNAME, not the auto-mint placeholder. SERIAL core change (ADR-0022) -- coordinate with core writers
+- [x] #1 spawn-request message kind defined (with job/parent lineage)
+- [x] #2 Dispatcher subscribes to spawn-request and launches a client (local subprocess)
+- [x] #3 The spawned client connects under its own identity and participates
+- [x] #4 Recursion works: a spawned client can itself publish spawn-requests
+- [x] #5 Supervisor / agent-runner is its OWN bus client (implements the SDK; starts as a simple re-invoker, grows into a richer client): subscribes to the spawned agent DM/topics and re-invokes the one-shot harness (claude -p --resume / codex exec resume) on inbound -- the wake loop that makes a one-shot a persistent bus citizen
+- [x] #6 mint-on-behalf op provisions SCOPED per-agent creds (bus = sole minter, ADR-0020): the dispatcher knows the spawned id up front (for spawn.ack/lifecycle), the id is resume-stable, and each spawned agent (kind=agent) gets a memorable NICKNAME, not the auto-mint placeholder. SERIAL core change (ADR-0022) -- coordinate with core writers
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
 Aligned to the approved M5 breakdown (artifact orchestration-m5-effort) by canopus 2026-06-12 on lena sign-off. M5.2. Depends on [[feat-m5-spawn-spike]] (TASK-70, sirius PR #119). Parallel: [[feat-m5-sextant-run]] (M5.3, TASK-23). Composed by [[feat-m5-workflow-coordinator]] (M5.4, TASK-26). Refs ADR-0009/0020/0022/0029.
+
+M5.2 built on branch worktree-feat-m5-dispatcher: cmd/sextant-dispatch (subscribe spawn.request → mint named child → launch harness + supervisor → spawn.ack), spawn lexicon (protocol/lexicons/spawn.{request,ack}.json), recursion + lineage, and AC#6 mint-on-behalf (ADR-0033, locked-core: a kind=dispatcher client mints kind=agent children with its own authority; bus clamps the kind). Self-validating docs/demos/m5-dispatcher-demo.sh = 10/10; pkg/bus/mint_on_behalf_test.go covers the authz. AC#6 core diff coordinated with sirius before merge (ADR-0022 serial). Folds TASK-70 Done+archive.
+
+Revised AC#6 per lena's review (2026-06-12): mint authority INVERTED from a kind=dispatcher allowlist to a spawned-worker fence. The bus stamps spawned_by=<caller> on every mint-on-behalf child (ClientEntry.SpawnedBy); clients.register is authorized from ANY registered client EXCEPT one carrying that marker. So any top-level client can dispatch, but a spawned worker cannot recursively dispatch (no fork-bomb); recursion flows through the dispatcher. Doesn't depend on kind (weakly enforced). New core diff = commit b97ee8f; client-side = fdafe3a; branch force-pushed. Demo still 10/10. Re-review pending (sirius core diff + lena).
 <!-- SECTION:NOTES:END -->

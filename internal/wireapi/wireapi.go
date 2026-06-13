@@ -131,8 +131,9 @@ const OpClientsHello = "clients.hello"
 //   - EnrollID — the bootstrap/enrollment identity. `sextant up` provisions its
 //     credential too; a local process reads it (locality trust) to self-enroll.
 //
-// The bus authorizes clients.register from either, and clients.retire from the
-// operator only; a regular client (a ULID) may call neither.
+// The bus authorizes clients.register from either of these — and, with its own
+// authority, from any non-spawned client (mint-on-behalf, ADR-0033) — but
+// clients.retire from the operator only.
 const (
 	OperatorID = "operator"
 	EnrollID   = "enroll"
@@ -144,6 +145,10 @@ const (
 // the one kind that may NEVER be named the principal, which the bus rejects on
 // the open enrollment claim path (ADR-0031), keeping agents off the principal by
 // construction. KindClient is the default human-seat label (`register --self`).
+//
+// Note that the authority to mint-on-behalf (ADR-0033) is NOT a kind: kind is
+// self-declared and weakly enforced, so the bus gates dispatching on the
+// bus-stamped ClientEntry.SpawnedBy marker instead, never on kind.
 const (
 	KindClient = "client"
 	KindAgent  = "agent"
@@ -310,6 +315,12 @@ type ClientEntry struct {
 	IssuedAt    string `json:"issued_at"`
 	Subject     string `json:"subject,omitempty"`
 	Presence    string `json:"presence,omitempty"`
+	// SpawnedBy is the id of the client that minted this identity via mint-on-behalf
+	// (ADR-0033). Empty for a top-level identity (operator/enrollment-minted). The
+	// bus stamps it at issuance; it is both the spawn lineage and the marker that
+	// fences a spawned worker out of dispatching its own children — so the no-mint
+	// guardrail rests on a bus-set field, never on the weakly-enforced kind.
+	SpawnedBy string `json:"spawned_by,omitempty"`
 }
 
 // Presence values for ClientEntry.Presence.
