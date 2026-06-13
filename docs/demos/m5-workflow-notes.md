@@ -82,6 +82,14 @@ step done — M5.1 already proved the live `claude -p` / `codex exec` harness, a
 dispatcher is harness-agnostic, so pointing `--harness` at a live `claude -p` wrapper
 makes these steps dispatch real agents (see m5-dispatcher-notes.md).
 
+**Live variant** (`docs/demos/m5-workflow-live-demo.sh`, token-bearing): the same
+workflow, but each step stands up a REAL `claude -p` agent that joins the bus under
+its dispatcher-minted name, does the task, and publishes its step-done
+`workflow.event` through the sextant MCP tools — the coordinator records it and
+walks on. Built on M5.1's proven recipe (`--bare --strict-mcp-config`, MCP config
+pointing `sextant-mcp` at the minted creds; a readiness-retry primer). Run it to
+watch real agents driven by a workflow.
+
 ## Scope + deferred (PoC)
 
 - One step kind (`dispatch`). A `function`-invoke step (M5.3 `sextant run`) is
