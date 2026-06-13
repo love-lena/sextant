@@ -112,9 +112,9 @@
                   <span className="sx-aicon">{a.type === "markdown" ? "❡" : a.type === "sheet" ? "▦" : "◆"}</span>
                   <div className="sx-amain">
                     <div className="sx-aname">{a.name}</div>
-                    <div className="sx-ameta"><span className="sx-achip"># {a.topic}</span><span className="mono">v{a.version}</span><span>· {a.updated}</span></div>
+                    <div className="sx-ameta">{a.topic && <span className="sx-achip"># {a.topic}</span>}<span className="mono">v{a.version}</span>{a.updated && <span>· {a.updated}</span>}</div>
                   </div>
-                  <Avatar name={a.author.name} kind={a.author.kind} size={20} />
+                  {a.author && a.author.name && <Avatar name={a.author.name} kind={a.author.kind} size={20} />}
                 </button>
               )}
             </div>);

@@ -1,6 +1,15 @@
-/* app.jsx — Sextant: splittable sidebar navigator + flexible stage (artifact or conversation). */
+/* app.jsx — Sextant cockpit, wired to the dash D1 local API (TASK-71, ADR-0032).
+   The prototype's seed data is replaced with live reads from /api/* and the SSE
+   live stream; the Go process stays the single bus client and the browser only
+   ever talks to this local API.
+
+   Concepts with no bus primitive yet stay stubbed and are marked as such:
+   - artifact review-status / approve / companion-topic  → TASK-66 (brief workstream)
+   - goal metrics                                        → no primitive
+   - the curated Home greeting / banner / links / note   → assistant-owned, static here
+*/
 (function () {
-  const { useState, useRef, useEffect, useMemo } = React;
+  const { useState, useRef, useEffect, useMemo, useCallback } = React;
 
   function shade(hex, amt){
     const n=parseInt(hex.slice(1),16); let r=n>>16&255,g=n>>8&255,b=n&255;
@@ -18,91 +27,97 @@
     "livePulse": true
   }/*EDITMODE-END*/;
 
-  // ---- seed data ----
-  const ARTIFACTS = [
-    { name:"Q3 Launch Brief", version:4, status:"review",   topic:"release-q3", type:"markdown", id:"art_9f3a1c", author:{name:"research-agent",kind:"agent"}, updated:"3m" },
-    { name:"Onboarding PRD",  version:5, status:"review",   topic:"product",    type:"markdown", id:"art_2bd740", author:{name:"research-agent",kind:"agent"}, updated:"12m" },
-    { name:"Comp Analysis",   version:2, status:"draft",    topic:"release-q3", type:"markdown", id:"art_77ae09", author:{name:"research-agent",kind:"agent"}, updated:"30m" },
-    { name:"API Design Note", version:9, status:"approved", topic:"platform",   type:"markdown", id:"art_4e1c08", author:{name:"qa-agent",kind:"agent"},        updated:"1h" },
-    { name:"Pricing Model",   version:7, status:"review",   topic:"release-q3", type:"sheet",    id:"art_b2c7d5", author:{name:"research-agent",kind:"agent"}, updated:"1h" },
-  ];
+  // ---- local API client (the per-launch token rides in the page URL) ----
+  const TOKEN = new URLSearchParams(location.search).get("token") || "";
+  const AUTH = { "Authorization": "Bearer " + TOKEN };
+  async function apiGet(path){
+    const r = await fetch(path, { headers: AUTH });
+    if (!r.ok) throw new Error(path + " -> " + r.status);
+    return r.json();
+  }
+  function apiPublish(subject, record){
+    return fetch("/api/publish", {
+      method: "POST",
+      headers: Object.assign({ "Content-Type": "application/json" }, AUTH),
+      body: JSON.stringify({ subject, record }),
+    }).then(r => { if (!r.ok) throw new Error("publish -> " + r.status); });
+  }
 
-  const PARTICIPANTS = [
-    { name:"designer-agent", kind:"agent", role:"designer", key:"ed25519:9f…3a", verified:true, online:true },
-    { name:"research-agent", kind:"agent", role:"research", key:"ed25519:b2…7d", verified:true, online:true },
-    { name:"qa-agent",       kind:"agent", role:"qa",       key:"ed25519:4e…c0", verified:true, online:false },
-    { name:"you",            kind:"human", role:"operator", key:"ed25519:7c…e1", verified:true, online:true },
-  ];
+  // ---- helpers ----
+  function relMs(ms){
+    if(!ms) return "";
+    const s = Math.max(0,(Date.now()-ms)/1000);
+    if(s<60) return Math.floor(s)+"s";
+    if(s<3600) return Math.floor(s/60)+"m";
+    if(s<86400) return Math.floor(s/3600)+"h";
+    return Math.floor(s/86400)+"d";
+  }
+  function relTime(iso){ const t=Date.parse(iso||""); return isNaN(t)?"":relMs(t); }
+  function topicLabel(subject){
+    if(subject.startsWith("msg.topic.")) return subject.slice(10);
+    if(subject.startsWith("msg.client.")) return subject.slice(11);
+    return subject;
+  }
+  function frameText(rec){
+    if(!rec) return "·";
+    if(typeof rec.text==="string") return rec.text;
+    if(rec.title) return rec.title;
+    return rec.$type || "·";
+  }
 
-  const CONVERSATIONS = [
-    { key:"release-q3", type:"topic", name:"release-q3", snippet:"research-agent: assigned the billing load-test to platform", time:"40s", unread:2, participants:4 },
-    { key:"platform",   type:"topic", name:"platform",   snippet:"qa-agent: audit export schema bumped to v2", time:"18m", unread:0, participants:3 },
-    { key:"product",    type:"topic", name:"product",    snippet:"you: let's cut multi-language from v1", time:"1h", unread:0, participants:5 },
-    { key:"brand",      type:"topic", name:"brand",      snippet:"designer-agent: logo set is up for review", time:"2h", unread:0, participants:2 },
-    { key:"dm-designer",type:"dm",    name:"designer-agent", snippet:"shipping the logo set now", time:"5m", unread:1, participants:2 },
-    { key:"dm-research",type:"dm",    name:"research-agent",  snippet:"draft brief is up — take a look?", time:"2h", unread:0, participants:2 },
-  ];
-
-  const CONV_MSGS = {
-    "release-q3":[
-      { id:1, kind:"event", text:"research-agent published Q3 Launch Brief · v4", time:"3m" },
-      { id:2, kind:"msg", author:"research-agent", role:"agent", time:"3m", artifactRef:"Q3 Launch Brief",
-        text:"v4 of the launch brief — moved GA to Aug 14 and tightened the CSAT goal to 95%. Ready for your review." },
-      { id:3, kind:"msg", author:"qa-agent", role:"agent", time:"2m",
-        text:"Flagged a risk: usage-based billing isn’t load-tested at GA volume yet. Added it to the Risks table as High." },
-      { id:4, kind:"msg", author:"you", role:"human", self:true, time:"1m",
-        text:"Aug 14 works and scope looks right. I’ll approve once the billing risk has a named owner." },
-      { id:5, kind:"msg", author:"research-agent", role:"agent", time:"40s",
-        text:"Assigned the billing load-test to platform — will reflect it in v5." },
-    ],
-    "platform":[
-      { id:1, kind:"msg", author:"qa-agent", role:"agent", time:"22m", artifactRef:"API Design Note",
-        text:"Bumped the audit export schema to v2 — backwards compatible, documented the stability guarantee." },
-      { id:2, kind:"msg", author:"you", role:"human", self:true, time:"18m", text:"Approved. Good to ship." },
-    ],
-    "product":[
-      { id:1, kind:"msg", author:"you", role:"human", self:true, time:"1h", text:"Let's cut multi-language from v1 — it's stretching the timeline." },
-      { id:2, kind:"msg", author:"research-agent", role:"agent", time:"1h", artifactRef:"Onboarding PRD", text:"Agreed — moved it to Q4 in the PRD." },
-    ],
-    "brand":[
-      { id:1, kind:"msg", author:"designer-agent", role:"agent", time:"2h", text:"Logo set v1 is up for review whenever you have a minute." },
-    ],
-    "dm-designer":[
-      { id:1, kind:"msg", author:"designer-agent", role:"agent", time:"5m", text:"Shipping the logo set now — DM me if the mark feels too heavy." },
-      { id:2, kind:"msg", author:"you", role:"human", self:true, time:"4m", text:"Looks great, no notes." },
-    ],
-    "dm-research":[
-      { id:1, kind:"msg", author:"research-agent", role:"agent", time:"2h", artifactRef:"Q3 Launch Brief", text:"Draft brief is up — take a look when you can?" },
-      { id:2, kind:"msg", author:"you", role:"human", self:true, time:"2h", text:"On it." },
-    ],
-  };
-
+  // Goal metrics have no bus primitive yet — stubbed (clearly a placeholder).
   const GOALS = [
-    { label:"Tasks merged this sprint", value:14, target:20, display:"14 / 20", note:"6 open · 2 in review" },
-    { label:"CI pipeline green", value:97, target:95, display:"97%", met:true, note:"last 50 runs · target ≥ 95%" },
-    { label:"Test coverage", value:81, target:85, display:"81%", note:"target 85% before GA cut" },
-    { label:"Open P0 bugs", value:0, target:1, display:"blocked", blocked:true, note:"1 P0 in billing meter · owner: platform" },
-  ];
-
-  const AGENTS = [
-    { name:"designer-agent", state:"working", meta:"editing Q3 Launch Brief · 2m", tone:"review" },
-    { name:"research-agent", state:"working", meta:"running comp analysis · 5m", tone:"review" },
-    { name:"qa-agent",       state:"idle",    meta:"last active 18m ago", tone:"draft" },
-    { name:"build-agent",    state:"blocked", meta:"waiting on your approval · 3m", tone:"changes" },
-    { name:"deploy-agent",   state:"offline", meta:"disconnected 1h ago", tone:"draft" },
+    { label:"Tasks merged this sprint", value:14, target:20, display:"14 / 20", note:"stub — no goals primitive yet" },
+    { label:"CI pipeline green", value:97, target:95, display:"97%", met:true, note:"stub — no goals primitive yet" },
+    { label:"Test coverage", value:81, target:85, display:"81%", note:"stub — no goals primitive yet" },
   ];
 
   function App() {
     const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
 
-    const [statuses, setStatuses] = useState(()=>Object.fromEntries(ARTIFACTS.map(a=>[a.name,a.status])));
-    const [activeArtifact, setActiveArtifact] = useState("Q3 Launch Brief");
-    const [activeConvo, setActiveConvo] = useState("release-q3");
-    const [convMsgs, setConvMsgs] = useState(CONV_MSGS);
+    const [self, setSelf] = useState({ id:"", display_name:"", principal:"" });
+    const [clients, setClients] = useState([]);          // raw ClientInfo[]
+    const [artifacts, setArtifacts] = useState([]);      // raw ArtifactInfo[]
+    const [convos, setConvos] = useState({});            // subject -> {msgs:[{id,author,text,ts}], last, lastText}
+    const [activity, setActivity] = useState([]);        // recent frames across all subjects
+    const [activeArtifact, setActiveArtifact] = useState("");
+    const [artRecord, setArtRecord] = useState(null);    // active artifact Record {$type,title,body}
+    const [activeConvo, setActiveConvo] = useState("");
+    const [stageMode, setStageMode] = useState("home");  // home | artifact | conversation
     const [draft, setDraft] = useState("");
-    const [stageMode, setStageMode] = useState("home"); // home | artifact | conversation
-    const msgId = useRef(1000);
 
+    const nameOf = useCallback((id)=>{ const c=clients.find(c=>c.ID===id); return c?c.DisplayName:(id||"").slice(0,8); },[clients]);
+    const kindOf = useCallback((id)=>{ const c=clients.find(c=>c.ID===id); return c?c.Kind:"agent"; },[clients]);
+
+    // initial directory loads
+    useEffect(()=>{
+      apiGet("/api/self").then(setSelf).catch(()=>{});
+      apiGet("/api/clients").then(cs=>setClients(Array.isArray(cs)?cs:[])).catch(()=>{});
+      apiGet("/api/artifacts").then(as=>setArtifacts(Array.isArray(as)?as:[])).catch(()=>{});
+    },[]);
+
+    // live stream over msg.> → activity feed + conversation discovery
+    useEffect(()=>{
+      if(!TOKEN) return;
+      const es = new EventSource("/api/stream?subject="+encodeURIComponent("msg.>")+"&token="+encodeURIComponent(TOKEN));
+      es.onmessage = (m)=>{
+        let ev; try { ev = JSON.parse(m.data); } catch(_) { return; }
+        const subj = ev.subject, f = ev.frame;
+        if(!subj || !f) return;
+        const text = frameText(f.record);
+        const msg = { id:f.id, author:f.author, text, ts:Date.now() };
+        setConvos(prev=>{
+          const cur = prev[subj] || { msgs:[] };
+          if(cur.msgs.some(x=>x.id===msg.id)) return prev;
+          return { ...prev, [subj]:{ ...cur, msgs:[...cur.msgs, msg].slice(-200), last:Date.now(), lastText:text } };
+        });
+        setActivity(prev=>[{ subj, author:f.author, text, ts:Date.now() }, ...prev].slice(0,40));
+      };
+      es.onerror = ()=>{};
+      return ()=>es.close();
+    },[TOKEN]);
+
+    // theme application
     useEffect(()=>{
       const r=document.getElementById("app");
       r.style.setProperty("--brand", t.accent);
@@ -113,33 +128,84 @@
       r.classList.toggle("no-pulse", !t.livePulse);
     },[t.accent,t.sideTone,t.sidePos,t.livePulse]);
 
-    const artifacts = useMemo(()=>ARTIFACTS.map(a=>({...a,status:statuses[a.name]})),[statuses]);
-    const artifact = artifacts.find(a=>a.name===activeArtifact) || artifacts[0];
+    // derived: agents (everything that isn't a human "client" kind)
+    const agents = useMemo(()=>clients.filter(c=>c.Kind!=="client").map(c=>({
+      name:c.DisplayName, state:c.Online?"working":"offline",
+      meta:(c.Kind||"agent")+(c.Online?" · online":" · offline"),
+    })),[clients]);
+
+    // derived: artifacts in the component shape (status/topic/author stubbed — TASK-66)
+    const artItems = useMemo(()=>artifacts.map(a=>({
+      name:a.Name, version:a.Revision, status:"draft", topic:"", type:"markdown",
+      id:a.Name, author:{ name:"", kind:"agent" }, updated:relTime(a.Updated),
+    })),[artifacts]);
+
+    // derived: conversation list from discovered subjects (newest first)
+    const convList = useMemo(()=>Object.entries(convos)
+      .sort((a,b)=>(b[1].last||0)-(a[1].last||0))
+      .map(([subj,c])=>({
+        key:subj,
+        type: subj.startsWith("msg.client.")?"dm":"topic",
+        name: subj.startsWith("msg.client.")?nameOf(subj.slice(11)):topicLabel(subj),
+        snippet:c.lastText||"", time:relMs(c.last), unread:0, participants:0,
+      })),[convos, nameOf]);
+
+    const messages = useMemo(()=>{
+      const c = convos[activeConvo]; if(!c) return [];
+      return c.msgs.map((m,i)=>({
+        id:m.id||i, kind:"msg", author:nameOf(m.author),
+        role: kindOf(m.author)==="client"?"human":"agent",
+        self: m.author===self.id, time:relMs(m.ts), text:m.text,
+      }));
+    },[convos, activeConvo, nameOf, kindOf, self.id]);
+
+    const homeActivity = useMemo(()=>activity.map(a=>({
+      who:nameOf(a.author), text:a.text, time:relMs(a.ts),
+    })),[activity, nameOf]);
+
+    const artifact = artItems.find(a=>a.name===activeArtifact) || artItems[0] ||
+      { name:"", version:0, status:"draft", topic:"", author:{name:"",kind:"agent"}, updated:"" };
     const status = artifact.status;
-    const convo = CONVERSATIONS.find(c=>c.key===activeConvo) || CONVERSATIONS[0];
-    const messages = convMsgs[activeConvo] || [];
+    const convo = convList.find(c=>c.key===activeConvo) || convList[0] || { type:"topic", name:"", participants:0 };
 
-    function openArtifact(name){ setActiveArtifact(name); setStageMode("artifact"); }
+    function openArtifact(name){
+      setActiveArtifact(name); setStageMode("artifact"); setArtRecord(null);
+      apiGet("/api/artifacts/"+encodeURIComponent(name)).then(a=>setArtRecord((a&&a.Record)||null)).catch(()=>setArtRecord(null));
+    }
     function goHome(){ setStageMode("home"); }
-    function openConvo(key){ setActiveConvo(key); }
-    function expandConvo(key){ setActiveConvo(key); setStageMode("conversation"); }
-
-    function postTo(key, msg){ setConvMsgs(m=>({...m,[key]:[...(m[key]||[]),{ id:++msgId.current, ...msg }]})); }
-    function send(){ if(!draft.trim()) return; postTo(activeConvo,{ kind:"msg", author:"you", role:"human", self:true, time:"now", text:draft.trim() }); setDraft(""); }
-    function approve(){ setStatuses(s=>({...s,[activeArtifact]:"approved"})); postTo(artifact.topic,{ kind:"event", time:"now", text:`you approved ${artifact.name} · v${artifact.version}` }); }
-    function request(){ setStatuses(s=>({...s,[activeArtifact]:"changes"})); postTo(artifact.topic,{ kind:"event", time:"now", text:`you requested changes on ${artifact.name} · v${artifact.version}` }); }
+    function backfill(subj){
+      apiGet("/api/messages?subject="+encodeURIComponent(subj)+"&limit=100").then(res=>{
+        const frames=(res&&res.messages)||[]; if(!frames.length) return;
+        const hist=frames.map(f=>({ id:f.id, author:f.author, text:frameText(f.record), ts:0 }));
+        setConvos(prev=>{
+          const cur=prev[subj]||{msgs:[]};
+          const seen=new Set(cur.msgs.map(m=>m.id));
+          const merged=[...hist.filter(m=>!seen.has(m.id)), ...cur.msgs];
+          return { ...prev, [subj]:{ ...cur, msgs:merged.slice(-200), lastText:cur.lastText||(hist.length?hist[hist.length-1].text:"") } };
+        });
+      }).catch(()=>{});
+    }
+    function openConvo(key){ setActiveConvo(key); backfill(key); }
+    function expandConvo(key){ setActiveConvo(key); setStageMode("conversation"); backfill(key); }
+    function send(){
+      if(!draft.trim()||!activeConvo) return;
+      const text=draft.trim();
+      apiPublish(activeConvo,{ "$type":"chat.message", text }).then(()=>setDraft("")).catch(()=>{});
+    }
 
     const ctx = {
-      conversations:CONVERSATIONS, activeConvo, stageMode, onOpenConvo:openConvo, onExpandConvo:expandConvo,
+      conversations:convList, activeConvo, stageMode, onOpenConvo:openConvo, onExpandConvo:expandConvo,
       messages, draft, setDraft, onSend:send, onArtifactRef:openArtifact,
-      artifacts, activeArtifact, onOpenArtifact:openArtifact,
-      goals:GOALS, agents:AGENTS, onGoHome:goHome,
+      artifacts:artItems, activeArtifact, onOpenArtifact:openArtifact,
+      goals:GOALS, agents, activity:homeActivity, self, onGoHome:goHome,
     };
+
+    const hasAuthor = artifact.author && artifact.author.name;
 
     return (
       <div className="sx-app">
         <div style={{display:"contents"}}>
-          <Sidebar ctx={ctx} busName="release-q3" navMode={t.sideNav} />
+          <Sidebar ctx={ctx} busName={(self.display_name||"bus")} navMode={t.sideNav} />
         </div>
 
         <main className="sx-stage">
@@ -149,11 +215,11 @@
                 <React.Fragment>
                   <span className="sx-crumb-topic">Home</span>
                   <span className="sx-crumb-sep">/</span>
-                  <span className="sx-crumb-art">curated by your assistant</span>
+                  <span className="sx-crumb-art">{self.display_name?("you are "+self.display_name):"live bus"}</span>
                 </React.Fragment>
               ) : stageMode==="artifact" ? (
                 <React.Fragment>
-                  <span className="sx-crumb-topic"># {artifact.topic}</span>
+                  <span className="sx-crumb-topic">Artifact</span>
                   <span className="sx-crumb-sep">/</span>
                   <span className="sx-crumb-art">{artifact.name}</span>
                 </React.Fragment>
@@ -182,25 +248,18 @@
                   <div className="sx-arthead-title">{artifact.name}</div>
                   <div className="sx-arthead-meta">
                     <span className="mono sx-arthead-v">v{artifact.version}</span>
-                    <span className="sx-dotsep">·</span>
-                    <Avatar name={artifact.author.name} kind={artifact.author.kind} size={18} />
-                    <span className="sx-arthead-by">{artifact.author.name}</span>
-                    <span className="sx-verified sm">✓ signed</span>
-                    <span className="sx-arthead-time">· updated {artifact.updated} ago</span>
+                    {hasAuthor && <span className="sx-dotsep">·</span>}
+                    {hasAuthor && <Avatar name={artifact.author.name} kind={artifact.author.kind} size={18} />}
+                    {hasAuthor && <span className="sx-arthead-by">{artifact.author.name}</span>}
+                    {artifact.updated && <span className="sx-arthead-time">· updated {artifact.updated} ago</span>}
                   </div>
                 </div>
                 <div className="sx-arthead-r">
                   <StatusPill status={status} big />
-                  {status==="review" && (
-                    <React.Fragment>
-                      <button className="sx-sbtn sx-sbtn-approve" onClick={approve}>✓ Approve v{artifact.version}</button>
-                      <button className="sx-sbtn sx-sbtn-req" onClick={request}>Request changes</button>
-                    </React.Fragment>
-                  )}
                 </div>
               </div>
               <div className="sx-canvas">
-                <div className="sx-page sx-page--doc"><MarkdownArtifact /></div>
+                <div className="sx-page sx-page--doc"><MarkdownArtifact record={artRecord} name={artifact.name} /></div>
               </div>
             </React.Fragment>
           ) : (
@@ -209,7 +268,7 @@
                 <div className="sx-convstage">
                   <div className="sx-convstage-head">
                     <span className="sx-convstage-title">{convo.type==="topic"?"# ":"@ "}{convo.name}</span>
-                    <span className="sx-convstage-meta">{convo.participants} participants on the bus</span>
+                    <span className="sx-convstage-meta">live on the bus</span>
                   </div>
                   <div className="sx-convstage-body">
                     <MessageList messages={messages} onArtifactRef={openArtifact} />

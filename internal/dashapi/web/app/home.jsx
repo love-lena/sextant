@@ -137,7 +137,8 @@
   }
 
   function PinnedBlock({ block, ctx }) {
-    const items = block.names.map(n=>ctx.artifacts.find(a=>a.name===n)).filter(Boolean);
+    const picked = (block.names||[]).map(n=>ctx.artifacts.find(a=>a.name===n)).filter(Boolean);
+    const items = picked.length ? picked : (ctx.artifacts||[]).slice(0,4);
     return (
       <div className="hm-card">
         <CardHead title={block.title} live={block.live} />
@@ -147,7 +148,7 @@
               <span className="hm-pin-ic">{ARTICON[a.type]||ARTICON.default}</span>
               <span className="hm-pin-main">
                 <span className="hm-pin-name">{a.name}</span>
-                <span className="hm-pin-meta"># {a.topic} · <span className="mono">v{a.version}</span></span>
+                <span className="hm-pin-meta">{a.topic?("# "+a.topic+" · "):""}<span className="mono">v{a.version}</span></span>
               </span>
               <span className={"sx-sd sx-sd-"+(a.status==="approved"?"approved":a.status==="changes"?"changes":a.status==="draft"?"draft":"review")} title={a.status} />
             </button>
@@ -224,12 +225,14 @@
     );
   }
 
-  function ActivityBlock({ block }) {
+  function ActivityBlock({ block, ctx }) {
+    const live = !!(ctx && ctx.activity && ctx.activity.length);
+    const items = live ? ctx.activity : (block.items||[]);
     return (
       <div className="hm-card">
-        <CardHead title={block.title} />
+        <CardHead title={block.title} live={live || block.live} />
         <ul className="hm-feed">
-          {block.items.map((e,i)=>(
+          {items.map((e,i)=>(
             <li className="hm-feed-row" key={i}>
               <Av name={e.who} size={20} />
               <span className="hm-feed-text"><b>{e.who}</b> {e.text}</span>
