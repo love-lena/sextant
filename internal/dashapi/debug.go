@@ -37,6 +37,9 @@ var appRoot = func() fs.FS {
 // gates the API they call.
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if s.uiDir != "" {
+		// Dev override: serve the live directory with no caching so a browser
+		// refresh always picks up edits (hot-reload during UI iteration).
+		w.Header().Set("Cache-Control", "no-store")
 		http.FileServer(http.Dir(s.uiDir)).ServeHTTP(w, r)
 		return
 	}

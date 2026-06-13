@@ -85,4 +85,7 @@ func TestUIDirOverridesBuiltIn(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "custom UI") {
 		t.Fatalf("status = %d body = %q, want custom UI", rec.Code, rec.Body.String())
 	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("ui dir Cache-Control = %q, want no-store (hot-reload)", cc)
+	}
 }
