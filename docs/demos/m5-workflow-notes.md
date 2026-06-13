@@ -83,12 +83,21 @@ dispatcher is harness-agnostic, so pointing `--harness` at a live `claude -p` wr
 makes these steps dispatch real agents (see m5-dispatcher-notes.md).
 
 **Live variant** (`docs/demos/m5-workflow-live-demo.sh`, token-bearing): the same
-workflow, but each step stands up a REAL `claude -p` agent that joins the bus under
-its dispatcher-minted name, does the task, and publishes its step-done
-`workflow.event` through the sextant MCP tools — the coordinator records it and
-walks on. Built on M5.1's proven recipe (`--bare --strict-mcp-config`, MCP config
-pointing `sextant-mcp` at the minted creds; a readiness-retry primer). Run it to
-watch real agents driven by a workflow.
+workflow, but each step stands up a REAL agent that joins the bus under its
+dispatcher-minted name, does the task, and publishes its step-done `workflow.event`
+through the sextant MCP tools — the coordinator records it and walks on. **Verified
+4/4** end-to-end (two haiku agents stood up as `reviewer`/`merger`). The harness:
+`--model claude-haiku-4-5` (cheap + direct), `--bare --strict-mcp-config` with an
+MCP config pointing `sextant-mcp` at the minted creds, and the agent scoped to ONLY
+the publish tool (`--allowedTools mcp__sextant__message_publish`,
+`--permission-mode default` — no blanket bypass) with a force-call primer (call the
+publish tool immediately, retry while the MCP server connects).
+
+_Lesson from the first attempt: an **opus** agent reasoned "the MCP tools aren't
+available" from the init tool-list and refused to even try (it declined to fake the
+publish via Bash) → the step timed out. The fix is the force-call primer + scoping
+to the publish tool + a direct model — don't let the agent deliberate about tool
+availability; have it call + retry._
 
 ## Scope + deferred (PoC)
 
