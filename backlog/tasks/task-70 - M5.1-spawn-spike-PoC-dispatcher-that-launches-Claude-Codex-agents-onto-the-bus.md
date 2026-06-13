@@ -3,9 +3,10 @@ id: TASK-70
 title: >-
   M5.1 spawn spike: PoC dispatcher that launches Claude + Codex agents onto the
   bus
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-12 21:07'
+updated_date: '2026-06-12 22:57'
 labels:
   - feature
   - spawn
@@ -28,11 +29,11 @@ De-risk the spawn milestone: prove that a dispatcher can launch an agent (claude
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 claude -p harness: a spawned Claude agent joins the bus under a keyed (resume-stable) identity, publishes a hello on msg.topic.demo, and its client id is returned to the dispatcher caller
-- [ ] #2 codex exec harness: a spawned Codex agent self-enrolls (store + enroll.creds in MCP env), joins the bus, publishes a hello, and its client id is returned
-- [ ] #3 Wake loop (shape 1): the PoC wraps one of the one-shots in a thin supervisor that subscribes to the agent's DM and re-invokes it (--resume / codex exec resume) on inbound — the agent wakes, reads the message, and acts on it
-- [ ] #4 Nicknames: each spawned agent (kind=agent) gets a human-readable nickname, not the claude-<hex> auto-mint placeholder
-- [ ] #5 Design notes written up (per harness): launch recipe, identity seam gaps vs mint-on-behalf, wake-loop shape, primer injection
+- [x] #1 claude -p harness: a spawned Claude agent joins the bus under a keyed (resume-stable) identity, publishes a hello on msg.topic.demo, and its client id is returned to the dispatcher caller
+- [x] #2 codex exec harness: a spawned Codex agent self-enrolls (store + enroll.creds in MCP env), joins the bus, publishes a hello, and its client id is returned
+- [x] #3 Wake loop (shape 1): the PoC wraps one of the one-shots in a thin supervisor that subscribes to the agent's DM and re-invokes it (--resume / codex exec resume) on inbound — the agent wakes, reads the message, and acts on it
+- [x] #4 Nicknames: each spawned agent (kind=agent) gets a human-readable nickname, not the claude-<hex> auto-mint placeholder
+- [x] #5 Design notes written up (per harness): launch recipe, identity seam gaps vs mint-on-behalf, wake-loop shape, primer injection
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -45,4 +46,6 @@ PoC only — no core protocol changes. Harness A: shell out to claude -p with --
 
 <!-- SECTION:NOTES:BEGIN -->
 Research: m5-spawn-spike-research artifact (rev 16). Lena approved on msg.topic.orchestration-m5 2026-06-12. Successor: [[feat-m5-client-standup]] (M5.2, mint-on-behalf). Parallel: [[feat-m5-sextant-run]] (M5.3).
+
+PoC built on branch worktree-task-70-spawn-spike. Supervisor: cmd/spawn-poc (its own pkg/sextant client — Connect + Subscribe(msg.client.<agent>, DeliverAll) + re-invoke --on-wake, threading inbound text via $SX_WAKE_TEXT; --once/--deadline/--wake-timeout fail-loud). Self-validating docs/demos/spawn-spike-demo.sh: 6 passed / 0 failed on a throwaway bus — AC#1 (claude -p keyed id), AC#2 (codex exec), AC#3a (supervisor mechanism, token-free) + AC#3b (live claude -p --resume: woken agent rejoined under its SAME keyed id and published awake-ack), AC#4 (nickname vega). AC#5 notes: docs/demos/spawn-spike-notes.md. Findings: MCP server is intermittently 'pending' on --resume (first tool call -> 'No such tool available'); mitigated by a retry primer in the wake adapter. Exit-hook refinement (lena 2026-06-12) folded in: agent's Stop hook declares topics -> supervisor --watch set. No core changes (mint-on-behalf deferred to M5.2/TASK-25).
 <!-- SECTION:NOTES:END -->
