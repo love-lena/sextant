@@ -27,7 +27,7 @@ func TestRootServesDesignedApp(t *testing.T) {
 		t.Fatalf("content-type = %q, want text/html", ct)
 	}
 	body := rec.Body.String()
-	for _, marker := range []string{`id="root"`, "app.jsx", "styles.css"} {
+	for _, marker := range []string{`id="root"`, "app.js", "styles.css"} {
 		if !strings.Contains(body, marker) {
 			t.Fatalf("designed app missing %q", marker)
 		}
