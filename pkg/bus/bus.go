@@ -369,6 +369,14 @@ func (b *Bus) ClientURL() string { return b.url }
 // use it directly to issue a client. The kind is the client's self-declared role
 // (e.g. "worker"); display_name is its human label.
 func (b *Bus) MintClient(ctx context.Context, displayName, kind string) (creds, id string, err error) {
+	return b.mintClient(ctx, displayName, kind, "")
+}
+
+// mintClient is MintClient with the spawnedBy lineage marker (ADR-0033): empty
+// for a top-level identity (operator/enrollment issuance), or the minting client's
+// id for a mint-on-behalf child — which both records the spawn lineage and fences
+// that child out of dispatching children of its own.
+func (b *Bus) mintClient(ctx context.Context, displayName, kind, spawnedBy string) (creds, id string, err error) {
 	creds, id, subject, err := b.mintIdentity(displayName)
 	if err != nil {
 		return "", "", err
@@ -384,6 +392,7 @@ func (b *Bus) MintClient(ctx context.Context, displayName, kind string) (creds, 
 		Kind:        kind,
 		Epoch:       epoch,
 		IssuedAt:    nowRFC3339(),
+		SpawnedBy:   spawnedBy,
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("bus: issue: encode record: %w", err)

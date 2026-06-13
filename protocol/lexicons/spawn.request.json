@@ -1,0 +1,32 @@
+{
+  "lexicon": 1,
+  "id": "spawn.request",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "A request for a dispatcher to spawn a new client onto the bus. It carries DATA only, never a command to run: the dispatcher launches its OWN trusted harness, so a request can never inject code onto the dispatcher's host. The requester is the bus-stamped frame author, which the dispatcher trusts as the spawn lineage's true parent.",
+      "record": {
+        "type": "object",
+        "required": ["prompt"],
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "description": "The task handed to the spawned client (the dispatcher exports it to the harness as $SX_PROMPT)."
+          },
+          "nickname": {
+            "type": "string",
+            "description": "Requested display name for the spawned client (minted kind=agent). The dispatcher may adjust it to keep it unique; the bus is the sole minter (ADR-0020)."
+          },
+          "job": {
+            "type": "string",
+            "description": "Lineage tag propagated across a spawn tree, so all spawns descended from one root share a job id."
+          },
+          "parent": {
+            "type": "string",
+            "description": "Optional requester id, informational only. The dispatcher trusts the bus-stamped frame author as the real parent, never this field."
+          }
+        }
+      }
+    }
+  }
+}

@@ -252,20 +252,19 @@ func TestIssuedClientIsInDirectory(t *testing.T) {
 	t.Fatalf("issued client %q absent from directory: %+v", id, list.Clients)
 }
 
-// TestRegularClientCannotMint pins the authorization on the issuance path: a
-// regular client (a ULID) may not call clients.register to mint identities —
-// only the reserved operator/enroll authorities can (ADR-0020). The allow-list
-// lets the client *publish* the call under its own prefix; the bus rejects it on
-// authorization, so identity creation stays governed by key custody.
-func TestRegularClientCannotMint(t *testing.T) {
+// TestTopLevelClientMayMintOnBehalf pins the INVERTED authorization on the
+// issuance path (ADR-0033): a regular top-level client (a ULID, not the
+// operator/enroll authority) MAY call clients.register to mint a child with its
+// own authority — the allow-list lets it publish the call under its own prefix,
+// and the bus authorizes it because the caller carries no SpawnedBy marker. The
+// one client the bus denies on this path — a spawned worker — is covered in
+// mint_on_behalf_test.go. (clients.retire stays operator-only; mint did not.)
+func TestTopLevelClientMayMintOnBehalf(t *testing.T) {
 	b := startTestBus(t)
-	nc, id := connectClient(t, b, "agent-nomint")
-	resp := call(t, nc, id, wireapi.OpClientsRegister, wireapi.RegisterInput{DisplayName: "evil", Kind: "worker"})
-	if resp.Error == "" {
-		t.Fatal("a regular client must not be authorized to mint identities")
-	}
-	if !strings.Contains(resp.Error, "not authorized") {
-		t.Errorf("expected an authorization error, got: %s", resp.Error)
+	nc, id := connectClient(t, b, "dispatcher")
+	resp := call(t, nc, id, wireapi.OpClientsRegister, wireapi.RegisterInput{DisplayName: "worker", Kind: "agent"})
+	if resp.Error != "" {
+		t.Fatalf("a top-level client should be authorized to mint-on-behalf, got: %s", resp.Error)
 	}
 }
 

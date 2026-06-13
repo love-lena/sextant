@@ -1,0 +1,44 @@
+{
+  "lexicon": 1,
+  "id": "spawn.ack",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "A dispatcher's acknowledgement of a spawn.request: the new client's bus-minted id and the spawn lineage. Published after the client is minted and its harness launched (or with status=error if the spawn failed).",
+      "record": {
+        "type": "object",
+        "required": ["requestId", "status"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The spawned client's bus-minted ULID identity. Set when status is ok."
+          },
+          "nickname": {
+            "type": "string",
+            "description": "The spawned client's display name (minted kind=agent)."
+          },
+          "requestId": {
+            "type": "string",
+            "description": "The frame id of the spawn.request this acknowledges."
+          },
+          "job": {
+            "type": "string",
+            "description": "The lineage job id, propagated from the request."
+          },
+          "parent": {
+            "type": "string",
+            "description": "The requester id: the bus-stamped author of the spawn.request."
+          },
+          "status": {
+            "type": "string",
+            "description": "ok when the client was minted and launched; error otherwise."
+          },
+          "error": {
+            "type": "string",
+            "description": "Failure detail when status is error."
+          }
+        }
+      }
+    }
+  }
+}

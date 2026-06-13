@@ -3,10 +3,10 @@ id: TASK-70
 title: >-
   M5.1 spawn spike: PoC dispatcher that launches Claude + Codex agents onto the
   bus
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-06-12 21:07'
-updated_date: '2026-06-12 22:57'
+updated_date: '2026-06-13 01:16'
 labels:
   - feature
   - spawn
@@ -49,3 +49,9 @@ Research: m5-spawn-spike-research artifact (rev 16). Lena approved on msg.topic.
 
 PoC built on branch worktree-task-70-spawn-spike. Supervisor: cmd/spawn-poc (its own pkg/sextant client — Connect + Subscribe(msg.client.<agent>, DeliverAll) + re-invoke --on-wake, threading inbound text via $SX_WAKE_TEXT; --once/--deadline/--wake-timeout fail-loud). Self-validating docs/demos/spawn-spike-demo.sh: 6 passed / 0 failed on a throwaway bus — AC#1 (claude -p keyed id), AC#2 (codex exec), AC#3a (supervisor mechanism, token-free) + AC#3b (live claude -p --resume: woken agent rejoined under its SAME keyed id and published awake-ack), AC#4 (nickname vega). AC#5 notes: docs/demos/spawn-spike-notes.md. Findings: MCP server is intermittently 'pending' on --resume (first tool call -> 'No such tool available'); mitigated by a retry primer in the wake adapter. Exit-hook refinement (lena 2026-06-12) folded in: agent's Stop hook declares topics -> supervisor --watch set. No core changes (mint-on-behalf deferred to M5.2/TASK-25).
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+M5.1 spawn spike shipped to main in PR #121 (cmd/spawn-poc + docs/demos/spawn-spike-demo.sh, 6/6 ACs): a dispatcher can launch claude -p / codex exec agents that join the bus under their own identity and wake on a DM, no core protocol change. Closed + archived as a fold-in of the M5.2 PR (TASK-25) per the no-standalone-status-flip agreement.
+<!-- SECTION:FINAL_SUMMARY:END -->

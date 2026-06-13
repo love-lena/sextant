@@ -414,26 +414,61 @@ func (b *Bus) opClientsList(ctx context.Context) (json.RawMessage, error) {
 	return json.Marshal(out)
 }
 
-// opClientsRegister is the issuance path (ADR-0020): the single exception to "you
-// must already be someone." The caller asks the bus to mint a NEW identity (it
-// does not name itself — the bus generates the id). The bus authorizes by the
-// caller's reserved id — OperatorID is held-identity mode (mint for another),
-// EnrollID is bootstrap/enrollment mode (mint for self) — and a regular client
-// (a ULID) may not mint at all. Either way the bus does the same thing: mint the
-// credential, persist the durable record, return the id and creds.
+// opClientsRegister is the issuance path (ADR-0020): the exception to "you must
+// already be someone." The caller asks the bus to mint a NEW identity (it does
+// not name itself — the bus generates the id). Who may mint:
+//   - OperatorID — held-identity mode: mint for another, any kind (ADR-0020).
+//   - EnrollID — bootstrap/enrollment mode: mint for self (ADR-0020).
+//   - any registered client — mint-on-behalf (ADR-0033) — EXCEPT a spawned
+//     worker. The fence is inverted from an allowlist: rather than blessing a
+//     dispatcher kind (kind is weakly enforced), the bus denies only a client it
+//     itself spawned (ClientEntry.SpawnedBy set). So any top-level client can act
+//     as a dispatcher, but the workers it spawns cannot recursively dispatch —
+//     the bus stamps each mint-on-behalf child with SpawnedBy=caller.
+//
+// Either way the bus then does the same thing: mint the credential, persist the
+// durable record, return the id and creds.
 func (b *Bus) opClientsRegister(ctx context.Context, callerID string, data []byte) (json.RawMessage, error) {
-	if callerID != wireapi.OperatorID && callerID != wireapi.EnrollID {
-		return nil, fmt.Errorf("bus: clients.register: caller %q is not authorized to mint identities", callerID)
-	}
 	var in wireapi.RegisterInput
 	if err := json.Unmarshal(data, &in); err != nil {
 		return nil, fmt.Errorf("bus: clients.register: bad input: %w", err)
 	}
-	creds, id, err := b.MintClient(ctx, in.DisplayName, in.Kind)
+	var spawnedBy string
+	switch callerID {
+	case wireapi.OperatorID, wireapi.EnrollID:
+		// Held-identity / bootstrap authority — a top-level mint, not a spawned worker.
+	default:
+		// mint-on-behalf: any client may dispatch unless it is itself a spawned
+		// worker. Mark the child as spawned by this caller (lineage + the fence
+		// that stops the child from recursively dispatching).
+		if !b.callerMayDispatch(ctx, callerID) {
+			return nil, fmt.Errorf("bus: clients.register: caller %q may not dispatch new clients (a spawned worker cannot; mint-on-behalf, ADR-0033)", callerID)
+		}
+		spawnedBy = callerID
+	}
+	creds, id, err := b.mintClient(ctx, in.DisplayName, in.Kind, spawnedBy)
 	if err != nil {
 		return nil, fmt.Errorf("bus: clients.register: %w", err)
 	}
 	return json.Marshal(wireapi.RegisterOutput{ID: id, Creds: creds})
+}
+
+// callerMayDispatch reports whether callerID is allowed to mint children
+// (mint-on-behalf, ADR-0033). The rule is inverted from an allowlist: every
+// registered client may dispatch EXCEPT one the bus itself spawned on another
+// client's behalf — marked by a SpawnedBy in its durable record, a bus-stamped
+// field that does not depend on the weakly-enforced kind. Fail closed: a missing
+// or unreadable record cannot be confirmed top-level, so it may not dispatch.
+func (b *Bus) callerMayDispatch(ctx context.Context, callerID string) bool {
+	val, _, err := b.backend.Get(ctx, sx.BucketClients, callerID)
+	if err != nil {
+		return false
+	}
+	var e wireapi.ClientEntry
+	if err := json.Unmarshal(val, &e); err != nil {
+		return false
+	}
+	return e.SpawnedBy == ""
 }
 
 // opClientsRetire decommissions an identity for good (ADR-0020): operator-only. It
