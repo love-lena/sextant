@@ -17,27 +17,27 @@ class Sextant < Formula
   homepage "https://github.com/love-lena/sextant"
   # No LICENSE file ships in the repo yet, so `license` is intentionally
   # omitted (TODO: add once the repo declares one).
-  version "0.2.0"
+  version "0.3.0"
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/love-lena/sextant/releases/download/v0.2.0/sextant_v0.2.0_darwin_arm64.tar.gz"
-      sha256 "f479f7102e9676e5562bcc20fef0380359a9ad70adfa99e4db554836edf3a08c" # darwin_arm64
+      url "https://github.com/love-lena/sextant/releases/download/v0.3.0/sextant_v0.3.0_darwin_arm64.tar.gz"
+      sha256 "1c650165ff695781bc553bb4500a7f03c81420b0656e120b0344ada47bff7e89" # darwin_arm64
     end
     if Hardware::CPU.intel?
-      url "https://github.com/love-lena/sextant/releases/download/v0.2.0/sextant_v0.2.0_darwin_amd64.tar.gz"
-      sha256 "61426b92cf6438c68b95fbfce0d0c7b007c86b014b65aa303d796875ddd06d4c" # darwin_amd64
+      url "https://github.com/love-lena/sextant/releases/download/v0.3.0/sextant_v0.3.0_darwin_amd64.tar.gz"
+      sha256 "ae44657ffb840a96896f81b6fa563dd019459db86ea407a35e8693422c1053fd" # darwin_amd64
     end
   end
 
   on_linux do
     if Hardware::CPU.arm?
-      url "https://github.com/love-lena/sextant/releases/download/v0.2.0/sextant_v0.2.0_linux_arm64.tar.gz"
-      sha256 "031d2ea1c3ca0a6d83a65cb4af8c3af240313e93ffe69f27d0406391fd613bd5" # linux_arm64
+      url "https://github.com/love-lena/sextant/releases/download/v0.3.0/sextant_v0.3.0_linux_arm64.tar.gz"
+      sha256 "4a61c8edb8c492bdb4ee46a4c24fc8dabc8571cb95b51e6734e486ec1435f9b6" # linux_arm64
     end
     if Hardware::CPU.intel?
-      url "https://github.com/love-lena/sextant/releases/download/v0.2.0/sextant_v0.2.0_linux_amd64.tar.gz"
-      sha256 "2b36edf0a480b0ae4b686a9020eea0db12f25d4894646532d40f38338154580e" # linux_amd64
+      url "https://github.com/love-lena/sextant/releases/download/v0.3.0/sextant_v0.3.0_linux_amd64.tar.gz"
+      sha256 "457c987658dc17b865abe9f0c182c242463d598dd144d05e599eadaa035e532a" # linux_amd64
     end
   end
 
