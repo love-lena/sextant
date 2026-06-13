@@ -49,7 +49,7 @@ waitfor(){ local pat="$1" cmd="$2" to="${3:-25}"; for _ in $(seq 1 $((to*3))); d
 # bus as the minted identity and reports the step done.
 cat >"$P/live-harness.sh" <<'EOF'
 #!/usr/bin/env sh
-MCP="$(mktemp)"
+MCP="$(mktemp)"; trap 'rm -f "$MCP"' EXIT
 printf '{"mcpServers":{"sextant":{"command":"%s","env":{"SEXTANT_CREDS":"%s","SEXTANT_STORE":"%s"}}}}' \
   "$SEXTANT_MCP_BIN" "$SEXTANT_CREDS" "$SEXTANT_STORE" > "$MCP"
 EV=$(printf '%s' "$SX_PROMPT" | sed -n 's/.*WF_EVENTS=\([^ ]*\).*/\1/p')

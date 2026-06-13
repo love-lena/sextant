@@ -159,8 +159,8 @@ func (co *coordinator) load(ctx context.Context, planPath, idFlag string) error 
 		if wf, ok := parseWorkflow(art.Record); ok {
 			co.wf, co.rev = wf, art.Revision
 			co.wf.Owner = co.c.ID() // (re)own on resume
-			if co.wf.Status == wfDone || co.wf.Status == wfCancelled {
-				return nil // terminal; run() will no-op
+			if isTerminal(co.wf.Status) {
+				return nil // done/cancelled/failed is terminal; run() honours it
 			}
 			co.wf.Status = wfRunning
 			return co.checkpoint()
@@ -185,9 +185,21 @@ func (co *coordinator) load(ctx context.Context, planPath, idFlag string) error 
 	return nil
 }
 
+// isTerminal reports whether a workflow status is final — there is no more work
+// to walk. A resumed coordinator that loads a terminal workflow does nothing
+// (so a cancelled or failed workflow is never re-run on restart).
+func isTerminal(status string) bool {
+	return status == wfDone || status == wfCancelled || status == wfFailed
+}
+
 // run walks the steps: gate on cooperative control, find the next not-done step,
-// run it, checkpoint + emit. A resumed coordinator skips done steps for free.
+// run it, checkpoint + emit. A resumed coordinator skips done steps for free, and
+// a resumed TERMINAL workflow (done/cancelled/failed) is a no-op.
 func (co *coordinator) run() error {
+	if isTerminal(co.wf.Status) {
+		logf("workflow %s already %s; nothing to do", co.wf.ID, co.wf.Status)
+		return nil
+	}
 	for {
 		if co.isCancelled() {
 			return co.finish(wfCancelled)
@@ -208,10 +220,14 @@ func (co *coordinator) run() error {
 		logf("step %s (%s): running", step.ID, step.Kind)
 		if err := co.runStep(idx); err != nil {
 			step.Status = stepFailed
-			_ = co.checkpoint()
+			if cerr := co.checkpoint(); cerr != nil {
+				logf("warn: checkpoint after step %s failed: %v", step.ID, cerr)
+			}
 			co.emit(WorkflowEvent{Step: step.ID, Status: stepFailed, Note: err.Error()})
 			co.wf.Status = wfFailed
-			_ = co.checkpoint()
+			if cerr := co.checkpoint(); cerr != nil {
+				logf("warn: checkpoint of failed status: %v", cerr)
+			}
 			co.emit(WorkflowEvent{Status: wfFailed, Note: "step " + step.ID + " failed"})
 			return fmt.Errorf("step %s: %w", step.ID, err)
 		}
@@ -253,6 +269,12 @@ func (co *coordinator) runStep(idx int) error {
 // runDispatch composes the M5.2 dispatcher: publish a spawn.request, correlate the
 // spawn.ack by requestId, then wait for the spawned agent to report the step done
 // on the event stream. Each wait is bounded (fail-loud, never a silent hang).
+//
+// KNOWN (PoC): not crash-safe for an in-flight step. If the coordinator dies after
+// checkpointing stepRunning but before the done-event, resume re-dispatches the
+// step — and DeliverAll may replay the prior attempt's done-event, so step.Agent
+// can name the new agent while the recorded done came from the old one. Crash-safe
+// in-flight steps (a fencing token / dedup by attempt) are out of PoC scope.
 func (co *coordinator) runDispatch(step *Step) error {
 	req := spawnRequest{Prompt: co.dispatchPrompt(step), Nickname: step.Nickname, Job: co.wf.ID}
 	out, err := co.c.PublishMsg(co.ctx, co.spawnSubject, req.marshal())
@@ -357,6 +379,9 @@ func (co *coordinator) awaitAck(requestID string, timeout time.Duration) (spawnA
 	for {
 		co.mu.Lock()
 		a, ok := co.acks[requestID]
+		if ok {
+			delete(co.acks, requestID) // matched; don't let the map grow unbounded
+		}
 		co.mu.Unlock()
 		if ok {
 			return a, true
@@ -392,14 +417,33 @@ func (co *coordinator) awaitStepDone(stepID string, timeout time.Duration) bool 
 }
 
 func (co *coordinator) waitWhilePaused() {
+	wasPaused := false
 	for {
 		co.mu.Lock()
 		paused, cancelled := co.paused, co.cancelled
 		co.mu.Unlock()
-		if cancelled || !paused {
+		if cancelled {
+			return // run() records the cancel; finish() overwrites any paused status
+		}
+		if !paused {
+			if wasPaused { // resumed — reflect it in the observable envelope
+				co.wf.Status = wfRunning
+				if err := co.checkpoint(); err != nil {
+					logf("warn: checkpoint on resume: %v", err)
+				}
+				co.emit(WorkflowEvent{Status: wfRunning, Note: "resumed"})
+			}
 			return
 		}
-		logf("paused; awaiting resume/cancel")
+		if !wasPaused { // entering pause — make it visible to anyone watching the envelope
+			wasPaused = true
+			co.wf.Status = wfPaused
+			if err := co.checkpoint(); err != nil {
+				logf("warn: checkpoint on pause: %v", err)
+			}
+			co.emit(WorkflowEvent{Status: wfPaused})
+			logf("paused; awaiting resume/cancel")
+		}
 		select {
 		case <-co.ctlCh:
 		case <-co.ctx.Done():
@@ -416,7 +460,10 @@ func (co *coordinator) isCancelled() bool {
 
 // settle gives DeliverAll a moment to replay retained control before the walk
 // begins, so a cancel/pause issued while the coordinator was down is honoured
-// rather than raced past into the first step.
+// rather than raced past into the first step. NOTE: this is a local-bus heuristic,
+// not a guaranteed barrier — on a slow/remote bus the replay may land after it. A
+// production coordinator should gate on an explicit drain signal or re-read the
+// control subject before the first step.
 func (co *coordinator) settle() {
 	select {
 	case <-time.After(300 * time.Millisecond):

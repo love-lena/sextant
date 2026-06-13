@@ -43,6 +43,7 @@ func TestNextPendingSkipsDone(t *testing.T) {
 		{"fresh", []Step{{Status: stepPending}, {Status: stepPending}}, 0},
 		{"one done", []Step{{Status: stepDone}, {Status: stepPending}}, 1},
 		{"running is not done", []Step{{Status: stepDone}, {Status: stepRunning}}, 1},
+		{"failed is not done", []Step{{Status: stepDone}, {Status: stepFailed}}, 1},
 		{"all done", []Step{{Status: stepDone}, {Status: stepDone}}, -1},
 		{"empty", nil, -1},
 	}
@@ -50,6 +51,21 @@ func TestNextPendingSkipsDone(t *testing.T) {
 		w := Workflow{Steps: tc.steps}
 		if got := w.nextPending(); got != tc.want {
 			t.Errorf("%s: nextPending = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestIsTerminal pins the resume guard: done/cancelled/failed are terminal (a
+// resumed coordinator does nothing), running/paused/pending are not.
+func TestIsTerminal(t *testing.T) {
+	for _, s := range []string{wfDone, wfCancelled, wfFailed} {
+		if !isTerminal(s) {
+			t.Errorf("isTerminal(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{wfRunning, wfPaused, stepPending, ""} {
+		if isTerminal(s) {
+			t.Errorf("isTerminal(%q) = true, want false", s)
 		}
 	}
 }

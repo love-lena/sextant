@@ -89,10 +89,12 @@ if waitfor 'workflow wfdemo: done' "cat $P/wf.log" 40; then
   lists | grep -qE "[[:space:]]reviewer[[:space:]]+agent[[:space:]]" && lists | grep -qE "[[:space:]]merger[[:space:]]+agent[[:space:]]" \
     && ok "each step DISPATCHED a named agent via the M5.2 dispatcher (end-to-end composition)" \
     || no "dispatched agents reviewer/merger not in the directory"
-  reads msg.workflow.wfdemo.events | grep -q '"step":"review","status":"done"' \
-    && reads msg.workflow.wfdemo.events | grep -q '"step":"merge","status":"done"' \
-    && ok "the workflow event stream carries per-step transitions (AC#2 events)" \
-    || no "event stream missing step-done events"
+  # Author-scoped: prove the AGENT (not the coordinator's own echo) reported done.
+  RV=$(lists | awk '/ reviewer /{print $1}'); MG=$(lists | awk '/ merger /{print $1}')
+  reads msg.workflow.wfdemo.events | grep -q "<$RV>.*\"step\":\"review\",\"status\":\"done\"" \
+    && reads msg.workflow.wfdemo.events | grep -q "<$MG>.*\"step\":\"merge\",\"status\":\"done\"" \
+    && ok "each spawned agent itself reported its step done on the event stream (AC#2 events)" \
+    || no "agent-authored step-done events missing"
 else
   no "AC#2: workflow never reached done"; cat "$P/wf.log"
 fi
@@ -102,8 +104,8 @@ echo "== AC#2 idempotent resume: re-run the coordinator on the SAME id =="
 REVIEWERS_BEFORE=$(lists | grep -cE "[[:space:]](reviewer|merger)[[:space:]]+agent[[:space:]]")
 "$SXWF" --creds "$P/coord.creds" --store "$S" --id wfdemo --spawn-subject msg.topic.spawn --step-timeout 20s >"$P/wf-resume.log" 2>&1
 AGENTS_AFTER=$(lists | grep -cE "[[:space:]](reviewer|merger)[[:space:]]+agent[[:space:]]")
-if grep -q "workflow wfdemo: done" "$P/wf-resume.log" && [ "$AGENTS_AFTER" -eq "$REVIEWERS_BEFORE" ]; then
-  ok "resumed coordinator loaded the checkpoint, skipped done steps, dispatched NOTHING new (AC#2 idempotent resume)"
+if grep -q "workflow wfdemo already done" "$P/wf-resume.log" && [ "$AGENTS_AFTER" -eq "$REVIEWERS_BEFORE" ]; then
+  ok "resumed coordinator saw the terminal checkpoint, did nothing, dispatched NOTHING new (AC#2 idempotent resume)"
 else
   no "resume re-ran steps or didn't reattach (agents before=$REVIEWERS_BEFORE after=$AGENTS_AFTER)"; cat "$P/wf-resume.log"
 fi
