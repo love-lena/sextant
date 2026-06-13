@@ -165,6 +165,32 @@
       return () => es.close();
     }, [TOKEN]);
     useEffect(() => {
+      const sig = (a) => a.map((x) => x.Name + ":" + x.Revision).join(",");
+      const id = setInterval(() => {
+        apiGet("/api/artifacts").then((as) => {
+          if (!Array.isArray(as)) return;
+          setArtifacts((prev) => sig(prev) === sig(as) ? prev : as);
+        }).catch(() => {
+        });
+        apiGet("/api/subjects").then((subs) => {
+          if (!Array.isArray(subs)) return;
+          setConvos((prev) => {
+            let changed = false;
+            const next = { ...prev };
+            for (const s of subs) {
+              if (s && s.subject && !next[s.subject]) {
+                next[s.subject] = { msgs: [], last: 0, lastText: "" };
+                changed = true;
+              }
+            }
+            return changed ? next : prev;
+          });
+        }).catch(() => {
+        });
+      }, 4e3);
+      return () => clearInterval(id);
+    }, []);
+    useEffect(() => {
       const r = document.getElementById("app");
       r.style.setProperty("--brand", t.accent);
       r.style.setProperty("--brand-strong", shade(t.accent, -0.16));

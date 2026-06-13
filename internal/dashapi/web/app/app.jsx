@@ -147,6 +147,25 @@
       return ()=>es.close();
     },[TOKEN]);
 
+    // poll the directory so newly-created artifacts (and subjects) appear without
+    // a manual refresh. Artifacts are KV, not a message stream, so there's no live
+    // push for them yet — poll, but keep the state reference stable when nothing
+    // changed so we don't needlessly re-render or re-fetch records.
+    useEffect(()=>{
+      const sig = a => a.map(x=>x.Name+":"+x.Revision).join(",");
+      const id = setInterval(()=>{
+        apiGet("/api/artifacts").then(as=>{
+          if(!Array.isArray(as)) return;
+          setArtifacts(prev => sig(prev)===sig(as) ? prev : as);
+        }).catch(()=>{});
+        apiGet("/api/subjects").then(subs=>{
+          if(!Array.isArray(subs)) return;
+          setConvos(prev=>{ let changed=false; const next={...prev}; for(const s of subs){ if(s&&s.subject&&!next[s.subject]){ next[s.subject]={msgs:[],last:0,lastText:""}; changed=true; } } return changed?next:prev; });
+        }).catch(()=>{});
+      }, 4000);
+      return ()=>clearInterval(id);
+    },[]);
+
     // theme application
     useEffect(()=>{
       const r=document.getElementById("app");
