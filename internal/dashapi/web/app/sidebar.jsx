@@ -144,7 +144,7 @@
 
   }
 
-  function AgentsView({ agents }) {
+  function AgentsView({ agents, onDM }) {
     const STATE = {
       working: { c: "approved", label: "working" }, idle: { c: "draft", label: "idle" },
       blocked: { c: "changes", label: "blocked" }, offline: { c: "draft", label: "offline" }
@@ -154,7 +154,10 @@
         {agents.map((a, i) => {
           const s = STATE[a.state] || STATE.offline;
           return (
-            <div className="sx-client" key={i}>
+            <div className="sx-client" key={i}
+            onClick={() => onDM && a.id && onDM(a.id)}
+            style={{ cursor: a.id ? "pointer" : "default" }}
+            title={a.id ? ("Message " + a.name) : undefined}>
               <span className="sx-agent-av"><Avatar name={a.name} kind="agent" size={28} /><span className={"sx-agent-dot sx-sd-" + s.c + (a.state === "working" ? " is-live" : "")} /></span>
               <div className="sx-client-main">
                 <div className="sx-client-name">{a.name}</div>
@@ -177,7 +180,7 @@
     { key: "conversations", label: "Conversations", glyph: "⌗", badge: unread, tone: "brand", render: () => <ConversationsView {...ctx} /> },
     { key: "artifacts", label: "Artifacts", glyph: "◆", badge: review, tone: "review", render: () => <ArtifactsView {...ctx} /> },
     { key: "goals", label: "Goal progress", glyph: "◎", badge: 0, tone: "draft", render: () => <GoalsView goals={ctx.goals} /> },
-    { key: "agents", label: "Agent status", glyph: "◉", badge: working, tone: "approved", render: () => <AgentsView agents={ctx.agents} /> }];
+    { key: "agents", label: "Agent status", glyph: "◉", badge: working, tone: "approved", render: () => <AgentsView agents={ctx.agents} onDM={ctx.onDM} /> }];
 
   }
 

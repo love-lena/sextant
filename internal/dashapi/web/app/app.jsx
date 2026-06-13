@@ -106,6 +106,11 @@
       apiGet("/api/clients").then(cs=>setClients(Array.isArray(cs)?cs:[])).catch(()=>{});
       apiGet("/api/artifacts").then(as=>setArtifacts(Array.isArray(as)?as:[])).catch(()=>{});
       apiGet("/api/artifacts/home").then(a=>setHome((a&&a.Record)||null)).catch(()=>{});
+      // seed the conversation list with subjects the dash already knows about
+      apiGet("/api/subjects").then(subs=>{
+        if(!Array.isArray(subs)) return;
+        setConvos(prev=>{ const next={...prev}; for(const s of subs){ if(s&&s.subject&&!next[s.subject]) next[s.subject]={msgs:[],last:0,lastText:""}; } return next; });
+      }).catch(()=>{});
     },[]);
 
     // prefetch artifact records so the sidebar can group by review-state and an
@@ -152,7 +157,7 @@
 
     // derived: agents (everything that isn't a human "client" kind)
     const agents = useMemo(()=>clients.filter(c=>c.Kind!=="client").map(c=>({
-      name:c.DisplayName, state:c.Online?"working":"offline",
+      id:c.ID, name:c.DisplayName, state:c.Online?"working":"offline",
       meta:(c.Kind||"agent")+(c.Online?" · online":" · offline"),
     })),[clients]);
 
@@ -171,14 +176,19 @@
     })),[artifacts, statusOf]);
 
     // derived: conversation list from discovered subjects (newest first)
+    // classify each discovered subject: inbox (a one-way client drop), dm (a
+    // 2-participant topic), or a regular topic. An inbox is NOT a conversation.
     const convList = useMemo(()=>Object.entries(convos)
       .sort((a,b)=>(b[1].last||0)-(a[1].last||0))
-      .map(([subj,c])=>({
-        key:subj,
-        type: subj.startsWith("msg.client.")?"dm":"topic",
-        name: subj.startsWith("msg.client.")?nameOf(subj.slice(11)):topicLabel(subj),
-        snippet:c.lastText||"", time:relMs(c.last), unread:0, participants:0,
-      })),[convos, nameOf]);
+      .map(([subj,c])=>{
+        let type="topic", name=topicLabel(subj);
+        if(subj.startsWith("msg.client.")){ type="inbox"; name=nameOf(subj.slice(11))+" · inbox"; }
+        else if(subj.startsWith("msg.topic.dm.")){
+          const ids=subj.slice(13).split("."); const other=ids.find(x=>x!==self.id)||ids[0]||"";
+          type="dm"; name=nameOf(other);
+        }
+        return { key:subj, type, name, snippet:c.lastText||"", time:relMs(c.last), unread:0, participants:0 };
+      }),[convos, nameOf, self.id]);
 
     const messages = useMemo(()=>{
       const c = convos[activeConvo]; if(!c) return [];
@@ -236,12 +246,16 @@
         .then(()=>apiPublish(companionTopic(name),{ "$type":"chat.message", text:(state==="approved"?"approved ":"requested changes on ")+name }))
         .catch(()=>{});
     }
+    // a DM is a 2-participant topic with a canonical subject from the sorted
+    // pair, so both ends derive the same one (distinct from the one-way inbox).
+    function dmSubject(a,b){ return "msg.topic.dm."+[a,b].sort().join("."); }
+    function startDM(otherId){ if(!self.id||!otherId) return; expandConvo(dmSubject(self.id, otherId)); }
 
     const ctx = {
       conversations:convList, activeConvo, stageMode, onOpenConvo:openConvo, onExpandConvo:expandConvo,
       messages, draft, setDraft, onSend:send, onArtifactRef:openArtifact,
       artifacts:artItems, activeArtifact, onOpenArtifact:openArtifact,
-      goals:GOALS, agents, activity:homeActivity, self, onGoHome:goHome, home,
+      goals:GOALS, agents, activity:homeActivity, self, onGoHome:goHome, home, onDM:startDM,
     };
 
     const hasAuthor = artifact.author && artifact.author.name;

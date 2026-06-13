@@ -71,8 +71,14 @@ func runServe(ctx context.Context, opts Options, out io.Writer) error {
 	// block on their request context and would otherwise hold the drain open.
 	srvCtx, srvCancel := context.WithCancel(context.Background())
 	defer srvCancel()
+	api := dashapi.New(dashapi.Config{Bus: client, Token: token, AllowedOrigins: opts.AllowedOrigins, UIDir: opts.UIDir})
+	// Track the subjects the dash sees (msg.>) so the UI can list conversations
+	// on load, not just as new traffic arrives. Best-effort; failure is non-fatal.
+	if err := api.Watch(srvCtx); err != nil {
+		fmt.Fprintf(out, "sextant dash --serve: subject watch unavailable: %v\n", err)
+	}
 	srv := &http.Server{
-		Handler:           dashapi.New(dashapi.Config{Bus: client, Token: token, AllowedOrigins: opts.AllowedOrigins, UIDir: opts.UIDir}),
+		Handler:           api,
 		BaseContext:       func(net.Listener) context.Context { return srvCtx },
 		ReadHeaderTimeout: 10 * time.Second,
 	}

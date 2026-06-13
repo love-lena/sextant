@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@orion'
 created_date: '2026-06-13 01:12'
-updated_date: '2026-06-13 02:20'
+updated_date: '2026-06-13 02:31'
 labels:
   - feature
   - dash
@@ -53,4 +53,6 @@ Progress 2026-06-12: served from dash --serve at / (debug moved to /debug), embe
 #1 review loop DONE (commit 7d3dc5d): review-state convention (review block in artifact record; absent=review), POST /api/artifacts/{name}/review (read-merge-CAS, unit-tested), Bus interface += UpdateArtifact, sidebar groups by review-state, approve/request-changes persist + post to companion topic msg.topic.artifact.<name>, Discussion link. Verified full approve flow via agent-browser on a throwaway bus. Open Q for lena: default review-state for un-reviewed artifacts (currently review; she may want draft-until-submitted). Next: #2 curated Home as artifact.
 
 #2 curated Home DONE: Home greeting/agenda/links/note read from a home artifact (assistant-owned) when present, else built-in default; live blocks (pinned/goals/agents/activity) stay live. Created the home artifact on the real bus as orion (rev 25). Verified via agent-browser (curated heading+agenda render, live agents present, old fake greeting gone). Noted: bus Revision is a global write-sequence not a per-doc version; flagged to lena re relabeling the v<n> display.
+
+#3 conversation depth DONE: server subject registry (Server.Watch standing msg.> subscription, GET /api/subjects, unit-tested; wired in serve.go); UI seeds conversations from /api/subjects on load + classifies inbox (msg.client.<id>, one-way) vs DM (msg.topic.dm.<sorted pair>, 2-party, shows other participant) vs topic; click an agent in Agent status to open a DM. Verified end-to-end on throwaway bus. Per lena: DMs are 2-party topics, inboxes are one-way drops.
 <!-- SECTION:NOTES:END -->
