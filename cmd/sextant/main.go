@@ -44,6 +44,8 @@ func main() {
 		cmdArtifact(os.Args[2:])
 	case "dash":
 		cmdDash(os.Args[2:])
+	case "lamp":
+		cmdLamp(os.Args[2:])
 	case "update":
 		cmdUpdate(os.Args[2:])
 	case "version", "--version":
@@ -89,6 +91,9 @@ the dash (a cockpit of three master-detail browsers over the same SDK — ADR-00
   sextant dash      [--theme light|dark|auto] [--config F] [--name N]
                     (alias for the sextant-dash binary; same connection flags;
                     first run with no identity self-enrolls against a local bus)
+
+ambient warmth (a small lamp artifact — first run places one; toggles thereafter):
+  sextant lamp      [show]                      toggle the lamp on/off (show just prints state)
 
 staying current (Homebrew installs — see the README for taps + the plugin):
   sextant update                                brew update && brew upgrade the tap formula
