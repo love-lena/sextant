@@ -9,8 +9,10 @@ author and a trust level.
 ## The trust hook (ADR-0030)
 
 A `UserPromptSubmit` hook (`hooks/hooks.json` → `sextant-mcp attest`) runs on
-each woken turn. It reads new inbound messages on this session's own DM subject,
-stamps each by its unforgeable bus-stamped **author ULID** with a trust level —
+each woken turn. It reads new inbound messages on this session's own inbox
+(`msg.client.<self>`) and its principal DM (the 2-party topic
+`msg.topic.dm.<sorted ids>`, ADR-0034), stamps each by its unforgeable
+bus-stamped **author ULID** with a trust level —
 **principal** (operator-equivalent), **verified peer** (cooperate, not obey), or
 **unknown** (untrusted data) — and delivers them as **trusted, unwrapped**
 `additionalContext`, so a validated message never reaches the agent under the
@@ -55,10 +57,35 @@ verification step (the `subscribed` notice after `message_subscribe`) catches
 that, and `message_read` polling is the fallback. Pin a per-project identity
 with `SEXTANT_CONTEXT` in the project's `.mcp.json` `env` block.
 
+## Updating to a new version
+
+Updating is two independent pieces — the **binaries** (Homebrew) and the
+**plugin** (skills, hooks, MCP wiring; Claude Code) — plus restarting the
+long-lived processes, because none of them reload in place.
+
+1. **Binaries.** `sextant update` (wraps `brew update && brew upgrade
+   love-lena/sextant/sextant`) installs the new `sextant`, `sextant-mcp`, and
+   `sextant-dash`. Confirm with `sextant version`.
+2. **The bus service.** A `brew services` bus keeps running the *old* binary
+   until restarted: `brew services restart sextant`. (Running it in the
+   foreground with `sextant up`? Stop and rerun it instead.)
+3. **The plugin.** Skills, hooks, and the MCP tool surface ship in the plugin,
+   not the formula, so the brew upgrade does not touch them. Pull the new plugin
+   version: `/plugin` → manage → update (or `claude plugin marketplace update
+   sextant && claude plugin update sextant@sextant`).
+4. **Active Claude Code sessions.** A session spawns its `sextant-mcp` at startup
+   and keeps using that process — an upgrade does not swap a running server.
+   Restart the session (exit and relaunch `claude
+   --dangerously-load-development-channels plugin:sextant@sextant`) so it spawns
+   the new MCP server and loads the updated skills and trust hook.
+5. **The web dash.** `sextant dash --serve` is long-lived too: stop it (Ctrl-C)
+   and rerun it to serve the new UI over the new binary.
+
 ## Layout
 
 - `.claude-plugin/plugin.json` — the plugin manifest
 - `.claude-plugin/marketplace.json` — lets this directory be added as a local marketplace
 - `.mcp.json` — runs `sextant-mcp` (stdio MCP server, `cmd/sextant-mcp`)
 - `hooks/hooks.json` — the `UserPromptSubmit` trust hook, `sextant-mcp attest`
-- `skills/sextant/SKILL.md` — conventions, verb selection, record shapes, identity setup
+- `skills/sextant/SKILL.md` — conventions, topics/DMs/inboxes, verb selection, record shapes, identity setup
+- `skills/startup/SKILL.md` — unattended-worker startup: connect, subscribe to the principal DM, handle inbound by trust level

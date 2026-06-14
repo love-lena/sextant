@@ -83,8 +83,29 @@ const (
 // access control). "Channel" is reserved for the Claude Code harness mechanism.
 func TopicSubject(name string) string { return MessagePrefix + "topic." + name }
 
-// ClientSubject is the direct subject for a client: msg.client.<id>.
+// ClientSubject is a client's inbox subject: msg.client.<id>. An inbox is a
+// one-way mailbox — anyone may drop a frame in, the owner reads it — and it is
+// the always-on wake floor every client auto-subscribes to on connect (TASK-55).
+// Use it for pings, notifications, and reaching a client you are not already in
+// a DM with. It is NOT a conversation channel: back-and-forth belongs on a DM
+// (see DMSubject).
 func ClientSubject(id string) string { return MessagePrefix + "client." + id }
+
+// DMSubject is the subject for a direct message between two clients: a topic
+// with exactly two participants (ADR-0034). It is the convention for
+// back-and-forth between two clients — the default over an inbox, which is
+// one-way. The two ULIDs are sorted, so both sides compute the identical
+// subject from their own and the peer's id without any coordination, and a DM
+// lives in the topic space (msg.topic.dm.<lo>.<hi>) so it is an ordinary topic
+// both parties publish to and subscribe to. Being a topic, no party is woken on
+// it automatically — each subscribes to follow it live.
+func DMSubject(a, b string) string {
+	lo, hi := a, b
+	if hi < lo {
+		lo, hi = hi, lo
+	}
+	return TopicSubject("dm." + lo + "." + hi)
+}
 
 // Buckets returns the reserved buckets created at bootstrap, with the history
 // depth each keeps.

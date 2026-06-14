@@ -14,7 +14,42 @@ import (
 	"github.com/love-lena/sextant/internal/attest"
 	"github.com/love-lena/sextant/pkg/sextant"
 	"github.com/love-lena/sextant/pkg/sx"
+	"github.com/love-lena/sextant/pkg/wire"
 )
+
+// fetchFunc is the cursor-paged read attestOnce depends on — c.FetchMessages in
+// production, a fake in tests. Pulling it out lets gatherInbound's fail-soft
+// branch be exercised without a live bus.
+type fetchFunc func(ctx context.Context, subject string, since uint64, limit int) ([]wire.Frame, uint64, error)
+
+// subjectAdvance is a (subject, next-cursor) pair queued for advancing — recorded
+// only for subjects that fetched cleanly, so a skipped subject is never marked
+// delivered.
+type subjectAdvance struct {
+	subject string
+	next    uint64
+}
+
+// gatherInbound fetches each subject from its own cursor and stamps the frames
+// into one batch, with the SAME content-blind classifier for every subject. The
+// cursor is per-subject, so the subjects advance independently. Fail-soft per
+// subject: a fetch error on one must not drop the others — it logs, skips that
+// subject this turn, and (by omitting it from the returned advances) leaves its
+// cursor put so it re-reads next turn.
+func gatherInbound(ctx context.Context, fetch fetchFunc, subjects []string, cur *attest.Cursor, self, principal string, registered map[string]bool) ([]attest.Stamped, []subjectAdvance) {
+	var stamped []attest.Stamped
+	var advances []subjectAdvance
+	for _, subj := range subjects {
+		frames, next, err := fetch(ctx, subj, cur.Since(subj), 200)
+		if err != nil {
+			log.Printf("sextant-mcp attest: read %s: %v (skipping this subject this turn)", subj, err)
+			continue
+		}
+		stamped = append(stamped, attest.Stamp(frames, self, principal, registered)...)
+		advances = append(advances, subjectAdvance{subject: subj, next: next})
+	}
+	return stamped, advances
+}
 
 // attest is the claude-code plugin's UserPromptSubmit hook body (ADR-0030,
 // TASK-56). The plugin's hooks.json invokes `sextant-mcp attest` — the SAME
@@ -25,9 +60,12 @@ import (
 // records the identity it connected as to a per-session file (attest.Identity,
 // keyed on CLAUDE_CODE_SESSION_ID under CLAUDE_PLUGIN_DATA, written on every
 // (re)connect), and the hook loads those exact creds and connects co-identity. So
-// it scans the SAME worker's always-on DM subject (msg.client.<self>, the
-// auto-subscribe from TASK-55) the server is on — lockstep by construction, in
-// every case (pinned creds/context, a context_use switch, or a per-session mint).
+// it scans the SAME worker's always-on inbox (msg.client.<self>, the auto-subscribe
+// from TASK-55) the server is on — and, when a principal is designated, the
+// worker's 2-party DM topic with the principal (sx.DMSubject(self, principal),
+// ADR-0034/TASK-90), so a principal DM is stamped just like an inbox drop. Lockstep
+// by construction, in every case (pinned creds/context, a context_use switch, or a
+// per-session mint).
 //
 // It reads NEW inbound frames since a persisted per-session cursor, stamps each by
 // its unforgeable bus-stamped author ULID with a trust level (attest.Classify),
@@ -176,7 +214,7 @@ func attestOnce(ctx context.Context, cf connFlags, sessionID string, emit func(s
 	defer c.Close()
 
 	self := c.ID()
-	subject := sx.ClientSubject(self) // the worker's always-on DM (TASK-55)
+	inbox := sx.ClientSubject(self) // the worker's always-on inbox (TASK-55)
 
 	// The principal designation (TASK-54): discovered on connect, the unforgeable
 	// basis for operator-equivalence. Prefer the cached value; fall back to an
@@ -210,20 +248,31 @@ func attestOnce(ctx context.Context, cf connFlags, sessionID string, emit func(s
 		log.Printf("sextant-mcp attest: cursor load: %v (starting clean)", err)
 	}
 
-	frames, next, err := c.FetchMessages(ctx, subject, cur.Since(subject), 200)
-	if err != nil {
-		return fmt.Errorf("read %s: %w", subject, err)
+	// The subjects to scan: always the inbox (the one-way wake floor), plus the
+	// principal DM topic when a principal is designated and is not us. A DM is the
+	// default for back-and-forth (ADR-0034), so a principal DM on a 2-party topic
+	// must be stamped exactly like the inbox — otherwise it is second-class on the
+	// trust path, contradicting "DMs as default over inboxes". Both are scanned
+	// with the SAME content-blind classifier; only the subject set widens.
+	subjects := []string{inbox}
+	if principal != "" && principal != self {
+		subjects = append(subjects, sx.DMSubject(self, principal))
 	}
 
-	stamped := attest.Stamp(frames, self, principal, registered)
+	// Fetch each subject from its own cursor and stamp into one batch, fail-soft
+	// per subject (see gatherInbound).
+	stamped, advances := gatherInbound(ctx, c.FetchMessages, subjects, cur, self, principal, registered)
+
 	block := attest.BuildContext(stamped, principal)
 
-	// advanceCursor moves the cursor to the batch's next sequence and persists it.
-	// We advance to next regardless of whether any frame survived self-filtering,
-	// so our own echoes don't wedge the cursor. It runs only AFTER a successful
-	// emit (or when there is nothing to emit) — never before (M2).
+	// advanceCursor moves every cleanly-fetched subject's cursor to its batch's next
+	// sequence and persists them. We advance regardless of whether any frame survived
+	// self-filtering, so our own echoes don't wedge a cursor. It runs only AFTER a
+	// successful emit (or when there is nothing to emit) — never before (M2).
 	advanceCursor := func() {
-		cur.Advance(subject, next)
+		for _, a := range advances {
+			cur.Advance(a.subject, a.next)
+		}
 		if err := cur.Save(); err != nil {
 			// Persist failure means a possible re-delivery next turn; surface it.
 			// The block is already out, so the agent seeing it twice beats never.
