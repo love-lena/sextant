@@ -30,7 +30,7 @@ func jsonResult(v any) (*mcp.CallToolResult, error) {
 }
 
 type publishArgs struct {
-	Subject string         `json:"subject" jsonschema:"the messages-space subject to publish on (msg.topic.<name> for a topic, msg.client.<id> for a DM)"`
+	Subject string         `json:"subject" jsonschema:"the messages-space subject to publish on: msg.topic.<name> for a shared topic; msg.topic.dm.<sorted-id1>.<sorted-id2> for a 2-party DM (the default for back-and-forth, ids sorted lexicographically); msg.client.<id> for a one-way inbox/ping (not for back-and-forth)"`
 	Record  map[string]any `json:"record" jsonschema:"the lexicon record, e.g. {\"$type\":\"chat.message\",\"text\":\"...\"}"`
 }
 

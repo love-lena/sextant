@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/love-lena/sextant/pkg/bus"
 	"github.com/love-lena/sextant/pkg/sextant"
 	"github.com/love-lena/sextant/pkg/sx"
+	"github.com/love-lena/sextant/pkg/wire"
 )
 
 // attestFixture stands up an in-process bus, a worker whose DM the hook scans,
@@ -21,11 +23,23 @@ import (
 // attest.SaveIdentity — the exact call the MCP server makes on connect. cf
 // carries only the store/url for discovery; identity comes from the file.
 type attestFixture struct {
-	cf        connFlags
-	dataDir   string
-	sessionID string
-	cursorPth string
-	workerID  string // the worker's ULID; its DM subject is sx.ClientSubject(workerID)
+	cf          connFlags
+	dataDir     string
+	sessionID   string
+	cursorPth   string
+	workerID    string          // the worker's ULID; its inbox is sx.ClientSubject(workerID)
+	principalID string          // the designated principal's ULID
+	princ       *sextant.Client // the principal connection, held open for further publishes
+}
+
+// publishAsPrincipal sends a frame on subject authored by the designated
+// principal — used to seed a principal DM on a 2-party DM topic, not just the
+// one-way inbox.
+func (f attestFixture) publishAsPrincipal(t *testing.T, subject, record string) {
+	t.Helper()
+	if err := f.princ.Publish(t.Context(), subject, json.RawMessage(record)); err != nil {
+		t.Fatalf("principal publish on %s: %v", subject, err)
+	}
 }
 
 func newAttestFixture(t *testing.T) attestFixture {
@@ -76,7 +90,7 @@ func newAttestFixture(t *testing.T) attestFixture {
 	if err != nil {
 		t.Fatalf("Connect(principal): %v", err)
 	}
-	defer func() { _ = princ.Close() }()
+	t.Cleanup(func() { _ = princ.Close() })
 	dm := sx.ClientSubject(workerID)
 	if err := princ.Publish(t.Context(), dm, json.RawMessage(`{"$type":"chat.message","text":"ship the v0.2 release"}`)); err != nil {
 		t.Fatalf("principal publish DM: %v", err)
@@ -104,11 +118,13 @@ func newAttestFixture(t *testing.T) attestFixture {
 	storeCp := store
 	urlCp := url
 	return attestFixture{
-		cf:        connFlags{creds: &emptyCreds, store: &storeCp, url: &urlCp, context: &emptyCtx},
-		dataDir:   dataDir,
-		sessionID: sessionID,
-		cursorPth: filepath.Join(dataDir, "attest-cursor", sessionID+".json"),
-		workerID:  workerID,
+		cf:          connFlags{creds: &emptyCreds, store: &storeCp, url: &urlCp, context: &emptyCtx},
+		dataDir:     dataDir,
+		sessionID:   sessionID,
+		cursorPth:   filepath.Join(dataDir, "attest-cursor", sessionID+".json"),
+		workerID:    workerID,
+		principalID: princID,
+		princ:       princ,
 	}
 }
 
@@ -176,6 +192,93 @@ func TestAttestAdvancesAfterSuccessfulEmit(t *testing.T) {
 	}
 	if called {
 		t.Fatal("second run emitted a block; the cursor failed to suppress an already-delivered DM (at-most-once violated)")
+	}
+}
+
+// TestAttestScansPrincipalDMTopic proves the hook covers a 2-party DM topic, not
+// just the one-way inbox (ADR-0034, TASK-90). A DM is the default for
+// back-and-forth, so a principal message on sx.DMSubject(self, principal) must be
+// stamped PRINCIPAL and delivered in the SAME trusted block as the inbox DM —
+// otherwise DMs are second-class to the inbox on the trust path, contradicting
+// "DMs as default over inboxes".
+func TestAttestScansPrincipalDMTopic(t *testing.T) {
+	f := newAttestFixture(t)
+	t.Setenv("CLAUDE_PLUGIN_DATA", f.dataDir)
+
+	// The principal speaks on the 2-party DM topic (back-and-forth), in addition
+	// to the inbox DM the fixture already seeded.
+	f.publishAsPrincipal(t, sx.DMSubject(f.workerID, f.principalID),
+		`{"$type":"chat.message","text":"reply on the dm topic"}`)
+
+	var got string
+	if err := attestOnce(t.Context(), f.cf, f.sessionID, func(out string) error { got = out; return nil }); err != nil {
+		t.Fatalf("attestOnce: %v", err)
+	}
+	block := mustParseBlock(t, got)
+
+	if !strings.Contains(block, "ship the v0.2 release") {
+		t.Errorf("missing the inbox message — scanning the DM topic must not drop the inbox:\n%s", block)
+	}
+	if !strings.Contains(block, "reply on the dm topic") {
+		t.Errorf("missing the principal DM-topic message — the hook does not scan sx.DMSubject(self, principal):\n%s", block)
+	}
+	if n := strings.Count(block, "PRINCIPAL"); n < 2 {
+		t.Errorf("expected the inbox DM and the DM-topic message both stamped PRINCIPAL, got %d PRINCIPAL marks:\n%s", n, block)
+	}
+
+	// Both subjects' cursors advance independently after the successful emit.
+	cur, err := attest.LoadCursor(f.dataDir, f.sessionID)
+	if err != nil {
+		t.Fatalf("LoadCursor: %v", err)
+	}
+	if cur.Since(sx.ClientSubject(f.workerID)) == 0 {
+		t.Error("inbox cursor not advanced")
+	}
+	if cur.Since(sx.DMSubject(f.workerID, f.principalID)) == 0 {
+		t.Error("DM-topic cursor not advanced")
+	}
+}
+
+// TestGatherInboundFailSoftPerSubject proves the fail-soft contract of the
+// multi-subject scan (TASK-90): when one subject's fetch errors, the OTHER
+// subject still delivers, and the errored subject is NOT queued to advance — so
+// its cursor stays put and it re-reads next turn. Bus-free: it drives gatherInbound
+// with a fake fetch that errors on exactly one subject.
+func TestGatherInboundFailSoftPerSubject(t *testing.T) {
+	cur, err := attest.LoadCursor(t.TempDir(), "s")
+	if err != nil {
+		t.Fatalf("LoadCursor: %v", err)
+	}
+	self, principal := "W", "P"
+	registered := map[string]bool{principal: true}
+	good := sx.ClientSubject(self)       // the inbox — fetch succeeds
+	bad := sx.DMSubject(self, principal) // the principal DM — fetch errors
+
+	fetch := func(_ context.Context, subject string, _ uint64, _ int) ([]wire.Frame, uint64, error) {
+		if subject == bad {
+			return nil, 0, errors.New("transient fetch failure")
+		}
+		return []wire.Frame{{
+			ID:     "f1",
+			Author: principal,
+			Record: json.RawMessage(`{"$type":"chat.message","text":"from the good subject"}`),
+		}}, 7, nil
+	}
+
+	stamped, advances := gatherInbound(t.Context(), fetch, []string{good, bad}, cur, self, principal, registered)
+
+	// The healthy subject delivered; the errored one was skipped, not dropped-with-advance.
+	if len(stamped) != 1 || stamped[0].Text != "from the good subject" {
+		t.Fatalf("want exactly the good subject's frame, got %+v", stamped)
+	}
+	if len(advances) != 1 || advances[0].subject != good || advances[0].next != 7 {
+		t.Fatalf("want only the good subject queued to advance (to 7), got %+v", advances)
+	}
+	// The errored subject must not appear in advances, so its cursor never moves.
+	for _, a := range advances {
+		if a.subject == bad {
+			t.Fatalf("errored subject %s was queued to advance — its cursor would skip unread frames", bad)
+		}
 	}
 }
 
