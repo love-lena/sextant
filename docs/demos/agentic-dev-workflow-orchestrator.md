@@ -73,6 +73,9 @@ working state.
 
 - **Isolation.** All work is in `$WF_WORKTREE` on its feature branch. Never edit, commit
   to, or `cd` into the operator's main checkout or any other branch.
+- **Commit selectively.** Stage only the files your step changed (`git add <paths>`).
+  NEVER `git add -A` / `git add .` — it can sweep scratch files or credentials into the
+  branch, and from there into a public PR. Tell your workers the same in their prompts.
 - **Open, never merge.** A release step opens a PR (`gh pr create`). Never push to main,
   `gh pr merge`, force-push, or tag. Merging is the human's separate action.
 - **Approve-gated release.** Only run a release step after the principal's `approve` at a

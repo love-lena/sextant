@@ -292,7 +292,9 @@ if [ "$MODE" = run ]; then
   git -C "$ROOT" worktree add "$WT" -b "agentic/$WF_ID" "${WF_BASE:-origin/main}" || { echo "worktree add failed"; exit 2; }
 
   echo "== register the orchestrator (top-level; uses your active context) =="
-  WORKERS="$WT/.wf-workers"; mkdir -p "$WORKERS"
+  # OUTSIDE the worktree, so a worker's `git add -A` can never stage the orchestrator's
+  # creds/scratch into the branch (and thence a public PR).
+  WORKERS="${TMPDIR:-/tmp}/sextant-wf/$WF_ID"; mkdir -p "$WORKERS"
   "$SX" clients register "orchestrator-$WF_ID" --kind agent --store "$SEXTANT_STORE" --out "$WORKERS/orch.creds" >/dev/null
   ORCH_ID="$("$SX" clients list --store "$SEXTANT_STORE" --creds "$WORKERS/orch.creds" | awk -v r="orchestrator-$WF_ID" '$0 ~ r {print $1}' | head -1)"
   PRINCIPAL="$("$SX" principal get --store "$SEXTANT_STORE" --creds "$WORKERS/orch.creds" 2>/dev/null | grep -oE '01[0-9A-HJKMNP-TV-Z]{24}' | head -1)"
