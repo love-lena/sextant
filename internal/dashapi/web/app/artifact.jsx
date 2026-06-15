@@ -5,9 +5,16 @@
    fetch is in flight. Exports MarkdownArtifact(record, name) to window. */
 (function () {
 
-  function MarkdownArtifact({ record, name }) {
+  function MarkdownArtifact({ record, name, revision }) {
     const body = record && typeof record.body === "string" ? record.body : "";
     const title = (record && record.title) || name || "";
+    // "Updated since reviewed" flag (TASK-79): review.rev is the revision the
+    // review was made against, and the review write itself bumps the rev by 1 —
+    // so any FURTHER write (revision > review.rev + 1) means the content changed
+    // since the review, and the verdict may be stale. (Right after a review,
+    // revision === review.rev + 1, so it does not flag.)
+    const rv = record && record.review;
+    const stale = rv && rv.rev && revision && revision > rv.rev + 1;
     // Sanitize the rendered markdown before injecting it: artifact bodies come
     // from the bus, and the cockpit page holds the API token — unsanitized HTML
     // would be a token-exfil XSS. Require DOMPurify; without it, fall back to raw.
@@ -16,6 +23,7 @@
       <article className="md-doc">
         <style>{MD_CSS}</style>
         <div className="md-inner">
+          {stale && <div className="md-stale">⚠ Updated since {rv.state || "reviewed"} (reviewed at rev {rv.rev}, now rev {revision}) — the verdict may be stale; re-review.</div>}
           {title && <div className="md-kicker">{title}</div>}
           {html
             ? <div dangerouslySetInnerHTML={{ __html: html }} />
@@ -31,6 +39,7 @@
   .md-doc *{box-sizing:border-box;}
   .md-inner{max-width:760px;margin:0 auto;padding:46px 32px 96px;}
   .md-kicker{font-family:var(--font-mono);font-size:11.5px;letter-spacing:.16em;color:var(--brand-strong);margin-bottom:16px;text-transform:uppercase;}
+  .md-stale{font-family:var(--font-ui);font-size:13px;line-height:1.45;background:rgba(217,119,6,.13);color:#b45309;border:1px solid rgba(217,119,6,.5);border-radius:8px;padding:9px 13px;margin-bottom:20px;font-weight:600;}
   .md-doc h1{font-family:var(--font-ui);font-size:39px;line-height:1.1;letter-spacing:-.03em;font-weight:600;color:#14161b;margin:0 0 18px;}
   .md-lede{font-size:19px;line-height:1.55;color:#41454d;margin:0 0 8px;}
   .md-doc h2{font-family:var(--font-ui);font-size:23px;font-weight:600;letter-spacing:-.02em;color:#181b20;margin:40px 0 14px;padding-top:22px;border-top:1px solid #e8e8ea;}

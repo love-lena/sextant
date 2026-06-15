@@ -457,7 +457,7 @@
                 </div>
               </div>
               <div className="sx-canvas">
-                <div className="sx-page sx-page--doc"><MarkdownArtifact record={artRecord} name={artifact.name} /></div>
+                <div className="sx-page sx-page--doc"><MarkdownArtifact record={artRecord} name={artifact.name} revision={artifact.version} /></div>
               </div>
             </React.Fragment>
           ) : (

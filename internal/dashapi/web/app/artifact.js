@@ -1,15 +1,18 @@
 (function() {
-  function MarkdownArtifact({ record, name }) {
+  function MarkdownArtifact({ record, name, revision }) {
     const body = record && typeof record.body === "string" ? record.body : "";
     const title = record && record.title || name || "";
+    const rv = record && record.review;
+    const stale = rv && rv.rev && revision && revision > rv.rev + 1;
     const html = body && window.marked && window.DOMPurify ? window.DOMPurify.sanitize(window.marked.parse(body)) : "";
-    return /* @__PURE__ */ React.createElement("article", { className: "md-doc" }, /* @__PURE__ */ React.createElement("style", null, MD_CSS), /* @__PURE__ */ React.createElement("div", { className: "md-inner" }, title && /* @__PURE__ */ React.createElement("div", { className: "md-kicker" }, title), html ? /* @__PURE__ */ React.createElement("div", { dangerouslySetInnerHTML: { __html: html } }) : record ? /* @__PURE__ */ React.createElement("pre", { className: "md-raw" }, JSON.stringify(record, null, 2)) : /* @__PURE__ */ React.createElement("p", { className: "md-lede" }, "Loading\u2026")));
+    return /* @__PURE__ */ React.createElement("article", { className: "md-doc" }, /* @__PURE__ */ React.createElement("style", null, MD_CSS), /* @__PURE__ */ React.createElement("div", { className: "md-inner" }, stale && /* @__PURE__ */ React.createElement("div", { className: "md-stale" }, "\u26A0 Updated since ", rv.state || "reviewed", " (reviewed at rev ", rv.rev, ", now rev ", revision, ") \u2014 the verdict may be stale; re-review."), title && /* @__PURE__ */ React.createElement("div", { className: "md-kicker" }, title), html ? /* @__PURE__ */ React.createElement("div", { dangerouslySetInnerHTML: { __html: html } }) : record ? /* @__PURE__ */ React.createElement("pre", { className: "md-raw" }, JSON.stringify(record, null, 2)) : /* @__PURE__ */ React.createElement("p", { className: "md-lede" }, "Loading\u2026")));
   }
   const MD_CSS = `
   .md-doc{font-family:'Newsreader',Georgia,serif;color:#23262c;}
   .md-doc *{box-sizing:border-box;}
   .md-inner{max-width:760px;margin:0 auto;padding:46px 32px 96px;}
   .md-kicker{font-family:var(--font-mono);font-size:11.5px;letter-spacing:.16em;color:var(--brand-strong);margin-bottom:16px;text-transform:uppercase;}
+  .md-stale{font-family:var(--font-ui);font-size:13px;line-height:1.45;background:rgba(217,119,6,.13);color:#b45309;border:1px solid rgba(217,119,6,.5);border-radius:8px;padding:9px 13px;margin-bottom:20px;font-weight:600;}
   .md-doc h1{font-family:var(--font-ui);font-size:39px;line-height:1.1;letter-spacing:-.03em;font-weight:600;color:#14161b;margin:0 0 18px;}
   .md-lede{font-size:19px;line-height:1.55;color:#41454d;margin:0 0 8px;}
   .md-doc h2{font-family:var(--font-ui);font-size:23px;font-weight:600;letter-spacing:-.02em;color:#181b20;margin:40px 0 14px;padding-top:22px;border-top:1px solid #e8e8ea;}
