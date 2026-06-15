@@ -344,13 +344,17 @@ if [ "$MODE" = run ]; then
 #!/usr/bin/env sh
 set -u
 common="--append-system-prompt-file $WF_PLAYBOOK --mcp-config $WF_MCP --strict-mcp-config --add-dir $WF_WORKTREE --permission-mode acceptEdits --allowedTools $WF_ALLOWED --model $WF_ORCH_MODEL"
-if [ -f "$WF_SESSION" ]; then
-  # a control message woke us at the gate; resume with its text.
+if [ -s "$WF_SESSION" ]; then
+  # resume turn: the supervisor loop woke us with $SX_WAKE_TEXT (a gate control, or a
+  # "continue" nudge when the prior turn ended mid-pipeline). -s (non-empty), not -f:
+  # an empty session file would make --resume "" error.
   claude -p "$SX_WAKE_TEXT" --resume "$(cat "$WF_SESSION")" $common --output-format text </dev/null
 else
+  # first turn: drive the pipeline from the task + the pipeline file; capture the session
+  # id (robust jq parse) so subsequent supervisor turns can --resume this orchestrator.
   out="$(claude -p "Task: $WF_TASK. Your pipeline is in the file $WF_PIPELINE - read it first, then execute it step by step per your playbook." $common --output-format json </dev/null)"
   printf '%s' "$out" > "$WF_TURN1"
-  printf '%s' "$out" | grep -oE '"session_id":"[^"]+"' | head -1 | cut -d'"' -f4 > "$WF_SESSION" 2>/dev/null || true
+  printf '%s' "$out" | jq -r '.session_id // empty' > "$WF_SESSION" 2>/dev/null || true
 fi
 EOF
   chmod +x "$WORKERS/orch-turn.sh"
