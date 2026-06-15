@@ -21,14 +21,15 @@ const kindWorkflowDef = "sextant.workflow.def/v1"
 
 // workflowDef is the record an `sextant workflow run` reads from the named artifact.
 type workflowDef struct {
-	Type              string `json:"$type"`
-	Title             string `json:"title,omitempty"`
-	Task              string `json:"task"`                        // what to build (required)
-	Base              string `json:"base,omitempty"`              // base ref (default origin/main)
-	Repo              string `json:"repo,omitempty"`              // target repo path (default: cwd git root)
-	OrchestratorModel string `json:"orchestratorModel,omitempty"` // default claude-sonnet-4-6
-	WorkerModel       string `json:"workerModel,omitempty"`       // default claude-haiku-4-5
-	Notes             string `json:"notes,omitempty"`
+	Type              string          `json:"$type"`
+	Title             string          `json:"title,omitempty"`
+	Task              string          `json:"task"`                        // what to build (required)
+	Steps             json.RawMessage `json:"steps"`                       // the explicit pipeline (required) — see the playbook
+	Base              string          `json:"base,omitempty"`              // base ref (default origin/main)
+	Repo              string          `json:"repo,omitempty"`              // target repo path (default: cwd git root)
+	OrchestratorModel string          `json:"orchestratorModel,omitempty"` // default claude-sonnet-4-6
+	WorkerModel       string          `json:"workerModel,omitempty"`       // default claude-haiku-4-5
+	Notes             string          `json:"notes,omitempty"`
 }
 
 func cmdWorkflow(args []string) {
@@ -83,6 +84,15 @@ func workflowRun(args []string) {
 	if strings.TrimSpace(def.Task) == "" {
 		fatal("workflow %q has no task", name)
 	}
+	var steps []json.RawMessage
+	if len(def.Steps) > 0 {
+		if err := json.Unmarshal(def.Steps, &steps); err != nil {
+			fatal("workflow %q has an invalid steps list: %v", name, err)
+		}
+	}
+	if len(steps) == 0 {
+		fatal("workflow %q has no steps (the def must declare an explicit pipeline; see the orchestrator playbook)", name)
+	}
 	if def.OrchestratorModel == "" {
 		def.OrchestratorModel = "claude-sonnet-4-6"
 	}
@@ -108,8 +118,8 @@ func workflowRun(args []string) {
 		base = "origin/main"
 	}
 
-	fmt.Printf("workflow %q (rev %d)\n  task:   %s\n  repo:   %s\n  base:   %s\n  models: orchestrator=%s worker=%s\n  store:  %s\n",
-		name, a.Revision, wfFirstLine(def.Task), repo, base, def.OrchestratorModel, def.WorkerModel, store)
+	fmt.Printf("workflow %q (rev %d)\n  task:   %s\n  steps:  %d\n  repo:   %s\n  base:   %s\n  models: orchestrator=%s worker=%s\n  store:  %s\n",
+		name, a.Revision, wfFirstLine(def.Task), len(steps), repo, base, def.OrchestratorModel, def.WorkerModel, store)
 	if *dry {
 		fmt.Println("(dry-run: validated; not launching)")
 		return
@@ -122,6 +132,7 @@ func workflowRun(args []string) {
 		"WF_BASE="+base,
 		"WF_ORCH_MODEL="+def.OrchestratorModel,
 		"WF_CLAUDE_MODEL="+def.WorkerModel,
+		"WF_STEPS="+string(def.Steps),
 	)
 	cmd := exec.Command("bash", harness, "run", def.Task)
 	cmd.Env = env

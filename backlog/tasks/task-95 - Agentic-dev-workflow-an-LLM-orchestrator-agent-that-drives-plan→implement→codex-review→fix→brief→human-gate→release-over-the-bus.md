@@ -6,7 +6,7 @@ title: >-
 status: In Progress
 assignee: []
 created_date: '2026-06-15 01:32'
-updated_date: '2026-06-15 01:50'
+updated_date: '2026-06-15 02:37'
 labels:
   - feature
   - orchestration
@@ -34,9 +34,9 @@ lena's flagship use of the orchestration: a single LLM orchestrator AGENT (not a
 - [ ] #5 Guardrails: all work isolated to a git worktree+branch (never the operator's main checkout); release = gh pr create (open PR, NOT auto-merge); the release step is gated on lena's approve
 - [x] #6 A token-free stub dry-run proves the harness plumbing (worktree setup, named-identity registration, the gate control path, the open-PR path) on a throwaway bus
 - [ ] #7 The live run is operator-driven (lena): the safety classifier blocks an unattended session from launching autonomous editing agents; a one-command harness lets her drive it on the real bus
+- [ ] #8 sextant workflow run <name> reads a sextant.workflow.def/v1 artifact (task/base/models) and launches the orchestrator under the operator's authority; no env vars
+- [ ] #9 Operator update (after the next release): cut a sextant release so the brew CLI has the workflow verb (sextant update + brew upgrade); until then run via the branch build (go run ./cmd/sextant workflow run <name>)
 <!-- AC:END -->
-
-
 
 ## Implementation Plan
 
@@ -48,4 +48,6 @@ v1, Architecture B on the sextant repo: (1) orchestrator playbook prompt; (2) wo
 
 <!-- SECTION:NOTES:BEGIN -->
 Discovered in: lena's orchestration-m5 session 2026-06-14, real-use-case request. Design (with the A-vs-B + blast-radius decisions): artifact agentic-dev-workflow-design. Composes [[feat-m5-dispatcher]] (spawn) + the M5.1 spawn spike (wake/resume). Decisions: B (coordinator spawns workers) over A (orchestrator does the work itself); sextant repo as the test target; real bus; release=open-PR not auto-merge for v1.
+
+Trigger redesigned per lena (2026-06-14): workflow-as-artifact + 'sextant workflow run <name>' (no env-var harness). cmd/sextant/workflow.go (commit 23c6b6e); progress artifact is <id>.run (distinct from the <id> def). First live target: def artifact 'task62'; run-instructions in artifact task62-run-instructions.
 <!-- SECTION:NOTES:END -->

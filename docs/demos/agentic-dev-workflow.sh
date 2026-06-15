@@ -312,6 +312,8 @@ if [ "$MODE" = run ]; then
   : "${WF_ORCH_MODEL:=claude-sonnet-4-6}"; export WF_ORCH_MODEL   # the orchestrator reasons; workers default to haiku
   printf '{"mcpServers":{"sextant":{"command":"%s","env":{"SEXTANT_CREDS":"%s","SEXTANT_STORE":"%s"}}}}' \
     "$SXMCP" "$WORKERS/orch.creds" "$SEXTANT_STORE" > "$WF_MCP"
+  export WF_PIPELINE="$WORKERS/pipeline.json"
+  printf '%s' "${WF_STEPS:-[]}" > "$WF_PIPELINE"   # the def's explicit steps; the orchestrator reads + executes them
 
   # The orchestrator's turn: claude -p with the playbook as an appended system prompt;
   # resumed by spawn-poc on a control message at the gate. A QUOTED heredoc — orch-turn.sh
@@ -326,7 +328,7 @@ if [ -f "$WF_SESSION" ]; then
   # a control message woke us at the gate; resume with its text.
   claude -p "$SX_WAKE_TEXT" --resume "$(cat "$WF_SESSION")" $common --output-format text </dev/null
 else
-  out="$(claude -p "Task: $WF_TASK" $common --output-format json </dev/null)"
+  out="$(claude -p "Task: $WF_TASK. Your pipeline is in the file $WF_PIPELINE - read it first, then execute it step by step per your playbook." $common --output-format json </dev/null)"
   printf '%s' "$out" > "$WF_TURN1"
   printf '%s' "$out" | grep -oE '"session_id":"[^"]+"' | head -1 | cut -d'"' -f4 > "$WF_SESSION" 2>/dev/null || true
 fi
