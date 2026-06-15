@@ -155,7 +155,20 @@ else
 fi
 EOF
 
-  chmod +x "$bin"/wf-* "$bin"/_wf-esc
+  # Shell-level open-PR guard (TASK-98): a `gh` shim, first on the orchestrator's + workers'
+  # PATH, that REFUSES `gh ... merge` so the workflow can only OPEN a PR, never merge it —
+  # a hard barrier, not just LLM compliance with the playbook. `gh pr create` and read-only
+  # gh pass straight through to the real binary (captured here before $WF_BIN is on PATH).
+  realgh="$(command -v gh 2>/dev/null || echo gh)"
+  cat >"$bin/gh" <<EOF
+#!/usr/bin/env sh
+case " \$* " in
+  *" merge "*) echo "wf-guard: refusing 'gh ... merge' — the agentic workflow opens PRs, it never merges (release guard)" >&2; exit 3 ;;
+esac
+exec "$realgh" "\$@"
+EOF
+
+  chmod +x "$bin"/wf-* "$bin"/_wf-esc "$bin/gh"
 }
 
 # ============================ DEMO (token-free plumbing) ============================
