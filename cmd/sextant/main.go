@@ -97,7 +97,7 @@ the dash (a cockpit of three master-detail browsers over the same SDK — ADR-00
 ambient warmth (a small lamp artifact — first run places one; toggles thereafter):
   sextant lamp      [show]                      toggle the lamp on/off (show just prints state)
 
-agentic dev workflow (run a workflow-def artifact: plan→review→gate→PR — TASK-97):
+agentic dev workflow (run a workflow-def artifact: plan→review→gate→PR — TASK-98):
   sextant workflow run <name> [--dry-run]       read the named workflow-def artifact + launch the orchestrator
 
 staying current (Homebrew installs — see the README for taps + the plugin):

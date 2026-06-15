@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Agentic dev workflow — run harness + token-free plumbing demo (TASK-97).
+# Agentic dev workflow — run harness + token-free plumbing demo (TASK-98).
 #
 # An LLM ORCHESTRATOR drives a task to an open PR by spawning a fresh worker per step
 # and resuming at each handoff (see agentic-dev-workflow-orchestrator.md +
