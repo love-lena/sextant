@@ -33,7 +33,16 @@ The orchestrator is the playbook `agentic-dev-workflow-orchestrator.md`.
   push to main, force-push, or tag); the release step is **gated on the principal's
   `approve`**.
 
-## The pipeline (the orchestrator's playbook)
+## The pipeline lives in the def; the playbook is a generic executor
+
+A workflow is a `sextant.workflow.def/v1` **artifact** with an explicit, natural-language
+`steps` list (each step: id, role, harness, instructions, review, onChanges, next,
+maxRounds, sticky, gate). **`sextant workflow run <name>`** (cmd/sextant/workflow.go) reads
+the def and launches the orchestrator, which **executes whatever steps the def provides** —
+the playbook no longer hardcodes the pipeline. Step order = array order, with
+`next`/`onChanges` for loops. This is the "natural-language steps, LLM-interpreted"
+workflow *type*; future types may do real orchestration/validation. The standard dev
+pipeline a def expresses:
 
 ```
 plan (superpowers writing-plans → PLAN.md)
@@ -46,8 +55,9 @@ plan (superpowers writing-plans → PLAN.md)
 ```
 
 `PLAN.md` + the feature branch + named artifacts (review notes, the brief) carry state
-between steps — durable + observable, not in-memory context. Reviewers end their output
-with `VERDICT: approved` / `VERDICT: changes-requested`.
+between steps — durable + observable, not in-memory context. The progress artifact is
+`<id>.run` (distinct from the `<id>` def). Reviewers end with `VERDICT: approved` /
+`VERDICT: changes-requested`.
 
 ## How a worker is spawned (composes M5.1 + M5.2)
 
@@ -95,6 +105,26 @@ loop the spawn spike proved (claude -p --resume rejoins under the same keyed ide
   approve.
 - No merge/push-to-main/force-push/tag anywhere in v1.
 - Every loop is bounded (fail-loud round caps), so a confused reviewer can't spin forever.
+
+## Lessons from the first live run (TASK-62, real bus)
+
+The first live run drove the full pipeline end-to-end (plan → implement → codex review,
+3 real rounds → fix → brief → brief-review, 2 rounds → gate) and produced a genuine fix +
+PR brief. Findings folded back in:
+
+- **Creds leak → fixed.** A fixer worker ran `git add -A` and committed the orchestrator's
+  `.wf-workers/` scratch dir — **worker creds included** — which a release (`gh pr create`)
+  would push to the public repo. Fix: the harness now puts `.wf-workers` **outside** the
+  worktree (`/tmp/sextant-wf/<id>`), and the playbook forbids `git add -A`. (The LLM fixer
+  even self-healed the tree + added a `.gitignore` entry, but creds remained in *history* —
+  so keeping them un-committable at the source is the real fix.)
+- **The live run is terminal-operator-initiated by design.** The harness action classifier
+  refuses to let an *unattended agent* launch the autonomous editing workers (they push to
+  a public repo), and a principal's permission given **over the bus** does NOT clear it —
+  bus content isn't verified terminal-user intent. A human runs `sextant workflow run` from
+  their terminal (or adds a Bash allow-rule). This is the right boundary.
+- **codex review is the slow long-pole** (~28 min/round, multi-hour end-to-end). Functional;
+  speed is the main thing to improve.
 
 ## Open / deferred
 
