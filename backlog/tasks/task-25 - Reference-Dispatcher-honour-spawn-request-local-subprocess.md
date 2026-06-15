@@ -1,10 +1,10 @@
 ---
 id: TASK-25
 title: 'Reference Dispatcher: honour spawn-request (local subprocess)'
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-06-04 18:05'
-updated_date: '2026-06-13 02:29'
+updated_date: '2026-06-15 16:55'
 labels:
   - 'slug:feat-m5-client-standup'
 milestone: 'M5: Orchestration (spawn + workflows)'
@@ -40,3 +40,9 @@ M5.2 built on branch worktree-feat-m5-dispatcher: cmd/sextant-dispatch (subscrib
 
 Revised AC#6 per lena's review (2026-06-12): mint authority INVERTED from a kind=dispatcher allowlist to a spawned-worker fence. The bus stamps spawned_by=<caller> on every mint-on-behalf child (ClientEntry.SpawnedBy); clients.register is authorized from ANY registered client EXCEPT one carrying that marker. So any top-level client can dispatch, but a spawned worker cannot recursively dispatch (no fork-bomb); recursion flows through the dispatcher. Doesn't depend on kind (weakly enforced). New core diff = commit b97ee8f; client-side = fdafe3a; branch force-pushed. Demo still 10/10. Re-review pending (sirius core diff + lena).
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in d5168e9 (#122, ADR-0033): mint-on-behalf inverted model — any registered client may dispatch EXCEPT one with SpawnedBy set; bus stamps SpawnedBy on minted children.
+<!-- SECTION:FINAL_SUMMARY:END -->

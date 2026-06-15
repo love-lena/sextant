@@ -4,7 +4,7 @@ title: 'Cross-machine connectivity: smoke spike (expands later)'
 status: To Do
 assignee: []
 created_date: '2026-06-04 17:56'
-updated_date: '2026-06-04 18:11'
+updated_date: '2026-06-15 16:58'
 labels: []
 milestone: 'M3: Cross-machine connectivity'
 dependencies: []
@@ -33,3 +33,9 @@ M3 STARTS AS A SPIKE and expands into the items below when we tackle it. The bar
 - [ ] #7 DRAFT: Multi-host NATS topology (leaf node / cluster) is supported or explicitly deferred with rationale
 - [ ] #8 DRAFT: Bare-minimum smoke spike FIRST — tunnel-only host-to-host comms with ZERO bind change (sextant up --port on host A; ssh -L from host B; scp the creds; a client on B reaches the bus through the tunnel), run early to surface rough spots (port stability, cross-host clock skew + message quarantine, NATS server advertise) before committing the full milestone
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Dependency note 2026-06-15 (lena): TASK-24 depends on TASK-95 (agentic dev workflow) — the goal is to kick off -p workflows on remote machines, not just connect a manual client. The SSH path is proven; the open question is the -p workflow launch + creds/context handoff.
+<!-- SECTION:NOTES:END -->

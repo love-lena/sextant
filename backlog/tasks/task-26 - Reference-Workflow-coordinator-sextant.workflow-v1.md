@@ -1,10 +1,10 @@
 ---
 id: TASK-26
 title: 'Reference Workflow coordinator: sextant.workflow/v1'
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-06-04 18:05'
-updated_date: '2026-06-13 02:59'
+updated_date: '2026-06-15 16:55'
 labels:
   - 'slug:feat-m5-workflow-coordinator'
 milestone: 'M5: Orchestration (spawn + workflows)'
@@ -35,3 +35,9 @@ Aligned to the approved M5 breakdown (artifact orchestration-m5-effort) by canop
 
 M5.4 built on branch feat/m5-workflow: cmd/sextant-workflow (engine-as-library coordinator) drives a declarative workflow — state in a sextant.workflow/v1 Artifact (CAS-checkpointed), events on msg.workflow.<id>.events, cooperative control on msg.workflow.<id>.control — and a 'dispatch' step COMPOSES the M5.2 dispatcher (spawn.request → correlate spawn.ack → await the agent's step-done). Idempotent step-granular resume. Self-validating docs/demos/m5-workflow-demo.sh = 8/8 (token-free; composes M5.2 end-to-end). FINDING: the reserved sx.workflow.*/sx_workflows Layer-0 names aren't client-reachable (sx namespace is bus-only, ADR-0012), so the coordinator realizes Layer-0 over msg.* + ARTIFACTS per ADR-0011's convention-over-primitives — no core change. M5.3 request/reply helper NOT needed (spawn.ack pattern covers it; TASK-23 stays parked).
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in 61a7789 (#123): M5.4 reference workflow coordinator — sextant.workflow/v1 end-to-end, 8/8 self-validating demo. M5 fully complete.
+<!-- SECTION:FINAL_SUMMARY:END -->

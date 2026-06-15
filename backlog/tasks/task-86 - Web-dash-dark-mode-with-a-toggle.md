@@ -1,11 +1,11 @@
 ---
 id: TASK-86
 title: 'Web dash: dark mode with a toggle'
-status: In Progress
+status: Done
 assignee:
   - '@orion'
 created_date: '2026-06-13 04:28'
-updated_date: '2026-06-13 04:28'
+updated_date: '2026-06-13 05:10'
 labels:
   - feature
   - dash
@@ -37,3 +37,9 @@ Add a full dark theme to the D2 web cockpit (TASK-71) plus a visible toggle butt
 <!-- SECTION:NOTES:BEGIN -->
 Requested by lena 2026-06-12 on frontend-dash. Follow-up on D2 [[feat-dash-web-ui-d2]] (TASK-71). Sidebar already has charcoal tokens; stage/Home/md use hardcoded light colors needing dark overrides.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in PR #125 (squash c50da4090): dark mode (#app.dark theme across stage/sidebar/Home/markdown + a persisted topbar toggle) + Home hot-reload (home config + agent presence added to the 4s poll). Pure CSS+JS, no Go change. Demo 8/8. Not archived.
+<!-- SECTION:FINAL_SUMMARY:END -->
