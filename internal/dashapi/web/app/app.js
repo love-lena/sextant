@@ -63,6 +63,21 @@
     const t = Date.parse(iso || "");
     return isNaN(t) ? "" : relMs(t);
   }
+  function ulidTime(id) {
+    if (!id || id.length < 10) return 0;
+    const A = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    let t = 0;
+    for (let i = 0; i < 10; i++) {
+      const v = A.indexOf((id[i] || "").toUpperCase());
+      if (v < 0) return 0;
+      t = t * 32 + v;
+    }
+    return t;
+  }
+  function frameTime(f) {
+    const t = Date.parse(f && f.createdAt || "");
+    return isNaN(t) ? ulidTime(f && f.id) : t;
+  }
   function topicLabel(subject) {
     if (subject.startsWith("msg.topic.")) return subject.slice(10);
     if (subject.startsWith("msg.client.")) return subject.slice(11);
@@ -167,17 +182,62 @@
         const subj = ev.subject, f = ev.frame;
         if (!subj || !f) return;
         const text = frameText(f.record);
-        const msg = { id: f.id, author: f.author, text, ts: Date.now() };
+        const at = frameTime(f) || Date.now();
+        const msg = { id: f.id, author: f.author, text, ts: at };
         setConvos((prev) => {
           const cur = prev[subj] || { msgs: [] };
           if (cur.msgs.some((x) => x.id === msg.id)) return prev;
-          return { ...prev, [subj]: { ...cur, msgs: [...cur.msgs, msg].slice(-200), last: Date.now(), lastText: text } };
+          return { ...prev, [subj]: { ...cur, msgs: [...cur.msgs, msg].slice(-200), last: Math.max(cur.last || 0, at), lastText: text } };
         });
-        setActivity((prev) => [{ subj, author: f.author, text, ts: Date.now() }, ...prev].slice(0, 40));
+        setActivity((prev) => [{ subj, author: f.author, text, ts: at }, ...prev].slice(0, 40));
       };
       es.onerror = () => {
       };
       return () => es.close();
+    }, [TOKEN]);
+    const seededRef = useRef(false);
+    useEffect(() => {
+      if (!TOKEN || seededRef.current) return;
+      seededRef.current = true;
+      let cancelled = false;
+      const latestTime = (subj) => {
+        const PAGE = 200, MAX = 25;
+        let best = 0;
+        const page = (since, guard) => apiGet("/api/messages?subject=" + encodeURIComponent(subj) + "&since=" + since + "&limit=" + PAGE).then((res) => {
+          const frames = res && res.messages || [];
+          for (const f of frames) {
+            const t2 = frameTime(f);
+            if (t2 > best) best = t2;
+          }
+          const next = res && res.next_cursor;
+          if (guard > 1 && frames.length >= PAGE && next && next > since) return page(next, guard - 1);
+          return best;
+        }).catch(() => best);
+        return page(0, MAX);
+      };
+      apiGet("/api/subjects").then((subs) => {
+        if (cancelled || !Array.isArray(subs)) return;
+        return Promise.all(subs.map((s) => {
+          const subj = s && s.subject;
+          if (!subj) return null;
+          return latestTime(subj).then((t2) => ({ subj, t: t2 }));
+        }).filter(Boolean));
+      }).then((pairs) => {
+        if (cancelled || !pairs) return;
+        setConvos((prev) => {
+          const next = { ...prev };
+          for (const p of pairs) {
+            if (!p || !p.t) continue;
+            const cur = next[p.subj] || { msgs: [], last: 0, lastText: "" };
+            if (p.t > (cur.last || 0)) next[p.subj] = { ...cur, last: p.t };
+          }
+          return next;
+        });
+      }).catch(() => {
+      });
+      return () => {
+        cancelled = true;
+      };
     }, [TOKEN]);
     useEffect(() => {
       const sig = (a) => a.map((x) => x.Name + ":" + x.Revision).join(",");
@@ -241,7 +301,7 @@
     const statusOf = useCallback((name) => {
       const rec = records[name];
       const st = rec && rec.review && rec.review.state;
-      return REVIEW_STATES.indexOf(st) >= 0 ? st : "draft";
+      return REVIEW_STATES.indexOf(st) >= 0 ? st : "review";
     }, [records]);
     const artItems = useMemo(() => artifacts.filter((a) => a.Name !== "home" && !a.Name.startsWith("status.")).map((a) => ({
       name: a.Name,
