@@ -112,7 +112,7 @@ func workflowRun(args []string) {
 		fatal("orchestrator harness not found at %s (v1 runs from a sextant checkout): %v", harness, err)
 	}
 
-	store := defaultStore()
+	store := *cf.store // the resolved --store (defaults to defaultStore()); the harness must use the SAME bus the command connected with
 	base := def.Base
 	if base == "" {
 		base = "origin/main"

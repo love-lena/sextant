@@ -119,12 +119,16 @@ case "$harness" in
       -c "mcp_servers.sextant.env.SEXTANT_CREDS=$creds" \
       -c "mcp_servers.sextant.env.SEXTANT_STORE=$SEXTANT_STORE" </dev/null ;;
   *)
-    # claude worker: edit+bash scoped to the worktree.
-    claude -p "$prompt" --model "${WF_CLAUDE_MODEL:-claude-haiku-4-5}" \
+    # claude worker: edit+bash scoped to the worktree. Capture the session id so a sticky
+    # step (wf-spawn-resume) can actually resume THIS agent — without this, resume silently
+    # falls back to a fresh agent and stickiness is a no-op (caught by the dogfood review).
+    out="$(claude -p "$prompt" --model "${WF_CLAUDE_MODEL:-claude-haiku-4-5}" \
       --strict-mcp-config --mcp-config "$mcp" --add-dir "$WF_WORKTREE" \
       --permission-mode acceptEdits \
       --allowedTools "Read,Edit,Write,Bash,mcp__sextant__message_publish,mcp__sextant__artifact_create,mcp__sextant__artifact_update" \
-      --output-format text </dev/null ;;
+      --output-format json </dev/null)"
+    printf '%s' "$out" | jq -r '.session_id // empty' > "$WF_WORKERS/$role.session" 2>/dev/null || true
+    printf '%s' "$out" | jq -r '.result // .text // empty' ;;
 esac
 EOF
 
@@ -138,8 +142,9 @@ fi
 sid="$WF_WORKERS/$role.session"
 mcp="$WF_WORKERS/$role.mcp.json"
 prompt="$(cat "$promptfile")"
-# Resume the prior claude session if we captured one, else fall back to a fresh turn.
-if [ -f "$sid" ]; then
+# Resume the prior claude session if we captured a NON-EMPTY one (-s, not -f: an empty
+# session file would make --resume "" error); else fall back to a fresh turn.
+if [ -s "$sid" ]; then
   claude -p "$prompt" --resume "$(cat "$sid")" --model "${WF_CLAUDE_MODEL:-claude-haiku-4-5}" \
     --strict-mcp-config --mcp-config "$mcp" --add-dir "$WF_WORKTREE" \
     --permission-mode acceptEdits \
