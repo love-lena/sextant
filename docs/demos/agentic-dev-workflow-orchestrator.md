@@ -65,6 +65,13 @@ For each step, `wf-progress <id> running`, then:
   <prompt>`. Then go to `next` (or the following step).
 - A step with no `next` and no following step ends the workflow.
 
+**On completion (after the final step, e.g. the PR is opened), emit `wf-event "DONE: <PR
+url or one-line summary>"`.** This is how your supervisor knows the workflow finished and
+stops re-invoking you. **If a turn is ending and the workflow is NOT done and NOT at a
+gate** (you simply have more pipeline to run), that's fine — just stop; the supervisor
+re-invokes you with a "continue" nudge, and you pick up from `$WF_PIPELINE` + the
+`$WF_ID.run` progress artifact. So you never have to cram the whole pipeline into one turn.
+
 Keep the `$WF_ID.run` progress artifact current and `wf-event` every transition, so the
 whole run is observable on the dash. You persist across resumes — your context is the
 working state.

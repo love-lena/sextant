@@ -342,12 +342,52 @@ fi
 EOF
   chmod +x "$WORKERS/orch-turn.sh"
 
-  echo "== launch the orchestrator (first turn drives to the gate; spawn-poc resumes it on your control) =="
+  echo "== launch the orchestrator under a resilient supervisor loop =="
   echo "   workflow id: $WF_ID   worktree: $WT   DM: $DM"
-  "$WORKERS/orch-turn.sh"
-  echo "== orchestrator yielded; supervising the gate (reply approve / changes <feedback> on msg.workflow.$WF_ID.control) =="
-  exec "$SXPOC" --creds "$WORKERS/orch.creds" --store "$SEXTANT_STORE" --agent "$ORCH_ID" \
-    --watch "msg.workflow.$WF_ID.control" --on-wake "$WORKERS/orch-turn.sh" --deadline 24h
+
+  # run_state inspects the workflow's observable state after an orchestrator turn:
+  #   done    — a DONE event was emitted (the release step opened the PR); stop.
+  #   gate    — the run artifact shows a step awaiting-approval; wait for the human control.
+  #   running — the turn ended mid-pipeline (e.g. ran out of turn budget); resume to continue.
+  # This is the turn-RESILIENCE fix: the dogfood stalled because the orchestrator drove the
+  # whole pipeline in ONE claude -p turn and the turn ended mid-pipeline. The loop re-invokes
+  # --resume to carry on across turns, yielding to the human only at a real gate.
+  run_state() {
+    "$SX" read "msg.workflow.$WF_ID.events" --since 0 --store "$SEXTANT_STORE" --creds "$WORKERS/orch.creds" 2>/dev/null \
+      | grep -q '"note":"DONE' && { echo done; return; }
+    "$SX" artifact get "$WF_ID.run" --json --store "$SEXTANT_STORE" --creds "$WORKERS/orch.creds" 2>/dev/null \
+      | grep -q 'awaiting-approval' && { echo gate; return; }
+    echo running
+  }
+
+  # wait_for_control blocks until a control lands on the control subject and returns its text
+  # (approve / changes <feedback>). spawn-poc --once is the proven wake mechanism.
+  wait_for_control() {
+    : > "$WORKERS/control.txt"
+    "$SXPOC" --creds "$WORKERS/orch.creds" --store "$SEXTANT_STORE" --agent "$ORCH_ID" \
+      --watch "msg.workflow.$WF_ID.control" --once \
+      --on-wake "printf '%s' \"\$SX_WAKE_TEXT\" > $WORKERS/control.txt" --deadline 24h >/dev/null 2>&1
+    cat "$WORKERS/control.txt" 2>/dev/null
+  }
+
+  WAKE=""                              # input for the next turn ("" = first turn, uses the task)
+  MAX_TURNS="${WF_MAX_TURNS:-40}"      # safety cap so a confused orchestrator can't loop forever
+  turn=0
+  while [ "$turn" -lt "$MAX_TURNS" ]; do
+    turn=$((turn + 1))
+    SX_WAKE_TEXT="$WAKE" "$WORKERS/orch-turn.sh"
+    case "$(run_state)" in
+      done) echo "supervisor: workflow done after $turn turn(s)"; break ;;
+      gate)
+        echo "supervisor: gate open — awaiting approve/changes on msg.workflow.$WF_ID.control"
+        WAKE="$(wait_for_control)"
+        echo "supervisor: control received; resuming" ;;
+      running)
+        echo "supervisor: turn $turn ended mid-pipeline; resuming to continue"
+        WAKE="Continue the workflow from where you left off. Re-read $WF_PIPELINE for the steps and the $WF_ID.run artifact for progress, then carry on." ;;
+    esac
+  done
+  [ "$turn" -ge "$MAX_TURNS" ] && echo "supervisor: hit MAX_TURNS=$MAX_TURNS — stopping (possible loop; inspect $WF_ID.run)"
 fi
 
 echo "usage: agentic-dev-workflow.sh (demo | run \"<task>\")"; exit 2
