@@ -31,9 +31,8 @@ sextant dash --serve                              # …or a local web API + debu
 ```
 
 Commands find the bus through a discovery file in the per-user store, so no URLs
-or flags are needed once the service is running. Upgrade with `sextant update`
-(wraps `brew update && brew upgrade love-lena/sextant/sextant`); `sextant --help`
-covers `--url`, `--store`, and contexts.
+or flags are needed once the service is running. To upgrade later, see
+[Updating](#updating); `sextant --help` covers `--url`, `--store`, and contexts.
 
 <details>
 <summary>Without Homebrew</summary>
@@ -71,6 +70,25 @@ plugin:sextant@sextant`; without the flag the tools still work and
 `message_read` polling covers inbound.
 [`clients/claude-code/`](clients/claude-code/README.md) has the rest: the
 offline install from an unpacked tarball, per-project identities, and a demo.
+
+## Updating
+
+Updating has two halves — the **binaries** (Homebrew) and the **Claude Code
+plugin** (skills, hooks, MCP wiring) — plus restarting the long-lived processes,
+since none of them reload in place:
+
+```bash
+sextant update                  # brew update && brew upgrade love-lena/sextant/sextant
+brew services restart sextant   # the running bus keeps the old binary until restarted
+claude plugin marketplace update sextant && claude plugin update sextant@sextant
+```
+
+Then restart any active Claude Code sessions (each spawned its `sextant-mcp` at
+startup and keeps using that process, so a session picks up the new server and
+skills only on restart) and re-run `sextant dash --serve` if it was up.
+`sextant version` confirms the new build.
+[`clients/claude-code/`](clients/claude-code/README.md#updating-to-a-new-version)
+has the per-step detail.
 
 ## Where things are
 
