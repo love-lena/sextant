@@ -241,7 +241,7 @@
     const statusOf = useCallback((name) => {
       const rec = records[name];
       const st = rec && rec.review && rec.review.state;
-      return REVIEW_STATES.indexOf(st) >= 0 ? st : "review";
+      return REVIEW_STATES.indexOf(st) >= 0 ? st : "draft";
     }, [records]);
     const artItems = useMemo(() => artifacts.filter((a) => a.Name !== "home" && !a.Name.startsWith("status.")).map((a) => ({
       name: a.Name,
