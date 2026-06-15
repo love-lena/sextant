@@ -16,6 +16,8 @@ import (
 
 	"github.com/love-lena/sextant/internal/attest"
 	"github.com/love-lena/sextant/internal/statushook"
+	"github.com/love-lena/sextant/pkg/conninfo"
+	"github.com/love-lena/sextant/pkg/sextant"
 )
 
 // status is the claude-code plugin's PostToolUse hook body (TASK-87): a per-agent
@@ -147,35 +149,62 @@ func runStatusWorker(session, transcript string) {
 		log.Printf("sextant-mcp status worker: no activity (%v)", err)
 		return
 	}
-	client := statushook.HaikuClient{
+	hc := statushook.HaikuClient{
 		APIKey:  os.Getenv(apiKeyEnv),
 		Model:   os.Getenv(statusModelEnv),
 		BaseURL: os.Getenv(statusAPIBaseEnv), // empty ⇒ the public API; tests/demos point it at a mock
 	}
-	line, err := client.Status(ctx, activity)
+	res, err := hc.Status(ctx, activity)
 	if err != nil {
 		log.Printf("sextant-mcp status worker: Haiku: %v", err)
 		return
 	}
-	if err := writeStatusStub(session, line); err != nil {
-		log.Printf("sextant-mcp status worker: write: %v", err)
+	if err := writeStatus(ctx, res); err != nil {
+		log.Printf("sextant-mcp status worker: write status (%s): %v", session, err)
 	}
 }
 
-// writeStatusStub is the DEFERRED sextant side, stubbed for the prototype: the
-// status lands in a local file under the plugin-data dir instead of a bus status
-// primitive. The demo reads this file to prove the hook produced a live status.
-func writeStatusStub(session, line string) error {
-	dataDir := os.Getenv("CLAUDE_PLUGIN_DATA")
-	if dataDir == "" {
-		return fmt.Errorf("no CLAUDE_PLUGIN_DATA")
+// writeStatus is the sextant side (TASK-84): the worker connects to the bus as
+// this session's identity — following the per-session identity file the MCP
+// server wrote, exactly like attest — and upserts its own `status.<self>`
+// artifact with the agent.status record. The artifact is a latest-value record,
+// single-writer (this agent), so the dash + crew see the agent's current state.
+func writeStatus(ctx context.Context, res statushook.StatusResult) error {
+	id, err := attest.LoadIdentity(os.Getenv("CLAUDE_PLUGIN_DATA"), os.Getenv(sessionEnv))
+	if err != nil {
+		return fmt.Errorf("load identity: %w", err)
 	}
-	name := session
-	if name == "" {
-		name = "no-session"
+	c, err := sextant.Connect(ctx, sextant.Options{
+		CredsPath:    id.Creds,
+		URL:          id.URL,
+		ConnInfoPath: filepath.Join(defaultStore(), conninfo.DefaultFile),
+		Logf:         log.Printf,
+	})
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
 	}
-	path := filepath.Join(dataDir, "status-"+statushook.Sanitize(name)+".txt")
-	return os.WriteFile(path, []byte(line+"\n"), 0o600)
+	defer c.Close()
+
+	self := c.ID()
+	name := "status." + self
+	b, err := json.Marshal(map[string]any{
+		"$type":    "agent.status",
+		"state":    res.State,
+		"headline": res.Headline,
+		"updated":  time.Now().UTC().Format(time.RFC3339),
+		"by":       self,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal record: %w", err)
+	}
+	rec := json.RawMessage(b)
+	// Upsert: CAS-update if it exists, else create.
+	if art, gerr := c.GetArtifact(ctx, name); gerr == nil {
+		_, err = c.UpdateArtifact(ctx, name, rec, art.Revision)
+		return err
+	}
+	_, err = c.CreateArtifact(ctx, name, rec)
+	return err
 }
 
 // statusInterval is the throttle interval, overridable via SEXTANT_STATUS_INTERVAL

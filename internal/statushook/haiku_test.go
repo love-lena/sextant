@@ -33,7 +33,8 @@ func TestHaikuStatus(t *testing.T) {
 			t.Errorf("request body missing the activity digest:\n%s", b)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"content":[{"type":"text","text":"  rebuilding the dash UI\n"}]}`)
+		// The model replies in the "state | headline" contract.
+		io.WriteString(w, `{"content":[{"type":"text","text":"  working | rebuilding the dash UI\n"}]}`)
 	}))
 	defer srv.Close()
 
@@ -42,14 +43,37 @@ func TestHaikuStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
-	if got != "rebuilding the dash UI" { // trimmed
-		t.Errorf("Status = %q, want %q", got, "rebuilding the dash UI")
+	if got.State != "working" {
+		t.Errorf("State = %q, want working", got.State)
+	}
+	if got.Headline != "rebuilding the dash UI" { // trimmed
+		t.Errorf("Headline = %q, want %q", got.Headline, "rebuilding the dash UI")
 	}
 	if gotBody["model"] != "claude-haiku-test" {
 		t.Errorf("request model = %v, want claude-haiku-test", gotBody["model"])
 	}
 	if _, ok := gotBody["max_tokens"]; !ok {
 		t.Error("request missing max_tokens")
+	}
+}
+
+// ParseStatusLine decodes the model's "state | headline" contract, with safe
+// fallbacks: no pipe ⇒ the whole line is the headline at state "working"; an
+// unrecognized state ⇒ "working" (never drop the headline).
+func TestParseStatusLine(t *testing.T) {
+	cases := []struct{ in, state, head string }{
+		{"working | rebuilding the dash UI", "working", "rebuilding the dash UI"},
+		{"waiting-for-human | awaiting lena's review", "waiting-for-human", "awaiting lena's review"},
+		{"waiting-for-agent | awaiting sirius gate", "waiting-for-agent", "awaiting sirius gate"},
+		{"blocked|CI is red", "blocked", "CI is red"},
+		{"just a headline, no pipe", "working", "just a headline, no pipe"},
+		{"bogus-state | doing things", "working", "doing things"},
+	}
+	for _, c := range cases {
+		got := statushook.ParseStatusLine(c.in)
+		if got.State != c.state || got.Headline != c.head {
+			t.Errorf("ParseStatusLine(%q) = {%q,%q}, want {%q,%q}", c.in, got.State, got.Headline, c.state, c.head)
+		}
 	}
 }
 
