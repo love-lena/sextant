@@ -50,6 +50,12 @@ func main() {
 		os.Exit(runAttest(os.Args[2:]))
 	}
 
+	// The `status` subcommand is the plugin's PostToolUse status hook (TASK-87) —
+	// same binary, reusing the per-session identity gating the attest hook uses.
+	if len(os.Args) > 1 && os.Args[1] == "status" {
+		os.Exit(runStatus(os.Args[2:]))
+	}
+
 	fs := flag.NewFlagSet("sextant-mcp", flag.ExitOnError)
 	cf := addConnFlags(fs)
 	ver := fs.Bool("version", false, "print version and exit")
