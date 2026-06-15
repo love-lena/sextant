@@ -165,12 +165,13 @@
 
   function AgentsView({ agents, onDM }) {
     const STATE = {
-      working: { c: "approved", label: "working" }, idle: { c: "draft", label: "idle" },
+      working: { c: "approved", label: "working" }, idle: { c: "review", label: "idle" },
       blocked: { c: "changes", label: "blocked" }, offline: { c: "draft", label: "offline" }
     };
+    const sorted = [...agents].sort((a, b) => (a.state === "offline" ? 1 : b.state === "offline" ? -1 : 0));
     return (
       <div className="sx-clients">
-        {agents.map((a, i) => {
+        {sorted.map((a, i) => {
           const s = STATE[a.state] || STATE.offline;
           return (
             <div className="sx-client" key={i}

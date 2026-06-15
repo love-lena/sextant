@@ -126,11 +126,12 @@
   function AgentsView({ agents, onDM }) {
     const STATE = {
       working: { c: "approved", label: "working" },
-      idle: { c: "draft", label: "idle" },
+      idle: { c: "review", label: "idle" },
       blocked: { c: "changes", label: "blocked" },
       offline: { c: "draft", label: "offline" }
     };
-    return /* @__PURE__ */ React.createElement("div", { className: "sx-clients" }, agents.map((a, i) => {
+    const sorted = [...agents].sort((a, b) => a.state === "offline" ? 1 : b.state === "offline" ? -1 : 0);
+    return /* @__PURE__ */ React.createElement("div", { className: "sx-clients" }, sorted.map((a, i) => {
       const s = STATE[a.state] || STATE.offline;
       return /* @__PURE__ */ React.createElement(
         "div",

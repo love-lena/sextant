@@ -205,7 +205,7 @@
     const statusOf = useCallback((name)=>{
       const rec = records[name];
       const st = rec && rec.review && rec.review.state;
-      return REVIEW_STATES.indexOf(st)>=0 ? st : "review";
+      return REVIEW_STATES.indexOf(st)>=0 ? st : "draft";
     },[records]);
 
     // derived: artifacts in the component shape (topic/author stay stubbed — no
