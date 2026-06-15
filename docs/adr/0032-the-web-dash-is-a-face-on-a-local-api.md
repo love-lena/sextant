@@ -74,5 +74,24 @@ and `--serve` is a second way to run it.
   WebSocket connection) collapses into this binary's boundary rather than
   reworking it. The MVP is that gateway, local and credential-free.
 
-See TASK-68. Builds on ADR-0023/0024 (the dash) and ADR-0014 (the dash is a
-client); orthogonal to the bus protocol.
+## Update — loopback is token-free (TASK-115, 2026-06-15)
+
+The per-launch token is dropped for **loopback** peers (127.0.0.0/8, ::1): a
+request from loopback is authorized without a token; a non-loopback peer still
+must present it. The `--serve` listener is loopback-bound (there is no host
+knob), and loopback is host-bound and implicitly trusted — the posture OAuth
+takes for native-app loopback redirects — so the token's CSRF/remote barrier adds
+nothing for a local peer, while forcing operators to copy a fresh `?token=` on
+every restart (it rotates per launch). The token path stays for any future
+non-loopback bind.
+
+Stated plainly: because the listener is loopback-only today, this makes the dash
+effectively token-free (the URL is just `http://127.0.0.1:8765/`). The exception
+trusts the peer IP, so anything that lets a *non-local* client reach the listener
+as loopback — a reverse proxy or SSH tunnel forwarding to 127.0.0.1 — would
+bypass the token. The dash is not tunnel-exposed today (the cross-machine tunnel
+forwards the NATS bus, not this HTTP API); exposing it later must re-introduce
+real auth rather than rely on this exception.
+
+See TASK-68 (and TASK-115). Builds on ADR-0023/0024 (the dash) and ADR-0014 (the
+dash is a client); orthogonal to the bus protocol.
