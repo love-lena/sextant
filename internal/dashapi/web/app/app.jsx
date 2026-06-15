@@ -268,9 +268,20 @@
     }
     function goHome(){ setStageMode("home"); }
     function backfill(subj){
-      apiGet("/api/messages?subject="+encodeURIComponent(subj)+"&limit=100").then(res=>{
-        const frames=(res&&res.messages)||[]; if(!frames.length) return;
-        const hist=frames.map(f=>({ id:f.id, author:f.author, text:frameText(f.record), ts:0 }));
+      // /api/messages reads FORWARD from `since` (since=0 is the oldest), so a
+      // single page returns the OLDEST messages. Page to the tail following
+      // next_cursor and keep the newest, so a busy topic (>1 page) shows recent
+      // history, not its first page. Bounded so a huge topic can't loop forever.
+      const PAGE=200, MAX_PAGES=25;
+      const acc=[];
+      const page=(since,guard)=>apiGet("/api/messages?subject="+encodeURIComponent(subj)+"&since="+since+"&limit="+PAGE).then(res=>{
+        const frames=(res&&res.messages)||[]; acc.push(...frames);
+        const next=res&&res.next_cursor;
+        if(guard>1 && frames.length>=PAGE && next && next>since) return page(next,guard-1);
+      });
+      page(0,MAX_PAGES).then(()=>{
+        if(!acc.length) return;
+        const hist=acc.map(f=>({ id:f.id, author:f.author, text:frameText(f.record), ts:0 }));
         setConvos(prev=>{
           const cur=prev[subj]||{msgs:[]};
           const seen=new Set(cur.msgs.map(m=>m.id));
