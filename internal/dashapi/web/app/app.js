@@ -224,18 +224,26 @@
       r.classList.toggle("side-right", t.sidePos === "right");
       r.classList.toggle("no-pulse", !t.livePulse);
     }, [t.accent, t.sideTone, t.sidePos, t.livePulse]);
-    const agents = useMemo(() => clients.filter((c) => c.Kind !== "client").map((c) => ({
-      id: c.ID,
-      name: c.DisplayName,
-      state: c.Online ? "working" : "offline",
-      meta: (c.Kind || "agent") + (c.Online ? " \xB7 online" : " \xB7 offline")
-    })), [clients]);
+    const STATUS_STATES = ["idle", "working", "waiting-for-human", "waiting-for-agent", "blocked", "done"];
+    const agents = useMemo(() => clients.filter((c) => c.Kind !== "client").map((c) => {
+      const sr = records["status." + c.ID];
+      const st = sr && sr.state;
+      const known = STATUS_STATES.indexOf(st) >= 0;
+      const headline = sr && sr.headline || "";
+      return {
+        id: c.ID,
+        name: c.DisplayName,
+        state: !c.Online ? "offline" : known ? st : "idle",
+        headline,
+        meta: headline || (c.Kind || "agent") + (c.Online ? " \xB7 online" : " \xB7 offline")
+      };
+    }), [clients, records]);
     const statusOf = useCallback((name) => {
       const rec = records[name];
       const st = rec && rec.review && rec.review.state;
-      return REVIEW_STATES.indexOf(st) >= 0 ? st : "review";
+      return REVIEW_STATES.indexOf(st) >= 0 ? st : "draft";
     }, [records]);
-    const artItems = useMemo(() => artifacts.filter((a) => a.Name !== "home").map((a) => ({
+    const artItems = useMemo(() => artifacts.filter((a) => a.Name !== "home" && !a.Name.startsWith("status.")).map((a) => ({
       name: a.Name,
       version: a.Revision,
       status: statusOf(a.Name),
