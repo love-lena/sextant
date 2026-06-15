@@ -1,4 +1,4 @@
-# Agentic dev workflow — design notes (TASK-95)
+# Agentic dev workflow — design notes (TASK-97)
 
 A reference **agentic dev workflow** on the sextant bus: an LLM **orchestrator** drives
 a task from a one-line description to an open PR — plan → implement → codex-review → fix

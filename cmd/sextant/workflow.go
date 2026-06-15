@@ -12,7 +12,7 @@ import (
 )
 
 // kindWorkflowDef is the $type of a workflow-definition artifact: a declarative
-// description of an agentic dev-workflow run (TASK-95). Anyone authors one as an
+// description of an agentic dev-workflow run (TASK-97). Anyone authors one as an
 // artifact, the operator reviews it on the dash, then runs it with
 // `sextant workflow run <name>` — which reads the artifact and launches the LLM
 // orchestrator (docs/demos/agentic-dev-workflow.sh). The bus stays the source of
