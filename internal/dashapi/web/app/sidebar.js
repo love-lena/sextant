@@ -126,9 +126,12 @@
   function AgentsView({ agents, onDM }) {
     const STATE = {
       working: { c: "approved", label: "working" },
+      done: { c: "approved", label: "done" },
       idle: { c: "draft", label: "idle" },
-      blocked: { c: "changes", label: "blocked" },
-      offline: { c: "draft", label: "offline" }
+      offline: { c: "draft", label: "offline" },
+      "waiting-for-human": { c: "review", label: "waiting \xB7 human" },
+      "waiting-for-agent": { c: "review", label: "waiting \xB7 agent" },
+      blocked: { c: "changes", label: "blocked" }
     };
     return /* @__PURE__ */ React.createElement("div", { className: "sx-clients" }, agents.map((a, i) => {
       const s = STATE[a.state] || STATE.offline;

@@ -195,11 +195,22 @@
       r.classList.toggle("no-pulse", !t.livePulse);
     },[t.accent,t.sideTone,t.sidePos,t.livePulse]);
 
-    // derived: agents (everything that isn't a human "client" kind)
-    const agents = useMemo(()=>clients.filter(c=>c.Kind!=="client").map(c=>({
-      id:c.ID, name:c.DisplayName, state:c.Online?"working":"offline",
-      meta:(c.Kind||"agent")+(c.Online?" · online":" · offline"),
-    })),[clients]);
+    // derived: agents (everything that isn't a human "client" kind). Each agent's
+    // live state + headline come from its own status.<id> artifact (agent.status,
+    // TASK-84) when present; otherwise we fall back to bus presence.
+    const STATUS_STATES = ["idle","working","waiting-for-human","waiting-for-agent","blocked","done"];
+    const agents = useMemo(()=>clients.filter(c=>c.Kind!=="client").map(c=>{
+      const sr = records["status."+c.ID];
+      const st = sr && sr.state;
+      const known = STATUS_STATES.indexOf(st)>=0;
+      const headline = (sr && sr.headline) || "";
+      return {
+        id:c.ID, name:c.DisplayName,
+        state: !c.Online ? "offline" : (known ? st : "idle"),
+        headline,
+        meta: headline || ((c.Kind||"agent")+(c.Online?" · online":" · offline")),
+      };
+    }),[clients, records]);
 
     // review-state from the artifact's record (convention); absent ⇒ "review"
     const statusOf = useCallback((name)=>{
@@ -210,8 +221,9 @@
 
     // derived: artifacts in the component shape (topic/author stay stubbed — no
     // primitive yet; status now comes from the review convention)
-    // 'home' is special-cased as the curated Home page, so hide it from the list.
-    const artItems = useMemo(()=>artifacts.filter(a=>a.Name!=="home").map(a=>({
+    // 'home' is the curated Home page and 'status.<id>' artifacts are the per-agent
+    // status records (rendered in the Agent-status panel), so hide both from the list.
+    const artItems = useMemo(()=>artifacts.filter(a=>a.Name!=="home" && !a.Name.startsWith("status.")).map(a=>({
       name:a.Name, version:a.Revision, status:statusOf(a.Name), topic:"", type:"markdown",
       id:a.Name, author:{ name:"", kind:"agent" }, updated:relTime(a.Updated),
     })),[artifacts, statusOf]);
