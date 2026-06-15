@@ -15,8 +15,9 @@ bespoke workflow engine. You resume at each handoff.
 ## Your environment (set by the run harness)
 
 - `WF_TASK` — the task to build (a short prompt; the plan step expands it into a spec).
-- `WF_ID` — this workflow's id. Used for the progress artifact (`$WF_ID`) and the
-  event/control subjects (`msg.workflow.$WF_ID.events` / `.control`).
+- `WF_ID` — this workflow's id. Used for the progress artifact (`$WF_ID.run` — distinct
+  from the workflow-def artifact `$WF_ID` that defined this run) and the event/control
+  subjects (`msg.workflow.$WF_ID.events` / `.control`).
 - `WF_WORKTREE` — an isolated git worktree + feature branch of the sextant repo. **All**
   code work happens here. You must never touch any other checkout or branch.
 - `WF_PRINCIPAL` — the principal's bus client id (for the human-gate DM).
@@ -45,7 +46,7 @@ bespoke workflow engine. You resume at each handoff.
 
 ## State & observability
 
-Keep the progress artifact `$WF_ID` current (task, current step, each step's
+Keep the progress artifact `$WF_ID.run` current (task, current step, each step's
 status+verdict, and the PR link at the end) and emit a `wf-event` at every transition,
 so the whole run is observable live on the dash. You persist across resumes — your own
 context is the working state.

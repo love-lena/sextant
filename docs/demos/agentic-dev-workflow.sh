@@ -85,12 +85,12 @@ done < "$WF_STATE"
 bt="$("$WF_BIN/_wf-esc" "$body")"
 rec="{\"\$type\":\"document\",\"title\":\"workflow $WF_ID\",\"body\":\"$bt\"}"
 # create on first call, else CAS-update on the current revision.
-rev="$("$WF_SEXTANT" artifact get "$WF_ID" --json --store "$SEXTANT_STORE" --creds "$WF_ORCH_CREDS" 2>/dev/null \
+rev="$("$WF_SEXTANT" artifact get "$WF_ID.run" --json --store "$SEXTANT_STORE" --creds "$WF_ORCH_CREDS" 2>/dev/null \
   | tr -d ' \n' | sed -n 's/.*"[Rr]evision":\([0-9]*\).*/\1/p')"
 if [ -z "$rev" ]; then
-  "$WF_SEXTANT" artifact create "$WF_ID" "$rec" --store "$SEXTANT_STORE" --creds "$WF_ORCH_CREDS" >/dev/null 2>&1
+  "$WF_SEXTANT" artifact create "$WF_ID.run" "$rec" --store "$SEXTANT_STORE" --creds "$WF_ORCH_CREDS" >/dev/null 2>&1
 else
-  "$WF_SEXTANT" artifact update "$WF_ID" "$rec" --rev "$rev" --store "$SEXTANT_STORE" --creds "$WF_ORCH_CREDS" >/dev/null 2>&1
+  "$WF_SEXTANT" artifact update "$WF_ID.run" "$rec" --rev "$rev" --store "$SEXTANT_STORE" --creds "$WF_ORCH_CREDS" >/dev/null 2>&1
 fi
 EOF
 
@@ -235,7 +235,7 @@ EOF
     && ok "each step registered a NAMED worker identity on the bus (planner/implementer/reviewer/fixer/briefer)" \
     || no "named worker identities missing from the directory"
   reads "msg.workflow.$WF_ID.events" | grep -q "worker reviewer" && ok "workers emitted observable events on the workflow stream" || no "no worker events on the stream"
-  "$SX" artifact get "$WF_ID" --json --store "$S" --creds "$P/orch.creds" 2>/dev/null | grep -q 'brief' \
+  "$SX" artifact get "$WF_ID.run" --json --store "$S" --creds "$P/orch.creds" 2>/dev/null | grep -q 'brief' \
     && ok "progress artifact tracks each step (brief recorded)" || no "progress artifact missing steps"
 
   echo "== human GATE via spawn-poc: post gate, yield, resume on a seeded approve =="
@@ -267,7 +267,7 @@ EOF
   for _ in $(seq 1 60); do [ -f "$WF_PR_MARKER" ] && break; sleep 0.25; done
   kill $POC 2>/dev/null
   [ -f "$WF_PR_MARKER" ] && ok "gate→approve→resume→release round-trip worked via spawn-poc (the live gate wiring)" || { no "gate resume never released"; echo "--- poc.log ---"; tail -15 "$P/poc.log"; }
-  "$SX" artifact get "$WF_ID" --json --store "$S" --creds "$P/orch.creds" 2>/dev/null | grep -q 'release.*done\|done.*release' \
+  "$SX" artifact get "$WF_ID.run" --json --store "$S" --creds "$P/orch.creds" 2>/dev/null | grep -q 'release.*done\|done.*release' \
     && ok "progress artifact shows release done" || no "release not marked done in progress"
 
   echo
@@ -289,7 +289,7 @@ if [ "$MODE" = run ]; then
   WF_ID="${WF_ID:-wf$(date +%s 2>/dev/null || echo run)}"
   WT="$ROOT/.claude/worktrees/$WF_ID"
   echo "== isolated worktree + branch =="
-  git -C "$ROOT" worktree add "$WT" -b "agentic/$WF_ID" origin/main || { echo "worktree add failed"; exit 2; }
+  git -C "$ROOT" worktree add "$WT" -b "agentic/$WF_ID" "${WF_BASE:-origin/main}" || { echo "worktree add failed"; exit 2; }
 
   echo "== register the orchestrator (top-level; uses your active context) =="
   WORKERS="$WT/.wf-workers"; mkdir -p "$WORKERS"
