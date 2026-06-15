@@ -14,6 +14,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -157,10 +158,10 @@ func (s *Server) originAllowed(origin string) bool {
 	return false
 }
 
-// gate wraps an /api handler with the per-launch token check: a request must
-// present the token as `Authorization: Bearer <token>` or `?token=<token>`, or
-// it is rejected 401. An empty configured token never matches, so a
-// misconfigured server exposes nothing.
+// gate wraps an /api handler with the access check (see authorized): a loopback
+// peer is allowed without a token (ADR-0032 loopback exception, TASK-115); any
+// non-loopback peer must present the per-launch token as `Authorization: Bearer
+// <token>` or `?token=<token>`, or it is rejected 401.
 func (s *Server) gate(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !s.authorized(r) {
@@ -171,11 +172,18 @@ func (s *Server) gate(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// authorized reports whether r carries the valid per-launch token, as a
-// `Authorization: Bearer <token>` header or a `?token=` query value. An empty
-// server token is never authorized. The comparison is constant-time so a token
-// can't be recovered by timing the response.
+// authorized reports whether r may access the API. A loopback peer (127.0.0.0/8
+// or ::1) is authorized WITHOUT a token: the dash listener is loopback-bound and
+// loopback is host-bound + implicitly trusted (standard localhost practice, cf.
+// OAuth's native-app loopback redirect), so the token's CSRF/remote barrier adds
+// nothing there (ADR-0032 loopback exception, TASK-115). Any non-loopback peer
+// must carry the valid per-launch token, as a `Authorization: Bearer <token>`
+// header or a `?token=` query value; an empty server token is never authorized.
+// The comparison is constant-time so a token can't be recovered by timing.
 func (s *Server) authorized(r *http.Request) bool {
+	if isLoopback(r.RemoteAddr) {
+		return true
+	}
 	if s.token == "" {
 		return false
 	}
@@ -183,6 +191,18 @@ func (s *Server) authorized(r *http.Request) bool {
 		return true
 	}
 	return tokenEqual(r.URL.Query().Get("token"), s.token)
+}
+
+// isLoopback reports whether a request's peer address is a loopback IP
+// (127.0.0.0/8 or ::1). A malformed/empty address is treated as non-loopback, so
+// an unparseable peer falls through to the token check (deny-by-default).
+func isLoopback(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // tokenEqual compares two tokens in constant time (subtle.ConstantTimeCompare

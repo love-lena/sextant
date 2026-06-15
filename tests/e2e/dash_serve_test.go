@@ -40,9 +40,13 @@ func TestDashServeAPI(t *testing.T) {
 	}
 	base, token := m[1], m[2]
 
-	// --- token gate ----------------------------------------------------------
-	if code := getStatus(t, base+"/api/self"); code != http.StatusUnauthorized {
-		t.Fatalf("GET /api/self without token = %d, want 401", code)
+	// --- loopback is token-free (ADR-0032 exception, TASK-115) ---------------
+	// The dash listens on 127.0.0.1, so this e2e is a loopback peer: a GET without
+	// a token now succeeds. The token still gates non-loopback peers (not testable
+	// from here — the listener is loopback-bound). The token-bearing path is still
+	// exercised by the apiGet/apiPost calls below.
+	if code := getStatus(t, base+"/api/self"); code != http.StatusOK {
+		t.Fatalf("GET /api/self from loopback without token = %d, want 200 (token-free loopback)", code)
 	}
 
 	// --- self: the dash claimed the principal on first run -------------------
