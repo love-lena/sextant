@@ -127,13 +127,14 @@
     const STATE = {
       working: { c: "approved", label: "working" },
       done: { c: "approved", label: "done" },
-      idle: { c: "draft", label: "idle" },
+      idle: { c: "review", label: "idle" },
       offline: { c: "draft", label: "offline" },
       "waiting-for-human": { c: "review", label: "waiting \xB7 human" },
       "waiting-for-agent": { c: "review", label: "waiting \xB7 agent" },
       blocked: { c: "changes", label: "blocked" }
     };
-    return /* @__PURE__ */ React.createElement("div", { className: "sx-clients" }, agents.map((a, i) => {
+    const sorted = [...agents].sort((a, b) => (a.state === "offline" ? 1 : b.state === "offline" ? -1 : 0));
+    return /* @__PURE__ */ React.createElement("div", { className: "sx-clients" }, sorted.map((a, i) => {
       const s = STATE[a.state] || STATE.offline;
       return /* @__PURE__ */ React.createElement(
         "div",
