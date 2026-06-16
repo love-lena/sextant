@@ -53,6 +53,16 @@
   const REVIEW_VERB = { approved:"approved", changes:"requested changes on", rejected:"rejected", archived:"archived", review:"reopened", draft:"reset to draft" };
   function companionTopic(name){ return "msg.topic.artifact." + name; }
 
+  // agent.status state → pill color (reuses the review-state palette) + label, for the
+  // counterpart-status strip in a DM view (TASK-129); mirrors the Agents panel's map.
+  const DM_STATE = {
+    working:{c:"approved",label:"working"}, done:{c:"approved",label:"done"},
+    idle:{c:"review",label:"idle"}, offline:{c:"draft",label:"offline"},
+    "waiting-for-human":{c:"review",label:"waiting · human"},
+    "waiting-for-agent":{c:"review",label:"waiting · agent"},
+    blocked:{c:"changes",label:"blocked"},
+  };
+
   // ---- helpers ----
   function relMs(ms){
     if(!ms) return "";
@@ -291,15 +301,17 @@
     // classify each discovered subject: inbox (a one-way client drop), dm (a
     // 2-participant topic), or a regular topic. An inbox is NOT a conversation.
     const convList = useMemo(()=>Object.entries(convos)
+      // artifact-discussion topics live only in the artifact view's inline panel (TASK-128, #142)
+      .filter(([subj])=>!subj.startsWith("msg.topic.artifact."))
       .sort((a,b)=>(b[1].last||0)-(a[1].last||0))
       .map(([subj,c])=>{
-        let type="topic", name=topicLabel(subj);
+        let type="topic", name=topicLabel(subj), other="";
         if(subj.startsWith("msg.client.")){ type="inbox"; name=nameOf(subj.slice(11))+" · inbox"; }
         else if(subj.startsWith("msg.topic.dm.")){
-          const ids=subj.slice(13).split("."); const other=ids.find(x=>x!==self.id)||ids[0]||"";
+          const ids=subj.slice(13).split("."); other=ids.find(x=>x!==self.id)||ids[0]||"";
           type="dm"; name=nameOf(other);
         }
-        return { key:subj, type, name, snippet:c.lastText||"", time:relMs(c.last), unread:0, participants:0 };
+        return { key:subj, type, name, other, snippet:c.lastText||"", time:relMs(c.last), unread:0, participants:0 };
       }),[convos, nameOf, self.id]);
 
     const messages = useMemo(()=>{
@@ -518,6 +530,11 @@
                   <div className="sx-convstage-body" ref={convBodyRef}>
                     <MessageList messages={messages} onArtifactRef={openArtifact} artifactNames={artifacts.map(a=>a.Name)} />
                   </div>
+                  {convo.type==="dm" && (()=>{
+                    const sr=records["status."+convo.other]; if(!sr||!sr.state) return null;
+                    const ds=DM_STATE[sr.state]||DM_STATE.idle;
+                    return <div className="sx-dm-status"><span className={"sx-status sx-st-"+ds.c}><i />{ds.label}</span>{sr.headline&&<span className="sx-dm-status-head">{sr.headline}</span>}</div>;
+                  })()}
                   <Composer draft={draft} setDraft={setDraft} onSend={send} placeholder={"Message "+(convo.type==="topic"?"#":"@")+convo.name} />
                 </div>
               </div>
