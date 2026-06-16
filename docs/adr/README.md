@@ -41,6 +41,7 @@ human has signed off — see
 | [0032](0032-the-web-dash-is-a-face-on-a-local-api.md) | The web dash is a face on a local API | proposed |
 | [0033](0033-a-dispatcher-mints-its-own-workers.md) | A dispatcher mints its own workers (mint-on-behalf) | proposed |
 | [0034](0034-the-web-cockpit-rests-on-conventions-not-new-protocol.md) | The web cockpit rests on conventions, not new protocol | proposed |
+| [0035](0035-the-goal-bus-primitive.md) | The goal bus primitive | proposed |
 
 ## Review batches
 - **Batch 1 — substrate:** 0004–0007 — *accepted*
@@ -59,3 +60,4 @@ human has signed off — see
 - **0032 — the web dash is a face on a local API** — *proposed* (`sextant dash --serve` exposes the dash's one bus identity as a token-gated local HTTP API + SSE on 127.0.0.1, with a zero-design web debug surface; the browser never touches the bus; D1 of TASK-68)
 - **0033 — a dispatcher mints its own workers** — *proposed* (mint-on-behalf: any registered client may call `clients.register` with its own authority EXCEPT a spawned worker — the fence is inverted from an allowlist and rests on a bus-stamped `SpawnedBy` marker, not the weakly-enforced kind, so a worker cannot recursively dispatch; the lone locked-core change of M5.2/TASK-25)
 - **0034 — the web cockpit rests on conventions, not new protocol** — *proposed* (the designed web dash, D2 of TASK-71; review-state, per-artifact discussion topics, DM-as-2-party-topic, and subject discovery are conventions over the core protocol, served by `sextant dash --serve`)
+- **0035 — the goal bus primitive** — *proposed* (TASK-84; a goal = a north-star + acceptance criteria with a **derived** status, the latest-value artifact `goal.<id>` + the `goal.update` stream on `msg.topic.goals`; evidence is declared artifact-side via a generic `relates`, met-criteria need ≥1 proof; signal-not-manage. Supersedes the parked coarse-state goal model)

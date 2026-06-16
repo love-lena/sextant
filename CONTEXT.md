@@ -131,6 +131,41 @@ _Avoid_: orchestrator, manager, controller
 A client that turns spawn requests into running clients.
 _Avoid_: scheduler, supervisor (it launches; it never supervises)
 
+**Goal**:
+A shared objective the crew works toward — a **north-star** plus its acceptance
+**criteria** — held as the latest-value artifact `goal.<id>`. Its **status is
+derived** from the criteria rollup (how many are met of the total), never stored
+as its own field. A record convention over the artifact operations, not a core
+concept; distinct from a **client's** `agent.status` (what one client is doing
+now) — a goal is an outcome many clients move.
+_Avoid_: task, milestone, project; storing a goal-level state (it is derived)
+
+**Criterion**:
+One acceptance condition of a **goal**, embedded in the goal record as
+`{id, text, status, owner?}` — `status` ∈ `met · in-progress · waiting-on-you ·
+blocked · not-started`. A *met* criterion has at least one **proof**-kind related
+artifact (the invariant). Who marks it met is fuzzy and uncoded — an agent that
+ran a check, an inference from a human-approved artifact, or the operator
+directly; no gate is baked in.
+_Avoid_: acceptance test, requirement, subtask
+
+**`relates` (artifact convention)**:
+An optional field a **record** may carry to associate an **artifact** with a
+**goal** or **criterion**: `relates: [{goal, crit?, kind}]`, where `kind` is
+`proof` (evidence backing a met criterion) or `related` (default; a generic
+association). A criterion's proof/related sets are **projected** from these
+declarations — read from the artifact side, never written onto the criterion.
+Content-opaque to the core; a convention, not a schema change.
+_Avoid_: link, dependency, parent/child
+
+**`goal.update` (the goals stream)**:
+A signalled transition on a **goal**, published on the topic `msg.topic.goals` —
+an observation that a goal moved (a criterion met, a goal opened), not the goal's
+value. It **signals; it never manages**: the owner and operator stay
+authoritative and nothing gains authority over a **client**. Mirrors the
+current-value-artifact + event-stream pairing the **workflow** harness uses.
+_Avoid_: command, assignment, directive
+
 **Epoch**:
 The protocol version; a client checks it on connect.
 _Avoid_: version, schema version
@@ -151,6 +186,11 @@ _Avoid_: kill (reserve that for forcing a process from the outside)
   **artifacts**.
 - A **workflow** is run by a **coordinator**; a **dispatcher** spawns new
   **clients**. Both coordinator and dispatcher are just clients.
+- A **goal** holds its **criteria**; its status is derived from their rollup. An
+  **artifact** declares (via `relates`) which goal/criterion it backs as **proof**
+  or is generically **related** to; a **workflow** is one in-flight "how" toward a
+  criterion. Movement is signalled on the `goal.update` stream — it reports, it
+  never directs a **client**.
 - The **clients registry** lists every issued client; **presence** is its liveness
   view — who is connected right now, derived at read time from the bus's live
   connection table.
