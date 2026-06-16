@@ -83,19 +83,23 @@
     if (!text) return "";
     if (!(window.marked && window.DOMPurify)) return null;
     let html = window.DOMPurify.sanitize(window.marked.parse(text, { breaks: true, gfm: true }));
-    // [[name]] wikilinks: rewrite only in text between tags. The captured name is
-    // the visible label; data-art carries the (attr-escaped) target for the click.
+    const list = (names || []).filter(Boolean);
+    const known = new Set(list);
+    // [[name]] wikilinks: rewrite only in text between tags. A wikilink is
+    // clickable ONLY when `name` is a KNOWN artifact — then data-art carries the
+    // (attr-escaped) target. An UNKNOWN [[name]] would navigate to a broken page,
+    // so it renders MUTED and inert (no data-art, no pointer) instead.
     if (html.indexOf("[[") >= 0) {
       const wiki = /\[\[([^\[\]]+?)\]\]/g;
       html = html.replace(/>([^<]+)</g, (full, seg) =>
         ">" + seg.replace(wiki, (m, raw) => {
           const n = raw.trim();
           if (!n) return m;
-          return '<a class="sx-artlink" data-art="' + escapeAttr(n) + '">' + escapeHTML(n) + "</a>";
+          if (known.has(n)) return '<a class="sx-artlink" data-art="' + escapeAttr(n) + '">' + escapeHTML(n) + "</a>";
+          return '<span class="sx-artlink-dead">' + escapeHTML(n) + "</span>";
         }) + "<");
       html = window.DOMPurify.sanitize(html);
     }
-    const list = (names || []).filter(Boolean);
     if (list.length) {
       const alt = list.slice().sort((a, b) => b.length - a.length).map(escapeRe).join("|");
       const re = new RegExp("(?<![\\w./-])(" + alt + ")(?![\\w./-])", "g");
@@ -163,74 +167,100 @@
 
   }
 
-  /* ---------- views (rendered in the white stage). Stage (a) wraps the existing
-     list internals in a flow2 stage frame; the internals are a later stage. ---------- */
+  /* ---------- views (rendered in the white stage). Stage (b): flow2 ArtifactsList
+     + AgentsList internals, wired to the real /api/artifacts records + /api/clients
+     presence. ---------- */
+
+  // review-state → flow2 group label + status-chip tone (the v0.5 token scale).
+  // Needs review/changes are "waiting on you"; approved is "met"; draft/rejected/
+  // archived are calmer "todo" grey so the eye lands on what actually needs action.
+  const ART_GROUPS = [
+  ["review", "Needs review", "Needs review", "t-waiting"],
+  ["changes", "Changes requested", "Changes requested", "t-waiting"],
+  ["draft", "Draft", "Draft", "t-todo"],
+  ["approved", "Approved", "Approved", "t-met"],
+  ["rejected", "Rejected", "Rejected", "t-blocked"],
+  ["archived", "Archived", "Archived", "t-todo"]];
+  const ART_DOTC = { "t-waiting": "var(--wait)", "t-met": "var(--met)", "t-todo": "var(--todo)", "t-blocked": "var(--blk)" };
+
   function ArtifactsView({ artifacts, activeArtifact, onOpenArtifact }) {
-    const groups = [
-    ["review", "Needs review"], ["changes", "Changes requested"],
-    ["draft", "Draft"], ["approved", "Approved"],
-    ["rejected", "Rejected"], ["archived", "Archived"]];
-    const review = artifacts.filter((a) => a.status === "review").length;
+    const awaiting = artifacts.filter((a) => a.status === "review" || a.status === "changes").length;
+    const settled = artifacts.length - awaiting;
     return (
       <div className="fx-scroll"><div className="fx-col sx-conv-light">
-        <h1 className="fx-h1">Artifacts</h1>
-        <p className="fx-psub">{artifacts.length} documents · {review} awaiting you</p>
-        <div className="sx-alist" style={{ marginTop: "18px" }}>
-          {groups.map(([st, label]) => {
-            const items = artifacts.filter((a) => a.status === st);
-            if (!items.length) return null;
-            return (
-              <div className="sx-agroup" key={st}>
-                <div className="sx-agroup-h"><StatusPill status={st} dot /><span>{label}</span><span className="sx-agroup-n">{items.length}</span></div>
-                {items.map((a) =>
-                <button key={a.name} className={"sx-aitem" + (a.name === activeArtifact ? " is-on" : "")}
-                onClick={() => onOpenArtifact(a.name)}>
-                    <span className="sx-aicon">{a.type === "markdown" ? "❡" : a.type === "sheet" ? "▦" : "◆"}</span>
-                    <div className="sx-amain">
-                      <div className="sx-aname">{a.name}</div>
-                      <div className="sx-ameta">{a.topic && <span className="sx-achip"># {a.topic}</span>}{a.updated && <span>{a.updated}</span>}</div>
-                    </div>
-                    {a.author && a.author.name && <Avatar name={a.author.name} kind={a.author.kind} size={20} />}
-                  </button>
-                )}
-              </div>);
-          })}
-        </div>
+        <h1 className="fx-h1 fx-in">Artifacts</h1>
+        <p className="fx-psub fx-in" style={{ animationDelay: ".03s" }}>{artifacts.length} documents · {awaiting} awaiting you, {settled} settled</p>
+        {ART_GROUPS.map(([st, label, chipLabel, tone]) => {
+          const items = artifacts.filter((a) => a.status === st);
+          if (!items.length) return null;
+          return (
+            <div className="fx-group" key={st}>
+              <div className="fx-group-h"><span className="fx-dot" style={{ background: ART_DOTC[tone] }} /><span>{label}</span><span className="fx-group-n">{items.length}</span></div>
+              <div className="fx-list">
+                {items.map((a) => {
+                  const ic = a.type === "sheet" ? "▦" : a.type === "markdown" ? "❡" : "◆";
+                  const author = a.author && a.author.name;
+                  return (
+                    <button key={a.name} className={"fx-row" + (a.name === activeArtifact ? " is-on" : "")} onClick={() => onOpenArtifact(a.name)}>
+                      <span className="fx-row-ic">{ic}</span>
+                      <span className="fx-row-main">
+                        <span className="fx-row-name">{a.name}</span>
+                        <span className="fx-row-meta">{a.type}{author ? " · " + author : ""}{a.updated ? " · " + a.updated + " ago" : ""}</span>
+                      </span>
+                      {author && <Avatar name={author} kind={a.author.kind} size={22} />}
+                      <span className={"fx-chip-status " + tone}>{chipLabel}</span>
+                    </button>);
+                })}
+              </div>
+            </div>);
+        })}
+        {artifacts.length === 0 && <p className="fx-psub" style={{ marginTop: "26px" }}>No artifacts on the bus yet.</p>}
       </div></div>);
 
   }
 
+  // agent state → flow2 status-chip tone + label + pulse dot colour.
+  // IDLE is GREY (a v0.5 design rule), working pulses green, blocked is amber,
+  // waiting reads as "waiting on you" red, offline is the calmest grey.
+  const AGENT_STATE = {
+    working: { tone: "t-met", label: "Working", c: "var(--met)", live: true },
+    done: { tone: "t-met", label: "Done", c: "var(--met)" },
+    idle: { tone: "t-todo", label: "Idle", c: "var(--todo)" },
+    offline: { tone: "t-todo", label: "Offline", c: "var(--todo)" },
+    "waiting-for-human": { tone: "t-waiting", label: "Waiting · you", c: "var(--wait)" },
+    "waiting-for-agent": { tone: "t-progress", label: "Waiting · agent", c: "var(--prog)" },
+    blocked: { tone: "t-blocked", label: "Blocked", c: "var(--blk)" }
+  };
+
   function AgentsView({ agents, onDM }) {
-    // status → tone. IDLE is GREY (draft), not amber — a design rule for v0.5.
-    const STATE = {
-      working: { c: "approved", label: "working" }, done: { c: "approved", label: "done" },
-      idle: { c: "draft", label: "idle" }, offline: { c: "draft", label: "offline" },
-      "waiting-for-human": { c: "review", label: "waiting · human" },
-      "waiting-for-agent": { c: "review", label: "waiting · agent" },
-      blocked: { c: "changes", label: "blocked" }
-    };
-    const sorted = [...agents].sort((a, b) => (a.state === "offline" ? 1 : b.state === "offline" ? -1 : 0));
+    // offline drops to the bottom; everything else holds its incoming order.
+    const sorted = [...agents].sort((a, b) => (a.state === "offline" ? 1 : 0) - (b.state === "offline" ? 1 : 0));
     const working = agents.filter((a) => a.state === "working").length;
     return (
       <div className="fx-scroll"><div className="fx-col sx-conv-light">
-        <h1 className="fx-h1">Agents</h1>
-        <p className="fx-psub">{working} working · {agents.length - working} idle or offline</p>
-        <div className="sx-clients" style={{ marginTop: "12px" }}>
+        <h1 className="fx-h1 fx-in">Agents</h1>
+        <p className="fx-psub fx-in" style={{ animationDelay: ".03s" }}>{working} working · {agents.length - working} idle, blocked or offline</p>
+        <div className="fx-list" style={{ marginTop: "18px" }}>
           {sorted.map((a, i) => {
-            const s = STATE[a.state] || STATE.offline;
+            const s = AGENT_STATE[a.state] || AGENT_STATE.offline;
+            const task = a.headline || a.meta || "—";
             return (
-              <div className="sx-client" key={i}
+              <button className="fx-row" key={a.id || i}
               onClick={() => onDM && a.id && onDM(a.id)}
               style={{ cursor: a.id ? "pointer" : "default" }}
               title={a.id ? ("Message " + a.name) : undefined}>
-                <span className="sx-agent-av"><Avatar name={a.name} kind="agent" size={28} /><span className={"sx-agent-dot sx-sd-" + s.c + (a.state === "working" ? " is-live" : "")} /></span>
-                <div className="sx-client-main">
-                  <div className="sx-client-name">{a.name}</div>
-                  <div className="sx-client-meta">{a.meta}</div>
-                </div>
-                <span className={"sx-agent-state sx-state-" + s.c}>{s.label}</span>
-              </div>);
+                <Avatar name={a.name} kind="agent" size={30} />
+                <span className="fx-row-main">
+                  <span className="fx-row-name">{a.name}</span>
+                  <span className="fx-row-meta">{task}</span>
+                </span>
+                <span className="fx-row-right">
+                  <span className={"fx-pulse" + (s.live ? " is-live" : "")} style={{ background: s.c }} />
+                  <span className="fx-crit-status" style={{ color: s.c }}>{s.label}</span>
+                </span>
+              </button>);
           })}
+          {agents.length === 0 && <p className="fx-psub" style={{ marginTop: "8px" }}>No agents connected to the bus.</p>}
         </div>
       </div></div>);
 
@@ -252,11 +282,19 @@
       </div></div>);
   }
 
-  /* ---------- floating Assistant FAB · visible stub (NOT wired) ---------- */
-  function AssistantFab() {
-    const [open, setOpen] = useState(false);
+  /* ---------- floating Assistant FAB · visible stub (NOT wired) ----------
+     Controlled when given open/onOpen/onClose (so ⌘K can open it with a
+     prefilled prompt); otherwise self-manages its own open state. `prompt` is a
+     query carried over from a ⌘K no-match — it's SHOWN, never answered: the
+     backend is still a stub, so we never fabricate a reply. */
+  function AssistantFab({ open: openProp, prompt, onOpen, onClose } = {}) {
+    const [openLocal, setOpenLocal] = useState(false);
+    const controlled = openProp !== undefined;
+    const open = controlled ? openProp : openLocal;
+    const doOpen = () => (controlled ? onOpen && onOpen() : setOpenLocal(true));
+    const doClose = () => (controlled ? onClose && onClose() : setOpenLocal(false));
     if (!open) return (
-      <button className="fx-asst-btn" title="Assistant (not wired yet)" onClick={() => setOpen(true)}>
+      <button className="fx-asst-btn" title="Assistant (not wired yet)" onClick={doOpen}>
         <span className="fx-asst-spark">✦</span>
       </button>);
     return (
@@ -264,14 +302,19 @@
         <div className="fx-asst-head">
           <span className="fx-asst-mark">✦</span>
           <div><div className="fx-asst-title">Assistant</div><div className="fx-asst-sub">not wired yet</div></div>
-          <button className="fx-asst-close" onClick={() => setOpen(false)} aria-label="Close">×</button>
+          <button className="fx-asst-close" onClick={doClose} aria-label="Close">×</button>
         </div>
+        {prompt
+          ? <div className="fx-asst-msg you"><span className="fx-asst-bub">{prompt}</span></div>
+          : null}
         <div className="fx-asst-stub">
           <p className="fx-asst-stub-lead">This is a placeholder.</p>
-          <p className="fx-asst-stub-body">The assistant isn't connected to anything yet — it can't answer questions or read your bus. It'll be wired up in a later track.</p>
+          <p className="fx-asst-stub-body">{prompt
+            ? "The assistant can't answer yet — it isn't connected to anything. Your question is parked here; the assistant gets wired up in a later track."
+            : "The assistant isn't connected to anything yet — it can't answer questions or read your bus. It'll be wired up in a later track."}</p>
         </div>
         <div className="fx-asst-composer">
-          <span className="fx-asst-field">Ask a quick question… (disabled)</span>
+          <span className="fx-asst-field">{prompt || "Ask a quick question…"} (disabled)</span>
           <button className="fx-asst-send" disabled>↑</button>
         </div>
       </div>);
@@ -280,11 +323,17 @@
   /* ---------- ⌘K command palette · real, client-side find & jump ---------- */
   // Searches the already-loaded artifacts + clients (agents) + conversation
   // subjects; selecting a result opens it via the existing open handlers.
-  function CmdK({ index, onClose }) {
+  function CmdK({ index, onClose, onAsk }) {
     const [q, setQ] = useState("");
     const [sel, setSel] = useState(0);
     const ql = q.trim().toLowerCase();
-    const results = (ql ? index.filter((it) => it.kw.indexOf(ql) >= 0) : index).slice(0, 9);
+    const matches = (ql ? index.filter((it) => it.kw.indexOf(ql) >= 0) : index).slice(0, 9);
+    // No good match for a typed query → offer "Ask the assistant" as a real,
+    // selectable result that hands the query to the (stubbed) Assistant FAB.
+    const askRow = (onAsk && ql && matches.length === 0)
+      ? { key: "ask", type: "Ask", label: "Ask the assistant: “" + q.trim() + "”", sub: "the assistant isn't wired up yet — your question gets parked", go: () => onAsk(q.trim()) }
+      : null;
+    const results = askRow ? [askRow] : matches;
     useEffect(() => { setSel(0); }, [q]);
     const pick = (it) => { if (it) { it.go(); onClose(); } };
     const onKey = (e) => {
@@ -293,18 +342,18 @@
       else if (e.key === "Enter") { e.preventDefault(); pick(results[sel]); }
       else if (e.key === "Escape") { e.preventDefault(); onClose(); }
     };
-    const TYPEC = { Artifact: "#c0573b", Agent: "#3f8f59", Channel: "#8a8e97" };
+    const TYPEC = { "Go to": "#5b6ef0", Artifact: "#c0573b", Agent: "#3f8f59", Channel: "#8a8e97", Ask: "#5b6ef0" };
     return (
       <div className="fx-cmdk-scrim" onClick={onClose}>
         <div className="fx-cmdk" onClick={(e) => e.stopPropagation()}>
           <input className="fx-cmdk-input" autoFocus placeholder="Search artifacts, agents, conversations…"
             value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKey} />
           <div className="fx-cmdk-results">
-            {results.length === 0 && <div className="fx-cmdk-empty">No matches for “{q}”</div>}
+            {results.length === 0 && <div className="fx-cmdk-empty">{ql ? "No matches for “" + q + "”" : "Type to search."}</div>}
             {results.map((it, i) => (
               <button className={"fx-cmdk-row" + (i === sel ? " is-sel" : "")} key={it.key}
                 onMouseEnter={() => setSel(i)} onClick={() => pick(it)}>
-                <span className="fx-cmdk-type" style={{ color: TYPEC[it.type], borderColor: TYPEC[it.type] + "44", background: TYPEC[it.type] + "10" }}>{it.type}</span>
+                <span className="fx-cmdk-type" style={{ color: TYPEC[it.type], borderColor: TYPEC[it.type] + "44", background: TYPEC[it.type] + "10" }}>{it.type === "Ask" ? "✦ Ask" : it.type}</span>
                 <span className="fx-cmdk-main"><span className="fx-cmdk-label">{it.label}</span>{it.sub && <span className="fx-cmdk-sub">{it.sub}</span>}</span>
                 <span className="fx-cmdk-enter">↵</span>
               </button>
