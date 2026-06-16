@@ -121,6 +121,19 @@ const (
 // (and disconnecting) needs no registry write at all.
 const OpClientsHello = "clients.hello"
 
+// OpClientsHeartbeat is the client's periodic liveness signal (TASK-126). Like
+// clients.hello it is bus plumbing, NOT one of the protocol's operations (not in
+// methods.json, no CLI/MCP surface, no conformance entry) — presence/liveness is
+// reference-bus behaviour (ADR-0020), so a fork may omit it and the op is
+// epoch-neutral (additive: it adds no frame shape). The SDK calls it on a timer;
+// the bus records a bus-stamped last_seen on the client's registry record (the
+// presence source that, unlike Connz, works across a leaf link) AND echoes the
+// beat down the caller's delivery path so the client can confirm its own push
+// path is live (the TASK-124 mode-D floor). A bus that does not implement it
+// answers "unknown operation"; the SDK MUST treat that as benign — stop
+// heartbeating and let presence fall back to the connection table — never crash.
+const OpClientsHeartbeat = "clients.heartbeat"
+
 // OperatorID and EnrollID are the two reserved infrastructure identities that
 // authorize the issuance path (ADR-0020). They are not minted client ULIDs and
 // never appear in the clients directory; they exist only to satisfy
@@ -315,6 +328,13 @@ type ClientEntry struct {
 	IssuedAt    string `json:"issued_at"`
 	Subject     string `json:"subject,omitempty"`
 	Presence    string `json:"presence,omitempty"`
+	// LastSeen is the bus-stamped time of the client's most recent heartbeat
+	// (clients.heartbeat, TASK-126), RFC3339. Unlike Presence-from-Connz it is a
+	// stored field that survives across a leaf link, so it is the leaf-correct
+	// presence source: the bus derives online = last_seen within the freshness
+	// window. Empty for an identity that has never heartbeated (e.g. a pre-TASK-126
+	// client) — presence then falls back to the connection table.
+	LastSeen string `json:"last_seen,omitempty"`
 	// SpawnedBy is the id of the client that minted this identity via mint-on-behalf
 	// (ADR-0033). Empty for a top-level identity (operator/enrollment-minted). The
 	// bus stamps it at issuance; it is both the spawn lineage and the marker that
@@ -440,6 +460,31 @@ type HelloOutput struct {
 	BusEpoch   int    `json:"bus_epoch"`
 	ServerTime string `json:"server_time"`
 	Principal  string `json:"principal,omitempty"`
+}
+
+// --- clients.heartbeat (liveness signal, TASK-126) ---
+
+// HeartbeatInput carries the client's monotonic beat number; the caller is
+// identified by the call's subject token (its authenticated id), and the
+// timestamp is the bus's to stamp (the client clock is not trusted for last_seen).
+// Seq lets the client correlate the echo it receives back on its delivery path
+// (the mode-D push-path check) with the beat it sent.
+type HeartbeatInput struct {
+	Seq uint64 `json:"seq"`
+}
+
+// HeartbeatOutput acknowledges the beat: ServerTime is the bus-stamped last_seen
+// it recorded (RFC3339), so the client and the bus agree on the recorded value.
+type HeartbeatOutput struct {
+	ServerTime string `json:"server_time"`
+}
+
+// HeartbeatEcho is the beat the bus pushes back down the caller's delivery path
+// (its always-present auto-inbox relay) so the client confirms its own push path
+// is delivering — a beat sent but not echoed within the window is a stale push
+// (TASK-124 mode-D). Seq echoes HeartbeatInput.Seq for correlation.
+type HeartbeatEcho struct {
+	Seq uint64 `json:"seq"`
 }
 
 // --- principal.get / principal.set (ADR-0030 extension) ---
