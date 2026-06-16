@@ -382,10 +382,18 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 .sx-convstage-meta{font-family:var(--font-mono);font-size:12px;color:var(--ink-2);}
 .sx-convstage-body{flex:1;min-height:0;overflow-y:auto;padding-top:6px;}
 .sx-convstage .sx-composer{flex:0 0 auto;border-top:1px solid var(--hair);background:transparent;}
-/* TASK-83: the artifact view stacks the document over an inline companion discussion. */
-.sx-canvas--artifact{flex-direction:column;align-items:stretch;overflow:hidden;}
-.sx-canvas--artifact .sx-page--doc{flex:1;min-height:0;overflow-y:auto;}
-.sx-artdisc{flex:0 0 auto;height:auto;max-height:42%;display:flex;flex-direction:column;border-top:1px solid var(--shair);background:var(--sbg);}
+/* TASK-83: the artifact view pairs the document with its inline companion discussion.
+   Split (doc | discussion) by default; a head toggle switches to stacked for tight widths. */
+.sx-canvas--artifact{align-items:stretch;overflow:hidden;}
+.sx-canvas--artifact .sx-page--doc{flex:1;overflow-y:auto;}
+.sx-artdisc{display:flex;flex-direction:column;min-height:0;background:var(--sbg);}
+.sx-canvas--split{flex-direction:row;}
+.sx-canvas--split .sx-page--doc{min-width:0;}
+.sx-canvas--split .sx-artdisc{flex:0 0 38%;min-width:300px;max-width:520px;border-left:1px solid var(--shair);}
+.sx-canvas--stacked{flex-direction:column;}
+.sx-canvas--stacked .sx-page--doc{min-height:0;}
+.sx-canvas--stacked .sx-artdisc{flex:0 0 auto;max-height:42%;border-top:1px solid var(--shair);}
+.sx-artdisc-toggle{margin-left:auto;align-self:center;}
 .sx-artdisc-head{display:flex;align-items:baseline;gap:10px;padding:9px 24px;border-bottom:1px solid var(--shair);flex:0 0 auto;}
 .sx-artdisc-title{font-family:var(--font-ui);font-size:14px;font-weight:600;letter-spacing:-.01em;color:var(--stx);}
 .sx-artdisc-sub{font-family:var(--font-mono);font-size:11px;color:var(--smut);}
