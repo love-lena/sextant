@@ -109,6 +109,7 @@
     const [stageMode, setStageMode] = useState("home");
     const [draft, setDraft] = useState("");
     const convBodyRef = useRef(null);
+    const discBodyRef = useRef(null);
     const [hidden, setHidden] = useState(() => {
       try {
         return new Set(JSON.parse(localStorage.getItem("sx-hidden-convos") || "[]"));
@@ -121,6 +122,13 @@
         return localStorage.getItem("sx-dark") === "1";
       } catch (_) {
         return false;
+      }
+    });
+    const [discSplit, setDiscSplit] = useState(() => {
+      try {
+        return localStorage.getItem("sx-disc-split") !== "0";
+      } catch (_) {
+        return true;
       }
     });
     const nameOf = useCallback((id) => {
@@ -160,6 +168,12 @@
       } catch (_) {
       }
     }, [dark]);
+    useEffect(() => {
+      try {
+        localStorage.setItem("sx-disc-split", discSplit ? "1" : "0");
+      } catch (_) {
+      }
+    }, [discSplit]);
     useEffect(() => {
       let cancelled = false;
       Promise.all(artifacts.map((a) => apiGet("/api/artifacts/" + encodeURIComponent(a.Name)).then((r) => [a.Name, r && r.Record || null]).catch(() => [a.Name, null]))).then((pairs) => {
@@ -338,6 +352,19 @@
         text: m.text
       }));
     }, [convos, activeConvo, nameOf, kindOf, self.id]);
+    const discussion = useMemo(() => {
+      const c = activeArtifact ? convos[companionTopic(activeArtifact)] : null;
+      if (!c) return [];
+      return c.msgs.map((m, i) => ({
+        id: m.id || i,
+        kind: "msg",
+        author: nameOf(m.author),
+        role: kindOf(m.author) === "client" ? "human" : "agent",
+        self: m.author === self.id,
+        time: relMs(m.ts),
+        text: m.text
+      }));
+    }, [convos, activeArtifact, nameOf, kindOf, self.id]);
     const homeActivity = useMemo(() => activity.map((a) => ({
       who: nameOf(a.author),
       text: a.text,
@@ -352,9 +379,17 @@
       const el = convBodyRef.current;
       if (el) el.scrollTop = el.scrollHeight;
     }, [messages, stageMode, activeConvo]);
+    useEffect(() => {
+      if (stageMode !== "artifact") return;
+      const el = discBodyRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    }, [discussion, stageMode, activeArtifact]);
     function openArtifact(name) {
       setActiveArtifact(name);
       setStageMode("artifact");
+      const subj = companionTopic(name);
+      ensureConvo(subj);
+      backfill(subj);
       const cached = records[name];
       setArtRecord(cached !== void 0 ? cached : null);
       apiGet("/api/artifacts/" + encodeURIComponent(name)).then((a) => {
@@ -406,6 +441,12 @@
       if (!draft.trim() || !activeConvo) return;
       const text = draft.trim();
       apiPublish(activeConvo, { "$type": "chat.message", text }).then(() => setDraft("")).catch(() => {
+      });
+    }
+    function sendDiscussion() {
+      if (!draft.trim() || !activeArtifact) return;
+      const text = draft.trim();
+      apiPublish(companionTopic(activeArtifact), { "$type": "chat.message", text }).then(() => setDraft("")).catch(() => {
       });
     }
     function setReview(name, state) {
@@ -471,7 +512,7 @@
       onUnhide: unhideConvo
     };
     const hasAuthor = artifact.author && artifact.author.name;
-    return /* @__PURE__ */ React.createElement("div", { className: "sx-app" }, /* @__PURE__ */ React.createElement("div", { style: { display: "contents" } }, /* @__PURE__ */ React.createElement(Sidebar, { ctx, busName: self.display_name || "bus", navMode: t.sideNav })), /* @__PURE__ */ React.createElement("main", { className: "sx-stage" }, /* @__PURE__ */ React.createElement("div", { className: "sx-topbar" }, /* @__PURE__ */ React.createElement("div", { className: "sx-crumb" }, stageMode === "home" ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "sx-crumb-topic" }, "Home"), /* @__PURE__ */ React.createElement("span", { className: "sx-crumb-sep" }, "/"), /* @__PURE__ */ React.createElement("span", { className: "sx-crumb-art" }, self.display_name ? "you are " + self.display_name : "live bus")) : stageMode === "artifact" ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "sx-crumb-topic" }, "Artifact"), /* @__PURE__ */ React.createElement("span", { className: "sx-crumb-sep" }, "/"), /* @__PURE__ */ React.createElement("span", { className: "sx-crumb-art" }, artifact.name)) : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "sx-crumb-topic" }, "Conversations"), /* @__PURE__ */ React.createElement("span", { className: "sx-crumb-sep" }, "/"), /* @__PURE__ */ React.createElement("span", { className: "sx-crumb-art" }, convo.type === "topic" ? "# " : "@ ", convo.name))), /* @__PURE__ */ React.createElement("div", { className: "sx-stage-tools" }, /* @__PURE__ */ React.createElement("span", { className: "sx-live" }, /* @__PURE__ */ React.createElement("span", { className: "sx-live-dot" }), "live"), /* @__PURE__ */ React.createElement("button", { className: "sx-icon-btn", title: dark ? "Light mode" : "Dark mode", onClick: () => setDark((d) => !d) }, dark ? "\u2600" : "\u263E"), /* @__PURE__ */ React.createElement("button", { className: "sx-icon-btn", title: "Fullscreen" }, "\u2922"))), stageMode === "home" ? /* @__PURE__ */ React.createElement("div", { className: "sx-canvas" }, /* @__PURE__ */ React.createElement("div", { className: "sx-page sx-page--doc sx-page--home" }, /* @__PURE__ */ React.createElement(HomePage, { ctx }))) : stageMode === "artifact" ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "sx-arthead" }, /* @__PURE__ */ React.createElement("div", { className: "sx-arthead-l" }, /* @__PURE__ */ React.createElement("div", { className: "sx-arthead-title" }, artifact.name), /* @__PURE__ */ React.createElement("div", { className: "sx-arthead-meta" }, artifact.updated && /* @__PURE__ */ React.createElement("span", { className: "sx-arthead-time" }, "updated ", artifact.updated, " ago"), status === "approved" && reviewRev > 0 && /* @__PURE__ */ React.createElement("span", { className: "sx-arthead-time" }, "\xB7 approved at v", reviewRev), /* @__PURE__ */ React.createElement("span", { className: "sx-arthead-v mono", style: { opacity: 0.5 } }, "\xB7 rev ", artifact.version))), /* @__PURE__ */ React.createElement("div", { className: "sx-arthead-r" }, /* @__PURE__ */ React.createElement(StatusPill, { status, big: true }), status === "archived" || status === "rejected" ? /* @__PURE__ */ React.createElement("button", { className: "sx-sbtn sx-sbtn-req", onClick: () => setReview(artifact.name, "review") }, "Reopen") : /* @__PURE__ */ React.createElement(React.Fragment, null, status !== "approved" && /* @__PURE__ */ React.createElement("button", { className: "sx-sbtn sx-sbtn-approve", onClick: () => setReview(artifact.name, "approved") }, "\u2713 Approve"), status !== "changes" && /* @__PURE__ */ React.createElement("button", { className: "sx-sbtn sx-sbtn-req", onClick: () => setReview(artifact.name, "changes") }, "Request changes"), /* @__PURE__ */ React.createElement("button", { className: "sx-sbtn sx-sbtn-req", onClick: () => setReview(artifact.name, "archived") }, "Archive"), /* @__PURE__ */ React.createElement("button", { className: "sx-sbtn sx-sbtn-req", onClick: () => setReview(artifact.name, "rejected") }, "Reject")), /* @__PURE__ */ React.createElement("button", { className: "sx-sbtn sx-sbtn-req", onClick: () => expandConvo(companionTopic(artifact.name)) }, "Discussion \u2197"))), /* @__PURE__ */ React.createElement("div", { className: "sx-canvas" }, /* @__PURE__ */ React.createElement("div", { className: "sx-page sx-page--doc" }, /* @__PURE__ */ React.createElement(MarkdownArtifact, { record: artRecord, name: artifact.name, revision: artifact.version })))) : /* @__PURE__ */ React.createElement("div", { className: "sx-canvas" }, /* @__PURE__ */ React.createElement("div", { className: "sx-page sx-page--doc sx-conv-light" }, /* @__PURE__ */ React.createElement("div", { className: "sx-convstage" }, /* @__PURE__ */ React.createElement("div", { className: "sx-convstage-head" }, /* @__PURE__ */ React.createElement("span", { className: "sx-convstage-title" }, convo.type === "topic" ? "# " : "@ ", convo.name), /* @__PURE__ */ React.createElement("span", { className: "sx-convstage-meta" }, "live on the bus")), /* @__PURE__ */ React.createElement("div", { className: "sx-convstage-body", ref: convBodyRef }, /* @__PURE__ */ React.createElement(MessageList, { messages, onArtifactRef: openArtifact, artifactNames: artifacts.map((a) => a.Name) })), /* @__PURE__ */ React.createElement(Composer, { draft, setDraft, onSend: send, placeholder: "Message " + (convo.type === "topic" ? "#" : "@") + convo.name }))))), /* @__PURE__ */ React.createElement(TweaksPanel, { title: "Tweaks" }, /* @__PURE__ */ React.createElement(TweakSection, { label: "Accent" }), /* @__PURE__ */ React.createElement(
+    return /* @__PURE__ */ React.createElement("div", { className: "sx-app" }, /* @__PURE__ */ React.createElement("div", { style: { display: "contents" } }, /* @__PURE__ */ React.createElement(Sidebar, { ctx, busName: self.display_name || "bus", navMode: t.sideNav })), /* @__PURE__ */ React.createElement("main", { className: "sx-stage" }, /* @__PURE__ */ React.createElement("div", { className: "sx-topbar" }, /* @__PURE__ */ React.createElement("div", { className: "sx-crumb" }, stageMode === "home" ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "sx-crumb-topic" }, "Home"), /* @__PURE__ */ React.createElement("span", { className: "sx-crumb-sep" }, "/"), /* @__PURE__ */ React.createElement("span", { className: "sx-crumb-art" }, self.display_name ? "you are " + self.display_name : "live bus")) : stageMode === "artifact" ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "sx-crumb-topic" }, "Artifact"), /* @__PURE__ */ React.createElement("span", { className: "sx-crumb-sep" }, "/"), /* @__PURE__ */ React.createElement("span", { className: "sx-crumb-art" }, artifact.name)) : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "sx-crumb-topic" }, "Conversations"), /* @__PURE__ */ React.createElement("span", { className: "sx-crumb-sep" }, "/"), /* @__PURE__ */ React.createElement("span", { className: "sx-crumb-art" }, convo.type === "topic" ? "# " : "@ ", convo.name))), /* @__PURE__ */ React.createElement("div", { className: "sx-stage-tools" }, /* @__PURE__ */ React.createElement("span", { className: "sx-live" }, /* @__PURE__ */ React.createElement("span", { className: "sx-live-dot" }), "live"), /* @__PURE__ */ React.createElement("button", { className: "sx-icon-btn", title: dark ? "Light mode" : "Dark mode", onClick: () => setDark((d) => !d) }, dark ? "\u2600" : "\u263E"), /* @__PURE__ */ React.createElement("button", { className: "sx-icon-btn", title: "Fullscreen" }, "\u2922"))), stageMode === "home" ? /* @__PURE__ */ React.createElement("div", { className: "sx-canvas" }, /* @__PURE__ */ React.createElement("div", { className: "sx-page sx-page--doc sx-page--home" }, /* @__PURE__ */ React.createElement(HomePage, { ctx }))) : stageMode === "artifact" ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "sx-arthead" }, /* @__PURE__ */ React.createElement("div", { className: "sx-arthead-l" }, /* @__PURE__ */ React.createElement("div", { className: "sx-arthead-title" }, artifact.name), /* @__PURE__ */ React.createElement("div", { className: "sx-arthead-meta" }, artifact.updated && /* @__PURE__ */ React.createElement("span", { className: "sx-arthead-time" }, "updated ", artifact.updated, " ago"), status === "approved" && reviewRev > 0 && /* @__PURE__ */ React.createElement("span", { className: "sx-arthead-time" }, "\xB7 approved at v", reviewRev), /* @__PURE__ */ React.createElement("span", { className: "sx-arthead-v mono", style: { opacity: 0.5 } }, "\xB7 rev ", artifact.version))), /* @__PURE__ */ React.createElement("div", { className: "sx-arthead-r" }, /* @__PURE__ */ React.createElement(StatusPill, { status, big: true }), status === "archived" || status === "rejected" ? /* @__PURE__ */ React.createElement("button", { className: "sx-sbtn sx-sbtn-req", onClick: () => setReview(artifact.name, "review") }, "Reopen") : /* @__PURE__ */ React.createElement(React.Fragment, null, status !== "approved" && /* @__PURE__ */ React.createElement("button", { className: "sx-sbtn sx-sbtn-approve", onClick: () => setReview(artifact.name, "approved") }, "\u2713 Approve"), status !== "changes" && /* @__PURE__ */ React.createElement("button", { className: "sx-sbtn sx-sbtn-req", onClick: () => setReview(artifact.name, "changes") }, "Request changes"), /* @__PURE__ */ React.createElement("button", { className: "sx-sbtn sx-sbtn-req", onClick: () => setReview(artifact.name, "archived") }, "Archive"), /* @__PURE__ */ React.createElement("button", { className: "sx-sbtn sx-sbtn-req", onClick: () => setReview(artifact.name, "rejected") }, "Reject")), /* @__PURE__ */ React.createElement("button", { className: "sx-sbtn sx-sbtn-req", onClick: () => expandConvo(companionTopic(artifact.name)) }, "Discussion \u2197"))), /* @__PURE__ */ React.createElement("div", { className: "sx-canvas sx-canvas--artifact " + (discSplit ? "sx-canvas--split" : "sx-canvas--stacked") }, /* @__PURE__ */ React.createElement("div", { className: "sx-page sx-page--doc" }, /* @__PURE__ */ React.createElement(MarkdownArtifact, { record: artRecord, name: artifact.name, revision: artifact.version })), /* @__PURE__ */ React.createElement("div", { className: "sx-artdisc sx-conv-light" }, /* @__PURE__ */ React.createElement("div", { className: "sx-artdisc-head" }, /* @__PURE__ */ React.createElement("span", { className: "sx-artdisc-title" }, "Discussion"), /* @__PURE__ */ React.createElement("span", { className: "sx-artdisc-sub" }, companionTopic(artifact.name)), /* @__PURE__ */ React.createElement("button", { className: "sx-icon-btn sx-artdisc-toggle", title: discSplit ? "Stack below the document" : "Split beside the document", onClick: () => setDiscSplit((v) => !v) }, discSplit ? "\u25A4" : "\u25A5")), /* @__PURE__ */ React.createElement("div", { className: "sx-artdisc-body", ref: discBodyRef }, discussion.length ? /* @__PURE__ */ React.createElement(MessageList, { messages: discussion, onArtifactRef: openArtifact }) : /* @__PURE__ */ React.createElement("div", { className: "sx-artdisc-empty" }, "No discussion yet \u2014 start the thread below.")), /* @__PURE__ */ React.createElement(Composer, { draft, setDraft, onSend: sendDiscussion, placeholder: "Discuss " + artifact.name })))) : /* @__PURE__ */ React.createElement("div", { className: "sx-canvas" }, /* @__PURE__ */ React.createElement("div", { className: "sx-page sx-page--doc sx-conv-light" }, /* @__PURE__ */ React.createElement("div", { className: "sx-convstage" }, /* @__PURE__ */ React.createElement("div", { className: "sx-convstage-head" }, /* @__PURE__ */ React.createElement("span", { className: "sx-convstage-title" }, convo.type === "topic" ? "# " : "@ ", convo.name), /* @__PURE__ */ React.createElement("span", { className: "sx-convstage-meta" }, "live on the bus")), /* @__PURE__ */ React.createElement("div", { className: "sx-convstage-body", ref: convBodyRef }, /* @__PURE__ */ React.createElement(MessageList, { messages, onArtifactRef: openArtifact, artifactNames: artifacts.map((a) => a.Name) })), /* @__PURE__ */ React.createElement(Composer, { draft, setDraft, onSend: send, placeholder: "Message " + (convo.type === "topic" ? "#" : "@") + convo.name }))))), /* @__PURE__ */ React.createElement(TweaksPanel, { title: "Tweaks" }, /* @__PURE__ */ React.createElement(TweakSection, { label: "Accent" }), /* @__PURE__ */ React.createElement(
       TweakColor,
       {
         label: "Brand signal",

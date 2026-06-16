@@ -110,8 +110,11 @@
     const [stageMode, setStageMode] = useState("home");  // home | artifact | conversation
     const [draft, setDraft] = useState("");
     const convBodyRef = useRef(null);
+    const discBodyRef = useRef(null);
     const [hidden, setHidden] = useState(()=>{ try{ return new Set(JSON.parse(localStorage.getItem("sx-hidden-convos")||"[]")); }catch(_){ return new Set(); } });
     const [dark, setDark] = useState(()=>{ try{ return localStorage.getItem("sx-dark")==="1"; }catch(_){ return false; } });
+    // artifact discussion layout: split (doc | discussion) by default, toggle to stacked; persisted
+    const [discSplit, setDiscSplit] = useState(()=>{ try{ return localStorage.getItem("sx-disc-split")!=="0"; }catch(_){ return true; } });
 
     const nameOf = useCallback((id)=>{ const c=clients.find(c=>c.ID===id); return c?c.DisplayName:(id||"").slice(0,8); },[clients]);
     const kindOf = useCallback((id)=>{ const c=clients.find(c=>c.ID===id); return c?c.Kind:"agent"; },[clients]);
@@ -135,6 +138,9 @@
       if(r) r.classList.toggle("dark", dark);
       try{ localStorage.setItem("sx-dark", dark?"1":"0"); }catch(_){}
     },[dark]);
+
+    // artifact discussion layout: persist the split↔stacked choice
+    useEffect(()=>{ try{ localStorage.setItem("sx-disc-split", discSplit?"1":"0"); }catch(_){} },[discSplit]);
 
     // prefetch artifact records so the sidebar can group by review-state and an
     // open is instant. Fine at dash scale; a very large bucket would want paging.
@@ -305,6 +311,19 @@
       }));
     },[convos, activeConvo, nameOf, kindOf, self.id]);
 
+    // the open artifact's companion-topic discussion, rendered inline in the
+    // artifact view (TASK-83). Same shape as `messages`, keyed on the artifact's
+    // companion subject msg.topic.artifact.<name>.
+    const discussion = useMemo(()=>{
+      const c = activeArtifact ? convos[companionTopic(activeArtifact)] : null;
+      if(!c) return [];
+      return c.msgs.map((m,i)=>({
+        id:m.id||i, kind:"msg", author:nameOf(m.author),
+        role: kindOf(m.author)==="client"?"human":"agent",
+        self: m.author===self.id, time:relMs(m.ts), text:m.text,
+      }));
+    },[convos, activeArtifact, nameOf, kindOf, self.id]);
+
     const homeActivity = useMemo(()=>activity.map(a=>({
       who:nameOf(a.author), text:a.text, time:relMs(a.ts),
     })),[activity, nameOf]);
@@ -323,8 +342,16 @@
       if(el) el.scrollTop = el.scrollHeight;
     },[messages, stageMode, activeConvo]);
 
+    // keep the inline artifact discussion pinned to the newest message too.
+    useEffect(()=>{
+      if(stageMode!=="artifact") return;
+      const el = discBodyRef.current;
+      if(el) el.scrollTop = el.scrollHeight;
+    },[discussion, stageMode, activeArtifact]);
+
     function openArtifact(name){
       setActiveArtifact(name); setStageMode("artifact");
+      const subj = companionTopic(name); ensureConvo(subj); backfill(subj); // load the inline discussion (TASK-83)
       const cached = records[name];
       setArtRecord(cached!==undefined ? cached : null);
       apiGet("/api/artifacts/"+encodeURIComponent(name)).then(a=>{
@@ -362,6 +389,12 @@
       if(!draft.trim()||!activeConvo) return;
       const text=draft.trim();
       apiPublish(activeConvo,{ "$type":"chat.message", text }).then(()=>setDraft("")).catch(()=>{});
+    }
+    // post to the open artifact's companion discussion topic (TASK-83 inline thread).
+    function sendDiscussion(){
+      if(!draft.trim()||!activeArtifact) return;
+      const text=draft.trim();
+      apiPublish(companionTopic(activeArtifact),{ "$type":"chat.message", text }).then(()=>setDraft("")).catch(()=>{});
     }
     // approve / request-changes: persist the review-state, refresh the record,
     // and post an event to the artifact's companion discussion topic.
@@ -457,8 +490,21 @@
                   <button className="sx-sbtn sx-sbtn-req" onClick={()=>expandConvo(companionTopic(artifact.name))}>Discussion ↗</button>
                 </div>
               </div>
-              <div className="sx-canvas">
+              <div className={"sx-canvas sx-canvas--artifact " + (discSplit?"sx-canvas--split":"sx-canvas--stacked")}>
                 <div className="sx-page sx-page--doc"><MarkdownArtifact record={artRecord} name={artifact.name} revision={artifact.version} /></div>
+                <div className="sx-artdisc sx-conv-light">
+                  <div className="sx-artdisc-head">
+                    <span className="sx-artdisc-title">Discussion</span>
+                    <span className="sx-artdisc-sub">{companionTopic(artifact.name)}</span>
+                    <button className="sx-icon-btn sx-artdisc-toggle" title={discSplit?"Stack below the document":"Split beside the document"} onClick={()=>setDiscSplit(v=>!v)}>{discSplit?"▤":"▥"}</button>
+                  </div>
+                  <div className="sx-artdisc-body" ref={discBodyRef}>
+                    {discussion.length
+                      ? <MessageList messages={discussion} onArtifactRef={openArtifact} />
+                      : <div className="sx-artdisc-empty">No discussion yet — start the thread below.</div>}
+                  </div>
+                  <Composer draft={draft} setDraft={setDraft} onSend={sendDiscussion} placeholder={"Discuss " + artifact.name} />
+                </div>
               </div>
             </React.Fragment>
           ) : (
