@@ -1,0 +1,44 @@
+{
+  "lexicon": 1,
+  "id": "goal.update",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "A signalled transition on a goal (TASK-84/TASK-87). Published as a message on msg.topic.goals — an observation that goal <goal> moved, NOT the goal's current value. The status tracker (TASK-87) emits these by watching crew activity; any agent or human may emit one. It SIGNALS; it does not manage (ADR-0035): the current value lives in the goal.<id> artifact, which the owner — or, as a cooperative convenience, the tracker — sets. A goal.update for a goal with no artifact yet is a proposal to open one. Content is opaque to the bus.",
+      "record": {
+        "type": "object",
+        "required": ["goal", "state"],
+        "properties": {
+          "goal": {
+            "type": "string",
+            "description": "The goal-id this update concerns (matches the goal.<id> artifact)."
+          },
+          "state": {
+            "type": "string",
+            "description": "The observed/new state: pending | active | blocked | done | dropped (same enum as goal.state)."
+          },
+          "progress": {
+            "type": "string",
+            "description": "Optional short progress at this transition."
+          },
+          "headline": {
+            "type": "string",
+            "description": "Short line describing the transition / what was observed, e.g. 'canopus opened PR #143 -> active'."
+          },
+          "ref": {
+            "type": "string",
+            "description": "Optional ticket/PR/artifact that triggered the update."
+          },
+          "updated": {
+            "type": "string",
+            "description": "ISO-8601 timestamp."
+          },
+          "by": {
+            "type": "string",
+            "description": "Who/what signalled it (convenience label; the bus-stamped author is authoritative)."
+          }
+        }
+      }
+    }
+  }
+}

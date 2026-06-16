@@ -131,6 +131,16 @@ _Avoid_: orchestrator, manager, controller
 A client that turns spawn requests into running clients.
 _Avoid_: scheduler, supervisor (it launches; it never supervises)
 
+**Goal**:
+A shared objective the crew works toward, held as the latest-value artifact
+`goal.<id>` and moved by **goal.update** signals on `msg.topic.goals`. A goal is
+*observed and cooperated on, never managed*: a tracker (or any client) signals
+movement; the goal's owner and the operator stay authoritative (ADR-0035).
+Distinct from an agent's **status** (`agent.status` — what one agent is doing
+right now); a goal is the outcome many agents move toward.
+_Avoid_: task, milestone, KPI (a goal is the objective, not a tracking system);
+reading goal.update as a command (it is a signal)
+
 **Epoch**:
 The protocol version; a client checks it on connect.
 _Avoid_: version, schema version
@@ -151,6 +161,9 @@ _Avoid_: kill (reserve that for forcing a process from the outside)
   **artifacts**.
 - A **workflow** is run by a **coordinator**; a **dispatcher** spawns new
   **clients**. Both coordinator and dispatcher are just clients.
+- A **goal** is a shared objective many **clients** move toward; a tracker (or any
+  client) signals **goal.update**s, but the goal's owner and the operator stay
+  authoritative — the bus tracks nothing and manages no one.
 - The **clients registry** lists every issued client; **presence** is its liveness
   view — who is connected right now, derived at read time from the bus's live
   connection table.
