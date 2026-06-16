@@ -50,6 +50,24 @@ func TestClientEntryLastSeenOmitEmpty(t *testing.T) {
 	}
 }
 
+// The echo subject is a dedicated, per-client core-NATS subject (sx.hb.<id>) —
+// not the inbox, not a JetStream/delivery subject. It must be built under the
+// HeartbeatPrefix and carry the client id as a single token.
+func TestHeartbeatSubject(t *testing.T) {
+	const id = "01KAGENTSPIKE0000000000000"
+	subj := wireapi.HeartbeatSubject(id)
+	if want := wireapi.HeartbeatPrefix + id; subj != want {
+		t.Fatalf("HeartbeatSubject = %q, want %q", subj, want)
+	}
+	if !strings.HasPrefix(subj, "sx.hb.") {
+		t.Fatalf("HeartbeatSubject %q is not under the sx.hb. space", subj)
+	}
+	// It must NOT collide with the delivery or inbox spaces.
+	if strings.HasPrefix(subj, wireapi.DeliverPrefix) || strings.HasPrefix(subj, "_INBOX.") {
+		t.Fatalf("HeartbeatSubject %q must be its own space, not delivery/inbox", subj)
+	}
+}
+
 func TestHeartbeatRecordsRoundTrip(t *testing.T) {
 	for _, tc := range []any{
 		wireapi.HeartbeatInput{Seq: 7},

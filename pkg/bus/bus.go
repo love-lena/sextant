@@ -50,6 +50,13 @@ type Config struct {
 	// default: write the line to stderr — exactly what a zero-config embedder
 	// sees today.
 	Logf func(format string, args ...any)
+
+	// HeartbeatFreshness is the heartbeat freshness window (TASK-126): a client
+	// whose most recent clients.heartbeat is within it is derived online even when
+	// the connection table cannot see it (the leaf case). Zero means the default
+	// (defaultHeartbeatFreshness). It is the bus's tolerance, independent of the
+	// SDK's beat interval, and should be a small multiple of it.
+	HeartbeatFreshness time.Duration
 }
 
 // logf returns the resolved log function: cfg.Logf, or the stderr default.
@@ -88,10 +95,24 @@ type Bus struct {
 	relaysMu    sync.Mutex
 	relays      map[string]map[string]*relay
 
+	// freshnessWindow is how recently a client must have heartbeated to be
+	// derived online when the connection table does not show it (TASK-126). It is
+	// the OR-half of the dual-source presence rule: online = Connz-online OR
+	// last_seen within this window. Resolved from Config.HeartbeatFreshness (or
+	// defaultHeartbeatFreshness) at Start.
+	freshnessWindow time.Duration
+
 	// logf is the resolved Config.Logf (never nil): the bus's only output
 	// channel. Components log through it instead of writing to stderr.
 	logf func(format string, args ...any)
 }
+
+// defaultHeartbeatFreshness is the bus's default heartbeat freshness window: a
+// client whose last beat is within it is derived online even when the connection
+// table cannot see it (the leaf case, TASK-126). It is generously wider than the
+// SDK's default heartbeat interval (~15s) so an occasional missed beat does not
+// flap presence — roughly the SDK's own freshness multiple.
+const defaultHeartbeatFreshness = 45 * time.Second
 
 // stablePort resolves the listen port for a (re)start. If cfg.Port is non-zero
 // the caller asked for a specific port — use it as-is. Otherwise look for a
@@ -181,7 +202,11 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 		return nil, err
 	}
 
-	b := &Bus{ns: ns, store: cfg.StoreDir, ident: ident, logf: logf}
+	freshness := cfg.HeartbeatFreshness
+	if freshness <= 0 {
+		freshness = defaultHeartbeatFreshness
+	}
+	b := &Bus{ns: ns, store: cfg.StoreDir, ident: ident, freshnessWindow: freshness, logf: logf}
 
 	// The bus's own operator-tier connection is in-process: it needs no TCP
 	// listener, so bootstrap runs while the client port is still closed and

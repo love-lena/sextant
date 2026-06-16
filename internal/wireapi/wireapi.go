@@ -31,6 +31,18 @@ const WildcardSubject = APIPrefix + "*.>"
 // delivery): sx.deliver.<clientID>.<stream>. Owner-subscribe only.
 const DeliverPrefix = "sx.deliver."
 
+// HeartbeatPrefix is the root of the heartbeat-echo space (TASK-126):
+// sx.hb.<clientID>. The bus core-NATS publishes a HeartbeatEcho to it on each
+// clients.heartbeat; the client auto-subscribes its own (owner-subscribe only,
+// like delivery) to confirm its push path is live. It is deliberately NOT the
+// delivery space (no JetStream relay, no persistence) and NOT the inbox (which
+// carries call replies): a transient core publish, dropped if the client is not
+// subscribed, so a missed echo signals a stale push path rather than queuing.
+const HeartbeatPrefix = "sx.hb."
+
+// HeartbeatSubject builds the per-client heartbeat-echo subject: sx.hb.<clientID>.
+func HeartbeatSubject(clientID string) string { return HeartbeatPrefix + clientID }
+
 // InboxPrefix is a client's private request/reply inbox prefix:
 // _INBOX.<clientID>. The SDK sets it as the connection's custom inbox (so its
 // call replies land under it) and the credential allow-lists subscribing only to

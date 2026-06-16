@@ -4,9 +4,14 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/love-lena/sextant/pkg/sx"
 )
+
+// SetFreshnessWindow overrides the heartbeat freshness window so a test can make
+// a seeded last_seen count as fresh or stale deterministically (TASK-126).
+func (b *Bus) SetFreshnessWindow(d time.Duration) { b.freshnessWindow = d }
 
 // Test-only seams. This file is a _test.go file, so it is compiled only into the
 // bus package's test binary and never ships in any production build — yet because

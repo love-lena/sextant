@@ -308,6 +308,12 @@ func clientPermissions(clientID string) jwt.Permissions {
 	p.Sub.Allow = []string{
 		wireapi.DeliverPrefix + clientID + ".>",
 		wireapi.InboxPrefix(clientID) + ".>",
+		// This client's own heartbeat-echo subject (sx.hb.<id>, TASK-126): the
+		// echo watcher subscribes it to confirm its push path is live. Scoped to
+		// the client's own id like the delivery space, so no client can read
+		// another's beat. Additive — a credential minted before this lands omits
+		// the entry, and the echo watcher then simply receives nothing (graceful).
+		wireapi.HeartbeatSubject(clientID),
 	}
 	return p
 }

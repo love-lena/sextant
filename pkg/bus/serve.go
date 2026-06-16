@@ -131,6 +131,8 @@ func (b *Bus) dispatch(ctx context.Context, clientID, op string, data []byte) (j
 		return b.opClientsRetire(ctx, clientID, data)
 	case wireapi.OpClientsHello:
 		return b.opClientsHello(ctx, clientID)
+	case wireapi.OpClientsHeartbeat:
+		return b.opClientsHeartbeat(ctx, clientID, data)
 	case wireapi.OpPrincipalGet:
 		return b.opPrincipalGet(ctx)
 	case wireapi.OpPrincipalSet:
@@ -387,6 +389,7 @@ func (b *Bus) opClientsList(ctx context.Context) (json.RawMessage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bus: clients.list: %w", err)
 	}
+	now := time.Now().UTC() // one clock read for the whole listing's freshness join
 	out := wireapi.ClientsListOutput{Clients: make([]wireapi.ClientEntry, 0, len(keys))}
 	for _, k := range keys {
 		val, _, err := b.backend.Get(ctx, sx.BucketClients, k)
@@ -403,11 +406,19 @@ func (b *Bus) opClientsList(ctx context.Context) (json.RawMessage, error) {
 			continue
 		}
 		e.ID = k // the registry key is the authoritative id, not the record body
+		// Dual-source presence (TASK-126): online if the connection table shows it
+		// (the first-hand, leaf-blind view) OR its last heartbeat is fresh (the
+		// leaf-correct view that survives a leaf link Connz cannot see across). A
+		// client behind a leaf is online to its peers while it keeps beating, even
+		// though this server holds no connection for it.
+		connOnline := e.Subject != "" && online[e.Subject]
 		e.Presence = wireapi.PresenceOffline
-		if e.Subject != "" && online[e.Subject] {
+		if connOnline || b.heartbeatFresh(e.LastSeen, now) {
 			e.Presence = wireapi.PresenceOnline
 		}
 		e.Subject = "" // internal join key — not part of the client-facing directory
+		// LastSeen stays on the reply: it is not sensitive (unlike Subject) and a
+		// consumer may render it ("last seen 30s ago") alongside the derived Presence.
 		out.Clients = append(out.Clients, e)
 	}
 	sort.Slice(out.Clients, func(i, j int) bool { return out.Clients[i].ID < out.Clients[j].ID })
@@ -532,6 +543,69 @@ func (b *Bus) opClientsHello(ctx context.Context, callerID string) (json.RawMess
 	return json.Marshal(wireapi.HelloOutput{BusEpoch: epoch, ServerTime: nowRFC3339(), Principal: principal})
 }
 
+// opClientsHeartbeat is the periodic liveness signal (TASK-126). It does two
+// things on each beat and returns the bus-stamped time:
+//
+//   - Presence floor: it stamps a bus-clock last_seen on the caller's registry
+//     record (same clock source as IssuedAt). last_seen is the leaf-correct
+//     presence source — unlike Connz it survives a leaf link — so a connected
+//     client a Connz query cannot see is still derived online while its beats
+//     are fresh. The write is last-writer-wins (the registry bucket is History:1
+//     and a beat is idempotent overwrite-with-a-newer-time): no compare-and-set
+//     retry loop, because two concurrent beats from the same client only ever
+//     advance the time, and a beat racing a register/retire is bounded by the
+//     same not-found gate hello uses.
+//   - Push-path floor: it core-NATS publishes a HeartbeatEcho (carrying the
+//     caller's Seq) to the dedicated, transient sx.hb.<id> subject. The client
+//     auto-subscribes its own and confirms the echo arrives — a beat sent but
+//     not echoed within the window is a stale push path (TASK-124 mode-D). This
+//     is a plain core publish, not a JetStream/delivery relay: it must not
+//     persist or queue, so a missed echo signals a dead path rather than piling
+//     up.
+//
+// A caller with no durable record (never issued, or retired) is rejected, like
+// hello — the record is what it modifies, so there is nothing to stamp.
+func (b *Bus) opClientsHeartbeat(ctx context.Context, callerID string, data []byte) (json.RawMessage, error) {
+	var in wireapi.HeartbeatInput
+	if err := json.Unmarshal(data, &in); err != nil {
+		return nil, fmt.Errorf("bus: clients.heartbeat: bad input: %w", err)
+	}
+	val, _, err := b.backend.Get(ctx, sx.BucketClients, callerID)
+	if err != nil {
+		if errors.Is(err, backend.ErrNotFound) {
+			return nil, fmt.Errorf("bus: identity %q is not registered (or has been retired)", callerID)
+		}
+		return nil, fmt.Errorf("bus: clients.heartbeat: %w", err)
+	}
+	var e wireapi.ClientEntry
+	if err := json.Unmarshal(val, &e); err != nil {
+		return nil, fmt.Errorf("bus: clients.heartbeat: decode record %q: %w", callerID, err)
+	}
+	now := nowRFC3339()
+	e.LastSeen = now
+	rec, err := json.Marshal(e)
+	if err != nil {
+		return nil, fmt.Errorf("bus: clients.heartbeat: encode record: %w", err)
+	}
+	// Last-writer-wins: the registry bucket keeps one revision per client, and a
+	// beat only ever advances last_seen, so an unconditional Put is correct — no
+	// CAS retry loop (two beats racing both write a fresh time; either wins).
+	if _, err := b.backend.Put(ctx, sx.BucketClients, callerID, rec); err != nil {
+		return nil, fmt.Errorf("bus: clients.heartbeat: persist last_seen: %w", err)
+	}
+	// Echo the beat back on the caller's dedicated heartbeat subject — a transient
+	// core publish (no persistence). Best-effort: a publish error does not fail the
+	// beat (last_seen is already recorded), but it must be loud.
+	echo, err := json.Marshal(wireapi.HeartbeatEcho{Seq: in.Seq})
+	if err != nil {
+		return nil, fmt.Errorf("bus: clients.heartbeat: encode echo: %w", err)
+	}
+	if err := b.opConn.Publish(wireapi.HeartbeatSubject(callerID), echo); err != nil {
+		b.logf("bus: clients.heartbeat: echo publish to %s failed: %v", wireapi.HeartbeatSubject(callerID), err)
+	}
+	return json.Marshal(wireapi.HeartbeatOutput{ServerTime: now})
+}
+
 // opPrincipalGet returns the current principal ULID (ADR-0030). Any authenticated
 // caller may read it — the read-open half of the key's shape.
 func (b *Bus) opPrincipalGet(ctx context.Context) (json.RawMessage, error) {
@@ -653,6 +727,23 @@ func (b *Bus) onlineSubjects() (map[string]bool, error) {
 		}
 	}
 	return set, nil
+}
+
+// heartbeatFresh reports whether lastSeen (RFC3339, the bus-stamped time of a
+// client's most recent heartbeat) is within the freshness window as of now — the
+// OR-half of the dual-source presence rule (TASK-126). An empty or unparseable
+// last_seen is not fresh (a client that has never beaten, or a pre-TASK-126
+// record): presence then rests on the connection table alone. A future beat
+// (clock skew) still reads as fresh — the window is one-sided on age.
+func (b *Bus) heartbeatFresh(lastSeen string, now time.Time) bool {
+	if lastSeen == "" {
+		return false
+	}
+	t, err := time.Parse(time.RFC3339, lastSeen)
+	if err != nil {
+		return false
+	}
+	return now.Sub(t) < b.freshnessWindow
 }
 
 // onlineClientIDs returns the ids of the clients connected right now — the join of
