@@ -3,13 +3,24 @@ name: mdbook
 on:
   push:
     branches: [main]
+    # docgen CONSUMES protocol/ + the Go SDK to generate operations.md + sdk-go/*,
+    # so a change to those inputs must trigger the drift guard too — not only
+    # docs/book edits (TASK-51: the guard was blind to its real inputs).
     paths:
       - "docs/book/**"
+      - "protocol/**"
+      - "pkg/sextant/**"
+      - "cmd/docgen/**"
+      - "internal/docgen/**"
       - ".github/workflows/mdbook.yml"
   pull_request:
     branches: [main]
     paths:
       - "docs/book/**"
+      - "protocol/**"
+      - "pkg/sextant/**"
+      - "cmd/docgen/**"
+      - "internal/docgen/**"
       - ".github/workflows/mdbook.yml"
   workflow_dispatch:
 
