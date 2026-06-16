@@ -155,10 +155,10 @@ else
 fi
 EOF
 
-  # Shell-level open-PR guard (TASK-98): a `gh` shim, first on the orchestrator's + workers'
-  # PATH, that REFUSES `gh ... merge` so the workflow can only OPEN a PR, never merge it —
-  # a hard barrier, not just LLM compliance with the playbook. `gh pr create` and read-only
-  # gh pass straight through to the real binary (captured here before $WF_BIN is on PATH).
+  # Open-PR guardrail (TASK-98): a `gh` shim, first on the orchestrator's + workers' PATH,
+  # that refuses `gh ... merge` so the workflow OPENs a PR but never merges it — a shell-level
+  # guardrail (defense in depth over playbook compliance), not an OS sandbox. `gh pr create`
+  # and read-only gh pass straight through to the real binary (captured before $WF_BIN is on PATH).
   realgh="$(command -v gh 2>/dev/null || echo gh)"
   cat >"$bin/gh" <<EOF
 #!/usr/bin/env sh
@@ -168,7 +168,49 @@ esac
 exec "$realgh" "\$@"
 EOF
 
-  chmod +x "$bin"/wf-* "$bin"/_wf-esc "$bin/gh"
+  # Destructive-git guardrail (TASK-118 worker least-privilege + TASK-122): a `git` shim
+  # on the same PATH that refuses the release-path ops the playbook forbids — force-push
+  # (incl. a +refspec), push to main/master, and tag — for the orchestrator AND its workers
+  # (their Bash inherits this PATH). This is a guardrail against an OVER-EAGER COOPERATIVE
+  # worker, NOT a sandbox: a full-path /usr/bin/git or a PATH reorder bypasses a shell shim;
+  # true least-privilege is OS-level (container/seccomp), the eventual evolution. Normal
+  # add/commit/status/diff and a non-force feature-branch push pass straight through.
+  # Captured before $WF_BIN is on PATH so the shim calls the real git.
+  realgit="$(command -v git 2>/dev/null || echo git)"
+  cat >"$bin/git" <<EOF
+#!/usr/bin/env sh
+# the first non-flag token is the git subcommand.
+sub=""; for a in "\$@"; do case "\$a" in -*) ;; *) sub="\$a"; break ;; esac; done
+if [ "\$sub" = push ]; then
+  case " \$* " in
+    *" --force "*|*" -f "*|*" --force-with-lease"*|*" --mirror "*|*" --delete "*|*" -d "*|*" +"*)
+      echo "wf-guard: refusing destructive 'git push' (force / +refspec / mirror / delete) — open a PR, never rewrite (release guard)" >&2; exit 3 ;;
+  esac
+  case " \$* " in
+    *" main "*|*" master "*|*":main "*|*":master "*|*" +main"*|*" +master"*)
+      echo "wf-guard: refusing 'git push' to main/master — the workflow opens a PR from a feature branch (release guard)" >&2; exit 3 ;;
+  esac
+fi
+if [ "\$sub" = tag ]; then
+  echo "wf-guard: refusing 'git tag' — the workflow never tags releases (release guard)" >&2; exit 3
+fi
+exec "$realgit" "\$@"
+EOF
+
+  # wf-release-pr <pr create args...> — the ONLY sanctioned release operation (TASK-122).
+  # It runs `gh pr create` and nothing else; any other verb is refused, so the release
+  # STEP has a single auditable door that can only OPEN a PR (never merge/push/tag).
+  cat >"$bin/wf-release-pr" <<'EOF'
+#!/usr/bin/env sh
+if [ "$1" = pr ] && [ "$2" = create ]; then
+  shift 2
+  exec gh pr create "$@"
+fi
+echo "wf-release-pr: refused — this wrapper only runs 'gh pr create' (open a PR; never merge/push/tag/force). Got: $*" >&2
+exit 3
+EOF
+
+  chmod +x "$bin"/wf-* "$bin"/_wf-esc "$bin/gh" "$bin/git"
 }
 
 # ============================ DEMO (token-free plumbing) ============================
@@ -205,6 +247,21 @@ if [ "$MODE" = demo ]; then
 
   gen_helpers "$WF_BIN"
   export PATH="$WF_BIN:$PATH"
+
+  echo "== shell-enforced autonomy guards (TASK-122 wf-release-pr + TASK-118 worker least-priv) =="
+  # A guard refuses with exit 3 + a 'wf-guard'/'wf-release-pr: refused' message; these run
+  # on the SAME PATH a worker's Bash inherits, so they bind the workers too.
+  guard_blocks(){ gb="$1"; shift; o="$("$@" 2>&1)"; rc=$?; if [ "$rc" = 3 ] && printf '%s' "$o" | grep -qE 'wf-guard|wf-release-pr: refused'; then ok "$gb"; else no "$gb (rc=$rc out=$o)"; fi; }
+  guard_allows(){ ga="$1"; shift; o="$("$@" 2>&1)"; if printf '%s' "$o" | grep -qE 'wf-guard|wf-release-pr: refused'; then no "$ga (wrongly refused: $o)"; else ok "$ga"; fi; }
+  guard_blocks "git shim refuses force-push"          git push --force origin feature
+  guard_blocks "git shim refuses +refspec force-push" git push origin +feature:feature
+  guard_blocks "git shim refuses push to main"        git push origin main
+  guard_blocks "git shim refuses git tag"             git tag v9.9.9
+  guard_blocks "gh shim refuses gh pr merge"          gh pr merge 123
+  guard_blocks "wf-release-pr refuses non-create"     wf-release-pr pr merge 123
+  guard_allows "git shim allows a normal add"         git add -A
+  guard_allows "git shim allows feature-branch push"  git push origin my-feature
+  guard_allows "wf-release-pr allows pr create"       wf-release-pr pr create --title x --body y
 
   # stub worker: registered identity already minted by wf-spawn; here we just emit the
   # canned output the orchestrator reads. The reviewer returns changes-requested once,
@@ -263,8 +320,8 @@ EOF
 # $SX_WAKE_TEXT carries the control message that woke us.
 echo "$SX_WAKE_TEXT" | grep -q approve || { "$WF_BIN/wf-event" "woke on non-approve: $SX_WAKE_TEXT"; exit 0; }
 "$WF_BIN/wf-progress" release running
-# release = open a PR (stubbed here; the live run does gh pr create). Prove the path:
-"$WF_BIN/wf-event" "release: would run: gh pr create (open PR, no merge)"
+# release = open a PR (stubbed here; the live run does `wf-release-pr pr create`). Prove the path:
+"$WF_BIN/wf-event" "release: would run: wf-release-pr pr create (open PR, no merge/tag/force)"
 touch "$WF_PR_MARKER"
 "$WF_BIN/wf-progress" release done
 "$WF_BIN/wf-dm" "PR opened (stub): workflow $WF_ID done"
