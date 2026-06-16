@@ -82,7 +82,7 @@ type channelHub struct {
 	// inboxDrains tracks one inbox-drain goroutine per live client object, so the
 	// drain starts exactly once per connection (idempotent) and can be stopped
 	// when the connManager discards that client.
-	dmMu        sync.Mutex
+	inboxMu     sync.Mutex
 	inboxDrains map[*sextant.Client]chan struct{}
 }
 
@@ -114,7 +114,7 @@ func newChannelHub(notify func(ctx context.Context, method string, params any) e
 //     same client object (startResumePass → reestablishSubs), so c.Inbox() keeps
 //     flowing and this one drain spans the whole cached-client lifecycle.
 //   - The goroutine exits on c.Drained() (a cooperative bus drain) or when
-//     stopDMDrain closes its stop channel (the connManager discarding the
+//     stopInboxDrain closes its stop channel (the connManager discarding the
 //     client). It never blocks the SDK delivery goroutine: frameEvent's push is
 //     non-fatal and bounded.
 func (h *channelHub) startInboxDrain(c *sextant.Client) {
@@ -123,14 +123,14 @@ func (h *channelHub) startInboxDrain(c *sextant.Client) {
 	id := c.ID()
 	h.selfID.Store(&id)
 
-	h.dmMu.Lock()
+	h.inboxMu.Lock()
 	if _, running := h.inboxDrains[c]; running {
-		h.dmMu.Unlock()
+		h.inboxMu.Unlock()
 		return
 	}
 	stop := make(chan struct{})
 	h.inboxDrains[c] = stop
-	h.dmMu.Unlock()
+	h.inboxMu.Unlock()
 
 	go func() {
 		// Warm the name cache before draining so the first DM resolves its
@@ -160,15 +160,15 @@ func (h *channelHub) drainLoop(inbox <-chan sextant.Message, drained <-chan stru
 	}
 }
 
-// stopDMDrain stops the drain for a client the connManager is discarding (a
+// stopInboxDrain stops the drain for a client the connManager is discarding (a
 // drained connection it is about to replace). Idempotent; safe if no drain ran.
-func (h *channelHub) stopDMDrain(c *sextant.Client) {
-	h.dmMu.Lock()
+func (h *channelHub) stopInboxDrain(c *sextant.Client) {
+	h.inboxMu.Lock()
 	stop, ok := h.inboxDrains[c]
 	if ok {
 		delete(h.inboxDrains, c)
 	}
-	h.dmMu.Unlock()
+	h.inboxMu.Unlock()
 	if ok {
 		close(stop)
 	}
@@ -220,7 +220,7 @@ func wakeOnlyMode() bool {
 // isSelfEcho reports whether a delivered frame is this process's own publish
 // echoing back on a subscribed subject. The id-based echo set (TASK-52) is the
 // source of truth, but there is a race: the bus can relay a self-published
-// frame back (via the auto-DM bridge or an explicit subscription) before
+// frame back (via the auto-inbox bridge or an explicit subscription) before
 // message_publish has finished recording its id in the set. So when a frame is
 // authored by THIS client but its id is not yet in the set, briefly wait for
 // the record to land before concluding it is not ours. The wait is bounded and

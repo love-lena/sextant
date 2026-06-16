@@ -273,22 +273,22 @@ func (r *recorder) count() int {
 	return len(r.events)
 }
 
-// TestDMDrainWakesContentMode proves M1 (review): a frame arriving on the auto-DM
+// TestInboxDrainWakesContentMode proves M1 (review): a frame arriving on the auto-DM
 // channel (c.Inbox(), TASK-55) is emitted as a channel event through frameEvent's
 // shared emit path — WITHOUT any explicit message_subscribe. This is the wake
 // path a principal DM rides; in CONTENT mode the body is pushed.
-func TestDMDrainWakesContentMode(t *testing.T) {
+func TestInboxDrainWakesContentMode(t *testing.T) {
 	clearWakeOnly(t)
 
 	rec := &recorder{}
 	h := newChannelHub(rec.notify, staticNames(map[string]string{"01PRIN": "lena"}))
 
-	dms := make(chan sextant.Message, 1)
+	inbox := make(chan sextant.Message, 1)
 	stop := make(chan struct{})
 	defer close(stop)
-	go h.drainLoop(dms, nil, stop)
+	go h.drainLoop(inbox, nil, stop)
 
-	dms <- msgID("01DM_CONTENT", sx.ClientSubject("01SELF"), "01PRIN",
+	inbox <- msgID("01DM_CONTENT", sx.ClientSubject("01SELF"), "01PRIN",
 		`{"$type":"chat.message","text":"ship the v0.2 release"}`, 4)
 
 	rec.waitForEvents(t, 1)
@@ -301,21 +301,21 @@ func TestDMDrainWakesContentMode(t *testing.T) {
 	}
 }
 
-// TestDMDrainWakesWakeOnlyMode proves the wake path composes with wake-only mode:
+// TestInboxDrainWakesWakeOnlyMode proves the wake path composes with wake-only mode:
 // a DM produces a content-less wake (no body), via the same frameEvent branch.
-func TestDMDrainWakesWakeOnlyMode(t *testing.T) {
+func TestInboxDrainWakesWakeOnlyMode(t *testing.T) {
 	setWakeOnly(t)
 
 	rec := &recorder{}
 	h := newChannelHub(rec.notify, staticNames(map[string]string{"01PRIN": "lena"}))
 
-	dms := make(chan sextant.Message, 1)
+	inbox := make(chan sextant.Message, 1)
 	stop := make(chan struct{})
 	defer close(stop)
-	go h.drainLoop(dms, nil, stop)
+	go h.drainLoop(inbox, nil, stop)
 
 	const body = "secret principal instruction"
-	dms <- msgID("01DM_WAKE", sx.ClientSubject("01SELF"), "01PRIN",
+	inbox <- msgID("01DM_WAKE", sx.ClientSubject("01SELF"), "01PRIN",
 		`{"$type":"chat.message","text":"`+body+`"}`, 9)
 
 	rec.waitForEvents(t, 1)
@@ -331,10 +331,10 @@ func TestDMDrainWakesWakeOnlyMode(t *testing.T) {
 	}
 }
 
-// TestDMDrainSuppressesSelfEcho proves a self-published DM is still dropped on the
+// TestInboxDrainSuppressesSelfEcho proves a self-published DM is still dropped on the
 // drain path: self-echo is checked first in frameEvent, so a worker DMing itself
 // (or its own publish relayed back) produces no wake.
-func TestDMDrainSuppressesSelfEcho(t *testing.T) {
+func TestInboxDrainSuppressesSelfEcho(t *testing.T) {
 	clearWakeOnly(t)
 
 	rec := &recorder{}
@@ -343,12 +343,12 @@ func TestDMDrainSuppressesSelfEcho(t *testing.T) {
 	const echoID = "01DM_SELF_ECHO"
 	h.echo.record(echoID) // this id was just published by this process
 
-	dms := make(chan sextant.Message, 1)
+	inbox := make(chan sextant.Message, 1)
 	stop := make(chan struct{})
 	defer close(stop)
-	go h.drainLoop(dms, nil, stop)
+	go h.drainLoop(inbox, nil, stop)
 
-	dms <- msgID(echoID, sx.ClientSubject("01SELF"), "01SELF",
+	inbox <- msgID(echoID, sx.ClientSubject("01SELF"), "01SELF",
 		`{"$type":"chat.message","text":"note to self"}`, 2)
 
 	// Give the drain a moment, then assert nothing was emitted.
@@ -358,35 +358,35 @@ func TestDMDrainSuppressesSelfEcho(t *testing.T) {
 	}
 }
 
-// TestDMDrainStartIsIdempotent proves startInboxDrain starts at most one drain per
+// TestInboxDrainStartIsIdempotent proves startInboxDrain starts at most one drain per
 // client object: a second call for the same client is a no-op (it does not
 // double-relay every DM). It uses a nil-channel client stand-in by tracking the
 // registry directly, since startInboxDrain only reads c.Inbox()/c.Drained() lazily in
 // the goroutine.
-func TestDMDrainStartIsIdempotent(t *testing.T) {
+func TestInboxDrainStartIsIdempotent(t *testing.T) {
 	h := newChannelHub((&recorder{}).notify, staticNames(nil))
 
 	var c sextant.Client // zero client: DMs()/Drained() return nil channels (block forever)
 	h.startInboxDrain(&c)
 	h.startInboxDrain(&c) // second call: must not register a second drain
 
-	h.dmMu.Lock()
+	h.inboxMu.Lock()
 	n := len(h.inboxDrains)
-	h.dmMu.Unlock()
+	h.inboxMu.Unlock()
 	if n != 1 {
 		t.Fatalf("inboxDrains has %d entries, want 1 (idempotent per client)", n)
 	}
 
-	// stopDMDrain unblocks the (idle) goroutine and clears the entry.
-	h.stopDMDrain(&c)
-	h.dmMu.Lock()
+	// stopInboxDrain unblocks the (idle) goroutine and clears the entry.
+	h.stopInboxDrain(&c)
+	h.inboxMu.Lock()
 	n = len(h.inboxDrains)
-	h.dmMu.Unlock()
+	h.inboxMu.Unlock()
 	if n != 0 {
 		t.Fatalf("inboxDrains has %d entries after stop, want 0", n)
 	}
 	// A double stop is safe.
-	h.stopDMDrain(&c)
+	h.stopInboxDrain(&c)
 }
 
 type stubSub struct{}
