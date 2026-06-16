@@ -170,7 +170,6 @@
       };
     }, [artifacts]);
     useEffect(() => {
-      if (!TOKEN) return;
       const es = new EventSource("/api/stream?subject=" + encodeURIComponent("msg.>") + "&token=" + encodeURIComponent(TOKEN));
       es.onmessage = (m) => {
         let ev;
@@ -197,7 +196,7 @@
     }, [TOKEN]);
     const seededRef = useRef(false);
     useEffect(() => {
-      if (!TOKEN || seededRef.current) return;
+      if (seededRef.current) return;
       seededRef.current = true;
       let cancelled = false;
       const latestTime = (subj) => {
