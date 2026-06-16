@@ -48,6 +48,8 @@ func main() {
 		cmdLamp(os.Args[2:])
 	case "workflow":
 		cmdWorkflow(os.Args[2:])
+	case "goal":
+		cmdGoal(os.Args[2:])
 	case "update":
 		cmdUpdate(os.Args[2:])
 	case "version", "--version":
@@ -99,6 +101,11 @@ ambient warmth (a small lamp artifact — first run places one; toggles thereaft
 
 agentic dev workflow (run a workflow-def artifact: plan→review→gate→PR — TASK-98):
   sextant workflow run <name> [--dry-run]       read the named workflow-def artifact + launch the orchestrator
+
+goals (a shared objective on the bus; declare it, move it — ADR-0035):
+  sextant goal set <id> --state S [--title T] [--headline H]  upsert goal.<id> + signal goal.update on msg.topic.goals
+  sextant goal get <id> [--json]                              read a goal
+  sextant goal list [--json]                                  list goals (id, state, headline)
 
 staying current (Homebrew installs — see the README for taps + the plugin):
   sextant update                                brew update && brew upgrade the tap formula
