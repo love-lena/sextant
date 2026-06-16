@@ -187,6 +187,14 @@ func (c *Client) PublishMsg(ctx context.Context, subject string, record json.Raw
 
 PublishMsg is Publish with the bus-stamped frame id and sequence returned. Callers that need to suppress self-echo (e.g. the MCP server) use this to record the published id before it can arrive back on a subscription.
 
+### func `(*Client) Register`
+
+```go
+func (c *Client) Register(ctx context.Context, displayName, kind string) (IssuedClient, error)
+```
+
+Register asks the bus to mint a NEW child identity over THIS client's own connection — mint-on-behalf (ADR-0033). Unlike Issuer.Register (held-identity or bootstrap authority), this is authorized only when the calling client is a registered dispatcher (KindDispatcher); the bus forces every minted identity to kind=agent. A reference dispatcher uses it to stand up its children with its own authority and no operator credential. The returned creds are secret material (they ride this client's per-client inbox) — write them to a file and hand them to the child.
+
 ### func `(*Client) Subscribe`
 
 ```go
@@ -329,10 +337,10 @@ Retire decommissions an identity for good (operator-only, enforced by the bus): 
 ### func `(*Issuer) SetPrincipal`
 
 ```go
-func (i *Issuer) SetPrincipal(ctx context.Context, principal string) error
+func (i *Issuer) SetPrincipal(ctx context.Context, principal string, force bool) error
 ```
 
-SetPrincipal re-points the bus's principal designation to a client ULID (ADR-0030), as a principal.set call. It is operator-only, enforced by the bus: the call rides the operator credential, and the bus rejects principal.set from any other identity — so an agent can never claim or alter the designation. This is the two-way door: the operator can re-designate at any time.
+SetPrincipal points the bus's principal designation at a client ULID (ADR-0030, ADR-0031), as a principal.set call. force authorizes re-pointing an ALREADY-established principal; it is ignored on a first claim. The bus enforces the asymmetry — only the bootstrap tier may claim an unclaimed principal (and the enrollment path only to a client seat), and only the operator may re-point an established one — so an agent can never claim or alter the designation.
 
 ## type `Message`
 
