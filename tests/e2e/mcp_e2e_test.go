@@ -12,6 +12,7 @@ package e2e
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -212,6 +213,86 @@ func TestMCPAutoMintAndResume(t *testing.T) {
 	}
 }
 
+// TestMCPRestoresSubscriptionsAfterResume is the TASK-124 acceptance: a fresh
+// MCP process (a resume — same session id + plugin-data, a brand-new process
+// with an empty in-memory sub map) automatically re-establishes the manual
+// subscription the prior process held AND catches up the frames published while
+// it was gone — without the agent calling message_subscribe again. This is the
+// durable self-healing the in-memory-only sub map lacked (modes A/B).
+func TestMCPRestoresSubscriptionsAfterResume(t *testing.T) {
+	h := newHarness(t)
+	h.startBus()
+	mcpBin := buildMCPBinary(t)
+
+	home := t.TempDir()
+	pluginData := t.TempDir() // CLAUDE_PLUGIN_DATA — the substate persists here across the resume
+	const subj = "msg.topic.t124-restore"
+
+	start := func(sessionID string) *mcpProc {
+		srv := startMCP(t, h, mcpBin, map[string]string{
+			"SEXTANT_HOME":           home,
+			"SEXTANT_STORE":          h.store,
+			"CLAUDE_CODE_SESSION_ID": sessionID,
+			"CLAUDE_PLUGIN_DATA":     pluginData,
+		})
+		initMCP(t, srv)
+		return srv
+	}
+
+	// A peer with a distinct identity publishes the missed frames — a different
+	// author, so the restored session never self-echo-suppresses them.
+	peer := start("sess-peer")
+	_ = peer.selfID(t, "msg.topic.t124-peer-probe") // force connect/mint
+	pub := func(text string) {
+		if out := peer.tool(t, "message_publish", `{"subject":"`+subj+`","record":{"$type":"chat.message","text":"`+text+`"}}`); !strings.Contains(out, "published") {
+			t.Fatalf("peer publish %q: %s", text, out)
+		}
+	}
+
+	// Process 1: subscribe to subj, then receive one live frame so the cursor is
+	// primed (it advances past the start of history — the real bug is an active
+	// subscription that has been delivering, then resumes).
+	p1 := start("sess-124")
+	if out := p1.tool(t, "message_subscribe", `{"subject":"`+subj+`"}`); !strings.Contains(out, subj) {
+		t.Fatalf("subscribe: %s", out)
+	}
+	pub("primer")
+	p1.waitEvent(t, func(ev channelEvent) bool { return ev.Content == "primer" })
+	time.Sleep(200 * time.Millisecond) // let the cursor advance land before the flush
+
+	// Graceful resume: stdin EOF makes p1 flush its (primed) cursor on shutdown.
+	p1.stop()
+
+	// Dead window: the peer publishes frames p1's now-dead subscription never saw.
+	pub("missed-1")
+	pub("missed-2")
+
+	// Process 2 (resume): same session id + plugin-data, a fresh process with an
+	// empty sub map. Its first tool call connects, and onConnect restores subj +
+	// catches up from the primed cursor — the agent itself never calls
+	// message_subscribe.
+	p2 := start("sess-124")
+	_ = p2.selfID(t, "msg.topic.t124-p2-probe") // trigger the lazy connect → restore
+
+	// The catch-up must deliver the two dead-window frames and must NOT re-deliver
+	// the already-seen primer (the cursor stored the NEXT seq to read, not the
+	// last-delivered one). Catch-up replays in seq order, so a re-read primer
+	// would arrive first.
+	got := map[string]bool{}
+	for i := 0; i < 2; i++ {
+		ev := p2.waitEvent(t, func(ev channelEvent) bool {
+			return ev.Content == "primer" || ev.Content == "missed-1" || ev.Content == "missed-2"
+		})
+		if ev.Content == "primer" {
+			t.Fatalf("restore re-delivered the already-seen primer — cursor off-by-one")
+		}
+		got[ev.Content] = true
+	}
+	if !got["missed-1"] || !got["missed-2"] {
+		t.Fatalf("resume did not catch up the missed frames: got %v", got)
+	}
+}
+
 // TestMCPNoBusActionableError is AC#7: when the server cannot mint (no bus, no
 // enrollment credential) and nothing is pinned, it returns the recovery recipe
 // rather than borrowing the operator's identity.
@@ -244,11 +325,39 @@ func (e channelEvent) meta(k string) string {
 }
 
 type mcpProc struct {
-	enc    *json.Encoder
-	mu     sync.Mutex
-	nextID atomic.Int64
-	resps  map[int64]chan json.RawMessage
-	events chan channelEvent
+	enc      *json.Encoder
+	mu       sync.Mutex
+	nextID   atomic.Int64
+	resps    map[int64]chan json.RawMessage
+	events   chan channelEvent
+	cmd      *exec.Cmd
+	stdin    io.WriteCloser
+	shutOnce sync.Once
+}
+
+// stop gracefully shuts the server down and reaps it — a resume simulation.
+// Closing stdin gives the stdio server EOF so it returns from Run and flushes
+// the durable substate (TASK-124) on the way out, so the next process restores
+// from a fully-persisted cursor. Falls back to a kill if it doesn't exit
+// promptly. Idempotent (the t.Cleanup also calls it), so a test may stop a
+// process mid-run.
+func (p *mcpProc) stop() {
+	p.shutOnce.Do(func() {
+		if p.stdin != nil {
+			_ = p.stdin.Close()
+		}
+		if p.cmd == nil || p.cmd.Process == nil {
+			return
+		}
+		done := make(chan struct{})
+		go func() { _, _ = p.cmd.Process.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			_ = p.cmd.Process.Kill()
+			<-done
+		}
+	})
 }
 
 func startMCP(t *testing.T, h *harness, bin string, env map[string]string) *mcpProc {
@@ -267,22 +376,15 @@ func startMCP(t *testing.T, h *harness, bin string, env map[string]string) *mcpP
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start sextant-mcp: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = stdin.Close()
-		done := make(chan struct{})
-		go func() { _ = cmd.Wait(); close(done) }()
-		select {
-		case <-done:
-		case <-time.After(3 * time.Second):
-			_ = cmd.Process.Kill()
-		}
-	})
 
 	p := &mcpProc{
 		enc:    json.NewEncoder(stdin),
 		resps:  map[int64]chan json.RawMessage{},
 		events: make(chan channelEvent, 64),
+		cmd:    cmd,
+		stdin:  stdin,
 	}
+	t.Cleanup(p.stop)
 	go func() {
 		sc := bufio.NewScanner(stdout)
 		sc.Buffer(make([]byte, 0, 1<<20), 1<<20)

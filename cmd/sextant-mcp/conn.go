@@ -100,10 +100,18 @@ type connManager struct {
 	pluginData string
 	sessionID  string
 
+	// state is the durable per-session store (TASK-124). use() records the
+	// context_use'd identity here so a fresh process re-pins it (main pre-loads
+	// switched from it) instead of reverting to the auto-mint id (mode C). nil in
+	// the resolution/provenance unit tests, which never switch contexts.
+	state *substate
+
 	mu     sync.Mutex
 	client *sextant.Client
 	// switched is the context Claude explicitly attached to via context_use;
-	// empty means "use this session's own auto-provisioned identity".
+	// empty means "use this session's own auto-provisioned identity". On a fresh
+	// process main pre-loads it from the durable state so the switch survives a
+	// resume; resolve() still lets an explicit --creds/--context override it.
 	switched string
 	// mint provisions a fresh agent identity. nil uses the real bus-backed
 	// implementation (mintAgent); tests inject a stub to exercise resolution
@@ -163,6 +171,29 @@ func (m *connManager) mintAgent(ctx context.Context, name, display string) (clic
 	return clictx.ResolvedConn{Creds: res.CredsPath, URL: res.URL, Context: res.Name}, nil
 }
 
+// restorePersistedContext re-pins the context_use choice carried across a resume
+// (TASK-124, mode C) — but ONLY if it still resolves to an AGENT context. This
+// mirrors use()'s guard: between sessions the saved context could have been
+// deleted and recreated, or edited, as a human / client / unlabelled identity,
+// and a resumed adapter must never assume a non-agent identity (ADR-0029). A
+// missing or non-agent context is not re-pinned, so resolve() falls through to
+// this session's own auto-minted identity. No lock: called at construction,
+// before the server serves.
+func (m *connManager) restorePersistedContext() {
+	if m.state == nil {
+		return
+	}
+	name, _ := m.state.snapshot()
+	if name == "" {
+		return
+	}
+	c, err := clictx.Load(name)
+	if err != nil || c.Kind != agentKind {
+		return
+	}
+	m.switched = name
+}
+
 // use switches this session's identity to an existing saved context (the
 // context_use tool). It refuses a human context — the agent must never assume
 // a person's identity, even when asked — and drops the held connection so the
@@ -183,7 +214,20 @@ func (m *connManager) use(name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.switched = name
+	// Persist the switch so a resumed process re-pins this identity instead of
+	// reverting to the auto-mint id (TASK-124, mode C). nil in unit tests.
+	if m.state != nil {
+		m.state.setContext(name)
+	}
 	if m.client != nil {
+		// Discard the old client the same way a drained-replace does (get()): run
+		// onDiscard so its inbox drain stops AND the manual subscriptions bound to
+		// it are cleared from the hub. Otherwise those stale entries would make the
+		// next connect's restore skip rebinding them as "already active", leaving
+		// the switched-to identity with no live relay (TASK-124).
+		if m.onDiscard != nil {
+			m.onDiscard(m.client)
+		}
 		_ = m.client.Close()
 		m.client = nil
 	}
