@@ -1,6 +1,6 @@
 {
   "name": "sextant",
   "description": "Be a first-class sextant client: bus verbs as tools, live messages pushed into the session as channel events, and a skill teaching the conventions.",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "author": { "name": "sextant" }
 }
