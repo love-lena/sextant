@@ -1,11 +1,14 @@
 package bus
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/love-lena/sextant/internal/backend"
 	"github.com/love-lena/sextant/internal/wireapi"
 	"github.com/love-lena/sextant/pkg/sx"
 	"github.com/love-lena/sextant/pkg/wire"
@@ -349,6 +352,53 @@ func TestHeartbeatUnknownIdentityRejected(t *testing.T) {
 	}
 	if resp := call(t, nc, id, wireapi.OpClientsHeartbeat, wireapi.HeartbeatInput{Seq: 1}); resp.Error == "" {
 		t.Error("heartbeat for an unknown/retired identity must be rejected")
+	}
+}
+
+// TestHeartbeatAfterRetireDoesNotResurrect pins retire as a hard decommissioning
+// boundary: a beat must NEVER recreate a retired record. Here the record is gone
+// before the beat, so the beat fails on the not-found gate and the record stays
+// gone (the simple, deterministic case).
+func TestHeartbeatAfterRetireDoesNotResurrect(t *testing.T) {
+	b := startTestBus(t)
+	nc, id := connectClient(t, b, "beater-retired")
+	if err := b.DeleteClientRecord(t.Context(), id); err != nil { // stands in for retire
+		t.Fatalf("retire (delete record): %v", err)
+	}
+	if resp := call(t, nc, id, wireapi.OpClientsHeartbeat, wireapi.HeartbeatInput{Seq: 1}); resp.Error == "" {
+		t.Fatal("heartbeat after retire must fail, not resurrect the record")
+	}
+	if _, _, err := b.backend.Get(t.Context(), sx.BucketClients, id); !errors.Is(err, backend.ErrNotFound) {
+		t.Fatalf("retired record must stay gone after a beat, Get err = %v", err)
+	}
+}
+
+// TestHeartbeatRetireRaceDoesNotResurrect forces the exact interleave Codex
+// flagged: the beat reads the record (and its revision) BEFORE the retire-delete,
+// but its write runs AFTER. An unconditional Put would resurrect the record; a
+// revision-aware write (CompareAndSet at the read revision) fails with ErrNotFound
+// instead, which the handler maps to the same "not registered/retired" rejection —
+// never a recreate. A hook fires the delete inside the post-read window.
+func TestHeartbeatRetireRaceDoesNotResurrect(t *testing.T) {
+	b := startTestBus(t)
+	nc, id := connectClient(t, b, "beater-racer")
+
+	var fired bool
+	b.SetHeartbeatAfterReadHook(func() {
+		if fired {
+			return // the retry path re-reads; only delete in the first read window
+		}
+		fired = true
+		if err := b.DeleteClientRecord(context.Background(), id); err != nil {
+			t.Errorf("hook delete: %v", err)
+		}
+	})
+
+	if resp := call(t, nc, id, wireapi.OpClientsHeartbeat, wireapi.HeartbeatInput{Seq: 1}); resp.Error == "" {
+		t.Fatal("a beat whose write loses to a concurrent retire must fail, not resurrect")
+	}
+	if _, _, err := b.backend.Get(t.Context(), sx.BucketClients, id); !errors.Is(err, backend.ErrNotFound) {
+		t.Fatalf("the retired record must stay gone (beat must not recreate it), Get err = %v", err)
 	}
 }
 

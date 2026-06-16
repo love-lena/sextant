@@ -550,11 +550,9 @@ func (b *Bus) opClientsHello(ctx context.Context, callerID string) (json.RawMess
 //     record (same clock source as IssuedAt). last_seen is the leaf-correct
 //     presence source — unlike Connz it survives a leaf link — so a connected
 //     client a Connz query cannot see is still derived online while its beats
-//     are fresh. The write is last-writer-wins (the registry bucket is History:1
-//     and a beat is idempotent overwrite-with-a-newer-time): no compare-and-set
-//     retry loop, because two concurrent beats from the same client only ever
-//     advance the time, and a beat racing a register/retire is bounded by the
-//     same not-found gate hello uses.
+//     are fresh. The write is revision-aware (compare-and-set at the read
+//     revision, see stampLastSeen) so a beat can never resurrect a record a
+//     concurrent retire deleted out from under it.
 //   - Push-path floor: it core-NATS publishes a HeartbeatEcho (carrying the
 //     caller's Seq) to the dedicated, transient sx.hb.<id> subject. The client
 //     auto-subscribes its own and confirms the echo arrives — a beat sent but
@@ -570,28 +568,9 @@ func (b *Bus) opClientsHeartbeat(ctx context.Context, callerID string, data []by
 	if err := json.Unmarshal(data, &in); err != nil {
 		return nil, fmt.Errorf("bus: clients.heartbeat: bad input: %w", err)
 	}
-	val, _, err := b.backend.Get(ctx, sx.BucketClients, callerID)
+	now, err := b.stampLastSeen(ctx, callerID)
 	if err != nil {
-		if errors.Is(err, backend.ErrNotFound) {
-			return nil, fmt.Errorf("bus: identity %q is not registered (or has been retired)", callerID)
-		}
-		return nil, fmt.Errorf("bus: clients.heartbeat: %w", err)
-	}
-	var e wireapi.ClientEntry
-	if err := json.Unmarshal(val, &e); err != nil {
-		return nil, fmt.Errorf("bus: clients.heartbeat: decode record %q: %w", callerID, err)
-	}
-	now := nowRFC3339()
-	e.LastSeen = now
-	rec, err := json.Marshal(e)
-	if err != nil {
-		return nil, fmt.Errorf("bus: clients.heartbeat: encode record: %w", err)
-	}
-	// Last-writer-wins: the registry bucket keeps one revision per client, and a
-	// beat only ever advances last_seen, so an unconditional Put is correct — no
-	// CAS retry loop (two beats racing both write a fresh time; either wins).
-	if _, err := b.backend.Put(ctx, sx.BucketClients, callerID, rec); err != nil {
-		return nil, fmt.Errorf("bus: clients.heartbeat: persist last_seen: %w", err)
+		return nil, err
 	}
 	// Echo the beat back on the caller's dedicated heartbeat subject — a transient
 	// core publish (no persistence). Best-effort: a publish error does not fail the
@@ -604,6 +583,69 @@ func (b *Bus) opClientsHeartbeat(ctx context.Context, callerID string, data []by
 		b.logf("bus: clients.heartbeat: echo publish to %s failed: %v", wireapi.HeartbeatSubject(callerID), err)
 	}
 	return json.Marshal(wireapi.HeartbeatOutput{ServerTime: now})
+}
+
+// heartbeatStampAttempts bounds the read-modify-write retries in stampLastSeen. A
+// beat that loses the CAS to a concurrent writer (another beat, or a register
+// rewrite) re-reads and retries; a small bound is plenty because each contender
+// only advances last_seen, so contention resolves in one or two rounds.
+const heartbeatStampAttempts = 3
+
+// stampLastSeen records a fresh bus-clock last_seen on callerID's registry record
+// with a revision-aware compare-and-set, returning the time it stamped. The CAS
+// is the retire boundary (the bug Codex caught): an unconditional Put would
+// resurrect a record a concurrent clients.retire deleted between this beat's read
+// and its write. Instead it reads the record AND its revision, writes back only
+// if the revision is unchanged, and — crucially — treats a delete-in-the-window
+// as a rejection, never a recreate:
+//
+//   - ErrNotFound from the read (or from a re-read after a CAS miss): the identity
+//     was never issued or has been retired. Reject with the same message hello's
+//     not-found path uses; do NOT write.
+//   - ErrRevisionMismatch from the CAS: a concurrent writer bumped the revision.
+//     Re-read and retry, bounded by heartbeatStampAttempts. If the re-read now
+//     returns ErrNotFound, the concurrent writer was a retire — reject.
+//
+// So a beat can never bring a retired identity back, and concurrent beats still
+// converge (each only advances last_seen).
+func (b *Bus) stampLastSeen(ctx context.Context, callerID string) (string, error) {
+	for attempt := 0; attempt < heartbeatStampAttempts; attempt++ {
+		val, rev, err := b.backend.Get(ctx, sx.BucketClients, callerID)
+		if err != nil {
+			if errors.Is(err, backend.ErrNotFound) {
+				return "", fmt.Errorf("bus: identity %q is not registered (or has been retired)", callerID)
+			}
+			return "", fmt.Errorf("bus: clients.heartbeat: %w", err)
+		}
+		var e wireapi.ClientEntry
+		if err := json.Unmarshal(val, &e); err != nil {
+			return "", fmt.Errorf("bus: clients.heartbeat: decode record %q: %w", callerID, err)
+		}
+		// Test seam: force a concurrent retire-delete into the read→write window.
+		if b.hbAfterReadHook != nil {
+			b.hbAfterReadHook()
+		}
+		now := nowRFC3339()
+		e.LastSeen = now
+		rec, err := json.Marshal(e)
+		if err != nil {
+			return "", fmt.Errorf("bus: clients.heartbeat: encode record: %w", err)
+		}
+		_, err = b.backend.CompareAndSet(ctx, sx.BucketClients, callerID, rec, rev)
+		switch {
+		case err == nil:
+			return now, nil
+		case errors.Is(err, backend.ErrNotFound):
+			// Retired in the read→write window: the record is gone. Reject — never
+			// recreate it (CompareAndSet does not create, but be explicit).
+			return "", fmt.Errorf("bus: identity %q is not registered (or has been retired)", callerID)
+		case errors.Is(err, backend.ErrRevisionMismatch):
+			continue // a concurrent writer advanced the revision; re-read and retry
+		default:
+			return "", fmt.Errorf("bus: clients.heartbeat: persist last_seen: %w", err)
+		}
+	}
+	return "", fmt.Errorf("bus: clients.heartbeat: last_seen contended past %d attempts for %q", heartbeatStampAttempts, callerID)
 }
 
 // opPrincipalGet returns the current principal ULID (ADR-0030). Any authenticated

@@ -102,6 +102,12 @@ type Bus struct {
 	// defaultHeartbeatFreshness) at Start.
 	freshnessWindow time.Duration
 
+	// hbAfterReadHook is a test-only seam (set via SetHeartbeatAfterReadHook):
+	// opClientsHeartbeat calls it, when non-nil, between reading the registry
+	// record and writing last_seen back, so a test can force a concurrent
+	// retire-delete into that window. Always nil in production.
+	hbAfterReadHook func()
+
 	// logf is the resolved Config.Logf (never nil): the bus's only output
 	// channel. Components log through it instead of writing to stderr.
 	logf func(format string, args ...any)
