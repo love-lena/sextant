@@ -25,7 +25,7 @@ var debugPage []byte
 // (index.html, styles.css, favicon.svg, image-slot.js, vendor/).
 //
 //go:generate bash ../../scripts/build-dash-ui.sh
-//go:embed web/app/app.js web/app/artifact.js web/app/artifacts.js web/app/home.js web/app/review.js web/app/sidebar.js web/app/tweaks-panel.js
+//go:embed web/app/app.js web/app/artifact.js web/app/artifacts.js web/app/conversations.js web/app/home.js web/app/review.js web/app/sidebar.js web/app/tweaks-panel.js
 //go:embed all:web/app
 var appAssets embed.FS
 

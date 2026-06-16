@@ -117,7 +117,6 @@
     const [asstOpen, setAsstOpen] = useState(false);
     const [asstPrompt, setAsstPrompt] = useState("");
     const [draft, setDraft] = useState("");
-    const convBodyRef = useRef(null);
     const [hidden, setHidden] = useState(()=>{ try{ return new Set(JSON.parse(localStorage.getItem("sx-hidden-convos")||"[]")); }catch(_){ return new Set(); } });
 
     // ---- ⌘K recency store ----
@@ -415,14 +414,6 @@
       { name:"", version:0, status:"review", topic:"", author:{name:"",kind:"agent"}, updated:"" };
     const convo = convList.find(c=>c.key===activeConvo) || convList[0] || { type:"topic", name:"", participants:0 };
 
-    // keep the conversation pinned to the newest message: scroll to the bottom on
-    // open and whenever a message arrives.
-    useEffect(()=>{
-      if(stageMode!=="conversation") return;
-      const el = convBodyRef.current;
-      if(el) el.scrollTop = el.scrollHeight;
-    },[messages, stageMode, activeConvo]);
-
     function openArtifact(name){
       touchRecent("art:"+name);
       setActiveArtifact(name); setStageMode("artifact"); setArtMissing(false);
@@ -642,20 +633,15 @@
               />
             </div>
           ) : (
-            <div className="sx-canvas">
-              <div className="sx-page sx-page--doc sx-conv-light">
-                <div className="sx-convstage">
-                  <div className="sx-convstage-head">
-                    <span className="sx-convstage-title">{convo.type==="topic"?"# ":"@ "}{convo.name}</span>
-                    <span className="sx-convstage-meta">live on the bus</span>
-                  </div>
-                  <div className="sx-convstage-body" ref={convBodyRef}>
-                    <MessageList messages={messages} onArtifactRef={openArtifact} artifactNames={artifacts.map(a=>a.Name)} />
-                  </div>
-                  <Composer draft={draft} setDraft={setDraft} onSend={send} placeholder={"Message "+(convo.type==="topic"?"#":"@")+convo.name} />
-                </div>
-              </div>
-            </div>
+            <ConversationView
+              convo={convo}
+              messages={messages}
+              draft={draft} setDraft={setDraft} onSend={send}
+              onArtifactRef={openArtifact}
+              artifactNames={artifacts.map(a=>a.Name)}
+              agents={agents}
+              self={self}
+            />
           )}
         </main>
 
