@@ -224,6 +224,15 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 .sx-icon-btn{border:1px solid var(--hair);background:#fff;border-radius:7px;width:28px;height:28px;color:var(--ink-2);cursor:pointer;font-size:13px;}
 .sx-icon-btn:hover{color:var(--ink);}
 
+/* build-staleness nudge (TASK-140): a quiet, dismissible slim bar above the
+   topbar. Toned to flow2's blocked-amber (--blk), not loud — it informs, the
+   operator refreshes when ready (no auto-reload). */
+.sx-buildnudge{display:flex;align-items:center;gap:8px;flex:0 0 auto;height:30px;padding:0 14px;font-family:var(--font-mono);font-size:11.5px;color:var(--blk);background:rgba(185,132,42,.08);border-bottom:1px solid rgba(185,132,42,.22);animation:sxin .3s ease both;}
+.sx-buildnudge-dot{width:7px;height:7px;border-radius:50%;background:var(--blk);flex:0 0 auto;}
+.sx-buildnudge-text{flex:1;letter-spacing:.01em;}
+.sx-buildnudge-x{border:none;background:transparent;color:var(--blk);opacity:.6;cursor:pointer;font-size:15px;line-height:1;padding:2px 4px;border-radius:5px;}
+.sx-buildnudge-x:hover{opacity:1;background:rgba(185,132,42,.14);}
+
 .sx-canvas{flex:1;overflow:auto;padding:0;display:flex;justify-content:center;align-items:flex-start;}
 .sx-canvas:has(.sx-page--home){overflow:hidden;align-items:stretch;}
 .sx-page{width:100%;max-width:1180px;background:#fff;border-radius:14px;box-shadow:0 1px 0 rgba(0,0,0,.05),0 50px 90px -55px rgba(20,20,40,.5);overflow:hidden;position:relative;container-type:inline-size;}
