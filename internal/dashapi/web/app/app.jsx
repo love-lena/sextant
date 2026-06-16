@@ -107,7 +107,9 @@
     const [activeArtifact, setActiveArtifact] = useState("");
     const [artRecord, setArtRecord] = useState(null);    // active artifact Record
     const [activeConvo, setActiveConvo] = useState("");
-    const [stageMode, setStageMode] = useState("home");  // home | artifact | conversation
+    // stage mode: home | artifacts | goals | agents | artifact (one open) | conversation
+    const [stageMode, setStageMode] = useState("home");
+    const [palette, setPalette] = useState(false);       // ⌘K command palette (TASK stage a)
     const [draft, setDraft] = useState("");
     const convBodyRef = useRef(null);
     const discBodyRef = useRef(null);
@@ -130,6 +132,14 @@
         if(!Array.isArray(subs)) return;
         setConvos(prev=>{ const next={...prev}; for(const s of subs){ if(s&&s.subject&&!next[s.subject]) next[s.subject]={msgs:[],last:0,lastText:""}; } return next; });
       }).catch(()=>{});
+    },[]);
+
+    // ⌘K / Ctrl-K toggles the command palette (a real client-side find & jump over
+    // the already-loaded artifacts + agents + conversation subjects).
+    useEffect(()=>{
+      const h = (e)=>{ if((e.metaKey||e.ctrlKey) && (e.key==="k"||e.key==="K")){ e.preventDefault(); setPalette(p=>!p); } };
+      window.addEventListener("keydown", h);
+      return ()=>window.removeEventListener("keydown", h);
     },[]);
 
     // dark mode: toggle the class on #app + persist (topbar toggle)
@@ -359,6 +369,9 @@
       }).catch(()=>{});
     }
     function goHome(){ setStageMode("home"); }
+    // Workspace nav (flow2 chrome): Home / Artifacts / Goals / Agents swap the
+    // white stage. Goals is an inert placeholder (Track 2 owns the real view).
+    function onNav(key){ setStageMode(key); }
     function backfill(subj){
       // /api/messages reads FORWARD from `since` (since=0 is the oldest), so a
       // single page returns the OLDEST messages. Page to the tail following
@@ -414,12 +427,34 @@
     function hideConvo(key){ setHidden(prev=>{ const n=new Set(prev); n.add(key); persistHidden(n); return n; }); }
     function unhideConvo(key){ setHidden(prev=>{ const n=new Set(prev); n.delete(key); persistHidden(n); return n; }); }
 
+    const reviewCount = artItems.filter(a=>a.status==="review").length;
+    const workingCount = agents.filter(a=>a.state==="working").length;
+
     const ctx = {
       conversations:convList, activeConvo, stageMode, onOpenConvo:openConvo, onExpandConvo:expandConvo,
       messages, draft, setDraft, onSend:send, onArtifactRef:openArtifact,
       artifacts:artItems, activeArtifact, onOpenArtifact:openArtifact,
       goals:GOALS, agents, activity:homeActivity, self, onGoHome:goHome, home, onDM:startDM,
       hidden, onHide:hideConvo, onUnhide:unhideConvo,
+      onNav, onSearch:()=>setPalette(true), reviewCount, workingCount,
+    };
+
+    // ⌘K search index — only what's already loaded (artifacts, agents, conversation
+    // subjects). Selecting a result opens it via the existing handlers; the
+    // artifact `go` uses openArtifact (which fetches by name), so it resolves even
+    // for a name not in the cached list.
+    const searchIndex = ()=>{
+      const items=[];
+      artItems.forEach(a=>items.push({ key:"art:"+a.name, type:"Artifact", label:a.name,
+        sub:(a.updated?("updated "+a.updated+" ago"):"")+(a.status?(" · "+a.status):""),
+        kw:(a.name+" "+a.status).toLowerCase(), go:()=>openArtifact(a.name) }));
+      agents.forEach(a=>items.push({ key:"agent:"+a.id, type:"Agent", label:a.name, sub:a.meta,
+        kw:(a.name+" "+(a.headline||"")+" "+a.state).toLowerCase(),
+        go:()=>{ if(a.id) startDM(a.id); else setStageMode("agents"); } }));
+      convList.forEach(c=>items.push({ key:"conv:"+c.key, type:"Channel",
+        label:(c.type==="topic"?"# ":"@ ")+c.name, sub:c.snippet||"conversation",
+        kw:(c.name+" "+(c.snippet||"")).toLowerCase(), go:()=>expandConvo(c.key) }));
+      return items;
     };
 
     const hasAuthor = artifact.author && artifact.author.name;
@@ -439,6 +474,12 @@
                   <span className="sx-crumb-sep">/</span>
                   <span className="sx-crumb-art">{self.display_name?("you are "+self.display_name):"live bus"}</span>
                 </React.Fragment>
+              ) : stageMode==="artifacts" ? (
+                <span className="sx-crumb-topic">Artifacts</span>
+              ) : stageMode==="goals" ? (
+                <span className="sx-crumb-topic">Goals</span>
+              ) : stageMode==="agents" ? (
+                <span className="sx-crumb-topic">Agents</span>
               ) : stageMode==="artifact" ? (
                 <React.Fragment>
                   <span className="sx-crumb-topic">Artifact</span>
@@ -463,6 +504,18 @@
           {stageMode==="home" ? (
             <div className="sx-canvas">
               <div className="sx-page sx-page--doc sx-page--home"><HomePage ctx={ctx} /></div>
+            </div>
+          ) : stageMode==="artifacts" ? (
+            <div className="sx-canvas sx-canvas--list">
+              <div className="sx-page sx-page--doc"><ArtifactsView artifacts={artItems} activeArtifact={activeArtifact} onOpenArtifact={openArtifact} /></div>
+            </div>
+          ) : stageMode==="goals" ? (
+            <div className="sx-canvas sx-canvas--list">
+              <div className="sx-page sx-page--doc"><GoalsStub /></div>
+            </div>
+          ) : stageMode==="agents" ? (
+            <div className="sx-canvas sx-canvas--list">
+              <div className="sx-page sx-page--doc"><AgentsView agents={agents} onDM={startDM} /></div>
             </div>
           ) : stageMode==="artifact" ? (
             <React.Fragment>
@@ -524,6 +577,9 @@
             </div>
           )}
         </main>
+
+        <AssistantFab />
+        {palette && <CmdK index={searchIndex()} onClose={()=>setPalette(false)} />}
 
         <TweaksPanel title="Tweaks">
           <TweakSection label="Accent" />
