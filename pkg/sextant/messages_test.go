@@ -817,7 +817,7 @@ func TestAutoDMSubscribedOnConnect(t *testing.T) {
 	}
 
 	select {
-	case m := <-receiver.DMs():
+	case m := <-receiver.Inbox():
 		if m.Subject != dmSubject {
 			t.Errorf("DM subject = %q, want %q", m.Subject, dmSubject)
 		}
@@ -858,7 +858,7 @@ func TestAutoDMIdempotentWithExplicitSubscribe(t *testing.T) {
 
 	// Both the auto-DM channel and the explicit subscription receive the message.
 	select {
-	case <-receiver.DMs():
+	case <-receiver.Inbox():
 	case <-time.After(10 * time.Second):
 		t.Fatal("auto-DM channel did not receive the message")
 	}
@@ -922,7 +922,7 @@ func TestAutoDMSurvivesReconnect(t *testing.T) {
 		t.Fatalf("pre-restart Publish: %v", err)
 	}
 	select {
-	case m := <-receiver.DMs():
+	case m := <-receiver.Inbox():
 		if string(m.Frame.Record) != `{"n":1}` {
 			t.Fatalf("pre-restart DM = %s, want {\"n\":1}", m.Frame.Record)
 		}
@@ -951,7 +951,7 @@ func TestAutoDMSurvivesReconnect(t *testing.T) {
 		t.Fatalf("post-restart Publish: %v", err)
 	}
 	select {
-	case m := <-receiver.DMs():
+	case m := <-receiver.Inbox():
 		if string(m.Frame.Record) != `{"n":2}` {
 			t.Fatalf("post-restart DM = %s, want {\"n\":2} (no duplicate replay)", m.Frame.Record)
 		}
@@ -960,7 +960,7 @@ func TestAutoDMSurvivesReconnect(t *testing.T) {
 	}
 	// No stale duplicate of n=1 trailing behind.
 	select {
-	case m := <-receiver.DMs():
+	case m := <-receiver.Inbox():
 		t.Fatalf("unexpected duplicate DM after reconnect: %s", m.Frame.Record)
 	case <-time.After(500 * time.Millisecond):
 	}

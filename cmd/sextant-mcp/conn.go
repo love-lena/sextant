@@ -72,11 +72,11 @@ type connManager struct {
 	cf connFlags
 
 	// base is the server-lifetime context the held connection is built on. The
-	// SDK ties a connection's subscriptions — including the auto-DM subscription
+	// SDK ties a connection's subscriptions — including the auto-inbox subscription
 	// (TASK-55) that feeds the M1 wake bridge — to the context passed to Connect:
 	// a cancelled connect ctx tears those subscriptions down. So we MUST connect
 	// on a context that outlives any single tool call; using the per-request ctx
-	// would kill the auto-DM sub the instant the first tool returned (it did, in
+	// would kill the auto-inbox sub the instant the first tool returned (it did, in
 	// review). This mirrors the explicit message_subscribe path, which likewise
 	// subscribes on a non-request context so the subscription outlives the call.
 	// nil falls back to context.Background() (unit tests that never connect).
@@ -84,7 +84,7 @@ type connManager struct {
 
 	// onConnect fires once for each newly-established client; onDiscard fires
 	// when a drained client is dropped before a fresh connect. The MCP server
-	// wires these to the channel hub's DM drain (start on connect, stop on
+	// wires these to the channel hub's inbox drain (start on connect, stop on
 	// discard) so a principal DM wakes the session (ADR-0030, review M1). Both
 	// are optional — nil in unit tests that exercise resolution/provenance only.
 	onConnect func(*sextant.Client)
@@ -246,7 +246,7 @@ func (m *connManager) get(ctx context.Context) (*sextant.Client, error) {
 	if m.client != nil {
 		select {
 		case <-m.client.Drained():
-			// The cached client drained: stop its DM drain before replacing it,
+			// The cached client drained: stop its inbox drain before replacing it,
 			// so the old drain goroutine does not outlive the connection.
 			if m.onDiscard != nil {
 				m.onDiscard(m.client)
@@ -263,9 +263,9 @@ func (m *connManager) get(ctx context.Context) (*sextant.Client, error) {
 	}
 
 	// Connect on the server-lifetime context, NOT the per-request ctx: the SDK
-	// binds this connection's subscriptions (including the auto-DM sub the M1
+	// binds this connection's subscriptions (including the auto-inbox sub the M1
 	// wake bridge drains) to the context passed here, so a request-scoped ctx
-	// would tear the auto-DM sub down the moment this tool call returned.
+	// would tear the auto-inbox sub down the moment this tool call returned.
 	connCtx := m.base
 	if connCtx == nil {
 		connCtx = context.Background()
@@ -296,7 +296,7 @@ func (m *connManager) get(ctx context.Context) (*sextant.Client, error) {
 			log.Printf("sextant-mcp: record session identity for the attest hook: %v (hook will degrade)", err)
 		}
 	}
-	// Start the DM drain for this fresh client: bridges c.DMs() into the
+	// Start the inbox drain for this fresh client: bridges c.Inbox() into the
 	// channel-wake path so a principal DM wakes the session (ADR-0030, M1).
 	// Idempotent in the hub, so a transient retry path can't double-start it.
 	if m.onConnect != nil {

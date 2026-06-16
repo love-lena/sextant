@@ -274,7 +274,7 @@ func (r *recorder) count() int {
 }
 
 // TestDMDrainWakesContentMode proves M1 (review): a frame arriving on the auto-DM
-// channel (c.DMs(), TASK-55) is emitted as a channel event through frameEvent's
+// channel (c.Inbox(), TASK-55) is emitted as a channel event through frameEvent's
 // shared emit path — WITHOUT any explicit message_subscribe. This is the wake
 // path a principal DM rides; in CONTENT mode the body is pushed.
 func TestDMDrainWakesContentMode(t *testing.T) {
@@ -358,32 +358,32 @@ func TestDMDrainSuppressesSelfEcho(t *testing.T) {
 	}
 }
 
-// TestDMDrainStartIsIdempotent proves startDMDrain starts at most one drain per
+// TestDMDrainStartIsIdempotent proves startInboxDrain starts at most one drain per
 // client object: a second call for the same client is a no-op (it does not
 // double-relay every DM). It uses a nil-channel client stand-in by tracking the
-// registry directly, since startDMDrain only reads c.DMs()/c.Drained() lazily in
+// registry directly, since startInboxDrain only reads c.Inbox()/c.Drained() lazily in
 // the goroutine.
 func TestDMDrainStartIsIdempotent(t *testing.T) {
 	h := newChannelHub((&recorder{}).notify, staticNames(nil))
 
 	var c sextant.Client // zero client: DMs()/Drained() return nil channels (block forever)
-	h.startDMDrain(&c)
-	h.startDMDrain(&c) // second call: must not register a second drain
+	h.startInboxDrain(&c)
+	h.startInboxDrain(&c) // second call: must not register a second drain
 
 	h.dmMu.Lock()
-	n := len(h.dmDrains)
+	n := len(h.inboxDrains)
 	h.dmMu.Unlock()
 	if n != 1 {
-		t.Fatalf("dmDrains has %d entries, want 1 (idempotent per client)", n)
+		t.Fatalf("inboxDrains has %d entries, want 1 (idempotent per client)", n)
 	}
 
 	// stopDMDrain unblocks the (idle) goroutine and clears the entry.
 	h.stopDMDrain(&c)
 	h.dmMu.Lock()
-	n = len(h.dmDrains)
+	n = len(h.inboxDrains)
 	h.dmMu.Unlock()
 	if n != 0 {
-		t.Fatalf("dmDrains has %d entries after stop, want 0", n)
+		t.Fatalf("inboxDrains has %d entries after stop, want 0", n)
 	}
 	// A double stop is safe.
 	h.stopDMDrain(&c)

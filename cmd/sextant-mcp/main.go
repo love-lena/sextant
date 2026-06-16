@@ -109,7 +109,7 @@ func run(ctx context.Context, cf connFlags) error {
 	// emit logic an explicit subscription uses. Connect is lazy (first tool
 	// call), so the drain begins after the worker's first sextant interaction —
 	// acceptable for v1; eager connect-at-startup would fail before the bus is up.
-	conn.onConnect = hub.startDMDrain
+	conn.onConnect = hub.startInboxDrain
 	conn.onDiscard = hub.stopDMDrain
 	registerTools(server, &deps{
 		conn:  conn,
