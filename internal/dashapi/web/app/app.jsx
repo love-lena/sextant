@@ -119,6 +119,27 @@
     const [draft, setDraft] = useState("");
     const convBodyRef = useRef(null);
     const [hidden, setHidden] = useState(()=>{ try{ return new Set(JSON.parse(localStorage.getItem("sx-hidden-convos")||"[]")); }catch(_){ return new Set(); } });
+
+    // ---- ⌘K recency store ----
+    // Tracks the last-opened timestamp per destination keyed by the entry's
+    // stable key (e.g. "nav:home", "art:<name>", "conv:<subject>").
+    // Persisted in localStorage (sx-cmdk-recents) as a plain {key:ms} object,
+    // capped to the 50 most-recently-touched entries so it never grows unbounded.
+    const RECENTS_KEY = "sx-cmdk-recents";
+    const RECENTS_CAP = 50;
+    const [recents, setRecents] = useState(()=>{
+      try { return JSON.parse(localStorage.getItem(RECENTS_KEY)||"{}"); } catch(_) { return {}; }
+    });
+    const touchRecent = useCallback((key)=>{
+      setRecents(prev=>{
+        const next = { ...prev, [key]: Date.now() };
+        // Evict oldest entries beyond the cap so localStorage stays bounded.
+        const entries = Object.entries(next).sort((a,b)=>b[1]-a[1]);
+        const capped = Object.fromEntries(entries.slice(0, RECENTS_CAP));
+        try { localStorage.setItem(RECENTS_KEY, JSON.stringify(capped)); } catch(_) {}
+        return capped;
+      });
+    }, []);
     const [dark, setDark] = useState(()=>{ try{ return localStorage.getItem("sx-dark")==="1"; }catch(_){ return false; } });
     // Review view comments rail (TASK-141): a resizable + collapsible right-side
     // "artifact chat" pane. Both the width and the collapsed flag are persisted in
@@ -403,6 +424,7 @@
     },[messages, stageMode, activeConvo]);
 
     function openArtifact(name){
+      touchRecent("art:"+name);
       setActiveArtifact(name); setStageMode("artifact"); setArtMissing(false);
       const subj = companionTopic(name); ensureConvo(subj); backfill(subj); // load the inline discussion (TASK-83)
       const cached = records[name];
@@ -423,7 +445,7 @@
     function askAssistant(query){ setPalette(false); setAsstPrompt(query||""); setAsstOpen(true); }
     // Workspace nav (flow2 chrome): Home / Artifacts / Goals / Agents swap the
     // white stage. Goals is an inert placeholder (Track 2 owns the real view).
-    function onNav(key){ setStageMode(key); }
+    function onNav(key){ touchRecent("nav:"+key); setStageMode(key); }
     function backfill(subj){
       // /api/messages reads FORWARD from `since` (since=0 is the oldest), so a
       // single page returns the OLDEST messages. Page to the tail following
@@ -449,7 +471,7 @@
     }
     function ensureConvo(subj){ setConvos(prev=>prev[subj]?prev:{ ...prev, [subj]:{ msgs:[], last:Date.now(), lastText:"" } }); }
     function openConvo(key){ ensureConvo(key); setActiveConvo(key); backfill(key); }
-    function expandConvo(key){ ensureConvo(key); setActiveConvo(key); setStageMode("conversation"); backfill(key); }
+    function expandConvo(key){ touchRecent("conv:"+key); ensureConvo(key); setActiveConvo(key); setStageMode("conversation"); backfill(key); }
     function send(){
       if(!draft.trim()||!activeConvo) return;
       const text=draft.trim();
@@ -505,9 +527,13 @@
       artItems.forEach(a=>items.push({ key:"art:"+a.name, type:"Artifact", label:a.name,
         sub:(a.updated?("updated "+a.updated+" ago"):"")+(a.status?(" · "+a.status):""),
         kw:(a.name+" "+a.status).toLowerCase(), go:()=>openArtifact(a.name) }));
+      // Agent rows keep a distinct "agent:<id>" key (a DM subject can also surface
+      // as a Channel row, so reusing "conv:<subject>" would collide). startDM
+      // records recency under the conversation; we ALSO touch the agent key here
+      // so the Agent row itself accumulates recency and ranks up over time.
       agents.forEach(a=>items.push({ key:"agent:"+a.id, type:"Agent", label:a.name, sub:a.meta,
         kw:(a.name+" "+(a.headline||"")+" "+a.state).toLowerCase(),
-        go:()=>{ if(a.id) startDM(a.id); else setStageMode("agents"); } }));
+        go:()=>{ if(a.id){ touchRecent("agent:"+a.id); startDM(a.id); } else onNav("agents"); } }));
       convList.forEach(c=>items.push({ key:"conv:"+c.key, type:"Channel",
         label:(c.type==="topic"?"# ":"@ ")+c.name, sub:c.snippet||"conversation",
         kw:(c.name+" "+(c.snippet||"")).toLowerCase(), go:()=>expandConvo(c.key) }));
@@ -636,7 +662,7 @@
         <AssistantFab open={asstOpen} prompt={asstPrompt}
           onOpen={()=>{ setAsstPrompt(""); setAsstOpen(true); }}
           onClose={()=>{ setAsstOpen(false); setAsstPrompt(""); }} />
-        {palette && <CmdK index={searchIndex()} onClose={()=>setPalette(false)} onAsk={askAssistant} />}
+        {palette && <CmdK index={searchIndex()} recents={recents} onClose={()=>setPalette(false)} onAsk={askAssistant} />}
 
         <TweaksPanel title="Tweaks">
           <TweakSection label="Accent" />
