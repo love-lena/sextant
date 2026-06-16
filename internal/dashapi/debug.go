@@ -17,6 +17,15 @@ var debugPage []byte
 // appAssets is the embedded intentionally-designed UI (D2, TASK-71): the
 // frontend served at / by default. A configured UIDir overrides it (dev hook).
 //
+// The five *.js bundles are GENERATED from their *.jsx sources by
+// scripts/build-dash-ui.sh (gitignored, not committed — TASK-121). They are
+// named explicitly below so a build that skipped `make ui` fails to COMPILE
+// (a loud "no matching files found" error) rather than silently embedding a
+// stale or missing UI. The trailing all:web/app pulls in the static assets
+// (index.html, styles.css, favicon.svg, image-slot.js, vendor/).
+//
+//go:generate bash ../../scripts/build-dash-ui.sh
+//go:embed web/app/app.js web/app/artifact.js web/app/home.js web/app/sidebar.js web/app/tweaks-panel.js
 //go:embed all:web/app
 var appAssets embed.FS
 

@@ -43,3 +43,13 @@ docs/demos/*.mp4
 
 # stray build output of `go build ./cmd/sextant` from the repo root
 /sextant
+
+# Generated dash UI bundles (TASK-121): the *.js are transpiled from *.jsx by
+# scripts/build-dash-ui.sh at build time (make ui / go:generate / CI / release),
+# never committed. image-slot.js is hand-written source and vendor/*.min.js is
+# vendored, so neither is ignored.
+/internal/dashapi/web/app/app.js
+/internal/dashapi/web/app/artifact.js
+/internal/dashapi/web/app/home.js
+/internal/dashapi/web/app/sidebar.js
+/internal/dashapi/web/app/tweaks-panel.js
