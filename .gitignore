@@ -53,3 +53,7 @@ docs/demos/*.mp4
 /internal/dashapi/web/app/home.js
 /internal/dashapi/web/app/sidebar.js
 /internal/dashapi/web/app/tweaks-panel.js
+# Generated build stamp (TASK-140): build-dash-ui.sh writes this with the build's
+# short SHA + UTC time; the served dash polls it for a "new version" nudge. Like
+# the *.js it's generated, not committed (it rides the all:web/app go:embed).
+/internal/dashapi/web/app/build.json

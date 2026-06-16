@@ -122,6 +122,14 @@
     const [dark, setDark] = useState(()=>{ try{ return localStorage.getItem("sx-dark")==="1"; }catch(_){ return false; } });
     // artifact discussion layout: split (doc | discussion) by default, toggle to stacked; persisted
     const [discSplit, setDiscSplit] = useState(()=>{ try{ return localStorage.getItem("sx-disc-split")!=="0"; }catch(_){ return true; } });
+    // build-staleness nudge (TASK-140): the SHA the page loaded with, the SHA now
+    // served, and whether the operator dismissed the current mismatch. On a `--ui`
+    // hot-reload the served build.json gets a new SHA on each `make ui` → the
+    // loaded (old) page polls, sees the mismatch, and shows a quiet refresh nudge.
+    // The embedded release dash has a fixed SHA → never mismatches → no nudge.
+    const [loadedBuild, setLoadedBuild] = useState(null); // {sha,builtAt} the page loaded with
+    const [currentBuild, setCurrentBuild] = useState(null); // {sha,builtAt} now served
+    const [buildNudgeOff, setBuildNudgeOff] = useState(false); // operator dismissed THIS mismatch
 
     const nameOf = useCallback((id)=>{ const c=clients.find(c=>c.ID===id); return c?c.DisplayName:(id||"").slice(0,8); },[clients]);
     const kindOf = useCallback((id)=>{ const c=clients.find(c=>c.ID===id); return c?c.Kind:"agent"; },[clients]);
@@ -257,6 +265,32 @@
       }, 4000);
       return ()=>clearInterval(id);
     },[]);
+
+    // build-staleness poll (TASK-140). build.json is a static file written by
+    // scripts/build-dash-ui.sh at `make ui` time ({sha,builtAt}); the Go process
+    // serves it from the live UIDir (--ui) or the embedded FS. Fetch it once to
+    // record the SHA this page loaded with, then poll every ~20s for the SHA now
+    // served. A mismatch (both SHAs present) means a newer build is live → the
+    // nudge shows. Robust to absence: an older/embedded dash without build.json
+    // (404 or non-JSON) leaves both null → no nudge, no errors. Plain fetch (not
+    // apiGet): build.json is a static, token-free asset like index.html.
+    const fetchBuild = useCallback(()=>fetch("/build.json", { cache:"no-store" })
+      .then(r=> r.ok ? r.json() : null)
+      .then(b=> (b && typeof b.sha==="string" && b.sha) ? b : null)
+      .catch(()=>null), []);
+    useEffect(()=>{
+      let cancelled=false;
+      fetchBuild().then(b=>{ if(!cancelled && b) setLoadedBuild(b); });
+      const id=setInterval(()=>{
+        fetchBuild().then(b=>{ if(cancelled || !b) return; setCurrentBuild(prev=> (prev && prev.sha===b.sha) ? prev : b); });
+      }, 20000);
+      return ()=>{ cancelled=true; clearInterval(id); };
+    },[fetchBuild]);
+    // a newer build is served iff both SHAs are present and differ. A fresh
+    // mismatch (new served SHA) re-arms the nudge even if a prior one was dismissed.
+    const staleBuild = !!(loadedBuild && currentBuild && loadedBuild.sha!==currentBuild.sha);
+    const servedSha = currentBuild && currentBuild.sha;
+    useEffect(()=>{ setBuildNudgeOff(false); },[servedSha]);
 
     // theme application
     useEffect(()=>{
@@ -485,6 +519,13 @@
         </div>
 
         <main className="sx-stage">
+          {staleBuild && !buildNudgeOff && (
+            <div className="sx-buildnudge" role="status">
+              <span className="sx-buildnudge-dot" />
+              <span className="sx-buildnudge-text">new version available — refresh (⌘R)</span>
+              <button className="sx-buildnudge-x" title="Dismiss until the next update" aria-label="Dismiss" onClick={()=>setBuildNudgeOff(true)}>×</button>
+            </div>
+          )}
           <div className="sx-topbar">
             <div className="sx-crumb">
               {stageMode==="home" ? (
