@@ -145,6 +145,8 @@ The carry-overs hold — goal-as-artifact `goal.<id>`, the `goal.update` stream 
 `msg.topic.goals`, signal-not-manage, the thin core — and only the record content
 changes: a stored state becomes a north-star plus criteria with a derived rollup.
 
-Links: [TASK-84] (this work), [ADR-0034] (the cockpit stub this fills),
-[ADR-0011] (the workflow that carries a goal's in-flight "how"), and the shipped
-`agent.status` lexicon (PR #132) this mirrors.
+Links: TASK-84 (this work),
+[ADR-0034](0034-the-web-cockpit-rests-on-conventions-not-new-protocol.md) (the
+cockpit stub this fills),
+[ADR-0011](0011-workflows.md) (the workflow that carries a goal's in-flight
+"how"), and the shipped `agent.status` lexicon (PR #132) this mirrors.
