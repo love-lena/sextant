@@ -1,0 +1,44 @@
+{
+  "lexicon": 1,
+  "id": "goal.update",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "A signalled transition on a goal (TASK-84). Published as a message on msg.topic.goals — an observation that goal <goal> moved, NOT the goal's current value. Any agent or human may emit one. It SIGNALS; it does not manage (ADR-0035): the current value lives in the goal.<id> artifact (single-writer by convention); the owner and operator stay authoritative; a goal.update reports, it never assigns, gates, or directs an agent. The goal's status is derived from its criteria, so an update headlines a movement (a criterion met, a goal opened) rather than stamping a state enum. A goal.update for a goal with no artifact yet is a proposal to open one. Content is opaque to the bus. This is the same current-value-artifact + observable-event-stream pairing the workflow harness uses (its run artifact alongside msg.workflow.<id>.events).",
+      "record": {
+        "type": "object",
+        "required": ["goal", "headline"],
+        "properties": {
+          "goal": {
+            "type": "string",
+            "description": "The goal-id this update concerns (matches the goal.<id> artifact)."
+          },
+          "crit": {
+            "type": "string",
+            "description": "Optional criterion id this update concerns, when the movement is about one acceptance criterion rather than the whole goal."
+          },
+          "status": {
+            "type": "string",
+            "description": "Optional new status this update reports. For a criterion (crit set): met | in-progress | waiting-on-you | blocked | not-started. Omitted for a whole-goal observation whose status is just derived from the criteria."
+          },
+          "headline": {
+            "type": "string",
+            "description": "Short line describing the transition / what was observed, e.g. 'lexicons merged -> criterion 1 met' or 'goal opened: ship v0.5'."
+          },
+          "ref": {
+            "type": "string",
+            "description": "Optional artifact/PR/ticket that triggered the update (e.g. the proof artifact backing a met criterion). Goals are generic — a ref MAY point at a ticket, but the primitive never requires one."
+          },
+          "updated": {
+            "type": "string",
+            "description": "ISO-8601 timestamp."
+          },
+          "by": {
+            "type": "string",
+            "description": "Who/what signalled it (convenience label; the bus-stamped author is authoritative)."
+          }
+        }
+      }
+    }
+  }
+}
