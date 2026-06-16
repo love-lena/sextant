@@ -203,8 +203,10 @@ _Avoid_: kill (reserve that for forcing a process from the outside)
   criterion. Movement is signalled on the `goal.update` stream — it reports, it
   never directs a **client**.
 - The **clients registry** lists every issued client; **presence** is its liveness
-  view — who is connected right now, derived at read time from the bus's live
-  connection table.
+  view — who is alive right now, derived at read time from the bus's live
+  connection table OR a fresh client **heartbeat** (`last_seen`), so a client
+  behind a leaf node — invisible to the connection table — still reads online
+  while it beats ([ADR-0036](docs/adr/0036-presence-and-liveness-derive-from-a-client-heartbeat.md)).
 - A **client** makes a **call** to invoke an **operation** on the **bus**; the bus
   stamps a **frame** around the record and stores or relays it via the **backend**.
 - A **bus** has at most one **principal** (a human's client), designated at
