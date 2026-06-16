@@ -82,3 +82,14 @@ the stable thing; the cockpit is a swappable face on it.
 
 Links: [TASK-71] (this work), [TASK-66] (the review/brief convention),
 [ADR-0032] (the local-API boundary), [TASK-72] (delivery status, separate).
+
+## Extension: needs-review is producer-set intent, default-neutral ([TASK-112])
+
+ADR-0034 read *absent ⇒ review*; revise to *absent ⇒ neutral*. The review block
+has two halves: `state` = the producer's needs-your-eyes INTENT (anyone may set
+it, no rev); `{by,at,rev}` = the operator's VERDICT, server-set by the review
+endpoint on approve/changes. The agentic workflow already sets `state=review` on
+its brief at the gate; generalized, any agent/workflow producing for-operator
+output sets it. A goal criterion `waiting-on-you` ⇒ linked artifact
+`state=review`. Home/inbox projects over `state=review` + criteria-waiting +
+question-messages. Norm, not enforcement.

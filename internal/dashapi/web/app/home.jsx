@@ -111,11 +111,12 @@
     const [movedOpen, setMovedOpen] = useState(false);
     const arts = (ctx && ctx.artifacts) || [];
 
-    // the operator's queue: review-pending artifacts. "review" outranks "changes"
-    // (a fresh ask vs. a re-review). Stable within a state by incoming order.
-    const order = { review: 0, changes: 1 };
-    const pending = arts.filter((a) => a.status === "review" || a.status === "changes")
-      .sort((a, b) => (order[a.status] - order[b.status]));
+    // the operator's inbox: artifacts explicitly flagged needs-review (review-state),
+    // most-recently-touched first. "changes" is the operator's verdict sent back to the
+    // agent (their turn) — it re-enters the inbox only when the agent revises + re-flags
+    // review, per the needs-review convention (default-neutral; inbox = state==="review").
+    const pending = arts.filter((a) => a.status === "review")
+      .sort((a, b) => (b.version || 0) - (a.version || 0));
     const hero = pending[0];
     const rest = pending.slice(1);
     const total = pending.length;

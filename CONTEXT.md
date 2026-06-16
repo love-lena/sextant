@@ -158,6 +158,17 @@ declarations — read from the artifact side, never written onto the criterion.
 Content-opaque to the core; a convention, not a schema change.
 _Avoid_: link, dependency, parent/child
 
+**Needs-review (review-state default)**:
+An artifact's `review` block (ADR-0034) defaults to **neutral** — a new artifact
+is not awaiting the operator. A producer (agent, workflow, or operator) sets
+`review.state = review` **explicitly** when the artifact is for the operator's
+judgment (brief, proposal, design, decision-doc) — the *intent* half, settable
+by anyone, no rev. The operator's *verdict* (`by/at/rev`) is server-set by the
+review endpoint on approve/changes. Context / working / done stay neutral.
+Home/inbox surfaces only `review`-state artifacts (+ criteria-waiting +
+question-messages). A **norm, not enforcement** (signal-not-manage).
+_Avoid_: default-to-review, auto-flag
+
 **`goal.update` (the goals stream)**:
 A signalled transition on a **goal**, published on the topic `msg.topic.goals` —
 an observation that a goal moved (a criterion met, a goal opened), not the goal's

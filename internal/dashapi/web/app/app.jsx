@@ -4,7 +4,8 @@
    ever talks to this local API.
 
    Review loop (TASK-66): an artifact's review-state lives as a `review` block in
-   its record (absent ⇒ "review"); approve / request-changes persist it via
+   its record (absent ⇒ neutral (draft); needs-review is set explicitly by the
+   producer); approve / request-changes persist it via
    POST /api/artifacts/{name}/review and post an event to the companion topic
    msg.topic.artifact.<name>.
 
@@ -320,7 +321,9 @@
       };
     }),[clients, records]);
 
-    // review-state from the artifact's record (convention); absent ⇒ "review"
+    // review-state from the artifact's record (convention); absent ⇒ neutral
+    // (draft) — needs-review is set explicitly by the producer. Reads only
+    // rec.review.state (no by/at/rev assumed), so a state-only block is fine.
     const statusOf = useCallback((name)=>{
       const rec = records[name];
       const st = rec && rec.review && rec.review.state;
