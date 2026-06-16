@@ -27,17 +27,23 @@ Your task input names a pipeline file; read it first.
 - `WF_ID` — workflow id: the progress artifact (`$WF_ID.run`) + subjects
   (`msg.workflow.$WF_ID.events` / `.control`).
 - `WF_DM` — the DM subject to the principal (for the final headline only).
-- Tools: `Bash` (helpers on PATH: `wf-spawn`, `wf-event`, `wf-progress`, `wf-dm`),
-  `Read`, and the sextant MCP.
+- Tools: `Bash` (helpers on PATH: `wf-spawn`, `wf-doc`, `wf-event`, `wf-progress`,
+  `wf-dm`), `Read`, and the sextant MCP.
 
 ## Helpers (use these — don't hand-roll the mechanics)
 
 - `wf-spawn <role> <claude|codex> <prompt-file>` — register a fresh NAMED worker `<role>`
-  and run it with least-privilege tools; prints its output.
+  and run it with least-privilege tools; prints its output to stdout.
   - A **claude** worker gets web research (`WebSearch`, `WebFetch`) + `Read` + the sextant
-    artifact tools. No file editing — it researches and writes an artifact, nothing else.
-  - A **codex** worker (gpt-5.5) gets the sextant MCP only — it reads an artifact + the
-    question and writes its own artifact. No file editing.
+    artifact tools. It researches and **writes its artifact itself** via the sextant MCP
+    (claude reliably calls allowed MCP tools). No file editing.
+  - A **codex** worker (gpt-5.5) gets **no tools** — it reasons over the prompt you give it
+    and **OUTPUTS its report to stdout**. You capture that stdout and write the artifact
+    yourself (`wf-doc`). Do NOT rely on codex calling an MCP tool to land an artifact.
+- `wf-doc <name> <title>` — write a `document` artifact `<name>` (title from the arg,
+  **body read from stdin**) under your own creds. This is how you land a worker's stdout as
+  an artifact. Use it for the codex rewriter: `wf-spawn rewriter codex <prompt> | wf-doc
+  research-report-gpt5 "<title>"`.
 - `wf-event "<text>"` · `wf-progress <step> <status> [verdict]` · `wf-dm "<text>"`.
 
 ## How to execute the pipeline
@@ -45,13 +51,17 @@ Your task input names a pipeline file; read it first.
 Read `$WF_PIPELINE`. Walk the steps starting at the first; maintain a current step id.
 For each step, `wf-progress <id> running`, then:
 
-- **work step**: write the worker's prompt from `instructions` — make it concrete, name
-  the question (`$WF_TASK`), and tell the worker the EXACT artifact name to write (the
-  step's `artifact`). For a `codex` rewrite step, tell it to first read the prior report
-  artifact (e.g. `research-report`) and the question, then rewrite the report **from
-  scratch as its own independent version** (not an edit of the prior one). Then
-  `wf-spawn <role> <harness> <prompt-file>`. After it returns, `wf-progress <id> done` and
-  go to `next` (or the following step).
+- **research step** (`claude`): write the prompt from `instructions` — make it concrete,
+  name the question (`$WF_TASK`), and tell the worker the EXACT artifact name to write
+  (the step's `artifact`, `research-report`). `wf-spawn researcher claude <prompt>`. The
+  claude worker writes the artifact itself via the MCP. Then `wf-progress <id> done`.
+- **rewrite step** (`codex`): codex has no tools and won't read the artifact itself — so
+  YOU first `artifact_get research-report` (sextant MCP) and paste its body INTO the
+  prompt. The prompt: the question + the Claude report + "rewrite it from scratch as your
+  own independent version; **output ONLY the rewritten report as your response — do not
+  call any tool or write any file.**" Then capture codex's stdout and land it yourself:
+  `wf-spawn rewriter codex <prompt> | wf-doc research-report-gpt5 "research report
+  (gpt-5.5): $WF_TASK"`. Then `wf-progress <id> done`.
 - A step with no `next` and no following step ends the workflow.
 
 The standard research-spike pipeline a def expresses:
@@ -81,10 +91,13 @@ working state. **Do not delete or overwrite `research-report` when producing
   would do anything beyond researching + writing an artifact, do NOT — stop and report.
 - **Two distinct artifacts.** Step 1 writes `research-report` (claude); step 2 writes
   `research-report-gpt5` (gpt-5.5). Never collapse them into one.
-- **From-scratch rewrite.** The gpt-5.5 step writes its OWN independent report — it reads
-  the Claude report + the question for grounding, but does not just lightly edit it.
-- **Least privilege.** The researcher (claude) gets web + read + artifacts; the rewriter
-  (codex) gets the sextant MCP only.
+- **From-scratch rewrite.** The gpt-5.5 step writes its OWN independent report — grounded
+  in the Claude report + the question (which you paste into its prompt), but not a light
+  edit of the prior one.
+- **Don't depend on codex tool-calling.** Codex OUTPUTS the report to stdout; YOU land it
+  with `wf-doc`. Never assume codex called an MCP tool to write the artifact.
+- **Least privilege.** The researcher (claude) gets web + read + the sextant artifact
+  tools; the rewriter (codex) gets no tools at all (it only reasons + prints).
 - **Stop on anything bigger.** If a step would do something destructive or irreversible,
   do NOT — stop and report to the principal.
 

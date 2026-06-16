@@ -96,9 +96,32 @@ else
 fi
 EOF
 
+  # wf-doc <name> <title> — write a `document` artifact <name> whose BODY is read from
+  # stdin, under the orchestrator's own creds (create-or-update, CAS). This is how the
+  # harness lands a worker's stdout as an artifact WITHOUT depending on that worker calling
+  # an MCP tool itself — the proven reviewer-stdout pattern. Used for the codex rewriter,
+  # whose tool-calling we don't want to rely on.
+  cat >"$bin/wf-doc" <<'EOF'
+#!/usr/bin/env sh
+name="$1"; title="$2"
+body="$(cat)"
+bt="$("$WF_BIN/_wf-esc" "$body")"
+tt="$("$WF_BIN/_wf-esc" "$title")"
+rec="{\"\$type\":\"document\",\"title\":\"$tt\",\"body\":\"$bt\"}"
+rev="$("$WF_SEXTANT" artifact get "$name" --json --store "$SEXTANT_STORE" --creds "$WF_ORCH_CREDS" 2>/dev/null \
+  | tr -d ' \n' | sed -n 's/.*"[Rr]evision":\([0-9]*\).*/\1/p')"
+if [ -z "$rev" ]; then
+  "$WF_SEXTANT" artifact create "$name" "$rec" --store "$SEXTANT_STORE" --creds "$WF_ORCH_CREDS" >/dev/null 2>&1
+else
+  "$WF_SEXTANT" artifact update "$name" "$rec" --rev "$rev" --store "$SEXTANT_STORE" --creds "$WF_ORCH_CREDS" >/dev/null 2>&1
+fi
+EOF
+
   # wf-spawn <role> <claude|codex> <prompt-file> — register a fresh NAMED worker identity
-  # and run it with least-privilege tools; print its final output. Research workers do not
-  # edit the repo, so neither harness gets Edit/Write/Bash — only Read + web + artifacts.
+  # and run it with least-privilege tools; print its final output to stdout. Research workers
+  # never edit the repo, so neither harness gets Edit/Write/Bash. The claude researcher gets
+  # web + read + the sextant artifact tools (writes its artifact via MCP); the codex rewriter
+  # gets NO tools (it prints its report; the orchestrator lands it via wf-doc).
   cat >"$bin/wf-spawn" <<'EOF'
 #!/usr/bin/env sh
 role="$1"; harness="$2"; promptfile="$3"
@@ -116,12 +139,12 @@ printf '{"mcpServers":{"sextant":{"command":"%s","env":{"SEXTANT_CREDS":"%s","SE
 prompt="$(cat "$promptfile")"
 case "$harness" in
   codex)
-    # gpt-5.5 rewrite worker: reads the prior report artifact + the question, writes its
-    # own independent version. No file edits — sextant MCP only (artifact_get/_create).
-    codex exec "$prompt" --model "${WF_CODEX_MODEL:-gpt-5.5}" \
-      -c "mcp_servers.sextant.command=$WF_SEXTANT_MCP" \
-      -c "mcp_servers.sextant.env.SEXTANT_CREDS=$creds" \
-      -c "mcp_servers.sextant.env.SEXTANT_STORE=$SEXTANT_STORE" </dev/null ;;
+    # gpt-5.5 rewrite worker (proven reviewer-stdout pattern): the orchestrator passes the
+    # prior report + question INTO the prompt, and codex OUTPUTS its from-scratch rewrite to
+    # stdout. The orchestrator captures that stdout and writes the artifact itself (wf-doc) —
+    # we do NOT depend on codex calling an MCP tool to land the artifact. So no MCP config:
+    # nothing for codex to call; it just reasons + prints.
+    codex exec "$prompt" --model "${WF_CODEX_MODEL:-gpt-5.5}" </dev/null ;;
   *)
     # claude research worker: web research (WebSearch/WebFetch) + Read + the sextant
     # artifact tools. No Edit/Write/Bash — it researches and writes an artifact, nothing else.
@@ -171,9 +194,15 @@ if [ "$MODE" = demo ]; then
   gen_helpers "$WF_BIN"
   export PATH="$WF_BIN:$PATH"
 
-  # stub worker: registered identity already minted by wf-spawn; here we just emit a canned
-  # report and WRITE the named artifact (so the demo can assert both artifacts exist), then
-  # echo a one-line summary the orchestrator reads. No tokens spent.
+  # stub worker: registered identity already minted by wf-spawn; emits canned worker OUTPUT
+  # the way each live harness does. The two paths differ on purpose, so the stub exercises
+  # the REAL live mechanism for each:
+  #   - researcher (claude): writes research-report itself via the sextant MCP (live: claude
+  #     reliably calls allowed MCP tools). Here the stub mints it via the orchestrator creds
+  #     to model "the artifact landed", then prints a one-line summary.
+  #   - rewriter (codex): does NOT write any artifact — it PRINTS the rewritten report to
+  #     stdout (live: codex tool-calling is not relied upon). The orchestrator step below
+  #     captures that stdout and writes research-report-gpt5 via wf-doc. No tokens spent.
   cat >"$P/stub-worker.sh" <<'EOF'
 #!/usr/bin/env sh
 role="$1"; harness="$2"
@@ -187,12 +216,8 @@ Stub research body (claude). Sources: [stub].")"
     "$WF_SEXTANT" artifact create research-report "$rec" --store "$SEXTANT_STORE" --creds "$WF_ORCH_CREDS" >/dev/null 2>&1
     echo "research-report written" ;;
   rewriter)
-    body="$("$WF_BIN/_wf-esc" "# Findings: $WF_TASK
-
-Stub rewrite body (gpt-5.5). Independent from-scratch version.")"
-    rec="{\"\$type\":\"document\",\"title\":\"research report (gpt-5.5): $WF_TASK\",\"body\":\"$body\"}"
-    "$WF_SEXTANT" artifact create research-report-gpt5 "$rec" --store "$SEXTANT_STORE" --creds "$WF_ORCH_CREDS" >/dev/null 2>&1
-    echo "research-report-gpt5 written" ;;
+    # codex prints its from-scratch report to stdout; the harness lands it (no MCP call).
+    printf '%s\n' "# Findings: $WF_TASK" "" "Stub rewrite body (gpt-5.5). Independent from-scratch version." ;;
   *) echo "$role done" ;;
 esac
 EOF
@@ -212,13 +237,22 @@ EOF
   wf-spawn researcher claude "$P/p-research" >/dev/null
   wf-progress research done
 
-  # step 2: rewrite (codex/gpt-5.5) -> research-report-gpt5
+  # step 2: rewrite (codex/gpt-5.5) -> research-report-gpt5. The orchestrator passes the
+  # prior report INTO the prompt and tells codex to OUTPUT only the rewritten report; the
+  # harness captures that stdout and writes the artifact itself (wf-doc) — never relying on
+  # codex to call an MCP tool. (Live builds the prompt the same way from research-report.)
   cat >"$P/p-rewrite" <<EOF
-Read the artifact research-report and the question: $WF_TASK. Rewrite the report from
-scratch as your own independent version. Write it to the artifact research-report-gpt5.
+Question: $WF_TASK
+
+The Claude report (research-report) is below. Rewrite it from scratch as your own
+independent version. Output ONLY the rewritten report as your response — do not call any
+tool, do not write any file. Just emit the report text.
+
+--- research-report ---
+(prior report content here)
 EOF
   wf-progress rewrite running
-  wf-spawn rewriter codex "$P/p-rewrite" >/dev/null
+  wf-spawn rewriter codex "$P/p-rewrite" | wf-doc research-report-gpt5 "research report (gpt-5.5): $WF_TASK"
   wf-progress rewrite done
 
   wf-event "DONE: research-report + research-report-gpt5 ready to compare"

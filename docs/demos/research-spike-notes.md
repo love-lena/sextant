@@ -24,11 +24,13 @@ research (claude: web research → artifact research-report)
 1. **research** — a **claude** worker researches the question with `WebSearch` + `WebFetch`
    + `Read` + the sextant artifact tools, and writes its findings as a `document` artifact
    named **`research-report`** (title + body).
-2. **rewrite** — a **codex** worker on **gpt-5.5** (`codex exec --model gpt-5.5`) reads
-   `research-report` + the original question and rewrites the report **from scratch** as
-   its own independent version, writing a second `document` artifact named
-   **`research-report-gpt5`**. Keeping both lets the operator compare Claude's vs gpt-5.5's
-   report side by side.
+2. **rewrite** — a **codex** worker on **gpt-5.5** (`codex exec --model gpt-5.5`) is given
+   the original question + the Claude report (the orchestrator pastes `research-report`'s
+   body into its prompt) and rewrites the report **from scratch** as its own independent
+   version. It **outputs the report to stdout**; the orchestrator captures that stdout and
+   writes the `document` artifact named **`research-report-gpt5`** itself (via `wf-doc`,
+   under its own creds). Keeping both lets the operator compare Claude's vs gpt-5.5's report
+   side by side.
 
 The two named artifacts carry state between steps — durable + observable, not in-memory
 context. The progress artifact is `<id>.run` (distinct from the `<id>` def).
@@ -50,9 +52,20 @@ The research spike deliberately drops everything the agentic harness needs for *
 
 What's **kept** verbatim (the harness backbone): `gen_helpers` (`_wf-esc`, `wf-event`,
 `wf-dm`, `wf-progress`, `wf-spawn`), the named-identity registration via `wf-spawn`, the
-MCP-config-per-worker pattern, the orchestrator turn loop with `--resume` across turns, and
-the stub/live split. The supervisor loop is trimmed: its only non-terminal state is
-`running` (resume to continue); there is no `gate` branch.
+per-worker MCP config (for the claude researcher), the orchestrator turn loop with
+`--resume` across turns, and the stub/live split. The supervisor loop is trimmed: its only
+non-terminal state is `running` (resume to continue); there is no `gate` branch.
+
+**The one robustness deviation from the codex pattern in the template.** The agentic
+template's codex worker only ever PRINTED a `VERDICT:` to stdout — it never wrote an
+artifact via MCP. So we do not rely on codex tool-calling to land `research-report-gpt5`.
+Instead the rewriter codex worker is told to **output the report to stdout** (no tools at
+all), and a new helper `wf-doc <name> <title>` (body read from stdin) lets the orchestrator
+write the artifact itself under its own creds — the proven reviewer-stdout pattern. The
+claude researcher keeps writing `research-report` via the MCP (claude reliably calls
+allowed MCP tools, so that path is fine). The stub exercises this split: the stub rewriter
+prints to stdout and the demo pipes it through `wf-doc`, so the demo covers the real live
+mechanism, not a direct write.
 
 ## How a worker is spawned (composes M5.1 + M5.2)
 
@@ -62,9 +75,10 @@ registers a **named** identity (`researcher`, `rewriter`) and launches that work
 right harness with least-privilege tools:
 
 - **researcher (claude)** — `WebSearch,WebFetch,Read` + `mcp__sextant__artifact_*`. No
-  `Edit`/`Write`/`Bash`: it researches and writes an artifact, nothing else.
-- **rewriter (codex, gpt-5.5)** — the sextant MCP only (`artifact_get` to read the prior
-  report, `artifact_create` to write its own). No file editing.
+  `Edit`/`Write`/`Bash`: it researches and writes its artifact via the MCP, nothing else.
+- **rewriter (codex, gpt-5.5)** — **no tools**. The orchestrator pastes the prior report +
+  question into its prompt; codex emits the rewritten report to stdout; the orchestrator
+  lands it via `wf-doc`. No MCP config, no file editing — nothing for codex to call.
 
 Workers appear on the dash under their role names.
 
