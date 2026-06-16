@@ -377,17 +377,7 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 .sx-state-changes{color:var(--c-changes);background:rgba(210,103,74,.16);}
 .sx-state-draft{color:var(--c-draft);background:rgba(139,144,152,.16);}
 
-/* ============ STAGE: artifact header ============ */
-.sx-arthead{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;row-gap:11px;flex-wrap:wrap;padding:11px 30px 11px;border-bottom:1px solid var(--hair);background:var(--paper);flex:0 0 auto;}
-.sx-arthead-l{flex:1 1 240px;min-width:0;}
-.sx-arthead-title{font-family:var(--font-ui);font-size:19px;font-weight:600;letter-spacing:-.02em;color:var(--ink);}
-.sx-arthead-meta{display:flex;align-items:center;gap:8px;margin-top:5px;font-size:12.5px;color:var(--ink-2);}
-.sx-arthead-meta .sx-av{text-shadow:none;}
-.sx-arthead-v{color:var(--ink);}
-.sx-dotsep{color:var(--ink-2);opacity:.4;}
-.sx-arthead-by{color:var(--ink);font-weight:500;}
-.sx-arthead-time{color:var(--ink-2);}
-.sx-arthead-r{display:flex;align-items:center;gap:10px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;}
+/* ============ STAGE: small action button (artMissing / stub CTAs) ============ */
 .sx-sbtn{font-family:var(--font-ui);font-size:13px;font-weight:600;border-radius:8px;padding:8px 14px;cursor:pointer;border:none;transition:filter .12s;white-space:nowrap;}
 .sx-sbtn:active{transform:translateY(1px);}
 .sx-sbtn-approve{background:var(--act);color:#fff;}
@@ -403,24 +393,6 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 .sx-convstage-meta{font-family:var(--font-mono);font-size:12px;color:var(--ink-2);}
 .sx-convstage-body{flex:1;min-height:0;overflow-y:auto;padding-top:6px;}
 .sx-convstage .sx-composer{flex:0 0 auto;border-top:1px solid var(--hair);background:transparent;}
-/* TASK-83: the artifact view pairs the document with its inline companion discussion.
-   Split (doc | discussion) by default; a head toggle switches to stacked for tight widths. */
-.sx-canvas--artifact{align-items:stretch;overflow:hidden;}
-.sx-canvas--artifact .sx-page--doc{flex:1;overflow-y:auto;}
-.sx-artdisc{display:flex;flex-direction:column;min-height:0;background:var(--sbg);}
-.sx-canvas--split{flex-direction:row;}
-.sx-canvas--split .sx-page--doc{min-width:0;}
-.sx-canvas--split .sx-artdisc{flex:0 0 38%;min-width:300px;max-width:520px;border-left:1px solid var(--shair);}
-.sx-canvas--stacked{flex-direction:column;}
-.sx-canvas--stacked .sx-page--doc{min-height:0;}
-.sx-canvas--stacked .sx-artdisc{flex:0 0 auto;max-height:42%;border-top:1px solid var(--shair);}
-.sx-artdisc-toggle{margin-left:auto;align-self:center;}
-.sx-artdisc-head{display:flex;align-items:baseline;gap:10px;padding:9px 24px;border-bottom:1px solid var(--shair);flex:0 0 auto;}
-.sx-artdisc-title{font-family:var(--font-ui);font-size:14px;font-weight:600;letter-spacing:-.01em;color:var(--stx);}
-.sx-artdisc-sub{font-family:var(--font-mono);font-size:11px;color:var(--smut);}
-.sx-artdisc-body{flex:1;min-height:0;overflow-y:auto;padding:6px 0;}
-.sx-artdisc-empty{padding:16px 24px;font-family:var(--font-ui);font-size:13px;color:var(--smut);}
-.sx-artdisc .sx-composer{flex:0 0 auto;border-top:1px solid var(--shair);background:transparent;}
 
 @media(max-width:1080px){
   .sx-side{width:340px;flex-basis:340px;}
@@ -737,3 +709,92 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 #app.dark .fx-moved-item{border-top-color:#23272e;}
 #app.dark .fx-starthead{color:#cfd3d9;}
 #app.dark .fx-zero{background:rgba(63,143,89,.06);}
+
+/* ============================================================
+   SEXTANT LIVE FLOW v0.5 — Review / DocumentView (stage c, TASK Track 1)
+   The artifact-under-review: a doc column + a resizable/collapsible comments
+   rail (TASK-141) + a review composer wired to the review-state primitive.
+   Recreates flow2's DocumentView on the dash token system (--fx-* / --ink /
+   --paper / status tokens) so it tracks light + dark mode.
+   ============================================================ */
+.sx-canvas--review{flex:1;min-height:0;overflow:hidden;padding:0;}
+.fx-docwrap{display:flex;height:100%;min-height:0;width:100%;}
+.fx-doccol{flex:1;min-width:0;overflow-y:auto;display:flex;flex-direction:column;}
+.fx-doccol .fx-topbar{display:flex;align-items:center;gap:14px;padding:0 24px;height:48px;flex:0 0 auto;border-bottom:1px solid var(--hair);}
+.fx-back{background:none;border:none;font-family:var(--font-ui);font-size:12.5px;font-weight:500;color:var(--ink-2);cursor:pointer;padding:6px 0;}
+.fx-back:hover{color:var(--ink);}
+.fx-top-tag{font-family:var(--font-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--fx-ink3);}
+.fx-top-right{margin-left:auto;background:none;border:none;font-family:var(--font-mono);font-size:11px;letter-spacing:.04em;color:var(--ink-2);cursor:pointer;padding:6px 0;}
+.fx-top-right:hover{color:var(--ink);}
+.fx-docinner{max-width:680px;margin:0 auto;width:100%;padding:30px 40px 60px;}
+.fx-crumbs{display:flex;align-items:center;gap:11px;margin-bottom:16px;flex-wrap:wrap;}
+.fx-type{font-family:var(--font-mono);font-size:9.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--fx-ink2);border:1px solid var(--fx-line);border-radius:5px;padding:3px 9px;}
+.fx-stream{font-family:var(--font-mono);font-size:11px;letter-spacing:.04em;text-transform:uppercase;font-weight:600;color:var(--brand-strong);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%;}
+.fx-title{font-family:var(--font-ui);font-size:31px;font-weight:600;line-height:1.1;letter-spacing:-.03em;margin:0 0 14px;color:var(--ink);}
+.fx-byline{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:13.5px;color:var(--ink-2);margin-bottom:20px;}
+.fx-byline b{color:var(--ink);font-weight:600;}
+.fx-byline .sx-av{text-shadow:none;}
+.fx-sep{color:var(--fx-ink3);}
+.fx-why{display:flex;flex-direction:column;gap:5px;padding:13px 16px;margin-bottom:8px;background:rgba(20,21,24,.025);border-radius:10px;border-left:2px solid var(--brand);}
+.fx-why-lbl{font-family:var(--font-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--fx-ink3);}
+.fx-why-text{font-size:13.5px;line-height:1.5;color:var(--ink-2);}
+/* the markdown body keeps its own md-doc styling; drop its inner left/right pad
+   here since the doc column already provides the reading measure + gutters. */
+.fx-docmd .md-inner{max-width:none;padding:18px 0 0;}
+.fx-docmd .md-doc h1{display:none;} /* the title is rendered above as fx-title */
+
+/* ---- right comments rail (resizable + collapsible, TASK-141) ---- */
+.fx-rail{position:relative;flex:0 0 auto;border-left:1px solid var(--hair);display:flex;flex-direction:column;background:var(--paper);min-height:0;}
+.fx-rail-resize{position:absolute;left:-3px;top:0;bottom:0;width:7px;cursor:col-resize;z-index:5;}
+.fx-rail-resize:hover{background:var(--brand-soft);}
+.fx-rail-head{display:flex;align-items:center;gap:8px;padding:13px 16px;border-bottom:1px solid var(--hair);font-family:var(--font-ui);font-size:14px;font-weight:600;color:var(--ink);flex:0 0 auto;}
+.fx-rail-count{font-family:var(--font-mono);font-size:11px;color:var(--fx-ink3);font-weight:400;}
+.fx-rail-pop{margin-left:auto;background:none;border:none;color:var(--fx-ink3);font-size:14px;cursor:pointer;padding:2px 6px;border-radius:6px;}
+.fx-rail-pop:hover{color:var(--ink);background:rgba(20,21,24,.05);}
+.fx-rail-body{flex:1;min-height:0;overflow-y:auto;padding:14px 14px 8px;}
+.fx-rail-sec{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--fx-ink3);margin:6px 2px 10px;}
+.fx-rail-sec.mt{margin-top:20px;}
+.fx-noevi{font-family:var(--font-mono);font-size:11px;color:var(--fx-ink3);font-style:italic;}
+.fx-comment{border:1px solid var(--fx-line);border-radius:11px;padding:11px 12px;margin-bottom:9px;background:var(--paper);}
+.fx-comment-head{display:flex;align-items:center;gap:7px;font-size:12.5px;}
+.fx-comment-head b{font-weight:600;color:var(--ink);}
+.fx-comment-head .sx-av{text-shadow:none;}
+.fx-comment-tag{font-family:var(--font-mono);font-size:8.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--prog);background:rgba(58,130,196,.12);border-radius:5px;padding:2px 6px;}
+.fx-comment-time{font-family:var(--font-mono);font-size:10.5px;color:var(--fx-ink3);margin-left:auto;}
+.fx-comment-text{font-size:13px;line-height:1.5;color:var(--ink-2);margin:6px 0 0;white-space:pre-wrap;word-break:break-word;}
+.fx-event{display:flex;gap:10px;padding:4px 0;}
+.fx-event-body{flex:1;min-width:0;}
+.fx-event-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px;}
+.fx-event-time{font-family:var(--font-mono);font-size:10px;color:var(--fx-ink3);}
+.fx-event-text{font-size:12px;line-height:1.5;color:var(--ink-2);margin:6px 0 0;}
+
+/* ---- review composer (pinned at the rail foot, wired to setReview) ---- */
+.fx-review{border-top:1px solid var(--hair);padding:13px 14px;background:var(--paper);flex:0 0 auto;}
+.fx-review-head{font-size:13px;font-weight:600;margin-bottom:10px;line-height:1.3;color:var(--ink);}
+.fx-rinput{width:100%;border:1px solid var(--fx-line);border-radius:9px;background:var(--paper);color:var(--ink);font-family:var(--font-ui);font-size:12.5px;line-height:1.45;padding:9px 11px;margin-bottom:9px;resize:none;outline:none;}
+.fx-rinput::placeholder{color:var(--fx-ink3);}
+.fx-rinput:focus{border-color:var(--brand);}
+.fx-verdict{display:flex;gap:3px;background:rgba(20,21,24,.05);border-radius:9px;padding:3px;margin-bottom:9px;}
+.fx-vopt{flex:1;text-align:center;font-size:11px;font-weight:500;color:var(--ink-2);padding:7px 4px;border-radius:7px;cursor:pointer;user-select:none;}
+.fx-vopt.is-on{background:var(--paper);color:var(--ink);font-weight:600;box-shadow:0 1px 3px rgba(20,21,40,.12);}
+.fx-submit{width:100%;background:var(--act);color:#fff;border:none;border-radius:9px;padding:10px;font-family:var(--font-ui);font-weight:600;font-size:13.5px;cursor:pointer;}
+.fx-submit:hover{background:var(--act-strong);}
+
+/* ---- ReviewDone consequence panel ---- */
+.fx-done{height:100%;display:flex;align-items:center;justify-content:center;padding:40px;}
+.fx-done-card{max-width:440px;text-align:center;}
+.fx-done-icon{width:54px;height:54px;border-radius:50%;display:grid;place-items:center;font-size:26px;margin:0 auto 20px;}
+.fx-done-title{font-family:var(--font-ui);font-size:23px;font-weight:600;letter-spacing:-.02em;line-height:1.2;margin:0 0 10px;color:var(--ink);}
+.fx-done-line{font-size:15px;line-height:1.55;color:var(--ink-2);margin:0 0 18px;}
+.fx-done-line b{color:var(--ink);font-weight:600;}
+.fx-done-actions{display:flex;justify-content:center;}
+.fx-done-actions .fx-submit{width:auto;padding:11px 22px;}
+
+/* ---- dark mode (Review view) ---- */
+#app.dark .fx-doccol .fx-topbar,#app.dark .fx-rail,#app.dark .fx-rail-head,#app.dark .fx-rail-body,#app.dark .fx-review{border-color:#2a2d33;}
+#app.dark .fx-rail,#app.dark .fx-review,#app.dark .fx-comment,#app.dark .fx-rinput{background:#16181d;}
+#app.dark .fx-type,#app.dark .fx-comment,#app.dark .fx-rinput{border-color:#2a2d33;}
+#app.dark .fx-why{background:rgba(255,255,255,.03);}
+#app.dark .fx-verdict{background:#22262d;}
+#app.dark .fx-vopt.is-on{background:#2f343c;}
+#app.dark .fx-rail-pop:hover{background:rgba(255,255,255,.06);}
