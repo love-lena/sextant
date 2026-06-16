@@ -273,14 +273,80 @@
       </div>);
   }
 
+  /* ---------- ⌘K command palette · scoring + recency ----------
+     scoreEntry returns a numeric score (higher = better) for a single index
+     entry. It is a WEIGHTED SUM of named signals — each signal is a pure
+     function (entry, ctx) → 0..1. Adding a new signal (frecency, type
+     weight, pinned) is one array entry + one weight constant; nothing else
+     needs to change.
+
+     ctx = { ql: string, recents: { [key]: timestamp(ms) }, now: number }
+       ql       — lower-cased trimmed query (empty string when palette is blank)
+       recents  — the recency store from localStorage (keyed by entry.key)
+       now      — Date.now() snapshot for the render
+  */
+  const RECENCY_HALF_LIFE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days → score decays to 0.5
+
+  // matchSignal: 1.0 for exact label match, 0.8 for prefix, 0.5 for substring,
+  // 0 for no match.  When query is empty every entry scores 0 so the signal
+  // contributes nothing and recency alone orders results.
+  function matchSignal(entry, { ql }) {
+    if (!ql) return 0;
+    const label = entry.label.toLowerCase();
+    if (label === ql) return 1.0;
+    if (label.startsWith(ql)) return 0.8;
+    if (entry.kw.indexOf(ql) >= 0) return 0.5;
+    return 0; // no match — entry will be filtered out by the caller
+  }
+
+  // recencySignal: exponential decay from the last open time.  An entry never
+  // opened scores 0.  One opened just now scores ~1.  One opened RECENCY_HALF_LIFE_MS
+  // ago scores 0.5.  The decay is fast enough to be useful without feeling stale.
+  function recencySignal(entry, { recents, now }) {
+    // Coerce + validate: a malformed localStorage value must not poison the
+    // score with NaN (which would corrupt the sort).
+    const ts = Number(recents[entry.key]);
+    if (!(Number.isFinite(ts) && ts > 0)) return 0;
+    const age = Math.max(0, now - ts);
+    return Math.pow(0.5, age / RECENCY_HALF_LIFE_MS);
+  }
+
+  // SIGNALS: array of { fn, weight } — add new signals here.
+  // Weights are relative; they don't have to sum to 1 (scores are only used
+  // for ordering, not displayed to the user).
+  const SIGNALS = [
+    { fn: matchSignal,   weight: 10 }, // match quality dominates when typing
+    { fn: recencySignal, weight: 3  }, // recency breaks ties + orders the empty state
+  ];
+
+  function scoreEntry(entry, ctx) {
+    let score = 0;
+    for (const { fn, weight } of SIGNALS) score += fn(entry, ctx) * weight;
+    return score;
+  }
+
   /* ---------- ⌘K command palette · real, client-side find & jump ---------- */
   // Searches the already-loaded artifacts + clients (agents) + conversation
   // subjects; selecting a result opens it via the existing open handlers.
-  function CmdK({ index, onClose, onAsk }) {
+  // `recents` is the recency store ({ [entry.key]: timestamp }) passed down
+  // from App so the palette can rank recently-opened destinations to the top.
+  function CmdK({ index, recents, onClose, onAsk }) {
     const [q, setQ] = useState("");
     const [sel, setSel] = useState(0);
     const ql = q.trim().toLowerCase();
-    const matches = (ql ? index.filter((it) => it.kw.indexOf(ql) >= 0) : index).slice(0, 9);
+    const now = Date.now();
+    const ctx = { ql, recents: recents || {}, now };
+
+    // Score every entry.  When there's a query, discard entries with zero
+    // match quality (matchSignal returns 0 → combined score may still be >0
+    // via recency; we want a strict "no match → hidden" rule when typing).
+    // When empty, include everything (match score is 0 for all, recency orders).
+    const scored = index
+      .filter((it) => !ql || it.kw.indexOf(ql) >= 0)
+      .map((it) => ({ it, score: scoreEntry(it, ctx) }))
+      .sort((a, b) => b.score - a.score);
+
+    const matches = scored.slice(0, 9).map((s) => s.it);
     // No good match for a typed query → offer "Ask the assistant" as a real,
     // selectable result that hands the query to the (stubbed) Assistant FAB.
     const askRow = (onAsk && ql && matches.length === 0)
