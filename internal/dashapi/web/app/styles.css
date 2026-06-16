@@ -393,6 +393,12 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 .sx-convstage-meta{font-family:var(--font-mono);font-size:12px;color:var(--ink-2);}
 .sx-convstage-body{flex:1;min-height:0;overflow-y:auto;padding-top:6px;}
 .sx-convstage .sx-composer{flex:0 0 auto;border-top:1px solid var(--hair);background:transparent;}
+/* DM-status strip (TASK-129): sits between the message body and the composer,
+   visible only in DM conversations where the counterpart is a known agent. */
+.sx-dm-strip{display:flex;align-items:center;gap:7px;padding:7px 18px;border-top:1px solid var(--shair);background:var(--sbg2);flex:0 0 auto;}
+.sx-dm-strip-label{font-family:var(--font-mono);font-size:11px;font-weight:500;letter-spacing:.01em;}
+.sx-dm-strip-sep{color:var(--sfai);font-size:11px;}
+.sx-dm-strip-headline{font-family:var(--font-ui);font-size:12px;color:var(--smut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}
 
 @media(max-width:1080px){
   .sx-side{width:340px;flex-basis:340px;}
