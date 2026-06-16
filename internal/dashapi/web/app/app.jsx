@@ -251,7 +251,7 @@
     // live state + headline come from its own status.<id> artifact (agent.status,
     // TASK-84) when present; otherwise we fall back to bus presence.
     const STATUS_STATES = ["idle","working","waiting-for-human","waiting-for-agent","blocked","done"];
-    const agents = useMemo(()=>clients.filter(c=>c.Kind!=="client").map(c=>{
+    const agents = useMemo(()=>clients.filter(c=>c.Kind!=="client" && c.Kind!=="human").map(c=>{
       const sr = records["status."+c.ID];
       const st = sr && sr.state;
       const known = STATUS_STATES.indexOf(st)>=0;
@@ -299,7 +299,7 @@
       const c = convos[activeConvo]; if(!c) return [];
       return c.msgs.map((m,i)=>({
         id:m.id||i, kind:"msg", author:nameOf(m.author),
-        role: kindOf(m.author)==="client"?"human":"agent",
+        role: (kindOf(m.author)==="client"||kindOf(m.author)==="human")?"human":"agent",
         self: m.author===self.id, time:relMs(m.ts), text:m.text,
       }));
     },[convos, activeConvo, nameOf, kindOf, self.id]);
@@ -469,7 +469,7 @@
                     <span className="sx-convstage-meta">live on the bus</span>
                   </div>
                   <div className="sx-convstage-body" ref={convBodyRef}>
-                    <MessageList messages={messages} onArtifactRef={openArtifact} />
+                    <MessageList messages={messages} onArtifactRef={openArtifact} artifactNames={artifacts.map(a=>a.Name)} />
                   </div>
                   <Composer draft={draft} setDraft={setDraft} onSend={send} placeholder={"Message "+(convo.type==="topic"?"#":"@")+convo.name} />
                 </div>

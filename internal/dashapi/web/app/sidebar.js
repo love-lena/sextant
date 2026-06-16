@@ -33,21 +33,58 @@
     if (dot) return /* @__PURE__ */ React.createElement("span", { className: "sx-sd sx-sd-" + s.c, title: s.t });
     return /* @__PURE__ */ React.createElement("span", { className: "sx-status sx-st-" + s.c + (big ? " is-big" : "") }, /* @__PURE__ */ React.createElement("i", null), s.t);
   }
-  function MessageList({ messages, onArtifactRef }) {
-    return /* @__PURE__ */ React.createElement("div", { className: "sx-activity" }, messages.map(
-      (m) => m.kind === "event" ? /* @__PURE__ */ React.createElement("div", { className: "sx-event", key: m.id }, /* @__PURE__ */ React.createElement("span", { className: "sx-event-line" }), /* @__PURE__ */ React.createElement("span", { className: "sx-event-txt" }, m.text), /* @__PURE__ */ React.createElement("span", { className: "sx-event-time" }, m.time)) : /* @__PURE__ */ React.createElement("div", { className: "sx-msg" + (m.self ? " is-self" : ""), key: m.id }, /* @__PURE__ */ React.createElement(Avatar, { name: m.author, kind: m.role === "agent" ? "agent" : "human" }), /* @__PURE__ */ React.createElement("div", { className: "sx-msg-body" }, /* @__PURE__ */ React.createElement("div", { className: "sx-msg-head" }, /* @__PURE__ */ React.createElement("span", { className: "sx-msg-name" }, m.author), m.role === "agent" && /* @__PURE__ */ React.createElement("span", { className: "sx-tag-agent" }, "agent"), /* @__PURE__ */ React.createElement("span", { className: "sx-msg-time" }, m.time)), /* @__PURE__ */ React.createElement("div", { className: "sx-msg-text" }, m.text), m.artifactRef && /* @__PURE__ */ React.createElement("button", { className: "sx-artref", onClick: () => onArtifactRef && onArtifactRef(m.artifactRef) }, /* @__PURE__ */ React.createElement("span", { className: "sx-artref-ic" }, "\u25A3"), m.artifactRef)))
-    ));
+  function escapeRe(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+  function renderMessageHTML(text, names) {
+    if (!text) return "";
+    if (!(window.marked && window.DOMPurify)) return null;
+    let html = window.DOMPurify.sanitize(window.marked.parse(text, { breaks: true, gfm: true }));
+    const list = (names || []).filter(Boolean);
+    if (list.length) {
+      const alt = list.slice().sort((a, b) => b.length - a.length).map(escapeRe).join("|");
+      const re = new RegExp("(?<![\\w./-])(" + alt + ")(?![\\w./-])", "g");
+      html = html.replace(/>([^<]+)</g, (full, seg) => ">" + seg.replace(re, (m, n) => '<a class="sx-artlink" data-art="' + n + '">' + n + "</a>") + "<");
+      html = window.DOMPurify.sanitize(html);
+    }
+    return html;
+  }
+  function MessageList({ messages, onArtifactRef, artifactNames }) {
+    function onArtClick(e) {
+      const a = e.target.closest && e.target.closest("a.sx-artlink");
+      if (a && onArtifactRef) {
+        e.preventDefault();
+        onArtifactRef(a.getAttribute("data-art"));
+      }
+    }
+    return /* @__PURE__ */ React.createElement("div", { className: "sx-activity" }, messages.map((m) => {
+      if (m.kind === "event") return /* @__PURE__ */ React.createElement("div", { className: "sx-event", key: m.id }, /* @__PURE__ */ React.createElement("span", { className: "sx-event-line" }), /* @__PURE__ */ React.createElement("span", { className: "sx-event-txt" }, m.text), /* @__PURE__ */ React.createElement("span", { className: "sx-event-time" }, m.time));
+      const html = renderMessageHTML(m.text, artifactNames);
+      return /* @__PURE__ */ React.createElement("div", { className: "sx-msg" + (m.self ? " is-self" : ""), key: m.id }, /* @__PURE__ */ React.createElement(Avatar, { name: m.author, kind: m.role === "agent" ? "agent" : "human" }), /* @__PURE__ */ React.createElement("div", { className: "sx-msg-body" }, /* @__PURE__ */ React.createElement("div", { className: "sx-msg-head" }, /* @__PURE__ */ React.createElement("span", { className: "sx-msg-name" }, m.self ? "you" : m.author), m.role === "agent" && !m.self && /* @__PURE__ */ React.createElement("span", { className: "sx-tag-agent" }, "agent"), /* @__PURE__ */ React.createElement("span", { className: "sx-msg-time" }, m.time)), html != null ? /* @__PURE__ */ React.createElement("div", { className: "sx-msg-text", onClick: onArtClick, dangerouslySetInnerHTML: { __html: html } }) : /* @__PURE__ */ React.createElement("div", { className: "sx-msg-text" }, m.text), m.artifactRef && /* @__PURE__ */ React.createElement("button", { className: "sx-artref", onClick: () => onArtifactRef && onArtifactRef(m.artifactRef) }, /* @__PURE__ */ React.createElement("span", { className: "sx-artref-ic" }, "\u25A3"), m.artifactRef)));
+    }));
   }
   function Composer({ draft, setDraft, onSend, placeholder }) {
+    const taRef = useRef(null);
+    useEffect(() => {
+      const ta = taRef.current;
+      if (!ta) return;
+      ta.style.height = "auto";
+      ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
+    }, [draft]);
     return /* @__PURE__ */ React.createElement("div", { className: "sx-composer" }, /* @__PURE__ */ React.createElement(
-      "input",
+      "textarea",
       {
+        ref: taRef,
         className: "sx-input",
+        rows: 1,
         placeholder: placeholder || "Message\u2026",
         value: draft,
         onChange: (e) => setDraft(e.target.value),
         onKeyDown: (e) => {
-          if (e.key === "Enter" && draft.trim()) onSend();
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            if (draft.trim()) onSend();
+          }
         }
       }
     ), /* @__PURE__ */ React.createElement("button", { className: "sx-send", disabled: !draft.trim(), onClick: onSend }, "\u21B5"));
@@ -133,7 +170,7 @@
       "waiting-for-agent": { c: "review", label: "waiting \xB7 agent" },
       blocked: { c: "changes", label: "blocked" }
     };
-    const sorted = [...agents].sort((a, b) => (a.state === "offline" ? 1 : b.state === "offline" ? -1 : 0));
+    const sorted = [...agents].sort((a, b) => a.state === "offline" ? 1 : b.state === "offline" ? -1 : 0);
     return /* @__PURE__ */ React.createElement("div", { className: "sx-clients" }, sorted.map((a, i) => {
       const s = STATE[a.state] || STATE.offline;
       return /* @__PURE__ */ React.createElement(

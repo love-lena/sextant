@@ -30,41 +30,78 @@
   }
 
   /* ---------- shared message list + composer ---------- */
-  function MessageList({ messages, onArtifactRef }) {
+  function escapeRe(s) {return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");}
+  // Render a chat message body: light markdown (newlines→breaks, bold, inline code,
+  // lists) + linkify any mentioned artifact name into a clickable ref. Returns
+  // sanitized HTML, or null when the markdown libs are absent (caller falls back to
+  // plain text). Two sanitize passes: once on marked's output, once more after we
+  // inject the <a data-art> link wrappers into text nodes only.
+  function renderMessageHTML(text, names) {
+    if (!text) return "";
+    if (!(window.marked && window.DOMPurify)) return null;
+    let html = window.DOMPurify.sanitize(window.marked.parse(text, { breaks: true, gfm: true }));
+    const list = (names || []).filter(Boolean);
+    if (list.length) {
+      const alt = list.slice().sort((a, b) => b.length - a.length).map(escapeRe).join("|");
+      const re = new RegExp("(?<![\\w./-])(" + alt + ")(?![\\w./-])", "g");
+      // only rewrite text *between* tags, never a tag's own attributes
+      html = html.replace(/>([^<]+)</g, (full, seg) =>
+      ">" + seg.replace(re, (m, n) => '<a class="sx-artlink" data-art="' + n + '">' + n + "</a>") + "<");
+      html = window.DOMPurify.sanitize(html);
+    }
+    return html;
+  }
+  function MessageList({ messages, onArtifactRef, artifactNames }) {
+    function onArtClick(e) {
+      const a = e.target.closest && e.target.closest("a.sx-artlink");
+      if (a && onArtifactRef) {e.preventDefault();onArtifactRef(a.getAttribute("data-art"));}
+    }
     return (
       <div className="sx-activity">
-        {messages.map((m) => m.kind === "event" ?
-        <div className="sx-event" key={m.id}>
-            <span className="sx-event-line" /><span className="sx-event-txt">{m.text}</span>
-            <span className="sx-event-time">{m.time}</span>
-          </div> :
-
-        <div className={"sx-msg" + (m.self ? " is-self" : "")} key={m.id}>
-            <Avatar name={m.author} kind={m.role === "agent" ? "agent" : "human"} />
-            <div className="sx-msg-body">
-              <div className="sx-msg-head">
-                <span className="sx-msg-name">{m.author}</span>
-                {m.role === "agent" && <span className="sx-tag-agent">agent</span>}
-                <span className="sx-msg-time">{m.time}</span>
+        {messages.map((m) => {
+          if (m.kind === "event") return (
+            <div className="sx-event" key={m.id}>
+              <span className="sx-event-line" /><span className="sx-event-txt">{m.text}</span>
+              <span className="sx-event-time">{m.time}</span>
+            </div>);
+          const html = renderMessageHTML(m.text, artifactNames);
+          return (
+            <div className={"sx-msg" + (m.self ? " is-self" : "")} key={m.id}>
+              <Avatar name={m.author} kind={m.role === "agent" ? "agent" : "human"} />
+              <div className="sx-msg-body">
+                <div className="sx-msg-head">
+                  <span className="sx-msg-name">{m.self ? "you" : m.author}</span>
+                  {m.role === "agent" && !m.self && <span className="sx-tag-agent">agent</span>}
+                  <span className="sx-msg-time">{m.time}</span>
+                </div>
+                {html != null ?
+                <div className="sx-msg-text" onClick={onArtClick} dangerouslySetInnerHTML={{ __html: html }} /> :
+                <div className="sx-msg-text">{m.text}</div>}
+                {m.artifactRef &&
+                <button className="sx-artref" onClick={() => onArtifactRef && onArtifactRef(m.artifactRef)}>
+                    <span className="sx-artref-ic">▣</span>{m.artifactRef}
+                  </button>
+                }
               </div>
-              <div className="sx-msg-text">{m.text}</div>
-              {m.artifactRef &&
-            <button className="sx-artref" onClick={() => onArtifactRef && onArtifactRef(m.artifactRef)}>
-                  <span className="sx-artref-ic">▣</span>{m.artifactRef}
-                </button>
-            }
-            </div>
-          </div>
-        )}
+            </div>);
+        })}
       </div>);
 
   }
   function Composer({ draft, setDraft, onSend, placeholder }) {
+    const taRef = useRef(null);
+    // grow vertically with content (wrap, don't push right); cap so it never eats
+    // the whole pane — past the cap it scrolls.
+    useEffect(() => {
+      const ta = taRef.current;if (!ta) return;
+      ta.style.height = "auto";
+      ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
+    }, [draft]);
     return (
       <div className="sx-composer">
-        <input className="sx-input" placeholder={placeholder || "Message…"} value={draft}
+        <textarea ref={taRef} className="sx-input" rows={1} placeholder={placeholder || "Message…"} value={draft}
         onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => {if (e.key === "Enter" && draft.trim()) onSend();}} />
+        onKeyDown={(e) => {if (e.key === "Enter" && !e.shiftKey) {e.preventDefault();if (draft.trim()) onSend();}}} />
         <button className="sx-send" disabled={!draft.trim()} onClick={onSend}>↵</button>
       </div>);
 
