@@ -13,7 +13,7 @@ import (
 // TestMCPDMWakesWithoutSubscribe is the review-M1 definition-of-done: a frame
 // published to the worker's OWN DM subject (msg.client.<self>) produces a
 // channel wake event through the MCP server WITHOUT any explicit
-// message_subscribe call. This is the auto-DM bridge (TASK-55 c.DMs() drained
+// message_subscribe call. This is the auto-DM bridge (TASK-55 c.Inbox() drained
 // into frameEvent) wired in cmd/sextant-mcp; before it, a principal DM landed in
 // the durable stream but nothing woke the worker.
 //

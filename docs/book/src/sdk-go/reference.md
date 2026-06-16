@@ -83,14 +83,6 @@ func (c *Client) CreateArtifact(ctx context.Context, name string, record wire.Le
 
 CreateArtifact creates a new artifact from a Lexicon record as an artifact.create call: the bus stamps the frame (id, author, timestamps) and stores it. It fails if name already exists or record is not a valid lexicon.
 
-### func `(*Client) DMs`
-
-```go
-func (c *Client) DMs() <-chan Message
-```
-
-DMs returns the inbound direct-message channel: messages published to this client's own DM subject (msg.client.\<self>) arrive here without any explicit Subscribe call. The channel is buffered (64 messages); a receiver that falls behind will have messages dropped — the same behavior as a slow explicit Subscribe handler. A sender DMing this client need not know whether the client is subscribed: the bus delivers to the relay the auto-subscription establishes on connect, and the SDK fans the frame into this channel.
-
 ### func `(*Client) DeleteArtifact`
 
 ```go
@@ -146,6 +138,14 @@ func (c *Client) ID() string
 ```
 
 ID is this client's identity: the bus-minted ULID (its registry key and frame author).
+
+### func `(*Client) Inbox`
+
+```go
+func (c *Client) Inbox() <-chan Message
+```
+
+Inbox returns the inbound inbox channel: messages published to this client's own inbox subject (msg.client.\<self>) arrive here without any explicit Subscribe call. The channel is buffered (64 messages); a receiver that falls behind will have messages dropped — the same behavior as a slow explicit Subscribe handler. A sender messaging this client's inbox need not know whether the client is subscribed: the bus delivers to the relay the auto-subscription establishes on connect, and the SDK fans the frame into this channel.
 
 ### func `(*Client) ListArtifacts`
 

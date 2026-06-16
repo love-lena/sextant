@@ -25,7 +25,7 @@ import (
 // Subscribe call (AC#1, AC#2). It drives the built `sextant` binary to register
 // two clients, then uses in-process SDK connections to assert delivery:
 //
-//   - AC#1: receiver.DMs() delivers without an explicit Subscribe.
+//   - AC#1: receiver.Inbox() delivers without an explicit Subscribe.
 //   - AC#2: a message published to a fresh client's DM is delivered to it.
 func TestClientAutoDMOnConnect(t *testing.T) {
 	h := newHarness(t)
@@ -75,7 +75,7 @@ func TestClientAutoDMOnConnect(t *testing.T) {
 	}
 	defer sender.Close()
 
-	// AC#2: publish to the receiver's DM subject; it must arrive on receiver.DMs()
+	// AC#2: publish to the receiver's DM subject; it must arrive on receiver.Inbox()
 	// with no explicit Subscribe by the receiver.
 	payload := json.RawMessage(`{"task":"do the thing"}`)
 	if err := sender.Publish(context.Background(), dmSubject, payload); err != nil {
@@ -83,7 +83,7 @@ func TestClientAutoDMOnConnect(t *testing.T) {
 	}
 
 	select {
-	case m := <-receiver.DMs():
+	case m := <-receiver.Inbox():
 		if m.Subject != dmSubject {
 			t.Errorf("DM subject = %q, want %q", m.Subject, dmSubject)
 		}
@@ -171,7 +171,7 @@ func TestClientAutoDMSurvivesReconnect(t *testing.T) {
 		t.Fatalf("pre-restart Publish: %v", err)
 	}
 	select {
-	case m := <-receiver.DMs():
+	case m := <-receiver.Inbox():
 		if string(m.Frame.Record) != `{"n":1}` {
 			t.Fatalf("pre-restart DM = %s, want {\"n\":1}", m.Frame.Record)
 		}
@@ -222,7 +222,7 @@ func TestClientAutoDMSurvivesReconnect(t *testing.T) {
 		t.Fatalf("post-restart Publish: %v", err)
 	}
 	select {
-	case m := <-receiver.DMs():
+	case m := <-receiver.Inbox():
 		if string(m.Frame.Record) != `{"n":2}` {
 			t.Fatalf("post-restart DM = %s, want {\"n\":2} (no duplicate replay of n=1)", m.Frame.Record)
 		}
@@ -233,7 +233,7 @@ func TestClientAutoDMSurvivesReconnect(t *testing.T) {
 
 	// No stale duplicate of n=1.
 	select {
-	case m := <-receiver.DMs():
+	case m := <-receiver.Inbox():
 		t.Fatalf("unexpected duplicate DM after reconnect: %s", m.Frame.Record)
 	case <-time.After(500 * time.Millisecond):
 	}

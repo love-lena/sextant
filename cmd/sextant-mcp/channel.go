@@ -79,58 +79,58 @@ type channelHub struct {
 	mu   sync.Mutex
 	subs map[string]sextant.Subscription
 
-	// dmDrains tracks one DM-drain goroutine per live client object, so the
+	// inboxDrains tracks one inbox-drain goroutine per live client object, so the
 	// drain starts exactly once per connection (idempotent) and can be stopped
 	// when the connManager discards that client.
-	dmMu     sync.Mutex
-	dmDrains map[*sextant.Client]chan struct{}
+	inboxMu     sync.Mutex
+	inboxDrains map[*sextant.Client]chan struct{}
 }
 
 func newChannelHub(notify func(ctx context.Context, method string, params any) error, names *nameCache) *channelHub {
 	return &channelHub{
-		notify:   notify,
-		names:    names,
-		echo:     newSelfEchoSet(),
-		subs:     map[string]sextant.Subscription{},
-		dmDrains: map[*sextant.Client]chan struct{}{},
+		notify:      notify,
+		names:       names,
+		echo:        newSelfEchoSet(),
+		subs:        map[string]sextant.Subscription{},
+		inboxDrains: map[*sextant.Client]chan struct{}{},
 	}
 }
 
-// startDMDrain bridges the SDK's auto-DM channel (c.DMs(), TASK-55) into the
+// startInboxDrain bridges the SDK's auto-inbox channel (c.Inbox(), TASK-55) into the
 // SAME channel-wake path an explicit message_subscribe uses (frameEvent), so a
 // principal's DM to msg.client.<self> WAKES the session (ADR-0030, review M1).
-// This is the production consumer of c.DMs(); without it a DM lands in the
+// This is the production consumer of c.Inbox(); without it a DM lands in the
 // durable stream but nothing wakes the worker, and the trust hook — which can
 // only run on an already-woken turn — never fires until some unrelated turn.
 //
 // It does NOT open a second bus subscription: TASK-55 already auto-subscribes
-// to msg.client.<self> and fans frames into c.DMs(); a second subscribe would
+// to msg.client.<self> and fans frames into c.Inbox(); a second subscribe would
 // double-relay every DM. We only give that existing channel a real reader.
 //
 // Idempotent + reconnect-safe + leak-free:
 //   - One drain per client object: a repeat call for the same client is a no-op,
 //     so the connManager calling this on every get() starts it exactly once.
-//   - The SDK re-establishes the auto-DM subscription across reconnect on the
-//     same client object (startResumePass → reestablishSubs), so c.DMs() keeps
+//   - The SDK re-establishes the auto-inbox subscription across reconnect on the
+//     same client object (startResumePass → reestablishSubs), so c.Inbox() keeps
 //     flowing and this one drain spans the whole cached-client lifecycle.
 //   - The goroutine exits on c.Drained() (a cooperative bus drain) or when
-//     stopDMDrain closes its stop channel (the connManager discarding the
+//     stopInboxDrain closes its stop channel (the connManager discarding the
 //     client). It never blocks the SDK delivery goroutine: frameEvent's push is
 //     non-fatal and bounded.
-func (h *channelHub) startDMDrain(c *sextant.Client) {
+func (h *channelHub) startInboxDrain(c *sextant.Client) {
 	// Record this client's id for the self-echo timing grace (frameEvent). Set
 	// on every connect (same id across reconnect); cheap and idempotent.
 	id := c.ID()
 	h.selfID.Store(&id)
 
-	h.dmMu.Lock()
-	if _, running := h.dmDrains[c]; running {
-		h.dmMu.Unlock()
+	h.inboxMu.Lock()
+	if _, running := h.inboxDrains[c]; running {
+		h.inboxMu.Unlock()
 		return
 	}
 	stop := make(chan struct{})
-	h.dmDrains[c] = stop
-	h.dmMu.Unlock()
+	h.inboxDrains[c] = stop
+	h.inboxMu.Unlock()
 
 	go func() {
 		// Warm the name cache before draining so the first DM resolves its
@@ -138,17 +138,17 @@ func (h *channelHub) startDMDrain(c *sextant.Client) {
 		// connManager's get() critical section (a refresh re-enters get()), and
 		// off the hot path (frameEvent stays cached-only on the delivery side).
 		h.names.refresh(context.Background())
-		h.drainLoop(c.DMs(), c.Drained(), stop)
+		h.drainLoop(c.Inbox(), c.Drained(), stop)
 	}()
 }
 
 // drainLoop forwards each DM into the shared emit path (frameEvent) until the
-// connection drains or stop fires. Split out from startDMDrain so the bridge
+// connection drains or stop fires. Split out from startInboxDrain so the bridge
 // behavior is unit-testable with plain channels, independent of a live client.
-func (h *channelHub) drainLoop(dms <-chan sextant.Message, drained <-chan struct{}, stop <-chan struct{}) {
+func (h *channelHub) drainLoop(inbox <-chan sextant.Message, drained <-chan struct{}, stop <-chan struct{}) {
 	for {
 		select {
-		case m := <-dms:
+		case m := <-inbox:
 			// Same emit logic as an explicit subscription: self-echo drop
 			// first, then the wake-vs-content branch.
 			h.frameEvent(m)
@@ -160,15 +160,15 @@ func (h *channelHub) drainLoop(dms <-chan sextant.Message, drained <-chan struct
 	}
 }
 
-// stopDMDrain stops the drain for a client the connManager is discarding (a
+// stopInboxDrain stops the drain for a client the connManager is discarding (a
 // drained connection it is about to replace). Idempotent; safe if no drain ran.
-func (h *channelHub) stopDMDrain(c *sextant.Client) {
-	h.dmMu.Lock()
-	stop, ok := h.dmDrains[c]
+func (h *channelHub) stopInboxDrain(c *sextant.Client) {
+	h.inboxMu.Lock()
+	stop, ok := h.inboxDrains[c]
 	if ok {
-		delete(h.dmDrains, c)
+		delete(h.inboxDrains, c)
 	}
-	h.dmMu.Unlock()
+	h.inboxMu.Unlock()
 	if ok {
 		close(stop)
 	}
@@ -220,7 +220,7 @@ func wakeOnlyMode() bool {
 // isSelfEcho reports whether a delivered frame is this process's own publish
 // echoing back on a subscribed subject. The id-based echo set (TASK-52) is the
 // source of truth, but there is a race: the bus can relay a self-published
-// frame back (via the auto-DM bridge or an explicit subscription) before
+// frame back (via the auto-inbox bridge or an explicit subscription) before
 // message_publish has finished recording its id in the set. So when a frame is
 // authored by THIS client but its id is not yet in the set, briefly wait for
 // the record to land before concluding it is not ours. The wait is bounded and
@@ -315,7 +315,7 @@ func (h *channelHub) systemEvent(event, subject, content string) {
 // subscribes are idempotent. deliver="all" replays retained history first.
 func (h *channelHub) subscribe(ctx context.Context, c *sextant.Client, subject, deliver string) ([]string, error) {
 	// The client's own DM is already delivered to the channel by the auto-DM
-	// bridge (startDMDrain, TASK-55/M1). Opening a second relay here would push
+	// bridge (startInboxDrain, TASK-55/M1). Opening a second relay here would push
 	// every DM into the session twice. Treat an explicit subscribe to it as
 	// already-active: emit the subscribed notice (so the channels-enabled check
 	// still confirms) but do NOT open a redundant relay.
