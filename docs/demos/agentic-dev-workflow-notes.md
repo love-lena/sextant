@@ -126,9 +126,50 @@ PR brief. Findings folded back in:
 - **codex review is the slow long-pole** (~28 min/round, multi-hour end-to-end). Functional;
   speed is the main thing to improve.
 
+## The v0.5 variant — sirius/orion as pseudo-operator, PR to v0.5
+
+A config-only **variant** self-drives the same workflow to the **v0.5 integration branch**
+with **sirius (or orion) as the pseudo-operator** — so v0.5 work flows to merged-on-v0.5
+with sirius reviewing, while Lena keeps the v0.5→main gate + the release tag (the outer
+loop). Run it with `agentic-dev-workflow.sh run-v05 "<task>"`. Design artifact:
+`v0-5-agentic-workflow-variant-design`.
+
+The orchestrator is **generic** — the variant is **pure config + a delta playbook**, no new
+engine:
+
+- **Base + PR target = v0.5.** `run-v05` sets `WF_BASE=origin/v0.5` (worktree) and
+  `WF_PR_BASE=v0.5`; the release step opens the PR with `--base v0.5`. `wf-release-pr` also
+  injects `--base v0.5` if the orchestrator omits it (defense in depth).
+- **Routine gate → the pseudo-operator.** `run-v05` sets `WF_PSEUDO_OPERATOR` (default
+  sirius `01KTYFK00J6RXP4CFPHPWRBRS1`; override to orion's id), and the run path points
+  `WF_DM` at *that* peer's DM — so the routine release gate pings sirius, not the principal.
+  Sirius reviews (brief + diff) and approves on `msg.workflow.<id>.control`.
+- **Open, never merge — sirius merges.** The gh/git shims are **unchanged**: the workflow
+  only ever OPENS a PR (to v0.5); `gh … merge`, push-to-main, force-push, and tag still
+  refuse (exit 3). Sirius merges the open PR to v0.5 **separately**, under their own v0.5
+  authority — that's outside the workflow.
+- **Escalation stays with the REAL principal.** `WF_PRINCIPAL` remains the real principal in
+  both modes, and the run path also exports `WF_PRINCIPAL_DM` (the principal's DM, distinct
+  from the routine gate DM). The variant playbook directs anything dangerous/irreversible —
+  merge to **main**, **tag**, **force-push**, **history rewrite**, **other repos**,
+  **destructive**, **credentials** — to a **separate escalation gate to the principal**
+  (`wf-dm-principal`), NEVER sirius. The pseudo-operator's authority is scoped to
+  v0.5-PR-open + the v0.5 merge, nothing more.
+
+Artifacts: the variant pipeline def `agentic-dev-workflow-v05.def.json` (plan → implement →
+review⇄fix → brief → gate(sirius) → release `--base v0.5`) and the delta playbook
+`agentic-dev-workflow-v05-orchestrator.md` (layered on the generic executor via a second
+`--append-system-prompt-file`). The token-free demo gained a **v0.5 variant wiring** block
+(inspection): `run-v05` config, the gate peer redirecting to sirius, the `--base v0.5`
+injection (+ respect for an explicit base), and the still-refusing merge shim.
+
 ## Open / deferred
 
 - v1 names workers via the nickname path (register + creds), not the M5.2 dispatcher's
   mint-on-behalf — equivalent identities, less machinery. Routing through the dispatcher
   is a possible later refinement.
 - Auto-merge on approve (vs open-PR) is deliberately out of v1.
+- The v0.5 variant wires the pseudo-operator + PR base in the harness's `run-v05` mode (not
+  in `cmd/sextant/workflow.go`, which only knows `run`). A later refinement could add a
+  `pseudoOperator` field to the workflow-def so `sextant workflow run <name>` drives the
+  variant directly — kept out here to honor "spec/script + docs only, no Go engine change".
