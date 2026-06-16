@@ -146,9 +146,10 @@
       return ()=>{ cancelled=true; };
     },[artifacts]);
 
-    // live stream over msg.> → activity feed + conversation discovery
+    // live stream over msg.> → activity feed + conversation discovery.
+    // No TOKEN guard: loopback is token-free (TASK-115) so an empty token still
+    // streams; a non-loopback page always carries the token in its URL.
     useEffect(()=>{
-      if(!TOKEN) return;
       const es = new EventSource("/api/stream?subject="+encodeURIComponent("msg.>")+"&token="+encodeURIComponent(TOKEN));
       es.onmessage = (m)=>{
         let ev; try { ev = JSON.parse(m.data); } catch(_) { return; }
@@ -176,7 +177,7 @@
     // latest-N read would replace the per-subject paging with one cheap tail read.)
     const seededRef = useRef(false);
     useEffect(()=>{
-      if(!TOKEN || seededRef.current) return;
+      if(seededRef.current) return; // loopback is token-free (TASK-115); don't gate the seed on a token
       seededRef.current = true;
       let cancelled=false;
       const latestTime=(subj)=>{
