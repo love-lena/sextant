@@ -191,7 +191,9 @@
         <h1 className="fx-h1 fx-in">Artifacts</h1>
         <p className="fx-psub fx-in" style={{ animationDelay: ".03s" }}>{artifacts.length} documents · {awaiting} awaiting you, {settled} settled</p>
         {ART_GROUPS.map(([st, label, chipLabel, tone]) => {
-          const items = artifacts.filter((a) => a.status === st);
+          // recently-edited first within the group: sort by artifact Revision (the bus-wide
+          // write-seq — bumps on every write), the robust "most-recently-touched" signal.
+          const items = artifacts.filter((a) => a.status === st).sort((a, b) => (b.version || 0) - (a.version || 0));
           if (!items.length) return null;
           return (
             <div className="fx-group" key={st}>

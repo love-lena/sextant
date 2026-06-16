@@ -340,6 +340,8 @@
     // classify each discovered subject: inbox (a one-way client drop), dm (a
     // 2-participant topic), or a regular topic. An inbox is NOT a conversation.
     const convList = useMemo(()=>Object.entries(convos)
+      // artifact-discussion topics live only in the artifact view's inline panel, not the convo list (TASK-128)
+      .filter(([subj])=>!subj.startsWith("msg.topic.artifact."))
       .sort((a,b)=>(b[1].last||0)-(a[1].last||0))
       .map(([subj,c])=>{
         let type="topic", name=topicLabel(subj);
