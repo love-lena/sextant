@@ -106,10 +106,15 @@
     const [activity, setActivity] = useState([]);        // recent frames across all subjects
     const [activeArtifact, setActiveArtifact] = useState("");
     const [artRecord, setArtRecord] = useState(null);    // active artifact Record
+    const [artMissing, setArtMissing] = useState(false); // the open artifact resolved to nothing (stale ref guard)
     const [activeConvo, setActiveConvo] = useState("");
     // stage mode: home | artifacts | goals | agents | artifact (one open) | conversation
     const [stageMode, setStageMode] = useState("home");
     const [palette, setPalette] = useState(false);       // ⌘K command palette (TASK stage a)
+    // Assistant FAB (stub, not wired): lifted here so ⌘K can open it with a
+    // prefilled prompt. asstPrompt is the query carried over from a no-match search.
+    const [asstOpen, setAsstOpen] = useState(false);
+    const [asstPrompt, setAsstPrompt] = useState("");
     const [draft, setDraft] = useState("");
     const convBodyRef = useRef(null);
     const discBodyRef = useRef(null);
@@ -360,15 +365,24 @@
     },[discussion, stageMode, activeArtifact]);
 
     function openArtifact(name){
-      setActiveArtifact(name); setStageMode("artifact");
+      setActiveArtifact(name); setStageMode("artifact"); setArtMissing(false);
       const subj = companionTopic(name); ensureConvo(subj); backfill(subj); // load the inline discussion (TASK-83)
       const cached = records[name];
       setArtRecord(cached!==undefined ? cached : null);
+      // Fetch by name (the API resolves names not in the cached list). A 404 or a
+      // null record for a name that isn't in the directory means the ref is stale
+      // — flag it so the stage shows a graceful "not found" instead of the wrong
+      // (fallback) document. Ignore a stale resolution if a newer open superseded it.
       apiGet("/api/artifacts/"+encodeURIComponent(name)).then(a=>{
         const rec=(a&&a.Record)||null; setArtRecord(rec); setRecords(prev=>({...prev,[name]:rec}));
-      }).catch(()=>{});
+        setActiveArtifact(cur=>{ if(cur===name && !rec && !artifacts.some(x=>x.Name===name)) setArtMissing(true); return cur; });
+      }).catch(()=>{ setActiveArtifact(cur=>{ if(cur===name && !artifacts.some(x=>x.Name===name)) setArtMissing(true); return cur; }); });
     }
     function goHome(){ setStageMode("home"); }
+    // ⌘K no-match → open the (stub) Assistant FAB with the typed query as its
+    // prompt. The assistant is NOT wired — the panel shows the prompt + the
+    // "not wired yet" placeholder; it never fabricates an answer.
+    function askAssistant(query){ setPalette(false); setAsstPrompt(query||""); setAsstOpen(true); }
     // Workspace nav (flow2 chrome): Home / Artifacts / Goals / Agents swap the
     // white stage. Goals is an inert placeholder (Track 2 owns the real view).
     function onNav(key){ setStageMode(key); }
@@ -445,6 +459,11 @@
     // for a name not in the cached list.
     const searchIndex = ()=>{
       const items=[];
+      // "Go to" — the four Workspace nav hubs as jump targets (same as clicking
+      // the sidebar nav). Listed first so a name-clash still surfaces the hub.
+      [["Home","home"],["Artifacts","artifacts"],["Goals","goals"],["Agents","agents"]]
+        .forEach(([label,key])=>items.push({ key:"nav:"+key, type:"Go to", label,
+          sub:"workspace", kw:("go to "+label+" "+key).toLowerCase(), go:()=>onNav(key) }));
       artItems.forEach(a=>items.push({ key:"art:"+a.name, type:"Artifact", label:a.name,
         sub:(a.updated?("updated "+a.updated+" ago"):"")+(a.status?(" · "+a.status):""),
         kw:(a.name+" "+a.status).toLowerCase(), go:()=>openArtifact(a.name) }));
@@ -517,6 +536,25 @@
             <div className="sx-canvas sx-canvas--list">
               <div className="sx-page sx-page--doc"><AgentsView agents={agents} onDM={startDM} /></div>
             </div>
+          ) : stageMode==="artifact" && artMissing ? (
+            <div className="sx-canvas sx-canvas--list">
+              <div className="sx-page sx-page--doc">
+                <div className="fx-scroll"><div className="fx-col sx-conv-light">
+                  <h1 className="fx-h1">Artifact not found</h1>
+                  <p className="fx-psub">Nothing on the bus is named <span className="mono">{activeArtifact}</span> right now.</p>
+                  <div className="fx-stub">
+                    <span className="fx-stub-ic">⌕</span>
+                    <div>
+                      <div className="fx-stub-title">The reference may be stale.</div>
+                      <div className="fx-stub-sub">It might have been renamed or removed, or it never existed. Open the Artifacts list to see what's actually here.</div>
+                    </div>
+                  </div>
+                  <div style={{marginTop:18}}>
+                    <button className="sx-sbtn sx-sbtn-req" onClick={()=>setStageMode("artifacts")}>Browse artifacts →</button>
+                  </div>
+                </div></div>
+              </div>
+            </div>
           ) : stageMode==="artifact" ? (
             <React.Fragment>
               <div className="sx-arthead">
@@ -578,8 +616,10 @@
           )}
         </main>
 
-        <AssistantFab />
-        {palette && <CmdK index={searchIndex()} onClose={()=>setPalette(false)} />}
+        <AssistantFab open={asstOpen} prompt={asstPrompt}
+          onOpen={()=>{ setAsstPrompt(""); setAsstOpen(true); }}
+          onClose={()=>{ setAsstOpen(false); setAsstPrompt(""); }} />
+        {palette && <CmdK index={searchIndex()} onClose={()=>setPalette(false)} onAsk={askAssistant} />}
 
         <TweaksPanel title="Tweaks">
           <TweakSection label="Accent" />

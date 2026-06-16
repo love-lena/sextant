@@ -145,6 +145,8 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 .sx-msg-text a{color:var(--brand);}
 .sx-artlink{color:var(--brand);cursor:pointer;text-decoration:none;border-bottom:1px solid var(--brand-soft);}
 .sx-artlink:hover{border-bottom-color:var(--brand);}
+/* an unknown [[name]] wikilink: muted + inert (it has no artifact to open) */
+.sx-artlink-dead{color:var(--fx-ink3);cursor:default;text-decoration:none;}
 .sx-msg.is-self .sx-msg-name{color:var(--brand);}
 .sx-msg.is-self .sx-msg-body{background:var(--brand-soft);border-radius:10px;padding:6px 11px;}
 .sx-msg:hover{cursor:default;}
@@ -533,6 +535,11 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 .fx-asst-close{margin-left:auto;background:none;border:none;color:var(--fx-ink3);font-size:20px;cursor:pointer;line-height:1;padding:2px 6px;}
 .fx-asst-close:hover{color:var(--fx-ink);}
 .fx-asst-stub{padding:18px 16px;}
+/* a carried-over ⌘K query shown as the operator's prompt bubble (never answered) */
+.fx-asst-msg{display:flex;gap:8px;align-items:flex-end;max-width:90%;padding:14px 16px 0;}
+.fx-asst-msg.you{align-self:flex-end;margin-left:auto;flex-direction:row-reverse;}
+.fx-asst-bub{padding:9px 13px;border-radius:13px;font-size:13.5px;line-height:1.5;word-break:break-word;}
+.fx-asst-msg.you .fx-asst-bub{background:var(--asst);color:#fff;border-bottom-right-radius:4px;}
 .fx-asst-stub-lead{font-size:14px;font-weight:600;color:var(--fx-ink);margin:0 0 8px;}
 .fx-asst-stub-body{font-size:13px;line-height:1.5;color:var(--fx-ink2);margin:0;}
 .fx-asst-composer{display:flex;gap:8px;align-items:center;border-top:1px solid var(--fx-line);padding:11px 12px;flex:0 0 auto;}
@@ -573,3 +580,151 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 #app.dark .fx-asst-field{background:#1a1d23;border-color:#2a2d33;}
 #app.dark .fx-stub{border-color:#2a2d33;background:rgba(255,255,255,.02);}
 #app.dark .fx-stub-title{color:#f0efe9;} #app.dark .fx-stub-sub,#app.dark .fx-asst-stub-body{color:#b8bcc2;}
+
+/* ============================================================
+   SEXTANT LIVE FLOW v0.5 — stage (b): Home / Artifacts / Agents
+   view internals. Recreated from flow2.css (HomeInbox + Hero/QRow/
+   GoalRow, ArtifactsList, AgentsList). The fx- prefix matches the
+   design; tokens are the stage-(a) --fx-*/--paper set so dark mode
+   flows. Status tones reuse the v0.5 token scale.
+   ============================================================ */
+
+/* second entrance variant (live row arrival) */
+@media (prefers-reduced-motion: no-preference){
+  .fx-fadein{animation:fxrise .55s cubic-bezier(.2,.7,.3,1) both;}
+}
+
+/* shared headings + group labels (wider home column) */
+.fx-col--home{max-width:1040px;}
+.fx-grouplbl{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--fx-ink3);margin:28px 0 12px;white-space:nowrap;}
+.fx-starthead{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:#46474e;font-weight:600;margin:26px 0 11px;}
+.fx-sechead{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:32px 0 12px;}
+.fx-sechead .fx-grouplbl{margin:0;}
+.fx-seclink{background:none;border:none;font-family:var(--font-mono);font-size:11px;color:var(--fx-ink2);cursor:pointer;padding:0;}
+.fx-seclink:hover{color:var(--ink);}
+.fx-card-stream{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--fx-ink3);border:1px solid var(--fx-line);border-radius:4px;padding:2px 6px;flex:0 0 auto;}
+
+/* ---- shared status chip (Met / In progress / Waiting / Blocked / Todo) ---- */
+.fx-chip-status{font-family:var(--font-mono);font-size:9.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;padding:3px 9px;border-radius:20px;white-space:nowrap;flex:0 0 auto;}
+.t-met{color:var(--met);background:rgba(63,143,89,.12);}
+.t-progress{color:var(--prog);background:rgba(58,130,196,.12);}
+.t-waiting{color:var(--wait);background:rgba(192,87,59,.12);}
+.t-blocked{color:var(--blk);background:rgba(185,132,42,.14);}
+.t-todo{color:var(--todo);background:rgba(120,124,132,.10);}
+
+/* ---- list-rows (Artifacts + Agents rosters) ---- */
+.fx-list{display:flex;flex-direction:column;}
+.fx-row{display:flex;align-items:center;gap:13px;width:100%;text-align:left;background:none;border:none;border-top:1px solid var(--fx-line);padding:14px 6px;cursor:pointer;color:var(--ink);}
+.fx-row:first-child{border-top:none;}
+.fx-row:hover{background:rgba(20,21,24,.025);}
+.fx-row-ic{width:30px;height:30px;border-radius:8px;background:rgba(20,21,24,.045);color:var(--fx-ink2);display:grid;place-items:center;font-size:14px;flex:0 0 auto;}
+.fx-row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;}
+.fx-row-name{font-size:14.5px;font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.fx-row-meta{font-size:12.5px;color:var(--fx-ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.fx-row-right{display:flex;align-items:center;gap:9px;flex:0 0 auto;}
+.fx-row .sx-av{text-shadow:none;}
+.fx-crit-status{font-family:var(--font-mono);font-size:10px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;white-space:nowrap;}
+.fx-pulse{width:8px;height:8px;border-radius:50%;flex:0 0 auto;}
+.fx-pulse.is-live{box-shadow:0 0 0 0 rgba(63,143,89,.5);}
+@media (prefers-reduced-motion: no-preference){ .fx-pulse.is-live{animation:fxpulse 2s ease-out infinite;} }
+#app.no-pulse .fx-pulse.is-live{animation:none;}
+
+/* ---- list-view group header (Artifacts grouped by review-state) ---- */
+.fx-group{margin-top:18px;}
+.fx-group-h{display:flex;align-items:center;gap:9px;padding:0 6px 6px;font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--fx-ink3);}
+.fx-group-h .fx-dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;}
+.fx-group-n{margin-left:auto;}
+
+/* ============ HOME · morning unblock board ============ */
+.fx-home-empty{padding:40px 6px;color:var(--fx-ink2);font-size:14px;}
+
+/* "Start here" hero — flow2 routing-slip card */
+.fx-dhero{position:relative;display:flex;width:100%;text-align:left;background:#fff;border:1px solid #e2e2e8;border-radius:16px;overflow:hidden;cursor:pointer;box-shadow:0 14px 36px -22px rgba(20,21,30,.45);transition:box-shadow .14s,transform .14s,border-color .14s;color:var(--ink);}
+.fx-dhero:hover{box-shadow:0 20px 46px -22px rgba(20,21,30,.52);transform:translateY(-1px);border-color:#d4d4dc;}
+.fx-dhero-rail{position:relative;width:6px;flex:0 0 6px;background:var(--asst);}
+.fx-dhero-rail-plus{position:absolute;top:9px;left:50%;transform:translateX(-50%);color:#fff;font-size:11px;font-weight:700;line-height:1;}
+.fx-dhero-body{flex:1;min-width:0;padding:22px 24px;position:relative;overflow:hidden;}
+.fx-dhero-tline{display:flex;align-items:center;gap:9px;margin-bottom:13px;flex-wrap:wrap;}
+.fx-dhero-badge{font-family:var(--font-mono);font-size:9px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--asst);background:rgba(91,110,240,.1);border:1px solid rgba(91,110,240,.28);border-radius:5px;padding:3px 8px;white-space:nowrap;}
+.fx-dhero-tmeta{font-family:var(--font-mono);font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--fx-ink3);white-space:nowrap;}
+.fx-dhero-title{font-size:25px;font-weight:600;letter-spacing:-.022em;line-height:1.12;position:relative;word-break:break-word;}
+.fx-dhero-sum{font-size:14.5px;line-height:1.5;color:var(--fx-ink2);margin-top:9px;max-width:480px;position:relative;}
+.fx-dhero-unb{font-family:var(--font-mono);font-size:11px;color:var(--fx-ink2);margin-top:13px;position:relative;}
+.fx-dhero-unb b{color:var(--ink);font-weight:600;}
+.fx-dhero-foot{display:flex;align-items:center;gap:9px;margin-top:16px;position:relative;}
+.fx-dhero-foot .fx-meta{font-size:12px;color:var(--fx-ink2);}
+.fx-dhero-foot .sx-av{text-shadow:none;}
+.fx-dhero-route{width:190px;flex:0 0 190px;border-left:1px solid var(--fx-line);padding:19px 20px 17px;display:flex;flex-direction:column;gap:12px;background:#fcfcfd;}
+.fx-dhero-rlbl{font-family:var(--font-mono);font-size:8.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--fx-ink3);margin-bottom:3px;}
+.fx-dhero-rval{font-family:var(--font-mono);font-size:11.5px;color:var(--fx-ink2);word-break:break-word;}
+.fx-dhero-rval.is-pri{font-weight:600;color:var(--ink);display:flex;align-items:center;gap:6px;text-transform:uppercase;letter-spacing:.02em;white-space:nowrap;}
+.fx-dhero-rval .spark{color:var(--asst);}
+.fx-dhero-open{margin-top:auto;align-self:flex-end;display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:var(--asst);white-space:nowrap;}
+
+/* postmark seal in the hero */
+.fx-seal{position:absolute;right:-22px;top:50%;transform:translateY(-50%);width:178px;height:125px;opacity:.13;color:#3b3f57;pointer-events:none;}
+.fx-seal text{font-family:var(--font-mono);font-weight:600;fill:currentColor;}
+.fx-seal-top{font-size:9px;letter-spacing:2px;}
+.fx-seal-bot{font-size:9px;letter-spacing:3px;}
+.fx-seal-spark{font-size:9px;}
+
+/* "Then · N more" queue rows */
+.fx-then-list{display:flex;flex-direction:column;gap:9px;}
+.fx-then-row{display:flex;align-items:center;gap:15px;width:100%;text-align:left;background:#fff;border:1px solid var(--fx-line);border-left:3px solid var(--tn,#9a9ea7);border-radius:11px;padding:14px 16px;cursor:pointer;transition:box-shadow .14s,transform .14s,border-color .14s;color:var(--ink);}
+.fx-then-row:hover{box-shadow:0 9px 24px -18px rgba(20,21,30,.45);transform:translateY(-1px);}
+.fx-then-idx{display:flex;align-items:center;gap:10px;flex:0 0 auto;}
+.fx-then-num{font-family:var(--font-mono);font-size:12px;font-weight:600;color:var(--fx-ink3);}
+.fx-then-glyph{font-size:11px;line-height:1;}
+.fx-then-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:7px;}
+.fx-then-title{font-size:15px;font-weight:600;letter-spacing:-.006em;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.fx-then-sub{display:flex;align-items:center;gap:9px;flex-wrap:wrap;}
+.fx-tbadge{font-family:var(--font-mono);font-size:9px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;border:1px solid;border-radius:5px;padding:2px 7px;}
+.fx-then-meta{font-family:var(--font-mono);font-size:10.5px;color:var(--fx-ink3);white-space:nowrap;}
+.fx-then-unb{font-family:var(--font-mono);font-size:10.5px;color:var(--fx-ink3);}
+.fx-then-right{display:flex;align-items:center;gap:12px;flex:0 0 auto;}
+.fx-then-age{display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:10.5px;color:var(--fx-ink3);white-space:nowrap;}
+.fx-then-age .sx-av{text-shadow:none;}
+.fx-then-chev{color:#c4c4cc;font-size:18px;line-height:1;}
+
+/* "Goals · N need you" box — PLACEHOLDER (no goals primitive in the UI yet) */
+.fx-goalsbox{border:1px solid var(--fx-line);border-radius:13px;overflow:hidden;}
+.fx-goalstub{display:flex;gap:14px;align-items:center;padding:22px;background:rgba(20,21,24,.012);}
+.fx-goalstub-ic{width:38px;height:38px;border-radius:11px;background:rgba(154,158,167,.14);color:var(--fx-ink3);display:grid;place-items:center;font-size:18px;flex:0 0 auto;}
+.fx-goalstub-title{font-size:15px;font-weight:600;color:var(--ink);}
+.fx-goalstub-sub{font-size:13px;color:var(--fx-ink2);margin-top:2px;}
+
+/* "moved overnight" reassurance line */
+.fx-moved{margin-top:24px;}
+.fx-moved-bar{display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:12px 14px;border:1px dashed #d8d8de;border-radius:10px;font-size:12.5px;color:var(--fx-ink2);background:rgba(20,21,24,.012);cursor:pointer;}
+.fx-moved-bar:hover{border-color:#c9c9d0;}
+.fx-moved-dot{width:7px;height:7px;border-radius:50%;background:var(--met);flex:0 0 auto;}
+.fx-moved-go{margin-left:auto;font-family:var(--font-mono);font-size:10px;color:var(--fx-ink3);text-decoration:underline;}
+.fx-moved-list{margin-top:8px;border:1px solid var(--fx-line);border-radius:10px;padding:4px 14px;}
+.fx-moved-item{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--fx-line2);font-size:12.5px;color:var(--fx-ink2);}
+.fx-moved-item:first-child{border-top:none;}
+.fx-moved-icheck{color:var(--met);font-size:12px;flex:0 0 auto;}
+
+/* inbox-zero state */
+.fx-zero{display:flex;gap:14px;align-items:center;padding:22px;border:1px solid var(--fx-line);border-radius:14px;background:rgba(63,143,89,.03);margin-top:8px;}
+.fx-zero-ic{width:38px;height:38px;border-radius:50%;background:rgba(63,143,89,.13);color:var(--met);display:grid;place-items:center;font-size:18px;flex:0 0 auto;}
+.fx-zero-title{font-size:16px;font-weight:600;color:var(--ink);}
+.fx-zero-sub{font-size:13px;color:var(--fx-ink2);margin-top:2px;}
+
+/* new-item pill (live arrival) */
+.fx-newpill{display:inline-flex;align-items:center;gap:7px;font-family:var(--font-mono);font-size:11px;font-weight:600;color:var(--met);background:rgba(63,143,89,.1);border:1px solid rgba(63,143,89,.3);border-radius:20px;padding:6px 13px;margin-bottom:10px;cursor:pointer;}
+.fx-newpill:hover{background:rgba(63,143,89,.16);}
+
+/* ---- dark mode (stage b surfaces) ---- */
+#app.dark .fx-dhero{background:#1a1d23;border-color:#2a2d33;}
+#app.dark .fx-dhero:hover{border-color:#3a3f47;}
+#app.dark .fx-dhero-route{background:#16181d;border-left-color:#2a2d33;}
+#app.dark .fx-then-row,#app.dark .fx-goalstub{background:#1a1d23;}
+#app.dark .fx-then-row{border-color:#2a2d33;}
+#app.dark .fx-goalsbox{border-color:#2a2d33;}
+#app.dark .fx-row:hover{background:rgba(255,255,255,.03);}
+#app.dark .fx-row-ic{background:#22262d;color:#9aa0a6;}
+#app.dark .fx-moved-bar{background:rgba(255,255,255,.02);border-color:#2a2d33;}
+#app.dark .fx-moved-list,#app.dark .fx-zero{border-color:#2a2d33;}
+#app.dark .fx-moved-item{border-top-color:#23272e;}
+#app.dark .fx-starthead{color:#cfd3d9;}
+#app.dark .fx-zero{background:rgba(63,143,89,.06);}
