@@ -50,6 +50,7 @@ docs/demos/*.mp4
 # vendored, so neither is ignored.
 /internal/dashapi/web/app/app.js
 /internal/dashapi/web/app/artifact.js
+/internal/dashapi/web/app/artifacts.js
 /internal/dashapi/web/app/home.js
 /internal/dashapi/web/app/sidebar.js
 /internal/dashapi/web/app/tweaks-panel.js

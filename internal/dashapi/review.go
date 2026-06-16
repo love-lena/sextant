@@ -9,9 +9,10 @@ import (
 // The review convention (TASK-66, brief workstream): an artifact carries a
 // review-state as a `review` block inside its record — NOT a change to the core
 // artifact primitive (create/get/update/list are untouched). Absent ⇒ the dash
-// reads the artifact as "review" (awaiting your review). The companion
-// discussion topic is msg.topic.artifact.<name>, posted to over /api/publish by
-// the UI; this endpoint only persists the state.
+// reads the artifact as neutral (draft); a producer sets state="review"
+// explicitly when the artifact is for the operator's judgment (TASK-112). The
+// companion discussion topic is msg.topic.artifact.<name>, posted to over
+// /api/publish by the UI; this endpoint only persists the operator's verdict.
 
 // reviewStates are the states the convention recognises.
 var reviewStates = map[string]bool{
@@ -23,13 +24,18 @@ type reviewRequest struct {
 	State string `json:"state"`
 }
 
-// reviewBlock is the convention's record field: the current state plus who set
-// it and when (attribution, so a reader knows the operator made the call).
+// reviewBlock is the convention's record field. It has two halves: `state` is
+// the producer's needs-your-eyes INTENT (settable by anyone, no verdict fields),
+// and `by`/`at`/`rev` are the operator's VERDICT, server-set by this endpoint on
+// approve/changes. The verdict fields are omitempty so a producer-set,
+// state-only block (TASK-112: absent ⇒ neutral; review-state set explicitly)
+// round-trips without phantom attribution. A real verdict always stamps a
+// non-zero rev + identity, so they serialize as before.
 type reviewBlock struct {
 	State string `json:"state"`
-	By    string `json:"by"`
-	At    string `json:"at"`
-	Rev   uint64 `json:"rev"` // the artifact revision this review was made against
+	By    string `json:"by,omitempty"`
+	At    string `json:"at,omitempty"`
+	Rev   uint64 `json:"rev,omitempty"` // the artifact revision this review was made against
 }
 
 // handleArtifactReview persists an artifact's review-state by merging a `review`
