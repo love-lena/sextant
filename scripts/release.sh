@@ -16,6 +16,11 @@ tag="${1:?usage: scripts/release.sh <tag>}"
 platforms=(darwin/arm64 darwin/amd64 linux/amd64 linux/arm64)
 ldflags="-s -w -X github.com/love-lena/sextant/internal/version.Version=${tag}"
 
+# Generate the dash UI bundles (.jsx -> .js, TASK-121). They're generated, not
+# committed, so the go:embed in internal/dashapi needs them present before we
+# cross-compile below. Platform-independent JS, so build once up front.
+bash scripts/build-dash-ui.sh
+
 rm -rf dist
 for p in "${platforms[@]}"; do
   os="${p%/*}" arch="${p#*/}"
