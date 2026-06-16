@@ -87,11 +87,14 @@ working state.
   NEVER `git add -A` / `git add .` — it can sweep scratch files or credentials into the
   branch, and from there into a public PR. Tell your workers the same in their prompts.
 - **Open, never merge.** A release step opens a PR via `wf-release-pr pr create`. Never push
-  to main, `gh pr merge`, force-push, or tag. Merging is the human's separate action. This
-  is **shell-enforced**, not just a rule you follow: the harness puts `gh`, `git`, and
-  `wf-release-pr` shims first on PATH (for you *and* your workers) that refuse `gh … merge`,
-  `git push --force`/`--mirror`/`--delete`, `git push` to main/master, and `git tag` with
-  exit 3. A worker's Bash inherits the same guards — it cannot reach around them.
+  to main, `gh pr merge`, force-push, or tag. Merging is the human's separate action. The
+  harness puts `gh`, `git`, and `wf-release-pr` shims first on PATH (for you *and* your
+  workers) that refuse `gh … merge`, `git push --force`/`+refspec`/`--mirror`/`--delete`,
+  `git push` to main/master, and `git tag` with exit 3. Treat these as a **guardrail against
+  an over-eager cooperative worker, not a security sandbox** — a full-path `/usr/bin/git` or
+  a PATH reorder bypasses a shell shim, so they reduce accident, not malice. True
+  least-privilege is OS-level (container/seccomp) and is the eventual evolution; until then,
+  keep workers cooperative and follow the rule even where the shim wouldn't catch you.
 - **Approve-gated release.** Only run a release step after the principal's `approve` at a
   gate.
 - **Least privilege.** Reviewers (codex) are read-only; implement/fix workers get

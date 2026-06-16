@@ -155,10 +155,10 @@ else
 fi
 EOF
 
-  # Shell-level open-PR guard (TASK-98): a `gh` shim, first on the orchestrator's + workers'
-  # PATH, that REFUSES `gh ... merge` so the workflow can only OPEN a PR, never merge it —
-  # a hard barrier, not just LLM compliance with the playbook. `gh pr create` and read-only
-  # gh pass straight through to the real binary (captured here before $WF_BIN is on PATH).
+  # Open-PR guardrail (TASK-98): a `gh` shim, first on the orchestrator's + workers' PATH,
+  # that refuses `gh ... merge` so the workflow OPENs a PR but never merges it — a shell-level
+  # guardrail (defense in depth over playbook compliance), not an OS sandbox. `gh pr create`
+  # and read-only gh pass straight through to the real binary (captured before $WF_BIN is on PATH).
   realgh="$(command -v gh 2>/dev/null || echo gh)"
   cat >"$bin/gh" <<EOF
 #!/usr/bin/env sh
@@ -168,12 +168,14 @@ esac
 exec "$realgh" "\$@"
 EOF
 
-  # Shell-level destructive-git guard (TASK-118 worker least-privilege + TASK-122):
-  # a `git` shim on the same PATH that REFUSES the release-path git ops the playbook
-  # forbids — force-push, push to main/master, and tag — for the orchestrator AND its
-  # workers (a worker's Bash inherits this PATH, so it can't reach around the guard).
-  # Normal add/commit/status/diff and a non-force push of the feature branch pass
-  # straight through. Captured before $WF_BIN is on PATH so the shim calls real git.
+  # Destructive-git guardrail (TASK-118 worker least-privilege + TASK-122): a `git` shim
+  # on the same PATH that refuses the release-path ops the playbook forbids — force-push
+  # (incl. a +refspec), push to main/master, and tag — for the orchestrator AND its workers
+  # (their Bash inherits this PATH). This is a guardrail against an OVER-EAGER COOPERATIVE
+  # worker, NOT a sandbox: a full-path /usr/bin/git or a PATH reorder bypasses a shell shim;
+  # true least-privilege is OS-level (container/seccomp), the eventual evolution. Normal
+  # add/commit/status/diff and a non-force feature-branch push pass straight through.
+  # Captured before $WF_BIN is on PATH so the shim calls the real git.
   realgit="$(command -v git 2>/dev/null || echo git)"
   cat >"$bin/git" <<EOF
 #!/usr/bin/env sh
@@ -181,8 +183,8 @@ EOF
 sub=""; for a in "\$@"; do case "\$a" in -*) ;; *) sub="\$a"; break ;; esac; done
 if [ "\$sub" = push ]; then
   case " \$* " in
-    *" --force "*|*" -f "*|*" --force-with-lease"*|*" --mirror "*|*" --delete "*|*" -d "*)
-      echo "wf-guard: refusing destructive 'git push' (force/mirror/delete) — open a PR, never rewrite (release guard)" >&2; exit 3 ;;
+    *" --force "*|*" -f "*|*" --force-with-lease"*|*" --mirror "*|*" --delete "*|*" -d "*|*" +"*)
+      echo "wf-guard: refusing destructive 'git push' (force / +refspec / mirror / delete) — open a PR, never rewrite (release guard)" >&2; exit 3 ;;
   esac
   case " \$* " in
     *" main "*|*" master "*|*":main "*|*":master "*|*" +main"*|*" +master"*)
@@ -252,6 +254,7 @@ if [ "$MODE" = demo ]; then
   guard_blocks(){ gb="$1"; shift; o="$("$@" 2>&1)"; rc=$?; if [ "$rc" = 3 ] && printf '%s' "$o" | grep -qE 'wf-guard|wf-release-pr: refused'; then ok "$gb"; else no "$gb (rc=$rc out=$o)"; fi; }
   guard_allows(){ ga="$1"; shift; o="$("$@" 2>&1)"; if printf '%s' "$o" | grep -qE 'wf-guard|wf-release-pr: refused'; then no "$ga (wrongly refused: $o)"; else ok "$ga"; fi; }
   guard_blocks "git shim refuses force-push"          git push --force origin feature
+  guard_blocks "git shim refuses +refspec force-push" git push origin +feature:feature
   guard_blocks "git shim refuses push to main"        git push origin main
   guard_blocks "git shim refuses git tag"             git tag v9.9.9
   guard_blocks "gh shim refuses gh pr merge"          gh pr merge 123
