@@ -118,11 +118,16 @@
     const [asstPrompt, setAsstPrompt] = useState("");
     const [draft, setDraft] = useState("");
     const convBodyRef = useRef(null);
-    const discBodyRef = useRef(null);
     const [hidden, setHidden] = useState(()=>{ try{ return new Set(JSON.parse(localStorage.getItem("sx-hidden-convos")||"[]")); }catch(_){ return new Set(); } });
     const [dark, setDark] = useState(()=>{ try{ return localStorage.getItem("sx-dark")==="1"; }catch(_){ return false; } });
-    // artifact discussion layout: split (doc | discussion) by default, toggle to stacked; persisted
-    const [discSplit, setDiscSplit] = useState(()=>{ try{ return localStorage.getItem("sx-disc-split")!=="0"; }catch(_){ return true; } });
+    // Review view comments rail (TASK-141): a resizable + collapsible right-side
+    // "artifact chat" pane. Both the width and the collapsed flag are persisted in
+    // localStorage (mirrors the dark-mode persistence pattern). The width is clamped
+    // to a sane range so a drag can't shrink it to nothing or eat the doc column.
+    const RAIL_MIN = 280, RAIL_MAX = 620;
+    const clampRail = (w)=>Math.max(RAIL_MIN, Math.min(RAIL_MAX, Math.round(w)));
+    const [railWidth, setRailWidth] = useState(()=>{ try{ const v=parseInt(localStorage.getItem("sx-rail-w")||"",10); return isNaN(v)?344:clampRail(v); }catch(_){ return 344; } });
+    const [railCollapsed, setRailCollapsed] = useState(()=>{ try{ return localStorage.getItem("sx-rail-collapsed")==="1"; }catch(_){ return false; } });
     // build-staleness nudge (TASK-140): the SHA the page loaded with, the SHA now
     // served, and whether the operator dismissed the current mismatch. On a `--ui`
     // hot-reload the served build.json gets a new SHA on each `make ui` → the
@@ -163,8 +168,11 @@
       try{ localStorage.setItem("sx-dark", dark?"1":"0"); }catch(_){}
     },[dark]);
 
-    // artifact discussion layout: persist the split↔stacked choice
-    useEffect(()=>{ try{ localStorage.setItem("sx-disc-split", discSplit?"1":"0"); }catch(_){} },[discSplit]);
+    // Review rail (TASK-141): persist the width + collapsed choice (localStorage).
+    useEffect(()=>{ try{ localStorage.setItem("sx-rail-w", String(railWidth)); }catch(_){} },[railWidth]);
+    useEffect(()=>{ try{ localStorage.setItem("sx-rail-collapsed", railCollapsed?"1":"0"); }catch(_){} },[railCollapsed]);
+    const onRailWidth = useCallback((w)=>setRailWidth(clampRail(w)),[]);
+    const toggleRail = useCallback(()=>setRailCollapsed(v=>!v),[]);
 
     // prefetch artifact records so the sidebar can group by review-state and an
     // open is instant. Fine at dash scale; a very large bucket would want paging.
@@ -384,8 +392,6 @@
 
     const artifact = artItems.find(a=>a.name===activeArtifact) || artItems[0] ||
       { name:"", version:0, status:"review", topic:"", author:{name:"",kind:"agent"}, updated:"" };
-    const status = artifact.status;
-    const reviewRev = (artRecord && artRecord.review && artRecord.review.rev) || 0;
     const convo = convList.find(c=>c.key===activeConvo) || convList[0] || { type:"topic", name:"", participants:0 };
 
     // keep the conversation pinned to the newest message: scroll to the bottom on
@@ -395,13 +401,6 @@
       const el = convBodyRef.current;
       if(el) el.scrollTop = el.scrollHeight;
     },[messages, stageMode, activeConvo]);
-
-    // keep the inline artifact discussion pinned to the newest message too.
-    useEffect(()=>{
-      if(stageMode!=="artifact") return;
-      const el = discBodyRef.current;
-      if(el) el.scrollTop = el.scrollHeight;
-    },[discussion, stageMode, activeArtifact]);
 
     function openArtifact(name){
       setActiveArtifact(name); setStageMode("artifact"); setArtMissing(false);
@@ -602,48 +601,20 @@
               </div>
             </div>
           ) : stageMode==="artifact" ? (
-            <React.Fragment>
-              <div className="sx-arthead">
-                <div className="sx-arthead-l">
-                  <div className="sx-arthead-title">{artifact.name}</div>
-                  <div className="sx-arthead-meta">
-                    {artifact.updated && <span className="sx-arthead-time">updated {artifact.updated} ago</span>}
-                    {status==="approved" && reviewRev>0 && <span className="sx-arthead-time">· approved at v{reviewRev}</span>}
-                    <span className="sx-arthead-v mono" style={{opacity:.5}}>· rev {artifact.version}</span>
-                  </div>
-                </div>
-                <div className="sx-arthead-r">
-                  <StatusPill status={status} big />
-                  {(status==="archived"||status==="rejected") ? (
-                    <button className="sx-sbtn sx-sbtn-req" onClick={()=>setReview(artifact.name,"review")}>Reopen</button>
-                  ) : (
-                    <React.Fragment>
-                      {status!=="approved" && <button className="sx-sbtn sx-sbtn-approve" onClick={()=>setReview(artifact.name,"approved")}>✓ Approve</button>}
-                      {status!=="changes" && <button className="sx-sbtn sx-sbtn-req" onClick={()=>setReview(artifact.name,"changes")}>Request changes</button>}
-                      <button className="sx-sbtn sx-sbtn-req" onClick={()=>setReview(artifact.name,"archived")}>Archive</button>
-                      <button className="sx-sbtn sx-sbtn-req" onClick={()=>setReview(artifact.name,"rejected")}>Reject</button>
-                    </React.Fragment>
-                  )}
-                  <button className="sx-sbtn sx-sbtn-req" onClick={()=>expandConvo(companionTopic(artifact.name))}>Discussion ↗</button>
-                </div>
-              </div>
-              <div className={"sx-canvas sx-canvas--artifact " + (discSplit?"sx-canvas--split":"sx-canvas--stacked")}>
-                <div className="sx-page sx-page--doc"><MarkdownArtifact record={artRecord} name={artifact.name} revision={artifact.version} /></div>
-                <div className="sx-artdisc sx-conv-light">
-                  <div className="sx-artdisc-head">
-                    <span className="sx-artdisc-title">Discussion</span>
-                    <span className="sx-artdisc-sub">{companionTopic(artifact.name)}</span>
-                    <button className="sx-icon-btn sx-artdisc-toggle" title={discSplit?"Stack below the document":"Split beside the document"} onClick={()=>setDiscSplit(v=>!v)}>{discSplit?"▤":"▥"}</button>
-                  </div>
-                  <div className="sx-artdisc-body" ref={discBodyRef}>
-                    {discussion.length
-                      ? <MessageList messages={discussion} onArtifactRef={openArtifact} />
-                      : <div className="sx-artdisc-empty">No discussion yet — start the thread below.</div>}
-                  </div>
-                  <Composer draft={draft} setDraft={setDraft} onSend={sendDiscussion} placeholder={"Discuss " + artifact.name} />
-                </div>
-              </div>
-            </React.Fragment>
+            <div className="sx-canvas sx-canvas--review sx-conv-light">
+              <ReviewView
+                artifact={artifact}
+                record={artRecord}
+                discussion={discussion}
+                draft={draft} setDraft={setDraft}
+                onSetReview={setReview}
+                onSendComment={sendDiscussion}
+                onExpandDiscussion={(n)=>expandConvo(companionTopic(n))}
+                onBrowse={()=>setStageMode("artifacts")}
+                railWidth={railWidth} railCollapsed={railCollapsed}
+                onRailWidth={onRailWidth} onToggleRail={toggleRail}
+              />
+            </div>
           ) : (
             <div className="sx-canvas">
               <div className="sx-page sx-page--doc sx-conv-light">

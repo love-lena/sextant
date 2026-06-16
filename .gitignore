@@ -52,6 +52,7 @@ docs/demos/*.mp4
 /internal/dashapi/web/app/artifact.js
 /internal/dashapi/web/app/artifacts.js
 /internal/dashapi/web/app/home.js
+/internal/dashapi/web/app/review.js
 /internal/dashapi/web/app/sidebar.js
 /internal/dashapi/web/app/tweaks-panel.js
 # Generated build stamp (TASK-140): build-dash-ui.sh writes this with the build's
