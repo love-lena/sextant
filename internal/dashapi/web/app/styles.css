@@ -382,6 +382,16 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 .sx-convstage-meta{font-family:var(--font-mono);font-size:12px;color:var(--ink-2);}
 .sx-convstage-body{flex:1;min-height:0;overflow-y:auto;padding-top:6px;}
 .sx-convstage .sx-composer{flex:0 0 auto;border-top:1px solid var(--hair);background:transparent;}
+/* TASK-83: the artifact view stacks the document over an inline companion discussion. */
+.sx-canvas--artifact{flex-direction:column;align-items:stretch;overflow:hidden;}
+.sx-canvas--artifact .sx-page--doc{flex:1;min-height:0;overflow-y:auto;}
+.sx-artdisc{flex:0 0 auto;height:auto;max-height:42%;display:flex;flex-direction:column;border-top:1px solid var(--shair);background:var(--sbg);}
+.sx-artdisc-head{display:flex;align-items:baseline;gap:10px;padding:9px 24px;border-bottom:1px solid var(--shair);flex:0 0 auto;}
+.sx-artdisc-title{font-family:var(--font-ui);font-size:14px;font-weight:600;letter-spacing:-.01em;color:var(--stx);}
+.sx-artdisc-sub{font-family:var(--font-mono);font-size:11px;color:var(--smut);}
+.sx-artdisc-body{flex:1;min-height:0;overflow-y:auto;padding:6px 0;}
+.sx-artdisc-empty{padding:16px 24px;font-family:var(--font-ui);font-size:13px;color:var(--smut);}
+.sx-artdisc .sx-composer{flex:0 0 auto;border-top:1px solid var(--shair);background:transparent;}
 
 @media(max-width:1080px){
   .sx-side{width:340px;flex-basis:340px;}
