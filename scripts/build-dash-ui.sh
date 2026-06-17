@@ -10,13 +10,13 @@ set -euo pipefail
 DIR="$(cd "$(dirname "$0")/../internal/dashapi/web/app" && pwd)"
 ESBUILD=(npx --yes esbuild@0.21.5)
 
-for f in tweaks-panel artifact home sidebar artifacts review conversations app; do
+for f in tweaks-panel artifact home sidebar artifacts review conversations goals app; do
   "${ESBUILD[@]}" "$DIR/$f.jsx" \
     --jsx=transform \
     --jsx-factory=React.createElement --jsx-fragment=React.Fragment \
     --outfile="$DIR/$f.js" --log-level=warning
 done
-echo "built dash UI components → $DIR/{tweaks-panel,artifact,home,sidebar,artifacts,review,conversations,app}.js"
+echo "built dash UI components → $DIR/{tweaks-panel,artifact,home,sidebar,artifacts,review,conversations,goals,app}.js"
 
 # Build stamp (TASK-140): write web/app/build.json with this build's short SHA +
 # UTC timestamp. The served dash polls /build.json; when the loaded build's SHA

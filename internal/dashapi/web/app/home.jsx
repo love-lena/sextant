@@ -5,7 +5,8 @@
      - "Start here" HERO: the single highest-priority review-pending artifact
        (review-state "review" first, then "changes") as a routing-slip card;
      - "Then · N more" queue: the remaining review-pending artifacts;
-     - "Goals · N need you" box: PLACEHOLDER — no goals primitive in the UI yet;
+     - "Goals · N need you" box: a calm summary of ctx.goals (the goal primitive,
+       ADR-0035) — a needs-you count + up to 3 needs-attention goals as rows;
      - collapsed "moved overnight" line: a calm count of recently-approved artifacts;
      - the curated home's pinned / quick-links fold in below as secondary panels.
    Exports HomePage(ctx) to window. */
@@ -51,6 +52,24 @@
      is a re-review. Both are accented violet/red on the queue's left rail. */
   const STATE_LABEL = { review: "Needs review", changes: "Re-review" };
   const STATE_TONE = { review: "var(--asst)", changes: "var(--wait)" };
+
+  /* the goal verdict — a tiny mirror of goals.jsx's roll() rule, just enough for
+     the Home summary (the full Portfolio/Detail lives in goals.jsx). Goal status
+     is DERIVED from the criteria rollup; no stored field. */
+  function goalRoll(g) {
+    const crits = (g && g.criteria) || [];
+    const met = crits.filter((c) => c.status === "met").length;
+    const waiting = crits.filter((c) => c.status === "waiting-on-you").length;
+    const blocked = crits.some((c) => c.status === "blocked");
+    const undef = !g || !g.northstar || crits.length === 0;
+    let verdict, tone;
+    if (undef) { verdict = "Not yet defined"; tone = "t-waiting"; }
+    else if (waiting) { verdict = waiting + (waiting > 1 ? " criteria" : " criterion") + " waiting on you"; tone = "t-waiting"; }
+    else if (met === crits.length) { verdict = "Done"; tone = "t-met"; }
+    else if (blocked) { verdict = "Blocked"; tone = "t-blocked"; }
+    else { verdict = "On track"; tone = "t-met"; }
+    return { verdict, tone, needsYou: undef || waiting > 0 || blocked };
+  }
 
   /* ---------- the hero — flow2 routing-slip card ---------- */
   function Hero({ a, onOpen }) {
@@ -104,6 +123,38 @@
           <span className="fx-then-chev">›</span>
         </span>
       </button>);
+  }
+
+  /* ---------- the Home Goals summary ---------- */
+  // A quiet, prose-first box: "N need you" headline, then up to 3 needs-attention
+  // goals as compact rows (north-star or name + verdict chip). The full Portfolio
+  // lives in goals.jsx; this is the morning glance. Empty ⇒ a single calm line.
+  function GoalsBox({ goals, onNav }) {
+    if (!goals.length) {
+      return (
+        <div className="fx-goalsbox fx-in" style={{ animationDelay: ".16s" }}>
+          <div className="fx-goalsum-empty">No goals yet.</div>
+        </div>);
+    }
+    const rolled = goals.map((g) => ({ g, r: goalRoll(g) }));
+    const needs = rolled.filter((x) => x.r.needsYou);
+    const head = needs.length
+      ? needs.length + (needs.length === 1 ? " goal needs you" : " goals need you")
+      : "All " + goals.length + (goals.length === 1 ? " goal is" : " goals are") + " moving on their own";
+    const rows = (needs.length ? needs : rolled).slice(0, 3);
+    return (
+      <div className="fx-goalsbox fx-in" style={{ animationDelay: ".16s" }}>
+        <div className="fx-goalsum-head">
+          <span className={"fx-goalsum-dot " + (needs.length ? "is-need" : "is-calm")} />
+          {head}
+        </div>
+        {rows.map(({ g, r }) => (
+          <button className="fx-goalsum-row" key={g.id} onClick={() => onNav && onNav("goals")}>
+            <span className="fx-goalsum-name">{g.northstar || g.name}</span>
+            <span className={"fx-goalsum-verdict " + r.tone}>{r.verdict}</span>
+          </button>
+        ))}
+      </div>);
   }
 
   /* ---------- the page ---------- */
@@ -172,20 +223,12 @@
           </React.Fragment>
         )}
 
-        {/* Goals · PLACEHOLDER — no goals primitive in the UI yet (Track 2) */}
+        {/* Goals · a calm summary of the goal primitive (ADR-0035), read from ctx.goals */}
         <div className="fx-sechead fx-in" style={{ animationDelay: ".14s" }}>
           <span className="fx-grouplbl">Goals</span>
           <button className="fx-seclink" onClick={() => ctx.onNav && ctx.onNav("goals")}>All goals →</button>
         </div>
-        <div className="fx-goalsbox fx-in" style={{ animationDelay: ".16s" }}>
-          <div className="fx-goalstub">
-            <span className="fx-goalstub-ic">◎</span>
-            <div>
-              <div className="fx-goalstub-title">Goals are coming in Track 2.</div>
-              <div className="fx-goalstub-sub">Goal north stars, criteria, and "what needs you" rollups land once the goal bus primitive is wired into the dash.</div>
-            </div>
-          </div>
-        </div>
+        <GoalsBox goals={(ctx && ctx.goals) || []} onNav={ctx.onNav} />
 
         {/* secondary: curated pinned + quick links (assistant-owned `home` artifact) */}
         {(pinnedBlock || linksBlock) && (
@@ -257,6 +300,18 @@
   }
 
   const HOME_CSS = `
+  .fx-goalsum-empty{padding:18px 18px;font-size:13.5px;color:var(--fx-ink2);}
+  .fx-goalsum-head{display:flex;align-items:center;gap:9px;padding:15px 18px 13px;font-size:14px;font-weight:600;color:var(--ink);border-bottom:1px solid var(--fx-line);}
+  .fx-goalsum-dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;}
+  .fx-goalsum-dot.is-need{background:var(--wait);}
+  .fx-goalsum-dot.is-calm{background:var(--met);}
+  .fx-goalsum-row{display:flex;align-items:center;gap:12px;width:100%;text-align:left;background:none;border:none;border-top:1px solid var(--fx-line);padding:13px 18px;cursor:pointer;color:var(--ink);}
+  .fx-goalsum-row:first-of-type{border-top:none;}
+  .fx-goalsum-row:hover{background:rgba(20,21,24,.025);}
+  .fx-goalsum-name{flex:1;min-width:0;font-family:'Newsreader',Georgia,serif;font-size:15px;line-height:1.35;color:var(--fx-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .fx-goalsum-verdict{flex:0 0 auto;font-family:var(--font-mono);font-size:9.5px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;padding:3px 9px;border-radius:20px;white-space:nowrap;}
+  #app.dark .fx-goalsum-head,#app.dark .fx-goalsum-row{border-color:#2a2d33;}
+  #app.dark .fx-goalsum-row:hover{background:rgba(255,255,255,.03);}
   .hm-secondary{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:30px;}
   @container (max-width:760px){ .hm-secondary{grid-template-columns:1fr;} }
   .hm-panel{border:1px solid var(--fx-line);border-radius:13px;padding:8px 16px 12px;}

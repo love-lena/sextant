@@ -97,12 +97,9 @@
     return rec.$type || "·";
   }
 
-  // Goal metrics have no bus primitive yet — stubbed (clearly a placeholder).
-  const GOALS = [
-    { label:"Tasks merged this sprint", value:14, target:20, display:"14 / 20", note:"stub — no goals primitive yet" },
-    { label:"CI pipeline green", value:97, target:95, display:"97%", met:true, note:"stub — no goals primitive yet" },
-    { label:"Test coverage", value:81, target:85, display:"81%", note:"stub — no goals primitive yet" },
-  ];
+  // the five criterion statuses (the goal.<id> lexicon); an unknown value is
+  // normalized to not-started so the Goals view never indexes an empty STATUS slot.
+  const GOAL_CRIT_STATES = ["met", "in-progress", "waiting-on-you", "blocked", "not-started"];
 
   function App() {
     const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
@@ -120,6 +117,10 @@
     const [activeConvo, setActiveConvo] = useState("");
     // stage mode: home | artifacts | goals | agents | artifact (one open) | conversation
     const [stageMode, setStageMode] = useState("home");
+    // bumped each time the Goals nav is clicked so GoalsView remounts to the
+    // portfolio (its open-goal is internal state; the nav should always land you
+    // on the list, not strand you in a detail you opened earlier).
+    const [goalsEpoch, setGoalsEpoch] = useState(0);
     const [palette, setPalette] = useState(false);       // ⌘K command palette (TASK stage a)
     // Assistant FAB (stub, not wired): lifted here so ⌘K can open it with a
     // prefilled prompt. asstPrompt is the query carried over from a no-match search.
@@ -370,6 +371,58 @@
       };
     }),[clients, records]);
 
+    // derived: goals (the goal primitive, ADR-0035). Each goal is a latest-value
+    // artifact named goal.<id> whose record carries $type:"goal" + a northstar +
+    // criteria[]. Goal STATUS is derived from the criteria rollup (goals.jsx) —
+    // there is no stored goal-status field. Evidence is found by scanning ALL
+    // records for a `relates` entry pointing at this goal (+crit): kind:"proof"
+    // backs a met criterion, kind:"related" is a generic association. Everything
+    // is guarded against missing/malformed fields so a half-written goal can't
+    // crash the view.
+    const goals = useMemo(()=>{
+      // index relates entries once: goalId -> { crit:{<critId>:[{name,kind}]}, goal:[{name,kind}] }
+      const rel = {};
+      for(const a of artifacts){
+        const rec = records[a.Name];
+        const rs = rec && Array.isArray(rec.relates) ? rec.relates : null;
+        if(!rs) continue;
+        for(const e of rs){
+          if(!e || typeof e.goal!=="string" || !e.goal) continue;
+          const bucket = rel[e.goal] || (rel[e.goal]={ crit:{}, goal:[] });
+          const ref = { name:a.Name, kind:(e.kind==="proof"?"proof":"related") };
+          if(typeof e.crit==="string" && e.crit){ (bucket.crit[e.crit] || (bucket.crit[e.crit]=[])).push(ref); }
+          else bucket.goal.push(ref);
+        }
+      }
+      // a goal is the latest-value artifact goal.<id> carrying a goal record;
+      // require BOTH the goal. name and the $type so a stray $type:"goal" under
+      // another name can't surface in Goals while still showing in the Artifacts
+      // list (which excludes the goal. namespace) — no cross-view double-listing.
+      return artifacts.filter(a=>{ const r=records[a.Name]; return a.Name.startsWith("goal.") && r && r.$type==="goal"; }).map(a=>{
+        const r = records[a.Name] || {};
+        const id = a.Name.replace(/^goal\./,"");
+        const bucket = rel[id] || { crit:{}, goal:[] };
+        const criteria = (Array.isArray(r.criteria)?r.criteria:[]).map((c,i)=>{
+          const cid = (c && typeof c.id==="string" && c.id) || ("crit-"+(i+1));
+          return {
+            id: cid,
+            text: (c && typeof c.text==="string") ? c.text : "",
+            status: (c && GOAL_CRIT_STATES.indexOf(c.status)>=0) ? c.status : "not-started",
+            owner: (c && typeof c.owner==="string") ? c.owner : "",
+            evidence: bucket.crit[cid] || [],
+          };
+        });
+        return {
+          id, name:a.Name,
+          stream: (typeof r.stream==="string"?r.stream:""),
+          northstar: (typeof r.northstar==="string"?r.northstar:""),
+          updated: r.updated||"", by: r.by||"",
+          criteria,
+          evidence: bucket.goal, // goal-level relates (no crit) — optional
+        };
+      });
+    },[artifacts, records]);
+
     // review-state from the artifact's record (convention); absent ⇒ neutral
     // (draft) — needs-review is set explicitly by the producer. Reads only
     // rec.review.state (no by/at/rev assumed), so a state-only block is fine.
@@ -381,9 +434,11 @@
 
     // derived: artifacts in the component shape (topic/author stay stubbed — no
     // primitive yet; status now comes from the review convention)
-    // 'home' is the curated Home page and 'status.<id>' artifacts are the per-agent
-    // status records (rendered in the Agent-status panel), so hide both from the list.
-    const artItems = useMemo(()=>artifacts.filter(a=>a.Name!=="home" && !a.Name.startsWith("status.")).map(a=>({
+    // 'home' is the curated Home page, 'status.<id>' artifacts are the per-agent
+    // status records (rendered in the Agent-status panel), and 'goal.<id>'
+    // artifacts are the goal primitive (rendered in the Goals view), so hide all
+    // three from the plain documents list.
+    const artItems = useMemo(()=>artifacts.filter(a=>a.Name!=="home" && !a.Name.startsWith("status.") && !a.Name.startsWith("goal.")).map(a=>({
       name:a.Name, version:a.Revision, status:statusOf(a.Name), topic:"", type:"markdown",
       id:a.Name, author:{ name:"", kind:"agent" }, updated:relTime(a.Updated),
     })),[artifacts, statusOf]);
@@ -459,8 +514,8 @@
     // "not wired yet" placeholder; it never fabricates an answer.
     function askAssistant(query){ setPalette(false); setAsstPrompt(query||""); setAsstOpen(true); }
     // Workspace nav (flow2 chrome): Home / Artifacts / Goals / Agents swap the
-    // white stage. Goals is an inert placeholder (Track 2 owns the real view).
-    function onNav(key){ touchRecent("nav:"+key); setStageMode(key); }
+    // white stage.
+    function onNav(key){ touchRecent("nav:"+key); if(key==="goals") setGoalsEpoch(e=>e+1); setStageMode(key); }
     function backfill(subj){
       // /api/messages reads FORWARD from `since` (since=0 is the oldest), so a
       // single page returns the OLDEST messages. Page to the tail following
@@ -542,7 +597,7 @@
       conversations:convList, activeConvo, stageMode, onOpenConvo:openConvo, onExpandConvo:expandConvo,
       messages, draft, setDraft, onSend:send, onArtifactRef:openArtifact,
       artifacts:artItems, activeArtifact, onOpenArtifact:openArtifact,
-      goals:GOALS, agents, activity:homeActivity, self, onGoHome:goHome, home, onDM:startDM,
+      goals, agents, activity:homeActivity, self, onGoHome:goHome, home, onDM:startDM,
       hidden, onHide:hideConvo, onUnhide:unhideConvo,
       onNav, onSearch:()=>setPalette(true), reviewCount, workingCount,
     };
@@ -637,7 +692,7 @@
             </div>
           ) : stageMode==="goals" ? (
             <div className="sx-canvas sx-canvas--list">
-              <div className="sx-page sx-page--doc"><GoalsStub /></div>
+              <div className="sx-page sx-page--doc"><GoalsView key={goalsEpoch} goals={goals} onOpenArtifact={openArtifact} /></div>
             </div>
           ) : stageMode==="agents" ? (
             <div className="sx-canvas sx-canvas--list">
