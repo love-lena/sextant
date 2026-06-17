@@ -106,9 +106,46 @@
      open: a goal.<id> routes to the Goals view, anything else opens the artifact.
      `tone` splits presentation: "context" is a calm one-liner (an at-a-glance
      status, e.g. "all clear"); a CALL tone (review/call/…) is a real card that
-     needs the operator. Wikilinks in `text` render as plain text for v1 (there's
-     no trivially-reusable inline wikilink renderer on window — MarkdownArtifact is
-     a full-document component). */
+     needs the operator. Wikilinks in `text` render as in-dash links: a known
+     target becomes a clickable span-link; an unknown target renders muted+inert
+     (same classes as the document-body wikilinks: sx-artlink / sx-artlink-dead). */
+
+  // renderAgendaText: split a plain text string on [[name]] / [[name|alias]]
+  // wikilinks and return an array of React nodes. Known targets get a clickable
+  // span[role=link]; unknown targets get a muted, inert span. Clicking a valid
+  // wikilink calls e.stopPropagation() so it doesn't bubble to the card button.
+  // "Known" = present in ctx.artifacts (by .name) or ctx.goals (by .name or .id).
+  function renderAgendaText(text, ctx) {
+    if (!text) return text;
+    const arts = (ctx && ctx.artifacts) || [];
+    const goals = (ctx && ctx.goals) || [];
+    // build a set of all known target strings
+    const known = new Set();
+    for (const a of arts) { if (a && a.name) known.add(a.name); }
+    for (const g of goals) {
+      if (g && g.name) known.add(g.name);
+      if (g && g.id) known.add("goal." + g.id);
+    }
+    // split on [[name]] or [[name|alias]] — keep delimiters via capturing group
+    const parts = text.split(/(\[\[[^\]|]+(?:\|[^\]]+)?\]\])/g);
+    if (parts.length === 1) return text; // no wikilinks — fast path
+    return parts.map((part, i) => {
+      const m = part.match(/^\[\[([^\]|]+)(?:\|([^\]]+))?\]\]$/);
+      if (!m) return part; // plain text segment
+      const target = m[1].trim();
+      const display = m[2] != null ? m[2].trim() : target;
+      if (known.has(target)) {
+        const onClick = (e) => {
+          e.stopPropagation();
+          if (target.indexOf("goal.") === 0) { ctx.onNav && ctx.onNav("goals"); }
+          else { ctx.onOpenArtifact && ctx.onOpenArtifact(target); }
+        };
+        return <span key={i} className="sx-artlink" role="link" tabIndex={0} onClick={onClick}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(e); } }}>{display}</span>;
+      }
+      return <span key={i} className="sx-artlink-dead">{display}</span>;
+    });
+  }
 
   // route an agenda ref to the right open handler. A goal.<id> ref opens the
   // Goals view (goals aren't artifacts in the documents list); everything else
@@ -127,7 +164,7 @@
     return (
       <div className={"fx-agenda-ctx fx-in" + (ref ? " is-link" : "")} onClick={ref ? open : undefined} role={ref ? "button" : undefined}>
         <span className="fx-agenda-ctx-ic">✓</span>
-        <span className="fx-agenda-ctx-txt">{item.text || "All clear — nothing needs you right now."}</span>
+        <span className="fx-agenda-ctx-txt">{item.text ? renderAgendaText(item.text, ctx) : "All clear — nothing needs you right now."}</span>
         {ref && <span className="fx-agenda-ctx-chev">›</span>}
       </div>);
   }
@@ -140,15 +177,17 @@
     const tone = STATE_TONE[item.tone] || "var(--asst)";
     const open = () => openAgendaRef(ref, ctx);
     return (
-      <button className="fx-agenda-call fx-in" style={{ "--tn": tone, animationDelay: (0.06 + n * 0.03) + "s" }} onClick={open} disabled={!ref}>
+      <div className={"fx-agenda-call fx-in" + (ref ? "" : " is-inert")} style={{ "--tn": tone, animationDelay: (0.06 + n * 0.03) + "s" }}
+        role={ref ? "button" : undefined} tabIndex={ref ? 0 : undefined} onClick={ref ? open : undefined}
+        onKeyDown={ref ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } } : undefined}>
         <span className="fx-agenda-rail" style={{ background: tone }} />
         <span className="fx-agenda-call-body">
           <span className="fx-agenda-call-kicker" style={{ color: tone }}>Needs you</span>
-          <span className="fx-agenda-call-text">{item.text || ""}</span>
+          <span className="fx-agenda-call-text">{item.text ? renderAgendaText(item.text, ctx) : ""}</span>
           {ref && <span className="fx-agenda-call-ref">{isGoal ? "◎ " + ref.replace(/^goal\./, "") : "❡ " + ref}</span>}
         </span>
         {ref && <span className="fx-agenda-call-open">{isGoal ? "Open goal →" : "Open →"}</span>}
-      </button>);
+      </div>);
   }
 
   // the agenda block as the "Needs you" list (replaces the auto-derived hero).
@@ -412,7 +451,7 @@
   .fx-agenda{display:flex;flex-direction:column;gap:11px;margin-top:8px;}
   .fx-agenda-call{position:relative;display:flex;align-items:stretch;width:100%;text-align:left;background:#fff;border:1px solid #e2e2e8;border-radius:14px;overflow:hidden;cursor:pointer;box-shadow:0 10px 28px -20px rgba(20,21,30,.4);transition:box-shadow .14s,transform .14s,border-color .14s;color:var(--ink);}
   .fx-agenda-call:hover{box-shadow:0 16px 38px -20px rgba(20,21,30,.5);border-color:#d4d4dc;transform:translateY(-1px);}
-  .fx-agenda-call:disabled{cursor:default;box-shadow:none;transform:none;}
+  .fx-agenda-call.is-inert{cursor:default;box-shadow:none;transform:none;}
   .fx-agenda-rail{width:5px;flex:0 0 5px;}
   .fx-agenda-call-body{flex:1;min-width:0;padding:16px 18px;display:flex;flex-direction:column;gap:7px;}
   .fx-agenda-call-kicker{font-family:var(--font-mono);font-size:9px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;}
