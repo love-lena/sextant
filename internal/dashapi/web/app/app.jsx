@@ -203,6 +203,17 @@
     const onRailWidth = useCallback((w)=>setRailWidth(clampRail(w)),[]);
     const toggleRail = useCallback(()=>setRailCollapsed(v=>!v),[]);
 
+    // Left nav (TASK-141): a resizable + collapsible shell sidebar — mirrors the
+    // right rail pattern. Width clamped to 200–420px (default 284 = the flow2 width).
+    const SIDE_MIN = 200, SIDE_MAX = 420;
+    const clampSide = (w)=>Math.max(SIDE_MIN, Math.min(SIDE_MAX, Math.round(w)));
+    const [sideWidth, setSideWidth] = useState(()=>{ try{ const v=parseInt(localStorage.getItem("sx-side-w")||"",10); return isNaN(v)?284:clampSide(v); }catch(_){ return 284; } });
+    const [sideCollapsed, setSideCollapsed] = useState(()=>{ try{ return localStorage.getItem("sx-side-collapsed")==="1"; }catch(_){ return false; } });
+    useEffect(()=>{ try{ localStorage.setItem("sx-side-w", String(sideWidth)); }catch(_){} },[sideWidth]);
+    useEffect(()=>{ try{ localStorage.setItem("sx-side-collapsed", sideCollapsed?"1":"0"); }catch(_){} },[sideCollapsed]);
+    const onSideWidth = useCallback((w)=>setSideWidth(clampSide(w)),[]);
+    const toggleSide = useCallback(()=>setSideCollapsed(v=>!v),[]);
+
     // prefetch artifact records so the sidebar can group by review-state and an
     // open is instant. Fine at dash scale; a very large bucket would want paging.
     useEffect(()=>{
@@ -566,9 +577,11 @@
     const hasAuthor = artifact.author && artifact.author.name;
 
     return (
-      <div className="sx-app">
+      <div className="sx-app" style={{"--sx-side-w": sideCollapsed ? "0px" : sideWidth+"px"}}>
         <div style={{display:"contents"}}>
-          <Sidebar ctx={ctx} busName={(self.display_name||"bus")} navMode={t.sideNav} />
+          <Sidebar ctx={ctx} busName={(self.display_name||"bus")} navMode={t.sideNav}
+            sideWidth={sideWidth} sideCollapsed={sideCollapsed}
+            onSideWidth={onSideWidth} onToggleSide={toggleSide} />
         </div>
 
         <main className="sx-stage">
