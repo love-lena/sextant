@@ -5,7 +5,7 @@
    Exports: Sidebar, Avatar, StatusPill, MessageList, Composer, SextantGlyph,
    GoalsStub, AssistantFab, CmdK (to window). */
 (function () {
-  const { useState, useEffect, useRef } = React;
+  const { useState, useEffect, useRef, useCallback } = React;
 
   /* The sextant brand glyph — eyepiece + A-frame + graduated arc, recreated from
      flow2.jsx. Teal/purple accents in the sidebar; falls back to a single ink. */
@@ -419,13 +419,67 @@
       </>);
   }
 
-  function Sidebar({ ctx, busName, navMode }) {
+  // Sidebar — the shell left nav. Accepts resize + collapse props (TASK-141)
+  // matching the right-rail pattern in review.jsx:
+  //   sideWidth / sideCollapsed  persisted state from app.jsx
+  //   onSideWidth(w)             parent clamps + persists the new width
+  //   onToggleSide()             parent flips the collapsed flag
+  // The drag handle sits on the sidebar's RIGHT edge; dragging right widens
+  // (startW + delta, opposite sign from the rail on the right). The
+  // endDragRef + unmount-cleanup mirrors the codex fix in review.jsx so a
+  // drag that's still in progress when the component unmounts can't leak
+  // document-level listeners.
+  function Sidebar({ ctx, busName, navMode, sideWidth, sideCollapsed, onSideWidth, onToggleSide }) {
     const section = ctx.stageMode === "conversation" ? "convo"
       : ctx.stageMode === "artifact" ? "artifacts"
       : ctx.stageMode; // home | artifacts | agents | goals
     const meName = (ctx.self && ctx.self.display_name) || "you";
+
+    // right-edge drag to resize — same shape as review.jsx's onHandleDown.
+    const draggingRef = useRef(false);
+    // holds the active drag's teardown so unmount mid-drag can't leak listeners.
+    const endDragRef = useRef(null);
+    const onHandleDown = useCallback((e) => {
+      e.preventDefault();
+      draggingRef.current = true;
+      const startX = e.clientX;
+      const startW = sideWidth;
+      const move = (ev) => {
+        if (!draggingRef.current) return;
+        // sidebar is on the LEFT, so dragging the handle RIGHT (larger clientX) widens it.
+        const next = startW + (ev.clientX - startX);
+        onSideWidth && onSideWidth(next);
+      };
+      const up = () => {
+        draggingRef.current = false;
+        document.removeEventListener("mousemove", move);
+        document.removeEventListener("mouseup", up);
+        document.body.style.userSelect = "";
+        endDragRef.current = null;
+      };
+      document.body.style.userSelect = "none";
+      document.addEventListener("mousemove", move);
+      document.addEventListener("mouseup", up);
+      endDragRef.current = up;
+    }, [sideWidth, onSideWidth]);
+    // tear down a drag still in progress if the sidebar unmounts (codex pattern).
+    useEffect(() => () => { if (endDragRef.current) endDragRef.current(); }, []);
+
+    // Collapsed: render a thin reveal strip instead of hiding completely, so
+    // the operator can always get the nav back without a mystery gesture.
+    if (sideCollapsed) {
+      return (
+        <aside className="fx-side fx-side--collapsed" aria-label="Navigation (collapsed)">
+          <button className="fx-side-reveal" title="Show navigation" onClick={onToggleSide}>
+            <span className="fx-side-reveal-ic">›</span>
+          </button>
+        </aside>);
+    }
+
     return (
-      <aside className="fx-side">
+      <aside className="fx-side" style={{ width: sideWidth, flexBasis: sideWidth }}>
+        {/* right-edge drag handle — col-resize affordance, mirrors .fx-rail-resize */}
+        <div className="fx-side-resize" onMouseDown={onHandleDown} title="Drag to resize" />
         <div className="fx-brand">
           <span className="fx-mark">
             <svg className="fx-logomark" viewBox="0 0 479 412" width="43" height="37" aria-hidden="true">
@@ -433,10 +487,13 @@
             </svg>
             <span className="fx-word">Sextant</span>
           </span>
-          <button className="fx-side-search" title="Search the bus  ⌘K" onClick={ctx.onSearch}>
-            <span className="fx-search-ic">⌕</span>
-            <span className="fx-kbd">⌘K</span>
-          </button>
+          <div className="fx-brand-end">
+            <button className="fx-side-search" title="Search the bus  ⌘K" onClick={ctx.onSearch}>
+              <span className="fx-search-ic">⌕</span>
+              <span className="fx-kbd">⌘K</span>
+            </button>
+            <button className="fx-side-collapse" title="Collapse navigation" onClick={onToggleSide} aria-label="Collapse navigation">‹</button>
+          </div>
         </div>
 
         <nav className="fx-nav">

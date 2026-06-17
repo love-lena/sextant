@@ -460,8 +460,27 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
    the existing sx- stage views render inside this shell unchanged.
    ============================================================ */
 
-/* ---- charcoal sidebar (284px) ---- */
-.fx-side{width:284px;flex:0 0 284px;background:var(--fx-sbg);color:var(--fx-stx);display:flex;flex-direction:column;height:100vh;border-right:1px solid rgba(255,255,255,.07);animation:sxin .45s ease both;}
+/* ---- charcoal sidebar (284px default, resizable + collapsible, TASK-141) ---- */
+/* Width is driven by the --sx-side-w CSS custom property set on .sx-app (app.jsx
+   inline style) so resizing / collapsing reflows the layout automatically. The
+   inline style on the <aside> itself carries the explicit px value while expanded. */
+.fx-side{width:var(--sx-side-w,284px);flex:0 0 var(--sx-side-w,284px);background:var(--fx-sbg);color:var(--fx-stx);display:flex;flex-direction:column;height:100vh;border-right:1px solid rgba(255,255,255,.07);animation:sxin .45s ease both;position:relative;overflow:hidden;}
+
+/* right-edge drag handle — mirrors .fx-rail-resize on the left-rail */
+.fx-side-resize{position:absolute;right:-3px;top:0;bottom:0;width:7px;cursor:col-resize;z-index:5;}
+.fx-side-resize:hover{background:var(--brand-soft);}
+
+/* collapse button — sits at the end of the brand bar, right of the ⌘K search */
+.fx-brand-end{display:flex;align-items:center;gap:6px;flex:0 0 auto;}
+.fx-side-collapse{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);color:#9a9da4;font-family:var(--font-mono);font-size:14px;width:26px;height:26px;border-radius:7px;cursor:pointer;display:grid;place-items:center;line-height:1;padding:0;}
+.fx-side-collapse:hover{background:rgba(255,255,255,.12);color:var(--fx-stx);}
+
+/* collapsed sidebar — a thin strip with a single expand affordance */
+.fx-side--collapsed{width:32px!important;flex:0 0 32px!important;min-width:32px;overflow:hidden;cursor:default;}
+.fx-side-reveal{display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:none;border:none;color:var(--fx-sfai);cursor:pointer;padding:0;}
+.fx-side-reveal:hover{color:var(--fx-stx);background:rgba(255,255,255,.04);}
+.fx-side-reveal-ic{font-family:var(--font-mono);font-size:18px;line-height:1;}
+
 .fx-brand{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:15px 16px 15px 18px;border-bottom:1px solid rgba(255,255,255,.06);}
 .fx-mark{display:flex;align-items:center;gap:12px;min-width:0;}
 .fx-logomark{flex:0 0 auto;display:block;}
