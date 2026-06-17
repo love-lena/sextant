@@ -100,6 +100,73 @@
       </button>);
   }
 
+  /* ---------- D7: violet's curated agenda ("Needs you") ----------
+     Each item is { action, ref, text, tone }. `text` is violet's per-item
+     rationale (why you're seeing this) — the prominent line. `ref` is what to
+     open: a goal.<id> routes to the Goals view, anything else opens the artifact.
+     `tone` splits presentation: "context" is a calm one-liner (an at-a-glance
+     status, e.g. "all clear"); a CALL tone (review/call/…) is a real card that
+     needs the operator. Wikilinks in `text` render as plain text for v1 (there's
+     no trivially-reusable inline wikilink renderer on window — MarkdownArtifact is
+     a full-document component). */
+
+  // route an agenda ref to the right open handler. A goal.<id> ref opens the
+  // Goals view (goals aren't artifacts in the documents list); everything else
+  // opens the named artifact. Empty ref ⇒ no-op (the row stays inert).
+  function openAgendaRef(ref, ctx) {
+    if (!ref || typeof ref !== "string") return;
+    if (ref.indexOf("goal.") === 0) { ctx.onNav && ctx.onNav("goals"); }
+    else { ctx.onOpenArtifact && ctx.onOpenArtifact(ref); }
+  }
+
+  // a "context" item: a calm single status line (mirrors the "all caught up"
+  // zero-state tone). Clickable only when it carries a ref.
+  function AgendaContextRow({ item, ctx }) {
+    const ref = item.ref;
+    const open = () => openAgendaRef(ref, ctx);
+    return (
+      <div className={"fx-agenda-ctx fx-in" + (ref ? " is-link" : "")} onClick={ref ? open : undefined} role={ref ? "button" : undefined}>
+        <span className="fx-agenda-ctx-ic">✓</span>
+        <span className="fx-agenda-ctx-txt">{item.text || "All clear — nothing needs you right now."}</span>
+        {ref && <span className="fx-agenda-ctx-chev">›</span>}
+      </div>);
+  }
+
+  // a CALL item: a real-call card. violet's rationale (`text`) leads; the ref's
+  // open affordance sits on the right. Adapts the Hero's accented-rail card.
+  function AgendaCall({ item, n, ctx }) {
+    const ref = item.ref || "";
+    const isGoal = ref.indexOf("goal.") === 0;
+    const tone = STATE_TONE[item.tone] || "var(--asst)";
+    const open = () => openAgendaRef(ref, ctx);
+    return (
+      <button className="fx-agenda-call fx-in" style={{ "--tn": tone, animationDelay: (0.06 + n * 0.03) + "s" }} onClick={open} disabled={!ref}>
+        <span className="fx-agenda-rail" style={{ background: tone }} />
+        <span className="fx-agenda-call-body">
+          <span className="fx-agenda-call-kicker" style={{ color: tone }}>Needs you</span>
+          <span className="fx-agenda-call-text">{item.text || ""}</span>
+          {ref && <span className="fx-agenda-call-ref">{isGoal ? "◎ " + ref.replace(/^goal\./, "") : "❡ " + ref}</span>}
+        </span>
+        {ref && <span className="fx-agenda-call-open">{isGoal ? "Open goal →" : "Open →"}</span>}
+      </button>);
+  }
+
+  // the agenda block as the "Needs you" list (replaces the auto-derived hero).
+  // Calls render first (the work), context lines after (the reassurance).
+  function AgendaList({ block, items, ctx }) {
+    const title = (block && block.title) || "Needs you";
+    const calls = items.filter((it) => it.tone !== "context");
+    const ctxs = items.filter((it) => it.tone === "context");
+    return (
+      <React.Fragment>
+        <div className="fx-starthead fx-in" style={{ animationDelay: ".06s" }}>{title}</div>
+        <div className="fx-agenda">
+          {calls.map((it, i) => <AgendaCall item={it} n={i} ctx={ctx} key={"call-" + i} />)}
+          {ctxs.map((it, i) => <AgendaContextRow item={it} ctx={ctx} key={"ctx-" + i} />)}
+        </div>
+      </React.Fragment>);
+  }
+
   /* ---------- a queue row ---------- */
   function QRow({ a, n, onOpen }) {
     const authorName = (a.author && a.author.name) || "agent";
@@ -189,6 +256,18 @@
     const pinnedBlock = blocks.find((b) => b.type === "pinned");
     const linksBlock = blocks.find((b) => b.type === "links");
 
+    // D7: violet's curated agenda (the "Needs you" block of the `home` artifact).
+    // When present with items it REPLACES the auto-derived review-state hero — each
+    // item carries violet's per-item rationale (why you're seeing this) + a ref to
+    // open. When absent we fall back to the auto-derived hero (violet isn't always
+    // live, so the fallback must stay intact). An agenda block with no items is
+    // treated as absent (nothing curated to show) → fall back.
+    const agendaBlock = blocks.find((b) => b.type === "agenda");
+    const agendaItems = (agendaBlock && Array.isArray(agendaBlock.items))
+      ? agendaBlock.items.filter((it) => it && typeof it === "object" && (typeof it.text === "string" || (typeof it.ref === "string" && it.ref)))
+      : [];
+    const hasAgenda = agendaItems.length > 0;
+
     return (
       <article className="fx-scroll"><div className="fx-col fx-col--home sx-conv-light">
         <style>{HOME_CSS}</style>
@@ -196,7 +275,9 @@
         <h1 className="fx-h1 fx-in">{heading}</h1>
         <p className="fx-psub fx-in" style={{ animationDelay: ".03s" }}>{stateLine}</p>
 
-        {hero ? (
+        {hasAgenda ? (
+          <AgendaList block={agendaBlock} items={agendaItems} ctx={ctx} />
+        ) : hero ? (
           <React.Fragment>
             <div className="fx-starthead fx-in" style={{ animationDelay: ".06s" }}>Start here</div>
             <Hero a={hero} onOpen={ctx.onOpenArtifact} />
@@ -326,6 +407,27 @@
   #app.dark .hm-panel{border-color:#2a2d33;}
   #app.dark .hm-link{border-top-color:#2a2d33;}
   #app.dark .hm-link:hover{background:rgba(255,255,255,.03);}
+  /* D7 · violet's curated agenda ("Needs you"): a real-call card (accent rail +
+     rationale + open) and a calm context line. Adapts the Hero / zero-state look. */
+  .fx-agenda{display:flex;flex-direction:column;gap:11px;margin-top:8px;}
+  .fx-agenda-call{position:relative;display:flex;align-items:stretch;width:100%;text-align:left;background:#fff;border:1px solid #e2e2e8;border-radius:14px;overflow:hidden;cursor:pointer;box-shadow:0 10px 28px -20px rgba(20,21,30,.4);transition:box-shadow .14s,transform .14s,border-color .14s;color:var(--ink);}
+  .fx-agenda-call:hover{box-shadow:0 16px 38px -20px rgba(20,21,30,.5);border-color:#d4d4dc;transform:translateY(-1px);}
+  .fx-agenda-call:disabled{cursor:default;box-shadow:none;transform:none;}
+  .fx-agenda-rail{width:5px;flex:0 0 5px;}
+  .fx-agenda-call-body{flex:1;min-width:0;padding:16px 18px;display:flex;flex-direction:column;gap:7px;}
+  .fx-agenda-call-kicker{font-family:var(--font-mono);font-size:9px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;}
+  .fx-agenda-call-text{font-size:15px;line-height:1.45;color:var(--ink);font-weight:500;}
+  .fx-agenda-call-ref{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.03em;color:var(--fx-ink3);}
+  .fx-agenda-call-open{align-self:center;flex:0 0 auto;padding:0 18px;font-size:13px;font-weight:600;color:var(--asst);white-space:nowrap;}
+  .fx-agenda-ctx{display:flex;align-items:center;gap:11px;padding:13px 16px;border:1px solid var(--fx-line);border-radius:12px;background:rgba(63,143,89,.03);color:var(--fx-ink2);}
+  .fx-agenda-ctx.is-link{cursor:pointer;}
+  .fx-agenda-ctx.is-link:hover{background:rgba(63,143,89,.06);}
+  .fx-agenda-ctx-ic{width:24px;height:24px;border-radius:50%;background:rgba(63,143,89,.13);color:var(--met);display:grid;place-items:center;font-size:13px;flex:0 0 auto;}
+  .fx-agenda-ctx-txt{flex:1;min-width:0;font-size:13.5px;line-height:1.4;}
+  .fx-agenda-ctx-chev{color:#c4c4cc;font-size:15px;flex:0 0 auto;}
+  #app.dark .fx-agenda-call{background:#1a1d23;border-color:#2a2d33;}
+  #app.dark .fx-agenda-call:hover{border-color:#3a3f47;}
+  #app.dark .fx-agenda-ctx{border-color:#2a2d33;background:rgba(63,143,89,.06);}
   `;
 
   window.HomePage = HomePage;
