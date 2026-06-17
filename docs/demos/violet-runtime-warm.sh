@@ -184,14 +184,13 @@ run_violet() {
     "$SX" publish "$VL_DM" "$rec" --store "$SEXTANT_STORE" --creds "$VL_CREDS" >/dev/null 2>&1 || true
   }
 
-  # refresh_context — the home-manager keeps the conversational session warm by
-  # injecting the CURRENT workspace state. The curation session writes a compact
-  # snapshot to $CTX as it curates (the deterministic core the stub also exercises);
-  # the wrapper injects it as a `[context refresh]` turn so the next operator DM is
-  # answered straight from context with NO pre-read. This is what makes it instant.
+  # refresh_context — inject the CURRENT workspace snapshot into the conversational
+  # session so the next operator DM is answered from context with NO pre-read. The
+  # snapshot is whatever the home-manager EMITTED on its last turn (captured to
+  # $CTX by the wrapper — NOT written by the session, which has no Write tool).
   refresh_context() {
     [ -s "$CTX" ] || return 0
-    inject_and_wait 8 "$CONV_OUT" "$CONV_PID" "[context refresh] Current workspace state (use this to answer the operator instantly — do not re-read the bus before replying):
+    inject_and_wait 8 "$CONV_OUT" "$CONV_PID" "[context refresh] Current workspace state (answer the operator from THIS only; if something isn't here, say you'll need to check rather than guess):
 $(cat "$CTX")"
   }
 
@@ -228,12 +227,24 @@ $(cat "$CTX")"
   echo "== violet WARM (pseudo-agent) up: self=$VL_SELF operator=$VL_OPERATOR DM=$VL_DM tick=${TICK}s =="
   echo "   conversational=$CONV_MODEL (pid $CONV_PID, output-captured)  home-manager=$CURATE_MODEL (pid $CURATE_PID)"
 
-  # home_manager_pass — the continuous loop's work: run the curation/defend duty on
-  # the sonnet session (writes the `home` artifact + the $CTX snapshot), THEN
-  # refresh the conversational session's context from that snapshot.
+  # home_manager_pass — the continuous loop's work, in two halves:
+  #   (1) the sonnet home-manager session re-curates the `home` artifact (its
+  #       owned-work artifact MCP tools) AND ends its turn by EMITTING a compact
+  #       current-workspace snapshot as its reply text;
+  #   (2) the WRAPPER captures that emitted snapshot from the session's output
+  #       stream (same reliable path as the conversational reply) and writes it to
+  #       $CTX, then injects it into the conversational session as a
+  #       `[context refresh]`.
+  # The session itself never writes $CTX — it has no Write tool. Snapshot delivery
+  # is output-capture, exactly like the answer reply. The snapshot must reflect
+  # LIVE state, so the home-manager READS the live goal + review queue + gated
+  # briefs via its artifact tools before emitting.
   home_manager_pass() {
     inject_and_wait 7 "$CURATE_OUT" "$CURATE_PID" \
-      "[defend tick] Re-curate Home now per the violet-curation skill. Then write a COMPACT current-workspace snapshot (goals, briefs at their gate, who is doing what, the review queue) to $CTX so the conversational side can answer instantly." || true
+      "[defend tick] Re-curate Home now per the violet-curation skill (write the home artifact via your artifact tools). Then READ the LIVE workspace with your artifact tools — \`goal.v0-5-0\` (each criterion + its current status), the current review queue (artifacts with review.state=review), and any briefs at their gate — and END this turn by REPLYING with a COMPACT, CURRENT snapshot of that state (a few short lines: where v0.5.0 stands criterion-by-criterion, what's at its gate, who's doing what). Reply with the snapshot text ONLY — no preamble. The wrapper captures your reply and feeds it to the conversational side; do not try to write a file." || true
+    # capture the emitted snapshot and persist it for the conversational refresh.
+    local snap; snap="$(capture_last_reply "$CURATE_OUT")"
+    [ -n "$snap" ] && printf '%s\n' "$snap" > "$CTX"
     refresh_context || true
   }
 
@@ -367,7 +378,10 @@ while IFS= read -r line; do
   fi
   case "\$text" in
     "[defend tick]"*)
-      # HOME-MANAGER (sonnet session): curate home + write the workspace snapshot.
+      # HOME-MANAGER (sonnet session): curate the home artifact via its artifact
+      # MCP tools (here, the CLI), then READ live state and EMIT a compact snapshot
+      # as the turn's RESULT TEXT. It does NOT write \$CTX — it has no Write tool;
+      # the WRAPPER captures this .result and writes \$CTX (the real capture path).
       rec='{"\$type":"document","greeting":{"heading":"Good morning.","note":"1 real call needs you · 2 things handled themselves"},"blocks":[{"type":"pinned","names":["demo-brief"]}]}'
       if "\$SX" artifact get home --json --store "\$S" --creds "\$CREDS" >/dev/null 2>&1; then
         rev="\$("\$SX" artifact get home --json --store "\$S" --creds "\$CREDS" | grep -oE '"Revision":[0-9]+' | grep -oE '[0-9]+' | head -1)"
@@ -375,26 +389,41 @@ while IFS= read -r line; do
       else
         "\$SX" artifact create home "\$rec" --store "\$S" --creds "\$CREDS" >/dev/null
       fi
-      # the compact workspace snapshot the wrapper injects into the conversational side.
-      printf 'demo-brief: a review-flagged brief, at its gate, waiting on the operator.\ngoal ship-v0.5: in progress.\n' > "\$CTX"
-      emit_assistant "violet(home-manager): curated home + wrote context snapshot"
-      emit_result "curated home"
+      # read a live fact to prove the snapshot reflects CURRENT state, not training:
+      # whether demo-brief is still review-flagged right now. (--json is pretty-
+      # printed, so tolerate the space after the colon.)
+      st="\$("\$SX" artifact get demo-brief --json --store "\$S" --creds "\$CREDS" 2>/dev/null | grep -oE '"state": *"review"' || true)"
+      [ -n "\$st" ] && gate="at its gate, waiting on you" || gate="resolved"
+      # EMIT the snapshot as the result text (NO file write).
+      emit_assistant "snapshot emitted"
+      emit_result "v0.5.0: in progress. [[demo-brief]] is \$gate. No other real calls."
       ;;
     "[context refresh]"*)
       # CONVERSATIONAL session: absorb the warm workspace context. No bus action.
+      # Stash it so the next answer comes FROM this snapshot (context-warm).
       LAST_CTX="\$text"
-      emit_assistant "violet(conv): context absorbed"
+      emit_assistant "ok"
       emit_result "context absorbed"
       ;;
     "[operator DM]"*)
-      # CONVERSATIONAL session: answer FROM WARM CONTEXT — NO pre-read, NO publish.
-      # The wrapper captures this .result text and publishes it to the DM.
-      ans="violet: the demo-brief is what needs you — it is at its gate."
+      # CONVERSATIONAL session: answer FROM WARM CONTEXT (\$LAST_CTX) — NO pre-read,
+      # NO publish. The wrapper captures this .result text and publishes it. Answer
+      # respects the operator's bar: <=250 chars, plain text, [[wikilinks]] only.
+      if printf '%s' "\$LAST_CTX" | grep -qi 'demo-brief'; then
+        # answer derived from the injected snapshot (proves it's not stale/training).
+        if printf '%s' "\$LAST_CTX" | grep -qi 'at its gate'; then
+          ans="[[demo-brief]] is at its gate, waiting on you. Nothing else needs you right now."
+        else
+          ans="[[demo-brief]] is resolved. Nothing needs you right now."
+        fi
+      else
+        ans="I don't have that in my current context — I'll check and follow up."
+      fi
       emit_assistant "\$ans"
       emit_result "\$ans"
       ;;
     *)
-      emit_assistant "violet: standing by"
+      emit_assistant "standing by"
       emit_result "standing by"
       ;;
   esac
@@ -421,10 +450,16 @@ STUBEOF
     sleep 0.25
   done
   "$SX" publish "$DM" '{"$type":"chat.message","text":"where does the demo-brief stand?"}' --store "$S" --creds "$P/op.creds" >/dev/null
-  # Deterministic: poll run.log until BOTH a DM-wake answer AND a periodic tick
-  # have run (bounded), then stop the loop — no wall-clock race.
-  for _ in $(seq 1 120); do
-    grep -q "woke on DM" "$P/run.log" 2>/dev/null && grep -q "tick .* home-manager pass" "$P/run.log" 2>/dev/null && break
+  # Deterministic stop: wait until the loop has produced the evidence the checks
+  # need — a DM-wake answer AND the home-manager having COMPLETED >=2 turns
+  # (startup pass + at least one periodic tick pass, each one `result`). Gating on
+  # the actual completed-turn count (not just the pre-pass log line) avoids the
+  # race where the loop is killed mid-tick before the home-manager's result lands.
+  for _ in $(seq 1 160); do
+    if grep -q "woke on DM" "$P/run.log" 2>/dev/null \
+       && [ "$(grep -c '"type":"result"' "$P/curate.stdout.jsonl" 2>/dev/null || echo 0)" -ge 2 ]; then
+      break
+    fi
     sleep 0.25
   done
   kill "$RUN_PID" 2>/dev/null || true; wait "$RUN_PID" 2>/dev/null || true
@@ -436,22 +471,36 @@ STUBEOF
   "$SX" artifact get home --json --store "$S" --creds "$P/violet.creds" 2>/dev/null | grep -q '"pinned"' \
     && ok "DEFEND: curated home carries a ranked pinned (real-calls) block" \
     || no "DEFEND: no pinned block"
-  # CONTEXT-WARM: the home-manager wrote a workspace snapshot the conversational
-  # side was fed BEFORE the DM arrived (instant-from-context, no pre-read).
-  [ -s "$P/violet.context.txt" ] \
-    && ok "CONTEXT-WARM: home-manager pre-loaded a workspace snapshot for the conversational side" \
-    || no "CONTEXT-WARM: no workspace snapshot written"
+  # CONTEXT-WARM (the bug the live run caught): the snapshot $CTX is written by the
+  # WRAPPER from the home-manager's EMITTED result text — NOT by the session (which
+  # has no Write tool). Assert $CTX holds the home-manager's live-derived snapshot,
+  # so the real output-capture delivery path is exercised (the stub no longer
+  # writes $CTX itself).
+  [ -s "$P/violet.context.txt" ] && grep -q 'demo-brief' "$P/violet.context.txt" 2>/dev/null \
+    && ok "CONTEXT-WARM: wrapper captured the home-manager's emitted snapshot into \$CTX (not a file write)" \
+    || no "CONTEXT-WARM: \$CTX not populated from the home-manager's output (the live bug)"
+  # the snapshot must reflect LIVE state: demo-brief is review-flagged right now, so
+  # the captured snapshot must say it's at its gate (not stale/training knowledge).
+  grep -q 'at its gate' "$P/violet.context.txt" 2>/dev/null \
+    && ok "CONTEXT-WARM: snapshot reflects CURRENT live state (read via the home-manager's tools)" \
+    || no "CONTEXT-WARM: snapshot did not reflect live state"
   grep -q "context absorbed" "$P/conv.stdout.jsonl" 2>/dev/null \
     && ok "CONTEXT-WARM: the conversational session absorbed a [context refresh] before answering" \
     || no "CONTEXT-WARM: conversational session never got a context refresh"
   # OUTPUT CAPTURE: the conversational stub did NOT publish; the WRAPPER did. The
   # reply still landed on the DM — proving capture works without the model publishing.
-  "$SX" read "$DM" --since 0 --store "$S" --creds "$P/op.creds" 2>/dev/null | grep -q "violet: the demo-brief" \
+  reply_line="$("$SX" read "$DM" --since 0 --store "$S" --creds "$P/op.creds" 2>/dev/null | grep 'demo-brief' | tail -1 || true)"
+  printf '%s' "$reply_line" | grep -q 'demo-brief' \
     && ok "OUTPUT-CAPTURE: wrapper captured the reply from the stream + published it to the DM" \
     || no "OUTPUT-CAPTURE: no reply on the DM"
   grep -q "captured + published reply" "$P/run.log" 2>/dev/null \
     && ok "OUTPUT-CAPTURE: wrapper (not the model) performed the publish" \
     || no "OUTPUT-CAPTURE: wrapper did not report a captured publish"
+  # ANSWER-FROM-CONTEXT: the reply must derive from the injected snapshot (it says
+  # "at its gate", which only came from the warm context), proving it is NOT stale.
+  printf '%s' "$reply_line" | grep -q 'at its gate' \
+    && ok "ANSWER-FROM-CONTEXT: the answer came from the warm snapshot, not stale/training knowledge" \
+    || no "ANSWER-FROM-CONTEXT: answer did not derive from the injected context"
   grep -q "tick .* home-manager pass" "$P/run.log" 2>/dev/null \
     && ok "TICK: the periodic home-manager (defend) tick fired" \
     || no "TICK: defend tick did not fire"
@@ -477,6 +526,26 @@ STUBEOF
   { [ "${answers:-0}" -eq 1 ]; } \
     && ok "OWN-REPLY: violet's published reply did not re-trigger her (1 answer for 1 DM)" \
     || no "OWN-REPLY: expected exactly 1 answer turn, got $answers (self-reply loop?)"
+  # BREVITY (operator's explicit bar): the published answer must be <=250 chars,
+  # plain text, no markdown formatting (no **bold**, # headers, or - bullets);
+  # [[wikilinks]] are allowed. Pull violet's published chat.message text from a
+  # --json read (the record.text of her reply frame).
+  if command -v jq >/dev/null; then
+    ans_text="$("$SX" read "$DM" --since 0 --json --store "$S" --creds "$P/op.creds" 2>/dev/null \
+      | jq -rs '[.[] | select(type=="object" and .author=="'"$VL_ID"'" and .record.text) | .record.text] | last // empty' 2>/dev/null)"
+  fi
+  # fallback: extract the text field from the matched plain-read frame line.
+  [ -n "${ans_text:-}" ] || ans_text="$(printf '%s' "$reply_line" | sed -E 's/.*"text": *"(.*)"\}.*/\1/')"
+  ans_len=${#ans_text}
+  fmt_bad=0
+  case "$ans_text" in
+    *'**'*|*'__'*) fmt_bad=1 ;;            # bold/italic markdown
+  esac
+  printf '%s' "$ans_text" | grep -qE '(^|[[:space:]])([#]{1,6}[[:space:]]|[-*][[:space:]])' && fmt_bad=1   # headers / bullets
+  echo "  (answer: ${ans_len} chars — \"$ans_text\")"
+  { [ "${ans_len:-9999}" -le 250 ] && [ "$fmt_bad" -eq 0 ]; } \
+    && ok "BREVITY: answer is <=250 chars, plain text, no formatting (wikilinks ok)" \
+    || no "BREVITY: answer broke the bar (${ans_len} chars, fmt_bad=$fmt_bad)"
 
   echo "== $pass passed, $fail failed =="
   [ "$fail" -eq 0 ] || { KEEP=1; echo "see $P/run.log + $P/conv.stdout.jsonl + $P/curate.stdout.jsonl + $P/violet.stderr"; exit 1; }
