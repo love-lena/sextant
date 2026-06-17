@@ -640,6 +640,11 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 .fx-group-h{display:flex;align-items:center;gap:9px;padding:0 6px 6px;font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--fx-ink3);}
 .fx-group-h .fx-dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;}
 .fx-group-n{margin-left:auto;}
+/* collapsible section toggle — clickable variant, caret affordance */
+.fx-group-h--toggle{cursor:pointer;user-select:none;border-radius:5px;transition:background .12s;}
+.fx-group-h--toggle:hover{background:rgba(20,21,24,.05);}
+.fx-group-caret{font-size:9px;color:var(--fx-ink3);opacity:.7;margin-left:4px;}
+#app.dark .fx-group-h--toggle:hover{background:rgba(255,255,255,.05);}
 
 /* ============ HOME · morning unblock board ============ */
 .fx-home-empty{padding:40px 6px;color:var(--fx-ink2);font-size:14px;}
