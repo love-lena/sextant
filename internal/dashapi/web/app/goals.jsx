@@ -157,6 +157,7 @@
   function SignOff({ g, onSetReview }) {
     const name = "goal." + g.id;
     const st = g.review;
+    const [note, setNote] = useState("");
     if (st === "approved") {
       return (
         <div className="dxg-signoff is-approved">
@@ -172,13 +173,20 @@
           <span className="dxg-signoff-txt">You requested changes — it's back with the agent now.</span>
         </div>);
     }
-    // "review" — awaiting the operator's sign-off
+    // "review" — awaiting the operator's sign-off. The feedback field (TASK-154)
+    // carries the WHAT to the agent on the goal's companion topic: REQUIRED to request
+    // changes (a bare "changes" with no note is useless — Lena's catch), optional to
+    // approve. The full goal discussion thread is the rest of TASK-154.
+    const canChanges = !!note.trim();
     return (
       <div className="dxg-signoff is-review">
         <div className="dxg-signoff-lead"><span className="dxg-signoff-ic">✦</span><span className="dxg-signoff-txt">This goal is waiting on <b>your sign-off</b>. Review the criteria below, then approve or ask for changes.</span></div>
+        <textarea className="dxg-signoff-note" rows={2}
+          placeholder="Add feedback for the agent — required to request changes, optional to approve…"
+          value={note} onChange={(e) => setNote(e.target.value)} />
         <div className="dxg-signoff-acts">
-          <button className="dxg-signoff-btn is-approve" onClick={() => onSetReview(name, "approved")}>Approve goal</button>
-          <button className="dxg-signoff-btn" onClick={() => onSetReview(name, "changes")}>Request changes</button>
+          <button className="dxg-signoff-btn is-approve" onClick={() => onSetReview(name, "approved", note)}>Approve goal</button>
+          <button className="dxg-signoff-btn" disabled={!canChanges} title={canChanges ? "" : "Add feedback to request changes"} onClick={() => canChanges && onSetReview(name, "changes", note)}>Request changes</button>
         </div>
       </div>);
   }
