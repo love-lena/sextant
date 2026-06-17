@@ -299,8 +299,8 @@
         <div className="fx-asst-stub">
           <p className="fx-asst-stub-lead">violet isn't live yet.</p>
           <p className="fx-asst-stub-body">{prompt
-            ? "Your assistant lights up at v0.5.0 release. Your question is parked here until then — violet will be able to answer once it's live."
-            : "Your assistant lights up at v0.5.0 release. Once violet is live, this is where you ask it about your goals, artifacts, and the bus."}</p>
+            ? "Your question is parked here — violet will be able to answer once it's live."
+            : "Once violet is live, this is where you ask it about your goals, artifacts, and the bus."}</p>
         </div>
         <div className="fx-asst-composer">
           <span className="fx-asst-field">{prompt || "Ask a quick question…"} (disabled)</span>
