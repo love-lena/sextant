@@ -843,6 +843,32 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 .dxg-crit-owner .sx-av{text-shadow:none;}
 .dxg-maintained{margin-top:22px;padding-top:16px;border-top:1px solid var(--fx-line);font-size:12.5px;line-height:1.5;color:var(--fx-ink3);}
 
+/* sign-off (TASK-157): a review-flagged goal awaiting the operator's verdict.
+   Tones reuse the v0.5 status scale — review=--wait (attention), changes=--prog
+   (the agent's turn), approved=--met (settled). The Portfolio card flags it via the
+   shared verdict chip ("Awaiting your sign-off"); the detail carries the verdict bar. */
+.dxg-signoff{margin-bottom:24px;border-radius:12px;padding:14px 16px;border:1px solid var(--fx-line);}
+.dxg-signoff.is-review{border-color:color-mix(in srgb,var(--wait) 42%,var(--fx-line));background:color-mix(in srgb,var(--wait) 6%,transparent);}
+.dxg-signoff.is-changes{display:flex;align-items:center;gap:10px;border-color:color-mix(in srgb,var(--prog) 38%,var(--fx-line));background:color-mix(in srgb,var(--prog) 5%,transparent);}
+.dxg-signoff.is-approved{display:flex;align-items:center;gap:10px;border-color:color-mix(in srgb,var(--met) 38%,var(--fx-line));background:color-mix(in srgb,var(--met) 5%,transparent);}
+.dxg-signoff-lead{display:flex;align-items:flex-start;gap:10px;}
+.dxg-signoff-ic{flex:0 0 auto;font-size:14px;line-height:1.4;color:var(--wait);}
+.dxg-signoff.is-changes .dxg-signoff-ic{color:var(--prog);}
+.dxg-signoff.is-approved .dxg-signoff-ic{color:var(--met);}
+.dxg-signoff-txt{font-size:14px;line-height:1.45;color:var(--ink);}
+.dxg-signoff-acts{display:flex;gap:10px;margin-top:13px;}
+.dxg-signoff-btn{font-family:var(--font-ui);font-size:13px;font-weight:600;padding:8px 17px;border-radius:8px;border:1px solid var(--fx-line);background:var(--paper);color:var(--ink);cursor:pointer;transition:border-color .12s,background .12s,transform .1s;}
+.dxg-signoff-btn:hover{border-color:var(--ink-2);}
+.dxg-signoff-btn:active{transform:translateY(1px);}
+.dxg-signoff-btn.is-approve{background:var(--met);border-color:var(--met);color:#fff;}
+.dxg-signoff-btn.is-approve:hover{background:color-mix(in srgb,var(--met) 88%,#000);border-color:color-mix(in srgb,var(--met) 88%,#000);}
+.dxg-signoff-reopen{margin-left:auto;font-family:var(--font-ui);font-size:12.5px;font-weight:600;background:none;border:none;color:var(--met);cursor:pointer;padding:4px 6px;}
+#app.dark .dxg-signoff{border-color:#2a2d33;}
+#app.dark .dxg-signoff-txt{color:var(--ink);}
+#app.dark .dxg-signoff-btn{background:#1a1d23;border-color:#2a2d33;color:var(--ink);}
+#app.dark .dxg-signoff-btn:hover{border-color:#3a3f47;}
+#app.dark .dxg-signoff-btn.is-approve{background:var(--met);border-color:var(--met);color:#fff;}
+
 /* the chip/icon/verdict colours come from the shared .t-* tone classes (met /
    progress / waiting / blocked / todo). The crit-icon wants the tone's tint as a
    true background; the crit-status wants only its ink (background cleared above). */

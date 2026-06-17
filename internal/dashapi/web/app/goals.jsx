@@ -26,10 +26,12 @@
   function stat(s) { return STATUS[s] || STATUS["not-started"]; }
 
   // roll(g): the criteria rollup → verdict + tone. Goal status is derived, never
-  // stored. No northstar OR no criteria ⇒ undefined; any waiting-on-you ⇒ waiting;
-  // all met ⇒ Done; any blocked ⇒ Blocked; else on track.
-  // waiting-on-you is checked BEFORE blocked deliberately: this is the operator's
-  // front door, so a goal with something for *them* leads with that call to action;
+  // stored. No northstar OR no criteria ⇒ undefined; flagged review.state="review"
+  // ⇒ awaiting your sign-off; any waiting-on-you ⇒ waiting; all met ⇒ Done; any
+  // blocked ⇒ Blocked; else on track.
+  // sign-off (TASK-157) and waiting-on-you are checked BEFORE blocked deliberately:
+  // this is the operator's front door, so a goal with something for *them* (a
+  // pending sign-off, or a waiting criterion) leads with that call to action;
   // blocked (the agents' to clear) surfaces only when nothing waits on the operator.
   // home.jsx's goalRoll() mirrors this order exactly — keep the two in lockstep.
   function roll(g) {
@@ -39,8 +41,10 @@
     const blocked = crits.some((c) => c.status === "blocked");
     const total = crits.length;
     const undef = !g || !g.northstar || total === 0;
+    const signoff = !!g && g.review === "review";
     let verdict, tone;
     if (undef) { verdict = "Not yet defined"; tone = "t-waiting"; }
+    else if (signoff) { verdict = "Awaiting your sign-off"; tone = "t-waiting"; }
     else if (waiting) { verdict = waiting + (waiting > 1 ? " criteria" : " criterion") + " waiting on you"; tone = "t-waiting"; }
     else if (met === total) { verdict = "Done"; tone = "t-met"; }
     else if (blocked) { verdict = "Blocked"; tone = "t-blocked"; }
@@ -48,11 +52,12 @@
     return { met, waiting, total, undef, verdict, tone };
   }
 
-  // a goal needs the operator when it's undefined, has any waiting-on-you, or has
-  // any blocked criterion — the same split the Portfolio groups on.
+  // a goal needs the operator when it's undefined, has any waiting-on-you, has any
+  // blocked criterion, OR is flagged review.state="review" awaiting their sign-off
+  // (TASK-157) — the same split the Portfolio groups on.
   function needsYou(g) {
     const r = roll(g);
-    return r.undef || r.waiting > 0 || (g.criteria || []).some((c) => c.status === "blocked");
+    return r.undef || r.waiting > 0 || g.review === "review" || (g.criteria || []).some((c) => c.status === "blocked");
   }
 
   /* ---------- L1 · Portfolio ---------- */
@@ -140,10 +145,49 @@
       </div>);
   }
 
-  function Detail({ g, onBack, onOpenArtifact, renderWiki }) {
+  /* ---------- sign-off (TASK-157) ----------
+     A goal flagged review.state="review" is awaiting the operator's sign-off. This
+     bar — shown atop the goal detail — carries the verdict, using the SAME review
+     primitive as any artifact (onSetReview → POST /api/artifacts/goal.<id>/review):
+       review   → "your turn": Approve / Request changes;
+       changes  → "the agent's turn": a calm note, no buttons;
+       approved → settled: a Reopen affordance.
+     Approving clears review.state, which drops the goal from the needs-you / review
+     queue (the app re-derives goals off the refreshed record). */
+  function SignOff({ g, onSetReview }) {
+    const name = "goal." + g.id;
+    const st = g.review;
+    if (st === "approved") {
+      return (
+        <div className="dxg-signoff is-approved">
+          <span className="dxg-signoff-ic">✓</span>
+          <span className="dxg-signoff-txt">You signed off on this goal — it's settled.</span>
+          <button className="dxg-signoff-reopen" onClick={() => onSetReview(name, "review")}>Reopen</button>
+        </div>);
+    }
+    if (st === "changes") {
+      return (
+        <div className="dxg-signoff is-changes">
+          <span className="dxg-signoff-ic">↩</span>
+          <span className="dxg-signoff-txt">You requested changes — it's back with the agent now.</span>
+        </div>);
+    }
+    // "review" — awaiting the operator's sign-off
+    return (
+      <div className="dxg-signoff is-review">
+        <div className="dxg-signoff-lead"><span className="dxg-signoff-ic">✦</span><span className="dxg-signoff-txt">This goal is waiting on <b>your sign-off</b>. Review the criteria below, then approve or ask for changes.</span></div>
+        <div className="dxg-signoff-acts">
+          <button className="dxg-signoff-btn is-approve" onClick={() => onSetReview(name, "approved")}>Approve goal</button>
+          <button className="dxg-signoff-btn" onClick={() => onSetReview(name, "changes")}>Request changes</button>
+        </div>
+      </div>);
+  }
+
+  function Detail({ g, onBack, onOpenArtifact, onSetReview, renderWiki }) {
     const r = roll(g);
     const crits = g.criteria || [];
     const rw = renderWiki || ((t) => t);
+    const showSignOff = onSetReview && (g.review === "review" || g.review === "changes" || g.review === "approved");
     return (
       <div className="dxg-detail">
         <div className="dxg-topbar">
@@ -153,6 +197,7 @@
         </div>
         <div className="dxg-scroll">
           <div className="dxg-doc">
+            {showSignOff && <SignOff g={g} onSetReview={onSetReview} />}
             <div className="dxg-ns-block">
               <div className="dxg-ns-lbl">North star</div>
               {g.northstar
@@ -196,14 +241,17 @@
 
   /* ---------- the view ---------- */
   // GoalsView holds the L1↔L2 selection. openGoal=null shows the Portfolio; an id
-  // shows that goal's Detail. onOpenArtifact opens an evidence artifact in the
-  // review stage (the same handler the rest of the dash uses).
-  function GoalsView({ goals, onOpenArtifact, renderWiki }) {
-    const [openGoal, setOpenGoal] = useState(null);
+  // shows that goal's Detail. initialGoalId (TASK-157) deep-links straight to a
+  // goal's detail — set when opened from the needs-you queue (GoalsView remounts on
+  // each Goals nav, so the prop seeds the initial selection). onOpenArtifact opens an
+  // evidence artifact in the review stage; onSetReview persists a goal sign-off
+  // verdict (the same review primitive the rest of the dash uses).
+  function GoalsView({ goals, initialGoalId, onOpenArtifact, onSetReview, renderWiki }) {
+    const [openGoal, setOpenGoal] = useState(initialGoalId || null);
     const list = goals || [];
     if (list.length === 0) return <Empty />;
     const g = openGoal && list.find((x) => x.id === openGoal);
-    if (g) return <Detail g={g} onBack={() => setOpenGoal(null)} onOpenArtifact={onOpenArtifact} renderWiki={renderWiki} />;
+    if (g) return <Detail g={g} onBack={() => setOpenGoal(null)} onOpenArtifact={onOpenArtifact} onSetReview={onSetReview} renderWiki={renderWiki} />;
     return <Portfolio goals={list} onOpen={(id) => setOpenGoal(id)} renderWiki={renderWiki} />;
   }
 

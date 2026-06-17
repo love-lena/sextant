@@ -128,6 +128,10 @@
     // portfolio (its open-goal is internal state; the nav should always land you
     // on the list, not strand you in a detail you opened earlier).
     const [goalsEpoch, setGoalsEpoch] = useState(0);
+    // the goal to open on the next Goals nav (TASK-157 deep-link): set when a
+    // review-flagged goal is opened from the needs-you queue, so the nav lands on
+    // that goal's detail; cleared on a plain Goals nav (lands on the portfolio).
+    const [goalsOpenId, setGoalsOpenId] = useState(null);
     const [palette, setPalette] = useState(false);       // ⌘K command palette (TASK stage a)
     // Assistant FAB (stub, not wired): lifted here so ⌘K can open it with a
     // prefilled prompt. asstPrompt is the query carried over from a no-match search.
@@ -445,6 +449,15 @@
           stream: (typeof r.stream==="string"?r.stream:""),
           northstar: (typeof r.northstar==="string"?r.northstar:""),
           updated: r.updated||"", by: r.by||"",
+          // the artifact revision — so a review-flagged goal sorts into the needs-you
+          // queue by recency ALONGSIDE review artifacts (same key artItems sorts on),
+          // not always behind them (TASK-157).
+          version: a.Revision,
+          // review-state from the goal artifact's record (same convention as any
+          // artifact — TASK-157). A goal flagged review.state="review" is awaiting
+          // the operator's sign-off; it projects into the needs-you/review queue
+          // and is signable in the Goals view. Absent/invalid ⇒ "" (neutral).
+          review: (r.review && REVIEW_STATES.indexOf(r.review.state)>=0) ? r.review.state : "",
           criteria,
           evidence: bucket.goal, // goal-level relates (no crit) — optional
         };
@@ -604,7 +617,10 @@
     }
     // Workspace nav (flow2 chrome): Home / Artifacts / Goals / Agents swap the
     // white stage.
-    function onNav(key){ touchRecent("nav:"+key); if(key==="goals") setGoalsEpoch(e=>e+1); setStageMode(key); }
+    // onNav(key[, arg]): swap the stage. For "goals", an optional arg is a goal id
+    // to deep-link to (TASK-157) — set it so the remounted GoalsView opens that
+    // goal's detail; a plain Goals nav (no arg) clears it and lands on the portfolio.
+    function onNav(key, arg){ touchRecent("nav:"+key); if(key==="goals"){ setGoalsOpenId(typeof arg==="string"?arg:null); setGoalsEpoch(e=>e+1); } setStageMode(key); }
 
     // renderWiki: shared wikilink renderer for any view that shows goal/artifact
     // wikilinks in plain-text fields (goals north-star, criteria, etc.).
@@ -714,7 +730,12 @@
     function hideConvo(key){ setHidden(prev=>{ const n=new Set(prev); n.add(key); persistHidden(n); return n; }); }
     function unhideConvo(key){ setHidden(prev=>{ const n=new Set(prev); n.delete(key); persistHidden(n); return n; }); }
 
+    // per-view review counts (the sidebar nav badges): the Artifacts badge counts
+    // review-pending artifacts; the Goals badge counts goals awaiting the operator's
+    // sign-off (TASK-157). Kept separate so each badge reflects what that view holds
+    // (a review goal lives under Goals, not in the Artifacts list).
     const reviewCount = artItems.filter(a=>a.status==="review").length;
+    const goalReviewCount = goals.filter(g=>g.review==="review").length;
     const workingCount = agents.filter(a=>a.state==="working").length;
 
     const ctx = {
@@ -723,7 +744,7 @@
       artifacts:artItems, activeArtifact, onOpenArtifact:openArtifact,
       goals, agents, activity:homeActivity, self, onGoHome:goHome, home, onDM:startDM,
       hidden, onHide:hideConvo, onUnhide:unhideConvo,
-      onNav, onSearch:()=>setPalette(true), reviewCount, workingCount,
+      onNav, onSearch:()=>setPalette(true), reviewCount, goalReviewCount, workingCount,
     };
 
     // ⌘K search index — only what's already loaded (artifacts, agents, conversation
@@ -816,7 +837,7 @@
             </div>
           ) : stageMode==="goals" ? (
             <div className="sx-canvas sx-canvas--list">
-              <div className="sx-page sx-page--doc"><GoalsView key={goalsEpoch} goals={goals} onOpenArtifact={openArtifact} renderWiki={renderWiki} /></div>
+              <div className="sx-page sx-page--doc"><GoalsView key={goalsEpoch} goals={goals} initialGoalId={goalsOpenId} onOpenArtifact={openArtifact} onSetReview={setReview} renderWiki={renderWiki} /></div>
             </div>
           ) : stageMode==="agents" ? (
             <div className="sx-canvas sx-canvas--list">

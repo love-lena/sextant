@@ -62,40 +62,50 @@
     const waiting = crits.filter((c) => c.status === "waiting-on-you").length;
     const blocked = crits.some((c) => c.status === "blocked");
     const undef = !g || !g.northstar || crits.length === 0;
+    const signoff = !!g && g.review === "review"; // awaiting the operator's sign-off (TASK-157)
     let verdict, tone;
     if (undef) { verdict = "Not yet defined"; tone = "t-waiting"; }
+    else if (signoff) { verdict = "Awaiting your sign-off"; tone = "t-waiting"; }
     else if (waiting) { verdict = waiting + (waiting > 1 ? " criteria" : " criterion") + " waiting on you"; tone = "t-waiting"; }
     else if (met === crits.length) { verdict = "Done"; tone = "t-met"; }
     else if (blocked) { verdict = "Blocked"; tone = "t-blocked"; }
     else { verdict = "On track"; tone = "t-met"; }
-    return { verdict, tone, needsYou: undef || waiting > 0 || blocked };
+    return { verdict, tone, needsYou: undef || signoff || waiting > 0 || blocked };
   }
 
-  /* ---------- the hero — flow2 routing-slip card ---------- */
+  /* ---------- the hero — flow2 routing-slip card ----------
+     Renders either a review-pending artifact or (TASK-157) a review-flagged goal
+     awaiting the operator's sign-off. The goal branch swaps the artifact-specific
+     copy (rev / "your verdict" / "Open review") for goal copy and routes to the
+     Goals view; everything else is shared. */
   function Hero({ a, onOpen }) {
+    const isGoal = !!a.isGoal;
     const authorName = (a.author && a.author.name) || "an agent";
     const tone = STATE_TONE[a.status] || "var(--asst)";
+    const badge = isGoal ? "Needs your sign-off" : (STATE_LABEL[a.status] || "Needs review");
     return (
-      <button className="fx-dhero fx-in" style={{ animationDelay: ".06s" }} onClick={() => onOpen(a.name)}>
+      <button className="fx-dhero fx-in" style={{ animationDelay: ".06s" }} onClick={() => onOpen(a)}>
         <span className="fx-dhero-rail" style={{ background: tone }}><span className="fx-dhero-rail-plus">+</span></span>
         <div className="fx-dhero-body">
           <Seal />
           <div className="fx-dhero-tline">
-            <span className="fx-dhero-badge">{STATE_LABEL[a.status] || "Needs review"}</span>
+            <span className="fx-dhero-badge">{badge}</span>
             {a.updated && <span className="fx-dhero-tmeta">updated {a.updated} ago</span>}
-            <span className="fx-dhero-tmeta">rev {a.version}</span>
+            {isGoal ? <span className="fx-dhero-tmeta">goal</span> : <span className="fx-dhero-tmeta">rev {a.version}</span>}
           </div>
           <div className="fx-dhero-title">{a.name}</div>
-          <div className="fx-dhero-sum">{a.status === "changes" ? "You asked for changes — the agent revised it. Re-review when you're ready." : "Waiting on your read before it can move."}</div>
-          <div className="fx-dhero-unb">→ {authorName} is waiting on <b>your verdict</b></div>
+          <div className="fx-dhero-sum">{isGoal ? "A goal is waiting on your sign-off — review its criteria, then approve or ask for changes." : a.status === "changes" ? "You asked for changes — the agent revised it. Re-review when you're ready." : "Waiting on your read before it can move."}</div>
+          <div className="fx-dhero-unb">{isGoal ? <>→ this goal needs <b>your sign-off</b></> : <>→ {authorName} is waiting on <b>your verdict</b></>}</div>
           <div className="fx-dhero-foot">{(a.author && a.author.name) && <Av name={authorName} size={20} square />}<span className="fx-meta">{authorName}{a.updated ? " · " + a.updated + " ago" : ""}</span></div>
         </div>
         <div className="fx-dhero-route">
           <div><div className="fx-dhero-rlbl">Routing</div><div className="fx-dhero-rval is-pri">Highest priority <span className="spark">✦</span></div></div>
-          <div><div className="fx-dhero-rlbl">State</div><div className="fx-dhero-rval">{STATE_LABEL[a.status] || "Needs review"}</div></div>
+          <div><div className="fx-dhero-rlbl">State</div><div className="fx-dhero-rval">{badge}</div></div>
           <div><div className="fx-dhero-rlbl">From</div><div className="fx-dhero-rval">{authorName}</div></div>
-          <div><div className="fx-dhero-rlbl">Revision</div><div className="fx-dhero-rval">rev {a.version}</div></div>
-          <span className="fx-dhero-open">Open review →</span>
+          {isGoal
+            ? <div><div className="fx-dhero-rlbl">Type</div><div className="fx-dhero-rval">Goal</div></div>
+            : <div><div className="fx-dhero-rlbl">Revision</div><div className="fx-dhero-rval">rev {a.version}</div></div>}
+          <span className="fx-dhero-open">{isGoal ? "Open goal →" : "Open review →"}</span>
         </div>
       </button>);
   }
@@ -208,19 +218,20 @@
 
   /* ---------- a queue row ---------- */
   function QRow({ a, n, onOpen }) {
+    const isGoal = !!a.isGoal;
     const authorName = (a.author && a.author.name) || "agent";
     const tone = STATE_TONE[a.status] || "var(--todo)";
     return (
-      <button className="fx-then-row" style={{ "--tn": tone }} onClick={() => onOpen(a.name)}>
+      <button className="fx-then-row" style={{ "--tn": tone }} onClick={() => onOpen(a)}>
         <span className="fx-then-idx">
           <span className="fx-then-num">{String(n).padStart(2, "0")}</span>
-          <span className="fx-then-glyph" style={{ color: tone }}>●</span>
+          <span className="fx-then-glyph" style={{ color: tone }}>{isGoal ? "◎" : "●"}</span>
         </span>
         <span className="fx-then-main">
           <span className="fx-then-title">{a.name}</span>
           <span className="fx-then-sub">
-            <span className="fx-tbadge" style={{ color: tone, borderColor: tone, background: "rgba(120,124,132,.08)" }}>{STATE_LABEL[a.status] || "Needs review"}</span>
-            <span className="fx-then-meta">rev {a.version}</span>
+            <span className="fx-tbadge" style={{ color: tone, borderColor: tone, background: "rgba(120,124,132,.08)" }}>{isGoal ? "Needs your sign-off" : (STATE_LABEL[a.status] || "Needs review")}</span>
+            <span className="fx-then-meta">{isGoal ? "goal" : "rev " + a.version}</span>
             {a.updated && <span className="fx-then-unb">· updated {a.updated} ago</span>}
           </span>
         </span>
@@ -272,11 +283,28 @@
     // most-recently-touched first. "changes" is the operator's verdict sent back to the
     // agent (their turn) — it re-enters the inbox only when the agent revises + re-flags
     // review, per the needs-review convention (default-neutral; inbox = state==="review").
-    const pending = arts.filter((a) => a.status === "review")
-      .sort((a, b) => (b.version || 0) - (a.version || 0));
+    // the review queue: review-flagged artifacts AND review-flagged goals (TASK-157),
+    // interleaved most-recent-first on the same revision key artItems sorts on — so a
+    // freshly-flagged goal can lead the queue (it isn't pinned behind every artifact).
+    // A goal awaiting the operator's sign-off surfaces in the SAME needs-you queue as
+    // any review-pending artifact, but routes to the Goals view (deep-linked to that
+    // goal) rather than the artifact stage. Clearing the goal's review (approve/changes
+    // in the Goals detail) drops it from goals.filter(review==="review") — so the queue
+    // clears on sign-off.
+    const goalArr = (ctx && ctx.goals) || [];
+    const artPending = arts.filter((a) => a.status === "review");
+    const goalPending = goalArr.filter((g) => g.review === "review").map((g) => ({
+      name: g.northstar || g.name, isGoal: true, goalId: g.id, status: "review",
+      version: g.version || 0, author: { name: g.by || "", kind: "agent" }, updated: g.updated || "",
+    }));
+    const pending = artPending.concat(goalPending).sort((a, b) => (b.version || 0) - (a.version || 0));
     const hero = pending[0];
     const rest = pending.slice(1);
     const total = pending.length;
+
+    // open a queue item: a goal routes to the Goals view (deep-linked to that goal);
+    // anything else opens the artifact review stage.
+    const openItem = (a) => { if (a && a.isGoal) { ctx.onNav && ctx.onNav("goals", a.goalId); } else { ctx.onOpenArtifact(a.name); } };
 
     const approved = arts.filter((a) => a.status === "approved").length;
 
@@ -319,7 +347,7 @@
         ) : hero ? (
           <React.Fragment>
             <div className="fx-starthead fx-in" style={{ animationDelay: ".06s" }}>Start here</div>
-            <Hero a={hero} onOpen={ctx.onOpenArtifact} />
+            <Hero a={hero} onOpen={openItem} />
           </React.Fragment>
         ) : (
           <div className="fx-zero fx-in">
@@ -338,7 +366,7 @@
               <button className="fx-seclink" onClick={() => ctx.onNav && ctx.onNav("artifacts")}>All artifacts →</button>
             </div>
             <div className="fx-then-list">
-              {rest.map((a, i) => <QRow a={a} n={i + 1} onOpen={ctx.onOpenArtifact} key={a.name} />)}
+              {rest.map((a, i) => <QRow a={a} n={i + 1} onOpen={openItem} key={a.isGoal ? "goal:" + a.goalId : a.name} />)}
             </div>
           </React.Fragment>
         )}
