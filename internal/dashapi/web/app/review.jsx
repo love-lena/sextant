@@ -45,7 +45,7 @@
   // to the artifact's own resulting state (approved / changes / comment); Goals are
   // Track 2 so there's no criterion-met language here (mirrors flow-ext's ReviewDone
   // minus the criteria branch).
-  function ReviewDone({ verdict, name, author, onBack }) {
+  function ReviewDone({ verdict, name, author, onClose }) {
     let tone, glyph, title, line;
     if (verdict === "approved") {
       tone = "met"; glyph = "✓";
@@ -68,7 +68,7 @@
           <h2 className="fx-done-title">{title}</h2>
           <p className="fx-done-line">{line}</p>
           <div className="fx-done-actions">
-            <button className="fx-submit" onClick={onBack}>Back to Artifacts</button>
+            <button className="fx-submit" onClick={onClose}>Close</button>
           </div>
         </div>
       </div>);
@@ -82,14 +82,18 @@
   //   draft/setDraft  the shared composer buffer
   //   onSetReview(name, state)  → setReview (the verdict primitive)
   //   onSendComment()           → sendDiscussion (post the composer to the companion topic)
-  //   onExpandDiscussion / onBrowse  navigation handlers
+  //   onExpandDiscussion  navigation handler (pop the thread out as a conversation)
+  //   onClose    dismiss the review (the modal host's close) — the review's own
+  //              exit affordance, since the review now lives in a dismissible modal
+  //              (× · scrim · Esc) rather than a full-stage takeover, so the in-view
+  //              "← Artifacts" became a plain "Close" (no "back to X" navigation).
   //   railWidth / railCollapsed / onRailWidth / onToggleRail  the resizable rail (TASK-141)
   //   onOpenArtifact / artifactNames  passed through to MarkdownArtifact so body
   //                                   [[wikilinks]] resolve + open in-dash
   function ReviewView(props) {
     const {
       artifact, record, discussion, draft, setDraft,
-      onSetReview, onSendComment, onExpandDiscussion, onBrowse,
+      onSetReview, onSendComment, onExpandDiscussion, onClose,
       railWidth, railCollapsed, onRailWidth, onToggleRail,
       onOpenArtifact, artifactNames,
     } = props;
@@ -157,7 +161,7 @@
       setDone(verdict);
     }, [verdict, draft, name, onSendComment, onSetReview]);
 
-    if (done) return <ReviewDone verdict={done} name={name} author={author} onBack={onBrowse} />;
+    if (done) return <ReviewDone verdict={done} name={name} author={author} onClose={onClose} />;
 
     const settled = status === "approved" || status === "rejected" || status === "archived";
     const why = WHY[status] || WHY.draft;
@@ -168,7 +172,7 @@
       <div className={"fx-docwrap" + (railCollapsed ? " rail-hidden" : "")}>
         <div className="fx-doccol">
           <div className="fx-topbar">
-            <button className="fx-back" onClick={onBrowse}>← Artifacts</button>
+            <button className="fx-back" onClick={onClose}>‹ Close</button>
             <span className="fx-top-tag">{STATUS_LABEL(status).toLowerCase()}</span>
             <button className="fx-top-right" title={railCollapsed ? "Show the comments rail" : "Hide the comments rail"} onClick={onToggleRail}>
               {railCollapsed ? "Comments ↤" : "Hide rail ↦"}
