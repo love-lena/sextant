@@ -2,6 +2,7 @@ package bus
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -116,6 +117,13 @@ func (b *Bus) artifactBucketForName(ctx context.Context, name string) string {
 // a peer may not collide with this node. It is a no-op for the single-hub default
 // (empty NodeID and no peers).
 func validateNodeConfig(cfg Config) error {
+	// Per-node-JS mode (NodeID set, runs its own JetStream domain) and leaf mode
+	// (LeafRemoteURL set, JetStream OFF, engine at the hub) are mutually exclusive —
+	// a bus is one or the other. Fail loud rather than silently ignore NodeID on the
+	// leaf path (startLeaf never reads it).
+	if cfg.NodeID != "" && cfg.LeafRemoteURL != "" {
+		return errors.New("bus: NodeID (per-node JetStream mode) and --leaf-remote (leaf mode, JetStream off) are mutually exclusive — a bus runs its own domain OR links to a hub as a leaf, not both")
+	}
 	if cfg.NodeID == "" {
 		if len(cfg.Peers) > 0 {
 			return fmt.Errorf("bus: peers are configured without a NodeID (a node that mirrors peers must have its own id)")
@@ -286,17 +294,21 @@ const kvFederationSubject = "$KV.>"
 
 // MintPeerLinkCreds mints a SEXTANT-user credential a PEER uses to link its leaf to
 // THIS node (v0.6 slice 1). It is the per-node analogue of the hub's leaf-link
-// credential, but minted with peerLinkPermissions — the federation set plus the
-// JetStream replication surface — because the link must carry the mirror
-// replication traffic that sources this node's artifacts bucket to the peer. The
-// signing keys never leave the bus (it is the minter), so this is a scoped minted
-// credential, not key material. A leaf bus has no signing identity and returns a
-// clean error.
+// credential, but minted with peerLinkPermissions SCOPED TO THIS NODE'S OWN domain —
+// because the only JetStream replication the link carries is a peer sourcing THIS
+// node's artifacts bucket (over $JS.<this-node-domain>.API.>). The signing keys
+// never leave the bus (it is the minter), so this is a scoped minted credential,
+// not key material. A leaf bus has no signing identity and returns a clean error.
+//
+// Scoping to b.nodeID (not all domains) keeps the trust boundary tight: a remote
+// box holds this credential, so it is scoped exactly to the domain it legitimately
+// sources and nothing more — the #174 leaf-link lesson (a credential that carries
+// traffic must still be the narrowest grant that carries it).
 func (b *Bus) MintPeerLinkCreds(name string) (creds string, err error) {
 	if b.isLeaf() {
 		return "", fmt.Errorf("bus: minting a peer-link credential is unavailable on a leaf — mint at the node (it holds no signing key)")
 	}
-	j, seed, _, err := b.ident.mintUser(name, peerLinkPermissions())
+	j, seed, _, err := b.ident.mintUser(name, peerLinkPermissions(b.nodeID))
 	if err != nil {
 		return "", fmt.Errorf("bus: mint peer-link credential: %w", err)
 	}
@@ -307,34 +319,54 @@ func (b *Bus) MintPeerLinkCreds(name string) (creds string, err error) {
 	return c, nil
 }
 
-// peerLinkPermissions is the leaf-link grant for a per-node bus that mirrors peers
-// (v0.6 slice 1). It is broader than leafLinkPermissions: confirmed by the
-// de-risk test (TestPernodeJSMirrorMechanism), the same-name External KV mirror
-// replicates over the leaf via the peer domain's cross-domain JetStream API
-// ($JS.<domain>.API.>) and the KV stream subjects ($KV.>) — subjects the
-// wire-API-only federation set does NOT cover, so the wire-API-only link
-// credential cannot carry mirror traffic and the mirror never catches up.
+// peerLinkPermissions is the leaf-link grant for a per-node bus, scoped to the
+// JetStream domain(s) the link legitimately sources (v0.6 slice 1). It is the
+// wire-API federation set (leafLinkPermissions) PLUS exactly the cross-domain
+// JetStream API of each named source domain ($JS.<srcDomain>.API.>) — the surface a
+// same-name External KV mirror sources its peer's bucket over, confirmed by the
+// de-risk test (TestPernodeJSMirrorMechanism).
 //
-// So this grant adds the JetStream replication surface to the federation set. It
-// is still NOT operatorPermissions(): like leafLinkPermissions it carries traffic,
-// not authority, and the per-client scoping for honest agents is still enforced on
-// each agent's own credential at the leaf edge. (Owner-only WRITE enforcement —
-// denying a non-owner's write-through to a peer's bucket — is slice 2's per-client
-// Pub.Deny; this grant is about letting REPLICATION flow, not about who may write.)
-func peerLinkPermissions() jwt.Permissions {
+// It is deliberately NARROW: NOT operatorPermissions() (it carries traffic, not
+// authority) and NOT the all-domains $JS.> wildcard (a peer-link credential lives on
+// a remote box — the #174 trust boundary — so it gets exactly the source domain(s)
+// it needs, no more). And NOT the bare $KV.> subjects: a node's KV writes land on
+// the bare $KV.<bucket>.> subject, and propagating those across the leaf is what
+// lets a peer's same-named stream capture this node's writes (the cross-domain leak
+// the de-risk surfaced). The mirror does not need bare-$KV propagation — it sources
+// via the domain API's consumer delivery. (Owner-only WRITE enforcement — denying a
+// non-owner's write-through to a peer's bucket — is slice 2's per-client Pub.Deny;
+// this grant is about letting REPLICATION flow, scoped, not about who may write.)
+//
+// srcDomains is the set of JetStream domains the link sources (a node minting a
+// credential for a peer to link in passes its OWN domain — the one the peer
+// mirrors). An empty/blank entry is skipped: a node with no domain has no
+// cross-domain JS surface to grant.
+func peerLinkPermissions(srcDomains ...string) jwt.Permissions {
 	p := leafLinkPermissions()
-	// ONLY the domain-qualified JetStream API ($JS.<domain>.API.>) — the cross-domain
-	// surface a same-name External mirror sources its peer's bucket over. Deliberately
-	// NOT the bare $KV.> subjects: a node's KV writes land on the bare $KV.<bucket>.>
-	// subject, and propagating those across the leaf is what lets a peer's same-named
-	// stream capture this node's writes (the cross-domain leak the de-risk surfaced).
-	// The mirror does not need bare-$KV propagation — it pulls via the domain API's
-	// consumer delivery — so confining the grant to $JS.> keeps replication working
-	// while keeping each node's bare KV writes domain-local.
-	jsReplication := []string{
-		"$JS.>", // cross-domain JetStream API (incl. $JS.<domain>.API.> + its delivery) — mirror sourcing
+	for _, d := range srcDomains {
+		if d == "" {
+			continue
+		}
+		// Exactly this source domain's cross-domain JetStream API — the mirror's
+		// source-consumer create/info/ack ride $JS.<srcDomain>.API.>.
+		jsAPI := peerJSAPIPrefix(d) + ".>"
+		p.Pub.Allow = append(p.Pub.Allow, jsAPI)
+		p.Sub.Allow = append(p.Sub.Allow, jsAPI)
 	}
-	p.Pub.Allow = append(p.Pub.Allow, jsReplication...)
-	p.Sub.Allow = append(p.Sub.Allow, jsReplication...)
+	// The cross-domain replication DELIVERY channel ($JSC.R.>): JetStream delivers a
+	// cross-domain mirror's sourced messages to a generated $JSC.R.<token> subject,
+	// which is NOT under any $JS.<domain>.API prefix. Without it the source consumer
+	// is created but never delivers, so the mirror never catches up. It is a single
+	// internal-replication prefix shared across domains (there is no per-domain form),
+	// far narrower than the all-domains $JS.> — and it carries only replication
+	// traffic, never client or KV data.
+	p.Pub.Allow = append(p.Pub.Allow, jsReplicationDelivery)
+	p.Sub.Allow = append(p.Sub.Allow, jsReplicationDelivery)
 	return p
 }
+
+// jsReplicationDelivery is the JetStream cross-domain replication delivery prefix
+// ($JSC.R.>) a peer-link credential must carry for a same-name External mirror to
+// receive its sourced messages (see peerLinkPermissions). It is internal
+// replication transport, not client/KV data.
+const jsReplicationDelivery = "$JSC.R.>"

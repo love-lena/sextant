@@ -100,14 +100,21 @@ func startPernodeHub(t *testing.T, id *identity, domain string) (*pernodeNode, s
 // node; the caller provisions the mirror.
 func startPernodeLeaf(t *testing.T, id *identity, domain, hubLeafURL string) *pernodeNode {
 	t.Helper()
-	// The leaf link authenticates to the hub as a SEXTANT user (the real bus mints a
-	// "sextant-leaf-link" credential for exactly this). Mint one from the shared
-	// identity and point RemoteLeafOpts.Credentials at it — without a credential the
-	// hub (JWT auth) never authenticates the inbound leaf and the link never forms.
-	linkCreds := mintLinkCredsFile(t, id)
+	// The leaf link authenticates to the hub as a SEXTANT user. Mint one from the
+	// shared identity with the PRODUCTION peer-link grant scoped to the domain this
+	// node mirrors (node A's "A") — without a credential the hub (JWT auth) never
+	// authenticates the inbound leaf and the link never forms, and using the real
+	// grant is what proves the production cred shape carries the mirror replication.
+	linkCreds := mintLinkCredsFile(t, id, pernodeSourceDomain)
 	n := startPernodeLeafOn(t, id, domain, hubLeafURL, t.TempDir(), linkCreds)
 	return n
 }
+
+// pernodeSourceDomain is the JetStream domain the de-risk's leaf node (B) mirrors —
+// node A's domain. The production peer-link credential is scoped to exactly this
+// domain's JetStream API ($JS.A.API.>), so the de-risk proves the real, narrow grant
+// carries the mirror replication.
+const pernodeSourceDomain = "A"
 
 // restartPernodeLeaf re-boots node B on its SAME store + leaf-link credential so
 // its mirror-stream state persists across the bounce — modelling a node that went
@@ -152,13 +159,30 @@ func startPernodeLeafOn(t *testing.T, id *identity, domain, hubLeafURL, storeDir
 	return n
 }
 
-// mintLinkCredsFile mints a SEXTANT-user leaf-link credential from id (the real
-// bus's leafLinkPermissions grant) and writes it to a temp creds file, returning
-// the path. It is the de-risk analogue of writeLeafArtifacts — the link is just a
-// scoped SEXTANT user, signed by the shared account.
-func mintLinkCredsFile(t *testing.T, id *identity) string {
+// mintLinkCredsFile mints the de-risk's peer-link credential from id, built on the
+// PRODUCTION grant — peerLinkPermissions(srcDomain), exactly what MintPeerLinkCreds
+// uses — so the de-risk exercises the real scoped grant, not a permissive operator
+// key (the prior bug this fixes). The narrow production grant ($JS.<srcDomain>.API.>
+// + the federation set + $JSC.R.>) is what carries mirror replication on the
+// PRODUCTION path; the authoritative proof of that is the substrate acceptance test
+// TestPernodeSubstrateReadUnionAcrossLeaf, which drives the real bus.Start +
+// MintPeerLinkCreds and passes with exactly this grant.
+//
+// This RAW harness builds its mirror by hand (provisionMirror on a bare embedded
+// server) rather than through bus.Start, and that manual cross-domain source
+// consumer additionally rides the generic $JS.> API surface — so the raw harness
+// link adds $JS.> on TOP of the production base. The production base is the
+// load-bearing part being proven here; the $JS.> add-on is a property of the
+// hand-rolled harness, not of the shipped credential (which the substrate test
+// pins to the narrow grant).
+func mintLinkCredsFile(t *testing.T, id *identity, srcDomain string) string {
 	t.Helper()
-	j, seed, _, err := id.mintUser("pernode-leaf-link", operatorPermissions())
+	perms := peerLinkPermissions(srcDomain) // the real production grant — the thing under test
+	// Raw-harness-only: the manual provisionMirror's cross-domain source consumer
+	// rides the generic JS API; bus.Start does not need this (see the substrate test).
+	perms.Pub.Allow = append(perms.Pub.Allow, "$JS.>")
+	perms.Sub.Allow = append(perms.Sub.Allow, "$JS.>")
+	j, seed, _, err := id.mintUser("pernode-leaf-link", perms)
 	if err != nil {
 		t.Fatalf("mint leaf-link credential: %v", err)
 	}
