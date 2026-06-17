@@ -56,17 +56,20 @@
   }
 
   /* ---------- L1 · Portfolio ---------- */
-  function Card({ g, onOpen }) {
+  function Card({ g, onOpen, renderWiki }) {
     const r = roll(g);
     const crits = g.criteria || [];
+    const rw = renderWiki || ((t) => t);
     return (
-      <button className="dxg-card" type="button" onClick={() => onOpen && onOpen(g.id)}>
+      <div className="dxg-card" role="button" tabIndex={0}
+        onClick={() => onOpen && onOpen(g.id)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen && onOpen(g.id); } }}>
         <div className="dxg-card-top">
           <span className="dxg-card-name">{g.name}</span>
           {g.stream && <span className="dxg-card-stream">{g.stream}</span>}
           <span className={"dxg-verdict " + r.tone}>{r.verdict}</span>
         </div>
-        <div className={"dxg-northstar" + (r.undef ? " is-undef" : "")}>{g.northstar || "No north star yet — what does success look like?"}</div>
+        <div className={"dxg-northstar" + (r.undef ? " is-undef" : "")}>{g.northstar ? rw(g.northstar) : "No north star yet — what does success look like?"}</div>
         <div className="dxg-rollup">
           <div className="dxg-segs">
             {crits.map((c, i) => <span className="dxg-seg" key={i} style={{ background: "var(--" + segVar(c.status) + ")" }} />)}
@@ -74,7 +77,7 @@
           </div>
           <span className="dxg-rollup-txt">{r.total === 0 ? "0 criteria defined" : r.met + " of " + r.total + " met"}</span>
         </div>
-      </button>);
+      </div>);
   }
 
   // status → the CSS custom-property name for the segment fill colour.
@@ -86,7 +89,7 @@
       : "todo";
   }
 
-  function Portfolio({ goals, onOpen }) {
+  function Portfolio({ goals, onOpen, renderWiki }) {
     const needs = goals.filter(needsYou);
     const moving = goals.filter((g) => !needsYou(g));
     return (
@@ -99,27 +102,28 @@
         {needs.length > 0 && (
           <React.Fragment>
             <div className="dxg-group-lbl">Needs your attention</div>
-            <div className="dxg-cards">{needs.map((g) => <Card g={g} onOpen={onOpen} key={g.id} />)}</div>
+            <div className="dxg-cards">{needs.map((g) => <Card g={g} onOpen={onOpen} renderWiki={renderWiki} key={g.id} />)}</div>
           </React.Fragment>
         )}
         {moving.length > 0 && (
           <React.Fragment>
             <div className="dxg-group-lbl">Moving on its own</div>
-            <div className="dxg-cards">{moving.map((g) => <Card g={g} onOpen={onOpen} key={g.id} />)}</div>
+            <div className="dxg-cards">{moving.map((g) => <Card g={g} onOpen={onOpen} renderWiki={renderWiki} key={g.id} />)}</div>
           </React.Fragment>
         )}
       </div></div>);
   }
 
   /* ---------- L2 · Goal detail ---------- */
-  function Criterion({ c, onOpenArtifact }) {
+  function Criterion({ c, onOpenArtifact, renderWiki }) {
     const s = stat(c.status);
     const evidence = c.evidence || [];
+    const rw = renderWiki || ((t) => t);
     return (
       <div className="dxg-crit">
         <span className={"dxg-crit-icon " + s.tone}>{s.glyph}</span>
         <div className="dxg-crit-main">
-          <div className="dxg-crit-text">{c.text}</div>
+          <div className="dxg-crit-text">{c.text ? rw(c.text) : c.text}</div>
           <div className="dxg-crit-evi">
             {evidence.length
               ? evidence.map((e, i) => (
@@ -136,9 +140,10 @@
       </div>);
   }
 
-  function Detail({ g, onBack, onOpenArtifact }) {
+  function Detail({ g, onBack, onOpenArtifact, renderWiki }) {
     const r = roll(g);
     const crits = g.criteria || [];
+    const rw = renderWiki || ((t) => t);
     return (
       <div className="dxg-detail">
         <div className="dxg-topbar">
@@ -151,7 +156,7 @@
             <div className="dxg-ns-block">
               <div className="dxg-ns-lbl">North star</div>
               {g.northstar
-                ? <div className="dxg-ns-text">{g.northstar}</div>
+                ? <div className="dxg-ns-text">{rw(g.northstar)}</div>
                 : <div className="dxg-ns-text is-undef">This goal isn't defined yet.</div>}
             </div>
 
@@ -162,7 +167,7 @@
 
             <div className="dxg-crits">
               {crits.length
-                ? crits.map((c, i) => <Criterion c={c} onOpenArtifact={onOpenArtifact} key={c.id || i} />)
+                ? crits.map((c, i) => <Criterion c={c} onOpenArtifact={onOpenArtifact} renderWiki={renderWiki} key={c.id || i} />)
                 : <div className="dxg-noevi" style={{ padding: "14px 0" }}>No criteria yet — this goal hasn't been broken down into checkable outcomes.</div>}
             </div>
 
@@ -193,13 +198,13 @@
   // GoalsView holds the L1↔L2 selection. openGoal=null shows the Portfolio; an id
   // shows that goal's Detail. onOpenArtifact opens an evidence artifact in the
   // review stage (the same handler the rest of the dash uses).
-  function GoalsView({ goals, onOpenArtifact }) {
+  function GoalsView({ goals, onOpenArtifact, renderWiki }) {
     const [openGoal, setOpenGoal] = useState(null);
     const list = goals || [];
     if (list.length === 0) return <Empty />;
     const g = openGoal && list.find((x) => x.id === openGoal);
-    if (g) return <Detail g={g} onBack={() => setOpenGoal(null)} onOpenArtifact={onOpenArtifact} />;
-    return <Portfolio goals={list} onOpen={(id) => setOpenGoal(id)} />;
+    if (g) return <Detail g={g} onBack={() => setOpenGoal(null)} onOpenArtifact={onOpenArtifact} renderWiki={renderWiki} />;
+    return <Portfolio goals={list} onOpen={(id) => setOpenGoal(id)} renderWiki={renderWiki} />;
   }
 
   Object.assign(window, { GoalsView });
