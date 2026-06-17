@@ -180,6 +180,28 @@ authoritative and nothing gains authority over a **client**. Mirrors the
 current-value-artifact + event-stream pairing the **workflow** harness uses.
 _Avoid_: command, assignment, directive
 
+**Assistant**:
+The operator's own **client**, run as an agent — one identity with two duties:
+it **answers** (read-only) when the operator messages it, reading the workspace
+to reply on the operator's DM; and it **defends** the operator's attention by
+curating the Home/inbox projection so "Needs you" holds only the real calls with
+one clear top action. A **convention**, not a core concept (ADR-0039): a role
+prompt plus the swappable `assistant` designation artifact, over the existing
+client, artifact, and message operations — no new operation, no privileged tier,
+no operator authority. **Signal-not-manage**: it curates the *view*, never a
+review verdict or an owner's state. The reference assistant is named **violet**.
+_Avoid_: bot, secretary, manager; an assistant that *acts* on the operator's
+behalf (it answers and curates a projection; it never acts)
+
+**`assistant` (designation artifact)**:
+The latest-value artifact **`assistant`** that names which live **client** is the
+current **assistant**: `{client_id, name, accent}` (its bus identity, display
+name, and identity colour). The dash and crew read it to know who the assistant
+is and how to reach it; re-pointing it swaps the assistant with no code change.
+Mirrors the `goal.<id>` / `status.<id>` latest-value pattern; a convention, not a
+schema change.
+_Avoid_: hardcoding the assistant's identity; registry, account
+
 **Epoch**:
 The protocol version; a client checks it on connect.
 _Avoid_: version, schema version
@@ -217,6 +239,11 @@ _Avoid_: kill (reserve that for forcing a process from the outside)
   adopt it. It is an opinionated extension over the core — the universal protocol
   has no principal. A client that is not the principal is just a **client**;
   there is no separate role for the trusting side.
+- The **assistant** is a **client** named by the latest-value `assistant`
+  artifact. It **answers** the operator (read-only) and **defends** the
+  operator's attention by curating the Home/inbox projection over the
+  `review`-state **artifacts**, goal criteria, and question-**messages** in the
+  pool — it curates the *view*, never an owner's state (a convention, ADR-0039).
 
 ## Flagged ambiguities
 
