@@ -84,11 +84,14 @@
   //   onSendComment()           → sendDiscussion (post the composer to the companion topic)
   //   onExpandDiscussion / onBrowse  navigation handlers
   //   railWidth / railCollapsed / onRailWidth / onToggleRail  the resizable rail (TASK-141)
+  //   onOpenArtifact / artifactNames  passed through to MarkdownArtifact so body
+  //                                   [[wikilinks]] resolve + open in-dash
   function ReviewView(props) {
     const {
       artifact, record, discussion, draft, setDraft,
       onSetReview, onSendComment, onExpandDiscussion, onBrowse,
       railWidth, railCollapsed, onRailWidth, onToggleRail,
+      onOpenArtifact, artifactNames,
     } = props;
 
     const name = artifact.name;
@@ -189,7 +192,7 @@
               <span className="fx-why-text">{why}</span>
             </div>
             <div className="fx-docmd">
-              <window.MarkdownArtifact record={record} name={name} revision={artifact.version} />
+              <window.MarkdownArtifact record={record} name={name} revision={artifact.version} onOpenArtifact={onOpenArtifact} artifactNames={artifactNames} />
             </div>
           </div>
         </div>
