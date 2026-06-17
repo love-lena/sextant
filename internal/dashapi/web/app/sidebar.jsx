@@ -219,36 +219,88 @@
 
   }
 
-  /* ---------- floating Assistant FAB · visible stub (NOT wired) ----------
+  /* ---------- floating Assistant FAB · the violet DM (ADR-0039) ----------
      Controlled when given open/onOpen/onClose (so ⌘K can open it with a
-     prefilled prompt); otherwise self-manages its own open state. `prompt` is a
-     query carried over from a ⌘K no-match — it's SHOWN, never answered: the
-     backend is still a stub, so we never fabricate a reply. */
-  function AssistantFab({ open: openProp, prompt, onOpen, onClose } = {}) {
+     prefilled prompt); otherwise self-manages its own open state.
+
+     `assistant` is violet — the live operator-assistant ({ id, name, accent })
+     read from the `assistant` artifact, or null when it doesn't exist yet (it's
+     created at v0.5.0 go-live). It drives the two modes:
+       - PRESENT → the FAB panel IS the live DM thread with violet: header,
+         window.MessageList (the backfilled DM history), window.Composer wired to
+         onSend (publishes to the violet DM subject). The spark is tinted with
+         violet's accent (inline, never touching the global --brand).
+       - ABSENT  → the calm "not live yet" stub: a disabled composer + the carried
+         ⌘K query shown but never answered (there's no assistant to answer it).
+     `prompt` is a query carried over from a ⌘K no-match (prefilled into the
+     composer by app.jsx; also shown in the absent stub). `online` is violet's
+     live bus presence → the header dot. */
+  function AssistantFab({ open: openProp, prompt, assistant, online, messages, self, draft, setDraft, onSend, onArtifactRef, artifactNames, onOpen, onClose } = {}) {
     const [openLocal, setOpenLocal] = useState(false);
     const controlled = openProp !== undefined;
     const open = controlled ? openProp : openLocal;
     const doOpen = () => (controlled ? onOpen && onOpen() : setOpenLocal(true));
     const doClose = () => (controlled ? onClose && onClose() : setOpenLocal(false));
+    const live = !!(assistant && assistant.id);
+    const name = (assistant && assistant.name) || "violet";
+    const accent = (assistant && assistant.accent) || "";
+    // keep the freshest message in view as the thread grows / on open.
+    const bodyRef = useRef(null);
+    useEffect(() => {
+      const el = bodyRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    }, [open, live, messages && messages.length]);
+
     if (!open) return (
-      <button className="fx-asst-btn" title="Assistant (not wired yet)" onClick={doOpen}>
-        <span className="fx-asst-spark">✦</span>
+      <button className="fx-asst-btn" title={live ? ("Ask " + name) : "Assistant (not live yet)"} onClick={doOpen}>
+        <span className="fx-asst-spark" style={accent ? { color: accent } : undefined}>✦</span>
       </button>);
+
+    // LIVE → the violet DM thread (window.MessageList + window.Composer, the same
+    // primitives ConversationView uses). The Composer reads its own `draft`, so
+    // its zero-arg onSend forwards the current draft to onSend(text).
+    if (live) {
+      const msgs = messages || [];
+      return (
+        <div className="fx-asst-panel is-live sx-conv-light" role="dialog" aria-label={"Chat with " + name}>
+          <div className="fx-asst-head">
+            <span className="fx-asst-mark" style={accent ? { background: accent } : undefined}>✦</span>
+            <div>
+              <div className="fx-asst-title" style={accent ? { color: accent } : undefined}>{name}</div>
+              <div className="fx-asst-live">
+                <span className={"fx-asst-dot" + (online ? " is-on" : "")} style={online && accent ? { background: accent } : undefined} />
+                {online ? "online" : "your assistant"}
+              </div>
+            </div>
+            <button className="fx-asst-close" onClick={doClose} aria-label="Close">×</button>
+          </div>
+          <div className="fx-asst-thread" ref={bodyRef}>
+            {msgs.length === 0 && (
+              <p className="fx-asst-empty">Ask {name} anything about your workspace — it can see your goals, artifacts, and the bus.</p>
+            )}
+            <window.MessageList messages={msgs} onArtifactRef={onArtifactRef} artifactNames={artifactNames} />
+          </div>
+          <window.Composer draft={draft || ""} setDraft={setDraft} onSend={() => onSend && onSend(draft)} placeholder={"Message " + name + "…"} />
+        </div>);
+    }
+
+    // ABSENT → the calm "not live yet" stub. The carried ⌘K query is shown but
+    // never answered (there's no assistant to answer it); the composer is disabled.
     return (
       <div className="fx-asst-panel" role="dialog" aria-label="Assistant">
         <div className="fx-asst-head">
           <span className="fx-asst-mark">✦</span>
-          <div><div className="fx-asst-title">Assistant</div><div className="fx-asst-sub">not wired yet</div></div>
+          <div><div className="fx-asst-title">Assistant</div><div className="fx-asst-sub">not live yet</div></div>
           <button className="fx-asst-close" onClick={doClose} aria-label="Close">×</button>
         </div>
         {prompt
           ? <div className="fx-asst-msg you"><span className="fx-asst-bub">{prompt}</span></div>
           : null}
         <div className="fx-asst-stub">
-          <p className="fx-asst-stub-lead">This is a placeholder.</p>
+          <p className="fx-asst-stub-lead">violet isn't live yet.</p>
           <p className="fx-asst-stub-body">{prompt
-            ? "The assistant can't answer yet — it isn't connected to anything. Your question is parked here; the assistant gets wired up in a later track."
-            : "The assistant isn't connected to anything yet — it can't answer questions or read your bus. It'll be wired up in a later track."}</p>
+            ? "Your assistant lights up at v0.5.0 release. Your question is parked here until then — violet will be able to answer once it's live."
+            : "Your assistant lights up at v0.5.0 release. Once violet is live, this is where you ask it about your goals, artifacts, and the bus."}</p>
         </div>
         <div className="fx-asst-composer">
           <span className="fx-asst-field">{prompt || "Ask a quick question…"} (disabled)</span>
@@ -314,7 +366,7 @@
   // subjects; selecting a result opens it via the existing open handlers.
   // `recents` is the recency store ({ [entry.key]: timestamp }) passed down
   // from App so the palette can rank recently-opened destinations to the top.
-  function CmdK({ index, recents, onClose, onAsk }) {
+  function CmdK({ index, recents, assistantLive, onClose, onAsk }) {
     const [q, setQ] = useState("");
     const [sel, setSel] = useState(0);
     const ql = q.trim().toLowerCase();
@@ -332,9 +384,13 @@
 
     const matches = scored.slice(0, 9).map((s) => s.it);
     // No good match for a typed query → offer "Ask the assistant" as a real,
-    // selectable result that hands the query to the (stubbed) Assistant FAB.
+    // selectable result that hands the query to the Assistant FAB. When violet is
+    // live (the `assistant` artifact is present) it opens a DM with violet; when
+    // absent the question is parked in the FAB's "not live yet" panel.
     const askRow = (onAsk && ql && matches.length === 0)
-      ? { key: "ask", type: "Ask", label: "Ask the assistant: “" + q.trim() + "”", sub: "the assistant isn't wired up yet — your question gets parked", go: () => onAsk(q.trim()) }
+      ? (assistantLive
+          ? { key: "ask", type: "Ask", label: "Ask violet: “" + q.trim() + "”", sub: "opens a DM with violet", go: () => onAsk(q.trim()) }
+          : { key: "ask", type: "Ask", label: "Ask the assistant: “" + q.trim() + "”", sub: "not live yet — your question gets parked", go: () => onAsk(q.trim()) })
       : null;
     const results = askRow ? [askRow] : matches;
     useEffect(() => { setSel(0); }, [q]);

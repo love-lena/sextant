@@ -109,6 +109,7 @@
     const [artifacts, setArtifacts] = useState([]);      // raw ArtifactInfo[]
     const [records, setRecords] = useState({});          // name -> Record (status + instant open)
     const [home, setHome] = useState(null);              // curated Home config (the 'home' artifact, TASK-71 #2)
+    const [assistant, setAssistant] = useState(null);    // the 'assistant' artifact (ADR-0039): { client_id, name, accent } — absent pre-v0.5.0
     const [convos, setConvos] = useState({});            // subject -> {msgs:[{id,author,text,ts}], last, lastText}
     const [activity, setActivity] = useState([]);        // recent frames across all subjects
     const [activeArtifact, setActiveArtifact] = useState("");
@@ -126,6 +127,9 @@
     // prefilled prompt. asstPrompt is the query carried over from a no-match search.
     const [asstOpen, setAsstOpen] = useState(false);
     const [asstPrompt, setAsstPrompt] = useState("");
+    // a dedicated composer buffer for the FAB's violet DM, so it never collides
+    // with the main stage `draft` (the operator can be mid-typing in a thread).
+    const [asstDraft, setAsstDraft] = useState("");
     const [draft, setDraft] = useState("");
     const [hidden, setHidden] = useState(()=>{ try{ return new Set(JSON.parse(localStorage.getItem("sx-hidden-convos")||"[]")); }catch(_){ return new Set(); } });
 
@@ -176,6 +180,9 @@
       apiGet("/api/clients").then(cs=>setClients(Array.isArray(cs)?cs:[])).catch(()=>{});
       apiGet("/api/artifacts").then(as=>setArtifacts(Array.isArray(as)?as:[])).catch(()=>{});
       apiGet("/api/artifacts/home").then(a=>setHome((a&&a.Record)||null)).catch(()=>{});
+      // the assistant convention (ADR-0039): a latest-value `assistant` artifact
+      // names the live operator-assistant. Absent pre-v0.5.0 (404) → stays null.
+      apiGet("/api/artifacts/assistant").then(a=>setAssistant((a&&a.Record)||null)).catch(()=>setAssistant(null));
       // seed the conversation list with subjects the dash already knows about
       apiGet("/api/subjects").then(subs=>{
         if(!Array.isArray(subs)) return;
@@ -309,6 +316,12 @@
           const rec=(a&&a.Record)||null;
           setHome(prev => JSON.stringify(prev)===JSON.stringify(rec) ? prev : rec);
         }).catch(()=>{});
+        // the `assistant` artifact (ADR-0039) lights up at v0.5.0 — poll so the FAB
+        // wires to violet's DM the moment it appears (and degrades if it's removed).
+        apiGet("/api/artifacts/assistant").then(a=>{
+          const rec=(a&&a.Record)||null;
+          setAssistant(prev => JSON.stringify(prev)===JSON.stringify(rec) ? prev : rec);
+        }).catch(()=>setAssistant(prev => prev===null ? prev : null));
         apiGet("/api/clients").then(cs=>{
           if(!Array.isArray(cs)) return;
           setClients(prev => JSON.stringify(prev)===JSON.stringify(cs) ? prev : cs);
@@ -469,6 +482,38 @@
       }));
     },[convos, activeConvo, nameOf, kindOf, self.id]);
 
+    // derived: violet, the operator's assistant (ADR-0039). The `assistant`
+    // artifact names the live assistant by its bus client_id; absent (pre-v0.5.0)
+    // or malformed ⇒ null, and the FAB falls back to its "not live yet" state.
+    const violet = (assistant && typeof assistant.client_id==="string" && assistant.client_id)
+      ? { id:assistant.client_id, name:(typeof assistant.name==="string" && assistant.name ? assistant.name : "violet"), accent:(typeof assistant.accent==="string"?assistant.accent:"") }
+      : null;
+    // violet is "live" when a matching online bus client is present — drives the
+    // header dot. Absent client / offline ⇒ no dot (the convention is just an
+    // artifact; the agent need not be connected).
+    const violetOnline = !!(violet && clients.some(c=>c.ID===violet.id && c.Online));
+
+    // the violet DM subject (the same canonical 2-party topic startDM derives) and
+    // the discovered+backfilled message thread, shaped exactly like `messages` so
+    // the FAB can feed window.MessageList. Both null/empty when violet is absent.
+    const asstSubject = (violet && self.id) ? dmSubject(self.id, violet.id) : "";
+    const assistantMessages = useMemo(()=>{
+      const c = asstSubject ? convos[asstSubject] : null; if(!c) return [];
+      return c.msgs.map((m,i)=>({
+        id:m.id||i, kind:"msg", author:nameOf(m.author),
+        role: (kindOf(m.author)==="client"||kindOf(m.author)==="human")?"human":"agent",
+        self: m.author===self.id, time:relMs(m.ts), text:m.text,
+      }));
+    },[convos, asstSubject, nameOf, kindOf, self.id]);
+
+    // discover + backfill the violet DM as soon as both ends are known, so the
+    // existing thread loads into `convos` (the same ensureConvo+backfill openArtifact
+    // / startDM use). Re-runs only when the subject changes (not per render).
+    useEffect(()=>{
+      if(!asstSubject) return;
+      ensureConvo(asstSubject); backfill(asstSubject);
+    },[asstSubject]);
+
     // the open artifact's companion-topic discussion, rendered inline in the
     // artifact view (TASK-83). Same shape as `messages`, keyed on the artifact's
     // companion subject msg.topic.artifact.<name>.
@@ -509,10 +554,18 @@
       }).catch(()=>{ setActiveArtifact(cur=>{ if(cur===name && !artifacts.some(x=>x.Name===name)) setArtMissing(true); return cur; }); });
     }
     function goHome(){ setStageMode("home"); }
-    // ⌘K no-match → open the (stub) Assistant FAB with the typed query as its
-    // prompt. The assistant is NOT wired — the panel shows the prompt + the
-    // "not wired yet" placeholder; it never fabricates an answer.
-    function askAssistant(query){ setPalette(false); setAsstPrompt(query||""); setAsstOpen(true); }
+    // ⌘K no-match → open the Assistant FAB with the typed query prefilled in the
+    // composer (never auto-sent — the operator hits send). When violet is live the
+    // FAB is the DM thread; when absent it shows the "not live yet" state. We set
+    // BOTH asstPrompt (shown as the carried query) and asstDraft (the live composer
+    // value) so the operator can edit + send.
+    function askAssistant(query){ setPalette(false); const q=query||""; setAsstPrompt(q); setAsstDraft(q); setAsstOpen(true); }
+    // send the FAB composer to violet's DM (the canonical 2-party topic), then
+    // clear the FAB draft. No-op until violet + self are both known.
+    function sendToAssistant(text){
+      const body=(text||"").trim(); if(!body || !violet || !self.id) return;
+      apiPublish(dmSubject(self.id, violet.id),{ "$type":"chat.message", text:body }).then(()=>{ setAsstDraft(""); setAsstPrompt(""); }).catch(()=>{});
+    }
     // Workspace nav (flow2 chrome): Home / Artifacts / Goals / Agents swap the
     // white stage.
     function onNav(key){ touchRecent("nav:"+key); if(key==="goals") setGoalsEpoch(e=>e+1); setStageMode(key); }
@@ -748,9 +801,14 @@
         </main>
 
         <AssistantFab open={asstOpen} prompt={asstPrompt}
-          onOpen={()=>{ setAsstPrompt(""); setAsstOpen(true); }}
+          assistant={violet} online={violetOnline}
+          messages={assistantMessages} self={self}
+          draft={asstDraft} setDraft={setAsstDraft}
+          onSend={sendToAssistant} onArtifactRef={openArtifact}
+          artifactNames={artifacts.map(a=>a.Name)}
+          onOpen={()=>{ setAsstPrompt(""); setAsstDraft(""); setAsstOpen(true); }}
           onClose={()=>{ setAsstOpen(false); setAsstPrompt(""); }} />
-        {palette && <CmdK index={searchIndex()} recents={recents} onClose={()=>setPalette(false)} onAsk={askAssistant} />}
+        {palette && <CmdK index={searchIndex()} recents={recents} assistantLive={!!violet} onClose={()=>setPalette(false)} onAsk={askAssistant} />}
 
         <TweaksPanel title="Tweaks">
           <TweakSection label="Accent" />
