@@ -112,13 +112,19 @@
       agents, self,
     } = props;
 
-    // Scroll the message body to the bottom when messages arrive or the
-    // conversation changes — mirrors the useEffect in app.jsx (which still
-    // drives the external ref when stageMode === "conversation").
+    // Scroll the message body to the bottom when messages arrive/send or the
+    // conversation changes. This is the sole scroll driver — the conversation view
+    // owns its own scroll now (app.jsx no longer keeps a ref for it).
     const convBodyRef = useRef(null);
     useEffect(() => {
       const el = convBodyRef.current;
-      if (el) el.scrollTop = el.scrollHeight;
+      if (!el) return;
+      // Defer to the next frame so the just-sent/just-arrived message is laid out
+      // before we measure scrollHeight — a synchronous read here lands short of the
+      // newest line (the message you just sent stays just out of view). (Lena's
+      // #ui-feedback: "sending messages doesn't scroll the conversation down".)
+      const id = requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+      return () => cancelAnimationFrame(id);
     }, [messages && messages.length, convo && convo.key]);
 
     const isDM = convo && convo.type === "dm";

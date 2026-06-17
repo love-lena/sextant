@@ -115,8 +115,12 @@
     const [activeArtifact, setActiveArtifact] = useState("");
     const [artRecord, setArtRecord] = useState(null);    // active artifact Record
     const [artMissing, setArtMissing] = useState(false); // the open artifact resolved to nothing (stale ref guard)
+    const [artifactOpen, setArtifactOpen] = useState(false); // the artifact-review modal floats over the current stage (Lena's #ui-feedback): a review is a dismissible overlay, not a full-stage takeover
+    const artReqRef = useRef(""); // the name of the latest-opened artifact — guards openArtifact's async fetch so a slow earlier fetch can't clobber a newer modal
     const [activeConvo, setActiveConvo] = useState("");
-    // stage mode: home | artifacts | goals | agents | artifact (one open) | conversation
+    // stage mode: home | artifacts | goals | agents | conversation. (Opening an
+    // artifact for review no longer changes the stage — it pops the review modal
+    // over whatever stage you were on; closing returns you exactly there.)
     const [stageMode, setStageMode] = useState("home");
     // bumped each time the Goals nav is clicked so GoalsView remounts to the
     // portfolio (its open-goal is internal state; the nav should always land you
@@ -197,6 +201,15 @@
       window.addEventListener("keydown", h);
       return ()=>window.removeEventListener("keydown", h);
     },[]);
+
+    // Esc dismisses the artifact-review modal (one of its three exits: × · scrim ·
+    // Esc). Only listens while the modal is open, so it doesn't shadow other keys.
+    useEffect(()=>{
+      if(!artifactOpen) return;
+      const h = (e)=>{ if(e.key==="Escape"){ e.preventDefault(); closeArtifact(); } };
+      window.addEventListener("keydown", h);
+      return ()=>window.removeEventListener("keydown", h);
+    },[artifactOpen]);
 
     // dark mode: toggle the class on #app + persist (topbar toggle)
     useEffect(()=>{
@@ -534,25 +547,40 @@
       who:nameOf(a.author), text:a.text, time:relMs(a.ts),
     })),[activity, nameOf]);
 
-    const artifact = artItems.find(a=>a.name===activeArtifact) || artItems[0] ||
-      { name:"", version:0, status:"review", topic:"", author:{name:"",kind:"agent"}, updated:"" };
+    // Resolve the open artifact for the review modal. When activeArtifact isn't in
+    // the cached list yet (a fresh ref, a poll lag), fall back to a minimal object
+    // named for activeArtifact — NOT artItems[0], which would show the WRONG doc;
+    // the record streams in via openArtifact's fetch.
+    const artifact = artItems.find(a=>a.name===activeArtifact) ||
+      { name:activeArtifact, version:0, status:statusOf(activeArtifact), topic:"", author:{name:"",kind:"agent"}, updated:"" };
     const convo = convList.find(c=>c.key===activeConvo) || convList[0] || { type:"topic", name:"", participants:0 };
 
     function openArtifact(name){
       touchRecent("art:"+name);
-      setActiveArtifact(name); setStageMode("artifact"); setArtMissing(false);
+      // Pop the review modal over the current stage — do NOT change stageMode, so
+      // closing returns you exactly to where you opened it from (Home / a list / …).
+      setActiveArtifact(name); setArtifactOpen(true); setArtMissing(false);
+      artReqRef.current = name; // mark this as the current open — the fetch below only applies if it's still current
       const subj = companionTopic(name); ensureConvo(subj); backfill(subj); // load the inline discussion (TASK-83)
       const cached = records[name];
       setArtRecord(cached!==undefined ? cached : null);
       // Fetch by name (the API resolves names not in the cached list). A 404 or a
       // null record for a name that isn't in the directory means the ref is stale
-      // — flag it so the stage shows a graceful "not found" instead of the wrong
-      // (fallback) document. Ignore a stale resolution if a newer open superseded it.
+      // — flag it so the modal shows a graceful "not found" instead of the wrong
+      // (fallback) document. Cache the record regardless, but only apply it to the
+      // modal (artRecord/artMissing) if THIS open is still the current one — a
+      // slower earlier fetch (or a close) must not clobber a newer modal.
       apiGet("/api/artifacts/"+encodeURIComponent(name)).then(a=>{
-        const rec=(a&&a.Record)||null; setArtRecord(rec); setRecords(prev=>({...prev,[name]:rec}));
-        setActiveArtifact(cur=>{ if(cur===name && !rec && !artifacts.some(x=>x.Name===name)) setArtMissing(true); return cur; });
-      }).catch(()=>{ setActiveArtifact(cur=>{ if(cur===name && !artifacts.some(x=>x.Name===name)) setArtMissing(true); return cur; }); });
+        const rec=(a&&a.Record)||null; setRecords(prev=>({...prev,[name]:rec}));
+        if(artReqRef.current!==name) return;
+        setArtRecord(rec);
+        if(!rec && !artifacts.some(x=>x.Name===name)) setArtMissing(true);
+      }).catch(()=>{ if(artReqRef.current===name && !artifacts.some(x=>x.Name===name)) setArtMissing(true); });
     }
+    // dismiss the review modal — the stage underneath is untouched, so this drops
+    // you back exactly where you were. Clear the active artifact + the request ref
+    // so a re-open is a fresh load and a late fetch can't repopulate a closed modal.
+    function closeArtifact(){ setArtifactOpen(false); setActiveArtifact(""); setArtMissing(false); artReqRef.current=""; }
     function goHome(){ setStageMode("home"); }
     // ⌘K no-match → open the Assistant FAB with the typed query prefilled in the
     // composer (never auto-sent — the operator hits send). When violet is live the
@@ -714,12 +742,6 @@
                 <span className="sx-crumb-topic">Goals</span>
               ) : stageMode==="agents" ? (
                 <span className="sx-crumb-topic">Agents</span>
-              ) : stageMode==="artifact" ? (
-                <React.Fragment>
-                  <span className="sx-crumb-topic">Artifact</span>
-                  <span className="sx-crumb-sep">/</span>
-                  <span className="sx-crumb-art">{artifact.name}</span>
-                </React.Fragment>
               ) : (
                 <React.Fragment>
                   <span className="sx-crumb-topic">Conversations</span>
@@ -751,42 +773,6 @@
             <div className="sx-canvas sx-canvas--list">
               <div className="sx-page sx-page--doc"><AgentsView agents={agents} onDM={startDM} /></div>
             </div>
-          ) : stageMode==="artifact" && artMissing ? (
-            <div className="sx-canvas sx-canvas--list">
-              <div className="sx-page sx-page--doc">
-                <div className="fx-scroll"><div className="fx-col sx-conv-light">
-                  <h1 className="fx-h1">Artifact not found</h1>
-                  <p className="fx-psub">Nothing on the bus is named <span className="mono">{activeArtifact}</span> right now.</p>
-                  <div className="fx-stub">
-                    <span className="fx-stub-ic">⌕</span>
-                    <div>
-                      <div className="fx-stub-title">The reference may be stale.</div>
-                      <div className="fx-stub-sub">It might have been renamed or removed, or it never existed. Open the Artifacts list to see what's actually here.</div>
-                    </div>
-                  </div>
-                  <div style={{marginTop:18}}>
-                    <button className="sx-sbtn sx-sbtn-req" onClick={()=>setStageMode("artifacts")}>Browse artifacts →</button>
-                  </div>
-                </div></div>
-              </div>
-            </div>
-          ) : stageMode==="artifact" ? (
-            <div className="sx-canvas sx-canvas--review sx-conv-light">
-              <ReviewView
-                artifact={artifact}
-                record={artRecord}
-                discussion={discussion}
-                draft={draft} setDraft={setDraft}
-                onSetReview={setReview}
-                onSendComment={sendDiscussion}
-                onExpandDiscussion={(n)=>expandConvo(companionTopic(n))}
-                onBrowse={()=>setStageMode("artifacts")}
-                railWidth={railWidth} railCollapsed={railCollapsed}
-                onRailWidth={onRailWidth} onToggleRail={toggleRail}
-                onOpenArtifact={openArtifact}
-                artifactNames={artifacts.map(a=>a.Name)}
-              />
-            </div>
           ) : (
             <ConversationView
               convo={convo}
@@ -799,6 +785,54 @@
             />
           )}
         </main>
+
+        {/* Artifact-review modal (Lena's #ui-feedback): a review floats over the
+            current stage instead of taking it over, so dismissing returns you
+            exactly to where you opened it from. Three exits: × · scrim · Esc. The
+            scrim closes on a click of itself only — the panel stops propagation. */}
+        {artifactOpen && (
+          <div className="sx-artmodal-scrim" onMouseDown={(e)=>{ if(e.target===e.currentTarget) closeArtifact(); }}>
+            <div className="sx-artmodal-panel" role="dialog" aria-modal="true"
+              aria-label={artMissing ? "Artifact not found" : ("Review "+(artifact.name||activeArtifact))}
+              tabIndex={-1} ref={el=>{ if(el && !el.dataset.focused){ el.dataset.focused="1"; el.focus(); } }}
+              onMouseDown={(e)=>e.stopPropagation()}>
+              <button className="sx-artmodal-x" aria-label="Close" title="Close (Esc)" onClick={closeArtifact}>×</button>
+              {artMissing ? (
+                <div className="sx-artmodal-missing sx-conv-light">
+                  <h1 className="fx-h1">Artifact not found</h1>
+                  <p className="fx-psub">Nothing on the bus is named <span className="mono">{activeArtifact}</span> right now.</p>
+                  <div className="fx-stub">
+                    <span className="fx-stub-ic">⌕</span>
+                    <div>
+                      <div className="fx-stub-title">The reference may be stale.</div>
+                      <div className="fx-stub-sub">It might have been renamed or removed, or it never existed. Open the Artifacts list to see what's actually here.</div>
+                    </div>
+                  </div>
+                  <div style={{marginTop:18}}>
+                    <button className="sx-sbtn sx-sbtn-req" onClick={()=>{ closeArtifact(); setStageMode("artifacts"); }}>Browse artifacts →</button>
+                  </div>
+                </div>
+              ) : (
+                <div className="sx-canvas--review sx-conv-light">
+                  <ReviewView
+                    artifact={artifact}
+                    record={artRecord}
+                    discussion={discussion}
+                    draft={draft} setDraft={setDraft}
+                    onSetReview={setReview}
+                    onSendComment={sendDiscussion}
+                    onExpandDiscussion={(n)=>{ closeArtifact(); expandConvo(companionTopic(n)); }}
+                    onClose={closeArtifact}
+                    railWidth={railWidth} railCollapsed={railCollapsed}
+                    onRailWidth={onRailWidth} onToggleRail={toggleRail}
+                    onOpenArtifact={openArtifact}
+                    artifactNames={artifacts.map(a=>a.Name)}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         <AssistantFab open={asstOpen} prompt={asstPrompt}
           assistant={violet} online={violetOnline}
