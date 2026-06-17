@@ -41,11 +41,14 @@
     draft:   "is still drafting this",
   };
 
-  // ReviewDone — the consequence panel shown right after a verdict. It speaks only
-  // to the artifact's own resulting state (approved / changes / comment); Goals are
-  // Track 2 so there's no criterion-met language here (mirrors flow-ext's ReviewDone
-  // minus the criteria branch).
-  function ReviewDone({ verdict, name, author, onClose }) {
+  // ReviewDone — the consequence note shown right after a verdict, as a small
+  // dismissible popup floating OVER the still-full-page review (Lena's #ui-feedback:
+  // the artifact stays a full page; only this confirmation is a popup). It speaks
+  // only to the artifact's own resulting state (approved / changes / comment); Goals
+  // are Track 2 so there's no criterion-met language here. Dismiss paths: × /
+  // scrim-click / "Stay here" → onDismiss (stay on the artifact); "Back to Artifacts"
+  // → onBack (explicit navigation). Esc is wired by ReviewView.
+  function ReviewDone({ verdict, name, author, onBack, onDismiss, inModal }) {
     let tone, glyph, title, line;
     if (verdict === "approved") {
       tone = "met"; glyph = "✓";
@@ -61,14 +64,19 @@
       line = <>Your note is on <b>{name}</b>'s thread. It stays in your inbox — you haven't decided yet.</>;
     }
     const C = { met: "var(--met)", waiting: "var(--wait)", progress: "var(--prog)" }[tone];
+    // scrim click dismisses, but only a click ON the scrim itself (the card
+    // stopPropagation's mousedown so an in-card drag/click never leaks out).
+    const onScrim = (e) => { if (e.target === e.currentTarget) onDismiss(); };
     return (
-      <div className="fx-done">
-        <div className="fx-done-card fx-in">
+      <div className="fx-donepop-scrim" onMouseDown={onScrim}>
+        <div className="fx-donepop-card fx-in" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(e) => e.stopPropagation()}>
+          <button className="fx-donepop-x" aria-label="Dismiss" onClick={onDismiss}>×</button>
           <span className="fx-done-icon" style={{ color: C, background: "color-mix(in srgb," + C + " 12%,transparent)" }}>{glyph}</span>
           <h2 className="fx-done-title">{title}</h2>
           <p className="fx-done-line">{line}</p>
           <div className="fx-done-actions">
-            <button className="fx-submit" onClick={onClose}>Close</button>
+            <button className="fx-submit" onClick={onBack}>{inModal ? "Back to conversation" : "Back to Artifacts"}</button>
+            <button className="fx-donepop-stay" onClick={onDismiss}>Stay here</button>
           </div>
         </div>
       </div>);
@@ -82,21 +90,23 @@
   //   draft/setDraft  the shared composer buffer
   //   onSetReview(name, state)  → setReview (the verdict primitive)
   //   onSendComment()           → sendDiscussion (post the composer to the companion topic)
-  //   onExpandDiscussion  navigation handler (pop the thread out as a conversation)
-  //   onClose    dismiss the review (the modal host's close) — the review's own
-  //              exit affordance, since the review now lives in a dismissible modal
-  //              (× · scrim · Esc) rather than a full-stage takeover, so the in-view
-  //              "← Artifacts" became a plain "Close" (no "back to X" navigation).
+  //   onExpandDiscussion / onBrowse  navigation handlers
   //   railWidth / railCollapsed / onRailWidth / onToggleRail  the resizable rail (TASK-141)
   //   onOpenArtifact / artifactNames  passed through to MarkdownArtifact so body
   //                                   [[wikilinks]] resolve + open in-dash
   function ReviewView(props) {
     const {
       artifact, record, discussion, draft, setDraft,
-      onSetReview, onSendComment, onExpandDiscussion, onClose,
+      onSetReview, onSendComment, onExpandDiscussion, onBrowse,
       railWidth, railCollapsed, onRailWidth, onToggleRail,
       onOpenArtifact, artifactNames,
+      // when rendered inside the conversation-ref MODAL, inModal is set + onClose
+      // dismisses the modal (back to the chat). The back-affordances (the top-left
+      // "← Artifacts" link and the ReviewDone "Back" button) call onClose in the
+      // modal and onBrowse (navigate to the Artifacts list) on the full-page stage.
+      inModal, onClose,
     } = props;
+    const onBack = inModal ? (onClose || onBrowse) : onBrowse;
 
     const name = artifact.name;
     const status = artifact.status;
@@ -107,6 +117,18 @@
     // the open artifact changes (a fresh open should show the doc, not the last note).
     const [done, setDone] = useState(null); // null | "approved" | "changes" | "comment"
     useEffect(() => { setDone(null); }, [name]);
+
+    // while the consequence popup is up, Esc dismisses it (clears `done`) and leaves
+    // you on the full-page review — no forced navigation.
+    useEffect(() => {
+      if (!done) return;
+      // stopPropagation so that when the review is itself in a modal (a chat-ref
+      // popup), this Esc closes only the consequence popup — it must not bubble
+      // document→window to the artifact modal's Esc handler and close that too.
+      const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); setDone(null); } };
+      document.addEventListener("keydown", onKey);
+      return () => document.removeEventListener("keydown", onKey);
+    }, [done]);
 
     // the verdict the composer's Submit will apply; the Comment option just posts
     // the thread comment without changing the review-state.
@@ -161,18 +183,20 @@
       setDone(verdict);
     }, [verdict, draft, name, onSendComment, onSetReview]);
 
-    if (done) return <ReviewDone verdict={done} name={name} author={author} onClose={onClose} />;
-
     const settled = status === "approved" || status === "rejected" || status === "archived";
     const why = WHY[status] || WHY.draft;
     const verb = VERB[status] || VERB.draft;
     const updated = artifact.updated;
 
+    // the review stays full-page ALWAYS; after a verdict the ReviewDone popup floats
+    // over it (the artifact shows its updated state behind the confirmation). The
+    // popup dismisses to leave you on the artifact — Back to Artifacts is opt-in.
     return (
+      <React.Fragment>
       <div className={"fx-docwrap" + (railCollapsed ? " rail-hidden" : "")}>
         <div className="fx-doccol">
           <div className="fx-topbar">
-            <button className="fx-back" onClick={onClose}>‹ Close</button>
+            <button className="fx-back" onClick={onBack}>{inModal ? "← Back" : "← Artifacts"}</button>
             <span className="fx-top-tag">{STATUS_LABEL(status).toLowerCase()}</span>
             <button className="fx-top-right" title={railCollapsed ? "Show the comments rail" : "Hide the comments rail"} onClick={onToggleRail}>
               {railCollapsed ? "Comments ↤" : "Hide rail ↦"}
@@ -284,7 +308,9 @@
             </div>
           </aside>
         )}
-      </div>);
+      </div>
+      {done && <ReviewDone verdict={done} name={name} author={author} onBack={onBack} onDismiss={() => setDone(null)} inModal={inModal} />}
+      </React.Fragment>);
   }
 
   // status → flow2 status-chip tone + label (the v0.5 token scale), used by the rail's
