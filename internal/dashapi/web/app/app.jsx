@@ -698,7 +698,10 @@
     // and post a status-change event to the artifact's companion discussion topic.
     // The event is a backward-compatible chat.message with an extra `review` marker
     // so review.jsx can render it as a timeline status-change entry inline with comments.
-    function setReview(name, state){
+    // An optional `note` (TASK-154) is the operator's feedback — posted as a plain
+    // comment to the SAME companion topic BEFORE the marker, so the WHAT travels to
+    // the agent (esp. on request-changes) and reads feedback→status-change in order.
+    function setReview(name, state, note){
       let latestRev = null;
       apiReview(name, state)
         .then(()=>apiGet("/api/artifacts/"+encodeURIComponent(name)))
@@ -708,6 +711,13 @@
           latestRev = (a && typeof a.Revision==="number") ? a.Revision : (rec && rec.review && rec.review.rev) || null;
           setRecords(prev=>({...prev,[name]:rec}));
           if(name===activeArtifact) setArtRecord(rec);
+        })
+        .then(()=>{
+          const n = (note||"").trim();
+          if(!n) return; // no feedback note — skip the comment
+          // a note-publish failure must NOT block the verdict marker below — swallow
+          // it locally so the status-change event still posts (codex Q4).
+          return apiPublish(companionTopic(name),{ "$type":"chat.message", text:n }).catch(()=>{});
         })
         .then(()=>{
           const marker = { state };
