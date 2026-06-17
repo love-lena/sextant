@@ -123,6 +123,31 @@ enforcement — they stay free to re-flag. The root fix for inbox noise is
 producers setting `review` only for genuine for-her judgement; you are the second
 line.
 
+## Event significance — when a bus event is worth a deep pass (the gate)
+
+The runtime watches the bus live; a cheap **gate** classifies each event and only
+wakes the deep curation pass when something **significant** happens (so the
+context stays current within seconds of anything that matters, without a deep
+pass on routine churn). The rule — tunable like the rest of this skill:
+
+- **Significant (WAKE — refresh the projection + context now):**
+  - an artifact just became **`review`-ready** (a producer flagged it for her);
+  - an **approval / verdict / sign-off** landed;
+  - a **goal or criterion state change** (a criterion went `waiting-on-you`, a
+    goal advanced or completed);
+  - an **operator DM / question addressed to her**;
+  - a real change to who-owns-what or what's-blocking-what.
+- **Not significant (SKIP — do nothing):** work-in-progress / "still working on
+  it" updates; routine peer chatter; `agent.status` heartbeat churn; duplicates of
+  something already reflected; **anything your own client authored** (never
+  re-trigger on your own published frames).
+
+This mirrors the candidate-pool logic above (a `review`-flag is a *candidate*, not
+automatically a real call) — the gate decides *whether to look*, the two tests
+decide *whether to surface*. When unsure, lean SKIP for routine churn, WAKE for
+anything that changed what she'd need to know. A missed WAKE costs a little
+staleness until the next event/tick; an over-eager WAKE costs one deep pass.
+
 ## Tuning (defaults, easy to adjust)
 
 These are the defaults; treat each as overridable per the operator's instruction
@@ -134,6 +159,9 @@ These are the defaults; treat each as overridable per the operator's instruction
   Alternates: `oldest-waiting`, `her-declared-focus`.
 - **Pool:** `review`-artifacts + `waiting-on-you` criteria + question-messages to
   her (default). Do not expand the pool without her say-so.
+- **Event significance:** WAKE on review-ready / approval-verdict /
+  goal-criterion-change / operator-DM; SKIP on WIP / status churn / chatter / own
+  messages (default — see *Event significance* above).
 - **Quiet-line phrasing:** "N things handled themselves" (default).
 
 To export or share a tuning, capture these four settings as a short record

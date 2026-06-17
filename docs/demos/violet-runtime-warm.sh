@@ -72,6 +72,13 @@ run_violet() {
   local SX="${VL_SEXTANT:-sextant}" TURN_TIMEOUT="${VL_TURN_TIMEOUT:-180}"
   local CONV_MODEL="${VL_CONV_MODEL:-claude-haiku-4-5}"
   local CURATE_MODEL="${VL_CURATE_MODEL:-claude-sonnet-4-6}"
+  # the GATE is the cheap, always-on triage: a haiku session that CLASSIFIES each
+  # bus event as SIGNIFICANT (WAKE the deep agent) or not (SKIP, do nothing) —
+  # Lena's cost model: haiku gates, sonnet only does deep work when woken. The
+  # subjects it watches (NATS multi-wildcard catches crew + goals + artifact.<name>
+  # discussion/change events, and the DM).
+  local GATE_MODEL="${VL_GATE_MODEL:-claude-haiku-4-5}"
+  local WATCH="${VL_WATCH:-msg.topic.>}"
   local MCP="$VL_WORK/violet.mcp.json"
   # workspace snapshot the home-manager writes + the wrapper injects. Exported as
   # VL_CONTEXT so a live home-manager session can read the path from its env (the
@@ -96,6 +103,9 @@ run_violet() {
   # publish is impossible. Both are bounded by the role prompt's signal-not-manage.
   local CURATE_TOOLS="Read,mcp__sextant__message_read,mcp__sextant__message_subscribe,mcp__sextant__artifact_get,mcp__sextant__artifact_list,mcp__sextant__artifact_create,mcp__sextant__artifact_update,mcp__sextant__clients_list"
   local CONV_TOOLS="Read"
+  # the gate is OUTPUT-CAPTURED like the conversational session: it classifies an
+  # event (WAKE/SKIP) and emits that one word — Read only, no bus writes.
+  local GATE_TOOLS="Read"
 
   # ---- launch a warm session: returns via globals <PFX>_PID, holds stdin on a fd.
   # Each session is one long-lived claude held open across all its turns: stdin is
@@ -103,8 +113,9 @@ run_violet() {
   # stdout streams to a per-session .jsonl the wrapper tails for `result` events.
   CONV_FIFO="$VL_WORK/conv.stdin"; CONV_OUT="$VL_WORK/conv.stdout.jsonl"
   CURATE_FIFO="$VL_WORK/curate.stdin"; CURATE_OUT="$VL_WORK/curate.stdout.jsonl"
+  GATE_FIFO="$VL_WORK/gate.stdin"; GATE_OUT="$VL_WORK/gate.stdout.jsonl"
 
-  start_session() {  # $1=fifo $2=out $3=model $4=tools $5=fd
+  start_session() {  # $1=fifo $2=out $3=model $4=tools $5=fd $6=pidvar
     local fifo="$1" out="$2" model="$3" tools="$4" fd="$5"
     rm -f "$fifo"; mkfifo "$fifo"; : > "$out"
     "$CLAUDE" -p --input-format stream-json --output-format stream-json --verbose \
@@ -115,15 +126,22 @@ run_violet() {
     eval "exec $fd>\"$fifo\""  # hold the write end open on the chosen fd
   }
 
+  # Three warm sessions, ONE violet client (one bus identity): a haiku GATE
+  # (cheap significance triage on every event) wakes the sonnet HOME-MANAGER (deep
+  # context refresh + Home curation) only on significant events; the haiku
+  # CONVERSATIONAL session answers operator DMs from the context sonnet keeps fresh.
   start_session "$CONV_FIFO"   "$CONV_OUT"   "$CONV_MODEL"   "$CONV_TOOLS"   8 CONV_PID
   start_session "$CURATE_FIFO" "$CURATE_OUT" "$CURATE_MODEL" "$CURATE_TOOLS" 7 CURATE_PID
+  start_session "$GATE_FIFO"   "$GATE_OUT"   "$GATE_MODEL"   "$GATE_TOOLS"   6 GATE_PID
 
   cleanup_warm() {
     exec 8>&- 2>/dev/null || true
     exec 7>&- 2>/dev/null || true
-    kill "$CONV_PID" "$CURATE_PID" 2>/dev/null || true
+    exec 6>&- 2>/dev/null || true
+    kill "$CONV_PID" "$CURATE_PID" "$GATE_PID" 2>/dev/null || true
     wait "$CONV_PID" 2>/dev/null || true; wait "$CURATE_PID" 2>/dev/null || true
-    rm -f "$CONV_FIFO" "$CURATE_FIFO"
+    wait "$GATE_PID" 2>/dev/null || true
+    rm -f "$CONV_FIFO" "$CURATE_FIFO" "$GATE_FIFO"
   }
   trap cleanup_warm RETURN
 
@@ -186,46 +204,102 @@ run_violet() {
 
   # refresh_context — inject the CURRENT workspace snapshot into the conversational
   # session so the next operator DM is answered from context with NO pre-read. The
-  # snapshot is whatever the home-manager EMITTED on its last turn (captured to
-  # $CTX by the wrapper — NOT written by the session, which has no Write tool).
+  # snapshot is in $CTX, kept current by the maintainer (per-event) and the
+  # home-manager (periodic) — both via output-capture, never a session file write.
   refresh_context() {
     [ -s "$CTX" ] || return 0
     inject_and_wait 8 "$CONV_OUT" "$CONV_PID" "[context refresh] Current workspace state (answer the operator from THIS only; if something isn't here, say you'll need to check rather than guess):
 $(cat "$CTX")"
   }
 
-  # dm_count — how many messages are on violet's DM right now. The supervisor keeps
-  # a cursor and treats growth as "a new operator message arrived." (Reading the
-  # whole DM is fine at assistant scale; production would page from a sequence.)
+  # gate_classify EVENT_TEXT — the cheap, always-on triage (haiku). Classify one
+  # new bus event as SIGNIFICANT (wake the deep agent) or not (skip). The gate is
+  # warm + output-captured: it emits exactly WAKE or SKIP and the wrapper branches
+  # on it. Self-authored events are filtered out before this is ever called (no
+  # self-trigger loop). The significance rule is in the role prompt / curation
+  # skill (start: artifact review-ready, approval/verdict, goal/criterion change,
+  # operator DM; ignore WIP / status churn / chatter). Returns 0 = WAKE, 1 = SKIP.
+  gate_classify() {
+    local event="$1" verdict
+    inject_and_wait 6 "$GATE_OUT" "$GATE_PID" "[bus event] Classify whether this event is SIGNIFICANT enough to wake the deep curation agent, per your significance rule (significant: an artifact became review-ready, an approval/verdict, a goal/criterion state change, an operator DM; NOT significant: work-in-progress updates, routine chatter, agent.status churn). Reply with EXACTLY one word — WAKE or SKIP — nothing else.
+
+EVENT:
+$event" || return 1
+    verdict="$(capture_last_reply "$GATE_OUT" | tr '[:lower:]' '[:upper:]')"
+    case "$verdict" in
+      *WAKE*) return 0 ;;
+      *) return 1 ;;
+    esac
+  }
+
+  # dm_count — how many messages are on violet's DM right now (a COUNT cursor; the
+  # DM path only needs "is there a new non-self message", not per-frame replay).
   dm_count() { "$SX" read "$VL_DM" --since 0 --json --store "$SEXTANT_STORE" --creds "$VL_CREDS" 2>/dev/null | grep -c '"kind": "message"' || true; }
 
-  # wait_for_trigger blocks until EITHER a NEW operator DM lands OR the tick
-  # elapses. It polls a DM message-COUNT cursor (DM_SEEN) so it reacts only to NEW
-  # traffic (never replays history) and IGNORES violet's own replies (author ==
-  # VL_SELF) so a published answer never re-triggers her.
-  WAKE_TEXT=""; WAKE_FROM=""; DM_SEEN="$(dm_count)"
-  wait_for_trigger() {
-    local waited=0 step=1 now frame
-    while [ "$waited" -lt "$TICK" ]; do
-      now="$(dm_count)"
-      if [ "${now:-0}" -gt "${DM_SEEN:-0}" ]; then
-        DM_SEEN="$now"
-        frame="$("$SX" read "$VL_DM" --since 0 --json --store "$SEXTANT_STORE" --creds "$VL_CREDS" 2>/dev/null || true)"
-        WAKE_FROM="$(printf '%s' "$frame" | grep '"author"' | tail -1 | sed -E 's/.*"author": *"([^"]*)".*/\1/' || true)"
-        WAKE_TEXT="$(printf '%s' "$frame" | grep '"text"'   | tail -1 | sed -E 's/.*"text": *"(.*)".*/\1/'   || true)"
-        if [ "$WAKE_FROM" != "$VL_SELF" ]; then
-          return 0   # a NEW operator (non-self) message → ANSWER wake
-        fi
-        # our own reply landed; ignore it and keep waiting.
-      fi
-      sleep "$step"; waited=$((waited + step))
-    done
-    WAKE_TEXT="__TICK__"; WAKE_FROM=""   # tick elapsed, no new message → DEFEND tick
+  # next_cursor SUBJECT — the bus's reported "next cursor" for a subject (the
+  # position AFTER the last frame). We seed EV_CUR with this at startup so we never
+  # replay history, then read --since EV_CUR to get exactly the NEW frames.
+  next_cursor() {
+    "$SX" read "$1" --since 0 --store "$SEXTANT_STORE" --creds "$VL_CREDS" 2>/dev/null \
+      | sed -nE 's/.*next cursor ([0-9]+).*/\1/p' | tail -1
+  }
+
+  # pop_event — read the SINGLE next new frame on $WATCH at cursor EV_CUR, advance
+  # EV_CUR by one, and (if it's not self-authored) set EV_AUTHOR/WAKE_EVENT to
+  # "<author> said (on <subj>): <text>". Returns 0 if a non-self event is ready,
+  # 1 if there was nothing new or it was self-authored (so we never re-trigger on
+  # our own published frames). Cursor-based ⇒ each frame is processed exactly once,
+  # in order — no newest-frame race when several land between polls.
+  EV_AUTHOR=""
+  pop_event() {
+    local line author text subj
+    # one frame at EV_CUR (plain read; drop the trailing summary line).
+    line="$("$SX" read "$WATCH" --since "$EV_CUR" --limit 1 --store "$SEXTANT_STORE" --creds "$VL_CREDS" 2>/dev/null | grep -v 'messages; next cursor' | head -1 || true)"
+    [ -z "$line" ] && return 1                       # nothing new at this cursor
+    EV_CUR=$((EV_CUR + 1))                            # consume this frame
+    # frame shape: [subject] <id> <author> {record-json}
+    subj="$(printf '%s' "$line" | sed -E 's/^\[([^]]*)\].*/\1/')"
+    author="$(printf '%s' "$line" | sed -E 's/^\[[^]]*\] +[^ ]+ +<([^>]*)>.*/\1/')"
+    text="$(printf '%s' "$line" | sed -E 's/.*"text": *"(.*)"\}.*/\1/')"
+    EV_AUTHOR="$author"
+    [ "$author" = "$VL_SELF" ] && return 1            # our own frame — ignore (no self-trigger)
+    WAKE_EVENT="$(printf '%s said (on %s): %s' "${author:-someone}" "${subj:-bus}" "$text")"
     return 0
   }
 
-  echo "== violet WARM (pseudo-agent) up: self=$VL_SELF operator=$VL_OPERATOR DM=$VL_DM tick=${TICK}s =="
-  echo "   conversational=$CONV_MODEL (pid $CONV_PID, output-captured)  home-manager=$CURATE_MODEL (pid $CURATE_PID)"
+  # wait_for_trigger blocks until ONE of: a NEW operator DM (ANSWER), a NEW bus
+  # event on $WATCH (GATE), or the tick (safety-net DEFEND). The DM path uses a
+  # COUNT cursor; the event path uses a real per-frame cursor (EV_CUR) so each
+  # event is triaged exactly once, in order. Self-authored frames are filtered so a
+  # published reply never re-triggers. The gate is the FAST path (no tick wait).
+  WAKE_TEXT=""; WAKE_FROM=""; WAKE_EVENT=""; DM_SEEN="$(dm_count)"
+  EV_CUR="$(next_cursor "$WATCH")"; EV_CUR="${EV_CUR:-1}"
+  wait_for_trigger() {
+    local waited=0 step=1 nowdm frame
+    while [ "$waited" -lt "$TICK" ]; do
+      # 1) a NEW operator DM → ANSWER (highest priority — she's waiting).
+      nowdm="$(dm_count)"
+      if [ "${nowdm:-0}" -gt "${DM_SEEN:-0}" ]; then
+        DM_SEEN="$nowdm"
+        frame="$("$SX" read "$VL_DM" --since 0 --json --store "$SEXTANT_STORE" --creds "$VL_CREDS" 2>/dev/null || true)"
+        WAKE_FROM="$(printf '%s' "$frame" | grep '"author"' | tail -1 | sed -E 's/.*"author": *"([^"]*)".*/\1/' || true)"
+        WAKE_TEXT="$(printf '%s' "$frame" | grep '"text"'   | tail -1 | sed -E 's/.*"text": *"(.*)".*/\1/'   || true)"
+        if [ "$WAKE_FROM" != "$VL_SELF" ]; then return 0; fi   # NEW operator DM → ANSWER
+        # our own reply landed; ignore it (the answer path advances EV_CUR for us).
+      fi
+      # 2) the NEXT new bus event on the watched subjects → GATE.
+      if pop_event; then
+        WAKE_TEXT="__EVENT__"; WAKE_FROM="$EV_AUTHOR"
+        return 0
+      fi
+      sleep "$step"; waited=$((waited + step))
+    done
+    WAKE_TEXT="__TICK__"; WAKE_FROM=""   # tick elapsed → safety-net deep curation
+    return 0
+  }
+
+  echo "== violet WARM (pseudo-agent) up: self=$VL_SELF operator=$VL_OPERATOR DM=$VL_DM safety-tick=${TICK}s watch=$WATCH =="
+  echo "   conversational=$CONV_MODEL (pid $CONV_PID)  home-manager=$CURATE_MODEL (pid $CURATE_PID, woken by gate)  gate=$GATE_MODEL (pid $GATE_PID, triages every event)"
 
   # home_manager_pass — the continuous loop's work, in two halves:
   #   (1) the sonnet home-manager session re-curates the `home` artifact (its
@@ -248,25 +322,47 @@ $(cat "$CTX")"
     refresh_context || true
   }
 
-  # turn 1: orient + first home-manager pass (curate + warm the conversation).
+  # turn 1: orient + first home-manager pass (deep curate + seed the warm context).
   home_manager_pass
-  echo "supervisor: turn 1 — startup home-manager pass (both sessions warm)"
+  echo "supervisor: turn 1 — startup home-manager pass (all sessions warm)"
   local turn=1
   while [ "$turn" -lt "$MAX" ]; do
     wait_for_trigger
     turn=$((turn + 1))
-    if [ "$WAKE_TEXT" = "__TICK__" ]; then
-      echo "supervisor: tick $turn — home-manager pass (curate + refresh context)"
-      home_manager_pass
-    else
-      echo "supervisor: turn $turn — woke on DM from ${WAKE_FROM:-?} (answer from warm context)"
-      # ANSWER: the conversational session replies from warm context; the WRAPPER
-      # captures the reply text and publishes it — never the model's job.
-      inject_and_wait 8 "$CONV_OUT" "$CONV_PID" "[operator DM] $WAKE_TEXT" || true
-      reply="$(capture_last_reply "$CONV_OUT")"
-      publish_reply "$reply"
-      echo "supervisor: turn $turn — captured + published reply (${#reply} chars)"
-    fi
+    case "$WAKE_TEXT" in
+      __TICK__)
+        # SAFETY-NET tick: the gate is the primary trigger; this slow fallback just
+        # re-curates + resyncs in case something was missed (a long quiet period, a
+        # dropped event). Keep $VL_TICK long in production.
+        echo "supervisor: safety-tick $turn — home-manager pass (deep curate + context resync)"
+        home_manager_pass
+        ;;
+      __EVENT__)
+        # EVENT-DRIVEN: a new bus event landed. The cheap haiku GATE triages it;
+        # only a SIGNIFICANT event wakes the sonnet deep refresh + curation (cost
+        # control — most events SKIP and cost only the gate classification).
+        if gate_classify "$WAKE_EVENT"; then
+          echo "supervisor: event $turn — SIGNIFICANT (${WAKE_FROM:-?}); waking deep refresh (sonnet)"
+          home_manager_pass
+        else
+          echo "supervisor: event $turn — not significant (${WAKE_FROM:-?}); skipped (gate only, no deep work)"
+        fi
+        ;;
+      *)
+        # ANSWER: a new operator DM (always significant). Wake the deep refresh so
+        # the context reflects the just-arrived message, then the conversational
+        # session replies from warm context; the WRAPPER captures + publishes.
+        echo "supervisor: turn $turn — woke on DM from ${WAKE_FROM:-?} (refresh + answer)"
+        home_manager_pass
+        inject_and_wait 8 "$CONV_OUT" "$CONV_PID" "[operator DM] $WAKE_TEXT" || true
+        reply="$(capture_last_reply "$CONV_OUT")"
+        publish_reply "$reply"
+        echo "supervisor: turn $turn — captured + published reply (${#reply} chars)"
+        # the DM (and our just-published reply) are under $WATCH; advance the event
+        # cursor past them so we don't re-triage them as generic bus events.
+        EV_CUR="$(next_cursor "$WATCH")"; EV_CUR="${EV_CUR:-$EV_CUR}"
+        ;;
+    esac
   done
   echo "supervisor: hit VL_MAX_TURNS=$MAX — stopping"
 }
@@ -310,10 +406,11 @@ fi
 # ---- demo: hermetic, self-validating (default; CI-safe) -----------------------
 # Stand up a throwaway bus, register a principal + violet, STUB `claude` with a
 # STREAM-JSON reader/writer (emits the REAL event shape). The stub stands in for
-# BOTH the conversational and the home-manager sessions: each is ONE long-lived
-# process; one turn per stdin line. This proves the WRAPPER mechanism —
-# context-warm answers, DIRECT output capture (the wrapper publishes; the
-# conversational stub does NOT), and the model split — without a live LLM or bus.
+# ALL THREE sessions (conversational, home-manager, gate): each is ONE long-lived
+# process; one turn per stdin line, dispatched by the turn's prefix. This proves
+# the WRAPPER mechanism — the GATE triaging events (WIP→SKIP, review-ready→WAKE),
+# event-driven deep refresh with no tick, context-warm answers, DIRECT output
+# capture (the wrapper publishes; the model does NOT) — without a live LLM or bus.
 if [ "$MODE" = demo ]; then
   command -v sextant >/dev/null || { echo "sextant not on PATH — run from a built tree"; exit 2; }
   SX="$(command -v sextant)"
@@ -379,24 +476,30 @@ while IFS= read -r line; do
   case "\$text" in
     "[defend tick]"*)
       # HOME-MANAGER (sonnet session): curate the home artifact via its artifact
-      # MCP tools (here, the CLI), then READ live state and EMIT a compact snapshot
-      # as the turn's RESULT TEXT. It does NOT write \$CTX — it has no Write tool;
-      # the WRAPPER captures this .result and writes \$CTX (the real capture path).
-      rec='{"\$type":"document","greeting":{"heading":"Good morning.","note":"1 real call needs you · 2 things handled themselves"},"blocks":[{"type":"pinned","names":["demo-brief"]}]}'
+      # MCP tools (here, the CLI), then READ LIVE state — ENUMERATE every
+      # review-flagged artifact right now (so a newly-created one shows up
+      # immediately) — and EMIT a compact snapshot as the turn's RESULT TEXT. It
+      # does NOT write \$CTX (no Write tool); the WRAPPER captures this .result.
+      # build the live list of review-ready artifacts (names), excluding home.
+      ready=""
+      for a in \$("\$SX" artifact list --store "\$S" --creds "\$CREDS" 2>/dev/null | grep -v 'artifacts)' | awk '{print \$1}'); do
+        [ "\$a" = "home" ] && continue
+        if "\$SX" artifact get "\$a" --json --store "\$S" --creds "\$CREDS" 2>/dev/null | grep -qE '"state": *"review"'; then
+          ready="\${ready:+\$ready, }[[\$a]]"
+        fi
+      done
+      [ -n "\$ready" ] || ready="(none)"
+      rec="\$(printf '{"\$type":"document","greeting":{"heading":"Good morning.","note":"real calls need you"},"blocks":[{"type":"pinned","names":["demo-brief"]}]}')"
       if "\$SX" artifact get home --json --store "\$S" --creds "\$CREDS" >/dev/null 2>&1; then
         rev="\$("\$SX" artifact get home --json --store "\$S" --creds "\$CREDS" | grep -oE '"Revision":[0-9]+' | grep -oE '[0-9]+' | head -1)"
         "\$SX" artifact update home "\$rec" --rev "\$rev" --store "\$S" --creds "\$CREDS" >/dev/null
       else
         "\$SX" artifact create home "\$rec" --store "\$S" --creds "\$CREDS" >/dev/null
       fi
-      # read a live fact to prove the snapshot reflects CURRENT state, not training:
-      # whether demo-brief is still review-flagged right now. (--json is pretty-
-      # printed, so tolerate the space after the colon.)
-      st="\$("\$SX" artifact get demo-brief --json --store "\$S" --creds "\$CREDS" 2>/dev/null | grep -oE '"state": *"review"' || true)"
-      [ -n "\$st" ] && gate="at its gate, waiting on you" || gate="resolved"
-      # EMIT the snapshot as the result text (NO file write).
+      # EMIT the snapshot as the result text (NO file write). It lists the LIVE
+      # review-ready set — so a just-created artifact appears after a WAKE pass.
       emit_assistant "snapshot emitted"
-      emit_result "v0.5.0: in progress. [[demo-brief]] is \$gate. No other real calls."
+      emit_result "v0.5.0: in progress. At their gate, waiting on you: \$ready."
       ;;
     "[context refresh]"*)
       # CONVERSATIONAL session: absorb the warm workspace context. No bus action.
@@ -405,20 +508,37 @@ while IFS= read -r line; do
       emit_assistant "ok"
       emit_result "context absorbed"
       ;;
+    "[bus event]"*)
+      # GATE (haiku session): classify the event as WAKE or SKIP per the
+      # significance rule. Emit EXACTLY one word as the result — the wrapper
+      # branches on it. SIGNIFICANT: review-ready / approval / verdict / gate /
+      # goal-criterion change / operator. NOT: WIP / "working on" / status churn.
+      # Classify ONLY the EVENT portion (the line(s) after the "EVENT:" marker) —
+      # the prompt itself states the significance rule, which would otherwise match
+      # the heuristic regex. (The marker is on its own line; the event follows.)
+      evtxt="\$(printf '%s' "\$text" | sed -n '/EVENT:/,\$p' | sed '1d')"
+      if printf '%s' "\$evtxt" | grep -qiE 'review-ready|ready for review|flagged .*review|approv|verdict|sign-off|at its gate|waiting on you|criterion|goal .*(advanced|complete)'; then
+        verdict="WAKE"
+      else
+        verdict="SKIP"
+      fi
+      emit_assistant "\$verdict"
+      emit_result "\$verdict"
+      ;;
     "[operator DM]"*)
       # CONVERSATIONAL session: answer FROM WARM CONTEXT (\$LAST_CTX) — NO pre-read,
       # NO publish. The wrapper captures this .result text and publishes it. Answer
       # respects the operator's bar: <=250 chars, plain text, [[wikilinks]] only.
-      if printf '%s' "\$LAST_CTX" | grep -qi 'demo-brief'; then
-        # answer derived from the injected snapshot (proves it's not stale/training).
-        if printf '%s' "\$LAST_CTX" | grep -qi 'at its gate'; then
-          ans="[[demo-brief]] is at its gate, waiting on you. Nothing else needs you right now."
-        else
-          ans="[[demo-brief]] is resolved. Nothing needs you right now."
-        fi
+      # The answer ECHOES the "at their gate" line from the injected snapshot, so
+      # whatever the latest snapshot listed (incl. an event-driven addition) shows.
+      gateln="\$(printf '%s' "\$LAST_CTX" | grep -i 'at their gate' | head -1 | sed -E 's/.*at their gate[^:]*: *//I')"
+      if [ -n "\$gateln" ]; then
+        ans="At their gate, waiting on you: \$gateln"
       else
         ans="I don't have that in my current context — I'll check and follow up."
       fi
+      # keep within the 250-char bar.
+      ans="\$(printf '%s' "\$ans" | cut -c1-250)"
       emit_assistant "\$ans"
       emit_result "\$ans"
       ;;
@@ -434,94 +554,108 @@ STUBEOF
   # seed a candidate the home-manager pass should surface (a review-flagged brief).
   "$SX" artifact create demo-brief '{"$type":"document","title":"demo brief","body":"x","review":{"state":"review"}}' --store "$S" --creds "$P/violet.creds" >/dev/null
 
+  # crew topic violet watches (under $WATCH = msg.topic.>). Peers publish here.
+  CREW="msg.topic.crew"
+
   export SEXTANT_STORE="$S" VL_SEXTANT="$SX" VL_SEXTANT_MCP="$(command -v sextant-mcp || echo /nonexistent)"
   export VL_CREDS="$P/violet.creds" VL_SELF="$VL_ID" VL_OPERATOR="$OP_ID" VL_DM="$DM"
   export VL_ROLE="$ROOT/docs/demos/violet-runtime.md" VL_WORK="$P"
-  export VL_CLAUDE="$STUB" VL_TICK=2 VL_MAX_TURNS=8 VL_TURN_TIMEOUT=30
+  # safety-tick set HIGH so it does NOT fire during the test — proving the gate
+  # (not the tick) is what keeps context current. VL_MAX_TURNS bounds the run.
+  export VL_CLAUDE="$STUB" VL_TICK=3600 VL_MAX_TURNS=12 VL_TURN_TIMEOUT=30
 
-  echo "== run the WRAPPER (turn 1 = home-manager: curate + warm context; then a DM → answer-from-context; then a tick) =="
+  echo "== run the WRAPPER (gate triages events → wakes deep refresh only on significant ones) =="
   ( run_violet >"$P/run.log" 2>&1 ) &
   RUN_PID=$!
-  # after the first home-manager pass settles (home written + context snapshot),
-  # send a DM (operator asks a question) → answer-from-warm-context turn.
+  # wait for the startup home-manager pass to seed the context.
   for _ in $(seq 1 80); do
-    "$SX" artifact get home --json --store "$S" --creds "$P/violet.creds" >/dev/null 2>&1 \
-      && [ -s "$P/violet.context.txt" ] && break
-    sleep 0.25
+    [ -s "$P/violet.context.txt" ] && break; sleep 0.25
   done
-  "$SX" publish "$DM" '{"$type":"chat.message","text":"where does the demo-brief stand?"}' --store "$S" --creds "$P/op.creds" >/dev/null
-  # Deterministic stop: wait until the loop has produced the evidence the checks
-  # need — a DM-wake answer AND the home-manager having COMPLETED >=2 turns
-  # (startup pass + at least one periodic tick pass, each one `result`). Gating on
-  # the actual completed-turn count (not just the pre-pass log line) avoids the
-  # race where the loop is killed mid-tick before the home-manager's result lands.
-  for _ in $(seq 1 160); do
-    if grep -q "woke on DM" "$P/run.log" 2>/dev/null \
-       && [ "$(grep -c '"type":"result"' "$P/curate.stdout.jsonl" 2>/dev/null || echo 0)" -ge 2 ]; then
-      break
-    fi
-    sleep 0.25
-  done
+
+  # (1) a WIP-ish bus event → gate should SKIP (no deep pass). Snapshot a marker so
+  # we can prove no home-manager turn fired in response.
+  ht_before_wip="$(grep -c '"type":"result"' "$P/curate.stdout.jsonl" 2>/dev/null || echo 0)"
+  "$SX" publish "$CREW" '{"$type":"chat.message","text":"canopus: still working on the flaky e2e test, about halfway"}' --store "$S" --creds "$P/op.creds" >/dev/null
+  for _ in $(seq 1 40); do grep -q "not significant" "$P/run.log" 2>/dev/null && break; sleep 0.25; done
+  ht_after_wip="$(grep -c '"type":"result"' "$P/curate.stdout.jsonl" 2>/dev/null || echo 0)"
+
+  # (2) a SIGNIFICANT event → gate WAKEs the deep refresh IMMEDIATELY (no tick).
+  # First create the new review-ready artifact, THEN publish the event about it.
+  "$SX" artifact create leaf-runbook '{"$type":"document","title":"leaf setup runbook","review":{"state":"review"}}' --store "$S" --creds "$P/violet.creds" >/dev/null
+  "$SX" publish "$CREW" '{"$type":"chat.message","text":"vega flagged leaf-runbook ready for review"}' --store "$S" --creds "$P/op.creds" >/dev/null
+  # wait until the context reflects the new artifact (the event-driven refresh).
+  for _ in $(seq 1 80); do grep -q 'leaf-runbook' "$P/violet.context.txt" 2>/dev/null && break; sleep 0.25; done
+
+  # (3) operator DM → answer should reflect leaf-runbook (from the just-refreshed
+  # warm context), with NO safety-tick having fired.
+  "$SX" publish "$DM" '{"$type":"chat.message","text":"what needs me right now?"}' --store "$S" --creds "$P/op.creds" >/dev/null
+  for _ in $(seq 1 80); do grep -q "captured + published reply" "$P/run.log" 2>/dev/null && break; sleep 0.25; done
   kill "$RUN_PID" 2>/dev/null || true; wait "$RUN_PID" 2>/dev/null || true
 
   echo "== validate =="
-  "$SX" artifact get home --json --store "$S" --creds "$P/violet.creds" 2>/dev/null | grep -q 'real call needs you' \
-    && ok "DEFEND: home-manager wrote the curated home projection (greeting + pinned)" \
-    || no "DEFEND: home artifact not curated"
   "$SX" artifact get home --json --store "$S" --creds "$P/violet.creds" 2>/dev/null | grep -q '"pinned"' \
-    && ok "DEFEND: curated home carries a ranked pinned (real-calls) block" \
-    || no "DEFEND: no pinned block"
-  # CONTEXT-WARM (the bug the live run caught): the snapshot $CTX is written by the
-  # WRAPPER from the home-manager's EMITTED result text — NOT by the session (which
-  # has no Write tool). Assert $CTX holds the home-manager's live-derived snapshot,
-  # so the real output-capture delivery path is exercised (the stub no longer
-  # writes $CTX itself).
-  [ -s "$P/violet.context.txt" ] && grep -q 'demo-brief' "$P/violet.context.txt" 2>/dev/null \
+    && ok "DEFEND: home-manager curated the home projection (greeting + pinned)" \
+    || no "DEFEND: home artifact not curated"
+  # GATE — SKIP: the WIP event did NOT wake the deep agent (no extra home-manager
+  # turn fired in response to it). This is the cost control: routine churn is cheap.
+  grep -q "not significant" "$P/run.log" 2>/dev/null \
+    && ok "GATE-SKIP: the WIP event was triaged not-significant (gate only, no deep pass)" \
+    || no "GATE-SKIP: WIP event was not skipped by the gate"
+  { [ "${ht_after_wip:-0}" -eq "${ht_before_wip:-0}" ]; } \
+    && ok "GATE-SKIP: the home-manager did NOT run for the WIP event (no deep work; cost saved)" \
+    || no "GATE-SKIP: home-manager ran on a WIP event (gate failed to skip): ${ht_before_wip} to ${ht_after_wip}"
+  # GATE — WAKE: the significant (review-ready) event woke the deep refresh, and the
+  # context now reflects the NEW artifact — within seconds, with NO tick having fired.
+  grep -q "SIGNIFICANT" "$P/run.log" 2>/dev/null \
+    && ok "GATE-WAKE: the review-ready event was triaged significant → woke the deep refresh" \
+    || no "GATE-WAKE: significant event did not wake the deep refresh"
+  grep -q 'leaf-runbook' "$P/violet.context.txt" 2>/dev/null \
+    && ok "EVENT-DRIVEN: context reflects the new artifact within seconds (no tick needed)" \
+    || no "EVENT-DRIVEN: context did NOT pick up the event-driven artifact"
+  ! grep -q "supervisor: safety-tick" "$P/run.log" 2>/dev/null \
+    && ok "EVENT-DRIVEN: the freshness came from the GATE, not the safety-tick (tick never fired)" \
+    || no "EVENT-DRIVEN: a safety-tick fired — can't attribute freshness to the gate"
+  # CONTEXT-WARM: $CTX is written by the WRAPPER from the home-manager's EMITTED
+  # result (output-capture), not a session file write; conversational absorbs it.
+  [ -s "$P/violet.context.txt" ] && grep -q 'leaf-runbook' "$P/violet.context.txt" 2>/dev/null \
     && ok "CONTEXT-WARM: wrapper captured the home-manager's emitted snapshot into \$CTX (not a file write)" \
-    || no "CONTEXT-WARM: \$CTX not populated from the home-manager's output (the live bug)"
-  # the snapshot must reflect LIVE state: demo-brief is review-flagged right now, so
-  # the captured snapshot must say it's at its gate (not stale/training knowledge).
-  grep -q 'at its gate' "$P/violet.context.txt" 2>/dev/null \
-    && ok "CONTEXT-WARM: snapshot reflects CURRENT live state (read via the home-manager's tools)" \
-    || no "CONTEXT-WARM: snapshot did not reflect live state"
+    || no "CONTEXT-WARM: \$CTX not populated from the home-manager's output"
   grep -q "context absorbed" "$P/conv.stdout.jsonl" 2>/dev/null \
     && ok "CONTEXT-WARM: the conversational session absorbed a [context refresh] before answering" \
     || no "CONTEXT-WARM: conversational session never got a context refresh"
-  # OUTPUT CAPTURE: the conversational stub did NOT publish; the WRAPPER did. The
-  # reply still landed on the DM — proving capture works without the model publishing.
-  reply_line="$("$SX" read "$DM" --since 0 --store "$S" --creds "$P/op.creds" 2>/dev/null | grep 'demo-brief' | tail -1 || true)"
-  printf '%s' "$reply_line" | grep -q 'demo-brief' \
+  # OUTPUT CAPTURE: the conversational stub did NOT publish; the WRAPPER did.
+  reply_line="$("$SX" read "$DM" --since 0 --store "$S" --creds "$P/op.creds" 2>/dev/null | grep 'leaf-runbook' | tail -1 || true)"
+  printf '%s' "$reply_line" | grep -q 'leaf-runbook' \
     && ok "OUTPUT-CAPTURE: wrapper captured the reply from the stream + published it to the DM" \
-    || no "OUTPUT-CAPTURE: no reply on the DM"
+    || no "OUTPUT-CAPTURE: no reply on the DM (or it didn't reflect leaf-runbook)"
   grep -q "captured + published reply" "$P/run.log" 2>/dev/null \
     && ok "OUTPUT-CAPTURE: wrapper (not the model) performed the publish" \
     || no "OUTPUT-CAPTURE: wrapper did not report a captured publish"
-  # ANSWER-FROM-CONTEXT: the reply must derive from the injected snapshot (it says
-  # "at its gate", which only came from the warm context), proving it is NOT stale.
-  printf '%s' "$reply_line" | grep -q 'at its gate' \
-    && ok "ANSWER-FROM-CONTEXT: the answer came from the warm snapshot, not stale/training knowledge" \
-    || no "ANSWER-FROM-CONTEXT: answer did not derive from the injected context"
-  grep -q "tick .* home-manager pass" "$P/run.log" 2>/dev/null \
-    && ok "TICK: the periodic home-manager (defend) tick fired" \
-    || no "TICK: defend tick did not fire"
+  # ANSWER-FROM-CONTEXT: the reply reflects leaf-runbook — which only entered via the
+  # event-driven refresh — proving it's from the warm context, not stale/training.
+  printf '%s' "$reply_line" | grep -q 'leaf-runbook' \
+    && ok "ANSWER-FROM-CONTEXT: the answer reflects the event-driven update (warm context, not stale)" \
+    || no "ANSWER-FROM-CONTEXT: answer did not reflect the event-driven context"
   grep -q "woke on DM" "$P/run.log" 2>/dev/null \
-    && ok "WAKE: bus activity (a DM) woke violet for an answer turn" \
+    && ok "WAKE: an operator DM woke violet for an answer turn" \
     || no "WAKE: DM did not wake violet"
-  # MODEL SPLIT: two distinct sessions ran behind the one violet client.
-  { [ -s "$P/conv.stdout.jsonl" ] && [ -s "$P/curate.stdout.jsonl" ]; } \
-    && ok "MODEL-SPLIT: two warm sessions (conversation + home-manager) behind ONE violet client" \
-    || no "MODEL-SPLIT: expected two session streams"
-  # WARM: each session is ONE process — exactly one init per stream, multiple turns.
+  # MODEL SPLIT: THREE distinct sessions ran behind the one violet client.
+  { [ -s "$P/conv.stdout.jsonl" ] && [ -s "$P/curate.stdout.jsonl" ] && [ -s "$P/gate.stdout.jsonl" ]; } \
+    && ok "MODEL-SPLIT: three warm sessions (conversation + home-manager + gate) behind ONE violet client" \
+    || no "MODEL-SPLIT: expected three session streams"
+  # WARM: each session is ONE process — exactly one init per stream, reused turns.
   ci="$(grep -c '"subtype":"init"' "$P/conv.stdout.jsonl" 2>/dev/null || echo 0)"
   ct="$(grep -c '"type":"result"' "$P/conv.stdout.jsonl" 2>/dev/null || echo 0)"
   hi="$(grep -c '"subtype":"init"' "$P/curate.stdout.jsonl" 2>/dev/null || echo 0)"
   ht="$(grep -c '"type":"result"' "$P/curate.stdout.jsonl" 2>/dev/null || echo 0)"
-  echo "  (warm: conversation $ci init/$ct turns · home-manager $hi init/$ht turns — one process each)"
-  { [ "${ci:-0}" -eq 1 ] && [ "${hi:-0}" -eq 1 ] && [ "${ct:-0}" -ge 1 ] && [ "${ht:-0}" -ge 2 ]; } \
-    && ok "WARM: one process per session, one init each, multiple turns — no per-turn cold start" \
-    || no "WARM: expected 1 init/session + reused turns (conv $ci/$ct · home $hi/$ht)"
+  gi="$(grep -c '"subtype":"init"' "$P/gate.stdout.jsonl" 2>/dev/null || echo 0)"
+  gt="$(grep -c '"type":"result"' "$P/gate.stdout.jsonl" 2>/dev/null || echo 0)"
+  echo "  (warm: conv $ci init/$ct turns · home-manager $hi init/$ht turns · gate $gi init/$gt turns — one process each)"
+  { [ "${ci:-0}" -eq 1 ] && [ "${hi:-0}" -eq 1 ] && [ "${gi:-0}" -eq 1 ] && [ "${gt:-0}" -ge 2 ]; } \
+    && ok "WARM: one process per session, one init each, gate reused across events — no cold start" \
+    || no "WARM: expected 1 init/session + a reused gate (conv $ci/$ct · home $hi/$ht · gate $gi/$gt)"
   # OWN-REPLY: the wrapper-published reply must NOT re-trigger violet — exactly ONE
-  # answer turn for the ONE operator DM.
+  # answer turn for the ONE operator DM (the gate filters self-authored events too).
   answers="$(grep -c "woke on DM" "$P/run.log" 2>/dev/null || echo 0)"
   { [ "${answers:-0}" -eq 1 ]; } \
     && ok "OWN-REPLY: violet's published reply did not re-trigger her (1 answer for 1 DM)" \
@@ -548,8 +682,8 @@ STUBEOF
     || no "BREVITY: answer broke the bar (${ans_len} chars, fmt_bad=$fmt_bad)"
 
   echo "== $pass passed, $fail failed =="
-  [ "$fail" -eq 0 ] || { KEEP=1; echo "see $P/run.log + $P/conv.stdout.jsonl + $P/curate.stdout.jsonl + $P/violet.stderr"; exit 1; }
-  echo "violet WARM pseudo-agent wrapper validated (hermetic; context-warm answers, direct output capture, model split; no live LLM/bus)."
+  [ "$fail" -eq 0 ] || { KEEP=1; echo "see $P/run.log + $P/{conv,curate,gate}.stdout.jsonl + $P/violet.stderr"; exit 1; }
+  echo "violet WARM pseudo-agent validated (hermetic; haiku gate → wakes sonnet deep refresh on significant events only → haiku answers from fresh context; output capture; ≤250c plain answers; no live LLM/bus)."
   exit 0
 fi
 
