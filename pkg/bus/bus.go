@@ -57,6 +57,33 @@ type Config struct {
 	// (defaultHeartbeatFreshness). It is the bus's tolerance, independent of the
 	// SDK's beat interval, and should be a small multiple of it.
 	HeartbeatFreshness time.Duration
+
+	// LeafListenAddr, when set, opens a leaf-node listener on the hub so a remote
+	// leaf can link in (ADR-0038). It is a host:port (e.g. "127.0.0.1:7422" behind
+	// a secure transport). Empty means no leaf listener — the default, no behavior
+	// change. The link MUST ride a secure transport (SSH-R / Tailscale / WireGuard);
+	// native leaf-listener TLS is a follow-up. Mutually exclusive with leaf-remote.
+	LeafListenAddr string
+
+	// LeafRemoteURL, when set, runs this bus in LEAF mode (ADR-0038): instead of an
+	// authoritative hub, it links to a remote hub at this nats-leaf:// URL,
+	// federates the per-client wire-API subjects to it, and keeps JetStream OFF (the
+	// engine stays at the hub). LeafBundle and LeafCreds are required with it. Empty
+	// means hub mode — the default. Mutually exclusive with LeafListenAddr.
+	LeafRemoteURL string
+
+	// LeafCreds is the path to the SEXTANT-user link credential the hub minted for
+	// this leaf (ADR-0038). Required in leaf mode; the leaf authenticates the link
+	// to the hub with it.
+	LeafCreds string
+
+	// LeafBundle is the path to the hub's public trust bundle (operator + SEXTANT +
+	// system account JWTs and the SEXTANT account public key — PUBLIC claims only,
+	// no signing seeds). Required in leaf mode: the leaf installs these so it trusts
+	// the hub's operator and enforces the same per-client perms locally, yet holds
+	// no seed and so CANNOT mint — minting stays at the hub (ADR-0038, the trust
+	// model's key-custody half).
+	LeafBundle string
 }
 
 // logf returns the resolved log function: cfg.Logf, or the stderr default.
@@ -164,10 +191,18 @@ func recordedPort(storeDir string) (int, bool) {
 }
 
 // Start launches the embedded bus under JWT auth and bootstraps the reserved
-// buckets. The caller must Shutdown it.
+// buckets. The caller must Shutdown it. With Config.LeafRemoteURL set it starts a
+// LEAF instead (ADR-0038): a JetStream-off bus that links to a remote hub and
+// federates the per-client wire-API subjects — see startLeaf.
 func Start(ctx context.Context, cfg Config) (*Bus, error) {
 	if cfg.StoreDir == "" {
 		return nil, errors.New("bus: StoreDir is required")
+	}
+	if err := validateLeafConfig(cfg); err != nil {
+		return nil, err
+	}
+	if cfg.LeafRemoteURL != "" {
+		return startLeaf(ctx, cfg)
 	}
 	ident, err := loadOrCreateIdentity(cfg.StoreDir)
 	if err != nil {
@@ -196,6 +231,14 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 	}
 	if err := ident.serverAuthOptions(opts); err != nil {
 		return nil, err
+	}
+	// Hub leaf listener (ADR-0038): default-off; only when --leaf-listen is set. It
+	// lets a remote leaf link into this hub. The listener MUST sit behind a secure
+	// transport (the bus does not open a routable unencrypted leaf listener).
+	if cfg.LeafListenAddr != "" {
+		if err := applyHubLeafListener(opts, cfg.LeafListenAddr); err != nil {
+			return nil, err
+		}
 	}
 
 	ns, err := natsserver.NewServer(opts)
@@ -271,6 +314,18 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 		return nil, errors.New("bus: client listener failed to start")
 	}
 	b.url = ns.ClientURL()
+
+	// With a leaf listener open, write the public trust bundle + a hub-minted link
+	// credential into the store (ADR-0038), so an operator can carry both to the
+	// remote box. Done after the listener is up: the bundle and link are about
+	// reaching this hub, which now exists.
+	if cfg.LeafListenAddr != "" {
+		if err := b.writeLeafArtifacts(); err != nil {
+			opConn.Close()
+			ns.Shutdown()
+			return nil, err
+		}
+	}
 	return b, nil
 }
 
@@ -365,6 +420,12 @@ func waitReady(ctx context.Context, ns *natsserver.Server, max time.Duration) er
 // table (ADR-0020), the same source of truth as presence — so there is no
 // register/deregister-maintained set to drift out of sync.
 func (b *Bus) Drain() error {
+	if b.isLeaf() {
+		// A leaf holds no operator connection or backend — Drain is a hub act
+		// (the hub owns the delivery space and the registry). Return a clean error
+		// rather than nil-deref; the CLI's leaf path does not call Drain at all.
+		return errors.New("bus: drain is unavailable on a leaf — the hub drains its clients")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	ids, err := b.onlineClientIDs(ctx)
@@ -392,6 +453,14 @@ func (b *Bus) Shutdown() {
 // ClientURL is the address clients connect to.
 func (b *Bus) ClientURL() string { return b.url }
 
+// isLeaf reports whether this bus is running in leaf mode (ADR-0038). A leaf is
+// built by startLeaf, which loads no signing identity, opens no operator
+// connection, and wires no backend — the engine and the sole minter are the hub.
+// ident==nil is the one invariant that holds for every leaf and no hub, so it is
+// the test the hub-only operations (mint, drain) guard on to fail clean rather
+// than nil-deref.
+func (b *Bus) isLeaf() bool { return b.ident == nil }
+
 // MintClient is the issuance path (ADR-0020): the bus mints a NEW client identity
 // — a fresh ULID id and its per-client credential (JWT+seed) — AND persists its
 // durable registry record, so the identity exists and can connect. The signing
@@ -408,6 +477,12 @@ func (b *Bus) MintClient(ctx context.Context, displayName, kind string) (creds, 
 // id for a mint-on-behalf child — which both records the spawn lineage and fences
 // that child out of dispatching children of its own.
 func (b *Bus) mintClient(ctx context.Context, displayName, kind, spawnedBy string) (creds, id string, err error) {
+	if b.isLeaf() {
+		// A leaf holds no signing identity or backend by construction (ADR-0038) —
+		// minting stays at the hub. Return a clean error rather than nil-deref on
+		// b.ident / b.backend.
+		return "", "", errors.New("bus: minting is unavailable on a leaf — mint at the hub (the leaf holds no signing key)")
+	}
 	creds, id, subject, err := b.mintIdentity(displayName)
 	if err != nil {
 		return "", "", err
