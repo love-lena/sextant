@@ -132,8 +132,9 @@ This ADR specifies the convention only. A live `assistant` artifact is created a
 
 The reference runtime — a long-lived client driven by violet's role prompt (the
 SDK runtime is a separate later PR) — runs on the operator's **live** bus only at
-v0.5.0 **release** (operator sign-off + tag). Until then the assistant convention
-is built and validated on the `v0.5` branch. Standing up an always-on new agent
+v0.5.1 **release** (operator sign-off + tag). The assistant convention and dash
+entry points (the FAB panel and ⌘K "Ask the assistant" entry) ship in v0.5.0 and
+degrade gracefully when violet is absent. Standing up an always-on new agent
 on the live bus is a release-time commitment, not a build-time one.
 
 ## Consequences
@@ -147,8 +148,8 @@ on the live bus is a release-time commitment, not a build-time one.
   `assistant` artifact for the live client id and accent, and wiring the FAB to
   that client's DM — wiring, not new flow.
 - Home/inbox curation moves from the coordinator (sirius curates Home today) to
-  violet at v0.5.0; the coordinator returns to pure coordination and gating. No
-  double-owner on Home.
+  violet at v0.5.1 (when the runtime ships); the coordinator returns to pure
+  coordination and gating. No double-owner on Home.
 - The assistant is swappable by re-pointing one artifact; we abstract against a
   second assistant only if one ever exists
   ([abstract only against a second implementation](../../CONTEXT.md)).

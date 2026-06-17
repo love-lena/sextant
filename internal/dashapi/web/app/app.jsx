@@ -9,8 +9,9 @@
    POST /api/artifacts/{name}/review and post an event to the companion topic
    msg.topic.artifact.<name>.
 
-   Still stubbed and labelled: goal metrics (no primitive), the curated Home
-   greeting / banner / links (assistant-owned, static here).
+   Goal metrics are live via the goal primitive (ADR-0035). The curated Home
+   greeting / agenda / links are served from the `home` artifact when violet is
+   active (ADR-0039); they degrade gracefully when the assistant is absent.
 */
 (function () {
   const { useState, useRef, useEffect, useMemo, useCallback } = React;
