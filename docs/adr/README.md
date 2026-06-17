@@ -42,6 +42,7 @@ human has signed off — see
 | [0033](0033-a-dispatcher-mints-its-own-workers.md) | A dispatcher mints its own workers (mint-on-behalf) | proposed |
 | [0034](0034-the-web-cockpit-rests-on-conventions-not-new-protocol.md) | The web cockpit rests on conventions, not new protocol | proposed |
 | [0035](0035-the-goal-bus-primitive.md) | The goal bus primitive | proposed |
+| [0038](0038-a-remote-box-joins-through-a-leaf-node.md) | A remote box joins the bus through a leaf node | proposed |
 | [0039](0039-the-assistant-is-a-convention-not-a-primitive.md) | The assistant is a convention, not a primitive | proposed |
 
 ## Review batches
@@ -62,4 +63,5 @@ human has signed off — see
 - **0033 — a dispatcher mints its own workers** — *proposed* (mint-on-behalf: any registered client may call `clients.register` with its own authority EXCEPT a spawned worker — the fence is inverted from an allowlist and rests on a bus-stamped `SpawnedBy` marker, not the weakly-enforced kind, so a worker cannot recursively dispatch; the lone locked-core change of M5.2/TASK-25)
 - **0034 — the web cockpit rests on conventions, not new protocol** — *proposed* (the designed web dash, D2 of TASK-71; review-state, per-artifact discussion topics, DM-as-2-party-topic, and subject discovery are conventions over the core protocol, served by `sextant dash --serve`)
 - **0035 — the goal bus primitive** — *proposed* (TASK-84; a goal = a north-star + acceptance criteria with a **derived** status, the latest-value artifact `goal.<id>` + the `goal.update` stream on `msg.topic.goals`; evidence is declared artifact-side via a generic `relates`, met-criteria need ≥1 proof; signal-not-manage. Supersedes the parked coarse-state goal model)
+- **0038 — a remote box joins through a leaf node** — *proposed* (TASK-125; a remote box runs a local bus in leaf mode that federates the per-client wire-API subjects to the hub over one SEXTANT account, JetStream stays at the hub; the leaf installs the hub's PUBLIC account JWTs only — no seed → can't mint, enforces per-client perms locally → the hub's subject-derived author stamp stays trustworthy; presence via the ADR-0036 heartbeat, no new machinery; link rides a secure transport, native leaf TLS is a follow-up; additive + default-off)
 - **0039 — the assistant is a convention, not a primitive** — *proposed* (TASK-138/144/120; **violet**, the operator's assistant, unified as one client with two duties — *answer* read-only when messaged + *defend* the operator's attention by curating Home/inbox; named by the swappable latest-value `assistant` artifact `{client_id, name, accent}`; a convention over clients/artifacts/messages, zero new operations, signal-not-manage. Runtime is a separate PR)
