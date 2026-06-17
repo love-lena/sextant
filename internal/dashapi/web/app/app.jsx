@@ -675,6 +675,8 @@
                 onBrowse={()=>setStageMode("artifacts")}
                 railWidth={railWidth} railCollapsed={railCollapsed}
                 onRailWidth={onRailWidth} onToggleRail={toggleRail}
+                onOpenArtifact={openArtifact}
+                artifactNames={artifacts.map(a=>a.Name)}
               />
             </div>
           ) : (
