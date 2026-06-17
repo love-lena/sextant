@@ -4,12 +4,14 @@
    ever talks to this local API.
 
    Review loop (TASK-66): an artifact's review-state lives as a `review` block in
-   its record (absent ⇒ "review"); approve / request-changes persist it via
+   its record (absent ⇒ neutral (draft); needs-review is set explicitly by the
+   producer); approve / request-changes persist it via
    POST /api/artifacts/{name}/review and post an event to the companion topic
    msg.topic.artifact.<name>.
 
-   Still stubbed and labelled: goal metrics (no primitive), the curated Home
-   greeting / banner / links (assistant-owned, static here).
+   Goal metrics are live via the goal primitive (ADR-0035). The curated Home
+   greeting / agenda / links are served from the `home` artifact when violet is
+   active (ADR-0039); they degrade gracefully when the assistant is absent.
 */
 (function () {
   const { useState, useRef, useEffect, useMemo, useCallback } = React;
@@ -50,7 +52,16 @@
 
   // The review convention (TASK-66): states + the per-artifact companion topic.
   const REVIEW_STATES = ["review","approved","changes","draft","rejected","archived"];
-  const REVIEW_VERB = { approved:"approved", changes:"requested changes on", rejected:"rejected", archived:"archived", review:"reopened", draft:"reset to draft" };
+  // REVIEW_ACTION: action-phrased human-readable text for status-change events posted
+  // to the companion topic (the marker's `text` field, read as a timeline entry in review.jsx).
+  const REVIEW_ACTION = {
+    approved:  "approved this",
+    changes:   "requested changes",
+    rejected:  "rejected this",
+    archived:  "archived this",
+    review:    "marked this needs review",
+    draft:     "reset this to draft",
+  };
   function companionTopic(name){ return "msg.topic.artifact." + name; }
 
   // ---- helpers ----
@@ -87,12 +98,9 @@
     return rec.$type || "·";
   }
 
-  // Goal metrics have no bus primitive yet — stubbed (clearly a placeholder).
-  const GOALS = [
-    { label:"Tasks merged this sprint", value:14, target:20, display:"14 / 20", note:"stub — no goals primitive yet" },
-    { label:"CI pipeline green", value:97, target:95, display:"97%", met:true, note:"stub — no goals primitive yet" },
-    { label:"Test coverage", value:81, target:85, display:"81%", note:"stub — no goals primitive yet" },
-  ];
+  // the five criterion statuses (the goal.<id> lexicon); an unknown value is
+  // normalized to not-started so the Goals view never indexes an empty STATUS slot.
+  const GOAL_CRIT_STATES = ["met", "in-progress", "waiting-on-you", "blocked", "not-started"];
 
   function App() {
     const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
@@ -102,19 +110,77 @@
     const [artifacts, setArtifacts] = useState([]);      // raw ArtifactInfo[]
     const [records, setRecords] = useState({});          // name -> Record (status + instant open)
     const [home, setHome] = useState(null);              // curated Home config (the 'home' artifact, TASK-71 #2)
+    const [assistant, setAssistant] = useState(null);    // the 'assistant' artifact (ADR-0039): { client_id, name, accent } — absent pre-v0.5.0
     const [convos, setConvos] = useState({});            // subject -> {msgs:[{id,author,text,ts}], last, lastText}
     const [activity, setActivity] = useState([]);        // recent frames across all subjects
     const [activeArtifact, setActiveArtifact] = useState("");
     const [artRecord, setArtRecord] = useState(null);    // active artifact Record
+    const [artMissing, setArtMissing] = useState(false); // the open artifact resolved to nothing (stale ref guard)
+    // The artifact-review MODAL is an OPTION (Lena's #ui-feedback): full-page is the
+    // default for every open, but an artifact opened FROM A CONVERSATION (a chat
+    // artifact-reference) pops as a dismissible modal floating over the chat — with an
+    // "Open in full page" button to escalate to the full-page review.
+    const [artifactOpen, setArtifactOpen] = useState(false);
+    const artReqRef = useRef(""); // the name of the latest-opened artifact — guards openArtifact's async fetch so a slow earlier fetch can't clobber the current review
     const [activeConvo, setActiveConvo] = useState("");
-    const [stageMode, setStageMode] = useState("home");  // home | artifact | conversation
+    // stage mode: home | artifacts | goals | agents | artifact (one open) | conversation
+    const [stageMode, setStageMode] = useState("home");
+    // bumped each time the Goals nav is clicked so GoalsView remounts to the
+    // portfolio (its open-goal is internal state; the nav should always land you
+    // on the list, not strand you in a detail you opened earlier).
+    const [goalsEpoch, setGoalsEpoch] = useState(0);
+    // the goal to open on the next Goals nav (TASK-157 deep-link): set when a
+    // review-flagged goal is opened from the needs-you queue, so the nav lands on
+    // that goal's detail; cleared on a plain Goals nav (lands on the portfolio).
+    const [goalsOpenId, setGoalsOpenId] = useState(null);
+    const [palette, setPalette] = useState(false);       // ⌘K command palette (TASK stage a)
+    // Assistant FAB (stub, not wired): lifted here so ⌘K can open it with a
+    // prefilled prompt. asstPrompt is the query carried over from a no-match search.
+    const [asstOpen, setAsstOpen] = useState(false);
+    const [asstPrompt, setAsstPrompt] = useState("");
+    // a dedicated composer buffer for the FAB's violet DM, so it never collides
+    // with the main stage `draft` (the operator can be mid-typing in a thread).
+    const [asstDraft, setAsstDraft] = useState("");
     const [draft, setDraft] = useState("");
-    const convBodyRef = useRef(null);
-    const discBodyRef = useRef(null);
     const [hidden, setHidden] = useState(()=>{ try{ return new Set(JSON.parse(localStorage.getItem("sx-hidden-convos")||"[]")); }catch(_){ return new Set(); } });
+
+    // ---- ⌘K recency store ----
+    // Tracks the last-opened timestamp per destination keyed by the entry's
+    // stable key (e.g. "nav:home", "art:<name>", "conv:<subject>").
+    // Persisted in localStorage (sx-cmdk-recents) as a plain {key:ms} object,
+    // capped to the 50 most-recently-touched entries so it never grows unbounded.
+    const RECENTS_KEY = "sx-cmdk-recents";
+    const RECENTS_CAP = 50;
+    const [recents, setRecents] = useState(()=>{
+      try { return JSON.parse(localStorage.getItem(RECENTS_KEY)||"{}"); } catch(_) { return {}; }
+    });
+    const touchRecent = useCallback((key)=>{
+      setRecents(prev=>{
+        const next = { ...prev, [key]: Date.now() };
+        // Evict oldest entries beyond the cap so localStorage stays bounded.
+        const entries = Object.entries(next).sort((a,b)=>b[1]-a[1]);
+        const capped = Object.fromEntries(entries.slice(0, RECENTS_CAP));
+        try { localStorage.setItem(RECENTS_KEY, JSON.stringify(capped)); } catch(_) {}
+        return capped;
+      });
+    }, []);
     const [dark, setDark] = useState(()=>{ try{ return localStorage.getItem("sx-dark")==="1"; }catch(_){ return false; } });
-    // artifact discussion layout: split (doc | discussion) by default, toggle to stacked; persisted
-    const [discSplit, setDiscSplit] = useState(()=>{ try{ return localStorage.getItem("sx-disc-split")!=="0"; }catch(_){ return true; } });
+    // Review view comments rail (TASK-141): a resizable + collapsible right-side
+    // "artifact chat" pane. Both the width and the collapsed flag are persisted in
+    // localStorage (mirrors the dark-mode persistence pattern). The width is clamped
+    // to a sane range so a drag can't shrink it to nothing or eat the doc column.
+    const RAIL_MIN = 280, RAIL_MAX = 620;
+    const clampRail = (w)=>Math.max(RAIL_MIN, Math.min(RAIL_MAX, Math.round(w)));
+    const [railWidth, setRailWidth] = useState(()=>{ try{ const v=parseInt(localStorage.getItem("sx-rail-w")||"",10); return isNaN(v)?344:clampRail(v); }catch(_){ return 344; } });
+    const [railCollapsed, setRailCollapsed] = useState(()=>{ try{ return localStorage.getItem("sx-rail-collapsed")==="1"; }catch(_){ return false; } });
+    // build-staleness nudge (TASK-140): the SHA the page loaded with, the SHA now
+    // served, and whether the operator dismissed the current mismatch. On a `--ui`
+    // hot-reload the served build.json gets a new SHA on each `make ui` → the
+    // loaded (old) page polls, sees the mismatch, and shows a quiet refresh nudge.
+    // The embedded release dash has a fixed SHA → never mismatches → no nudge.
+    const [loadedBuild, setLoadedBuild] = useState(null); // {sha,builtAt} the page loaded with
+    const [currentBuild, setCurrentBuild] = useState(null); // {sha,builtAt} now served
+    const [buildNudgeOff, setBuildNudgeOff] = useState(false); // operator dismissed THIS mismatch
 
     const nameOf = useCallback((id)=>{ const c=clients.find(c=>c.ID===id); return c?c.DisplayName:(id||"").slice(0,8); },[clients]);
     const kindOf = useCallback((id)=>{ const c=clients.find(c=>c.ID===id); return c?c.Kind:"agent"; },[clients]);
@@ -125,12 +191,32 @@
       apiGet("/api/clients").then(cs=>setClients(Array.isArray(cs)?cs:[])).catch(()=>{});
       apiGet("/api/artifacts").then(as=>setArtifacts(Array.isArray(as)?as:[])).catch(()=>{});
       apiGet("/api/artifacts/home").then(a=>setHome((a&&a.Record)||null)).catch(()=>{});
+      // the assistant convention (ADR-0039): a latest-value `assistant` artifact
+      // names the live operator-assistant. Absent pre-v0.5.0 (404) → stays null.
+      apiGet("/api/artifacts/assistant").then(a=>setAssistant((a&&a.Record)||null)).catch(()=>setAssistant(null));
       // seed the conversation list with subjects the dash already knows about
       apiGet("/api/subjects").then(subs=>{
         if(!Array.isArray(subs)) return;
         setConvos(prev=>{ const next={...prev}; for(const s of subs){ if(s&&s.subject&&!next[s.subject]) next[s.subject]={msgs:[],last:0,lastText:""}; } return next; });
       }).catch(()=>{});
     },[]);
+
+    // ⌘K / Ctrl-K toggles the command palette (a real client-side find & jump over
+    // the already-loaded artifacts + agents + conversation subjects).
+    useEffect(()=>{
+      const h = (e)=>{ if((e.metaKey||e.ctrlKey) && (e.key==="k"||e.key==="K")){ e.preventDefault(); setPalette(p=>!p); } };
+      window.addEventListener("keydown", h);
+      return ()=>window.removeEventListener("keydown", h);
+    },[]);
+
+    // Esc dismisses the artifact-review modal (one of its exits: × · scrim · Esc).
+    // Only listens while the modal is open, so it doesn't shadow other keys.
+    useEffect(()=>{
+      if(!artifactOpen) return;
+      const h = (e)=>{ if(e.key==="Escape"){ e.preventDefault(); closeArtifact(); } };
+      window.addEventListener("keydown", h);
+      return ()=>window.removeEventListener("keydown", h);
+    },[artifactOpen]);
 
     // dark mode: toggle the class on #app + persist (topbar toggle)
     useEffect(()=>{
@@ -139,8 +225,22 @@
       try{ localStorage.setItem("sx-dark", dark?"1":"0"); }catch(_){}
     },[dark]);
 
-    // artifact discussion layout: persist the split↔stacked choice
-    useEffect(()=>{ try{ localStorage.setItem("sx-disc-split", discSplit?"1":"0"); }catch(_){} },[discSplit]);
+    // Review rail (TASK-141): persist the width + collapsed choice (localStorage).
+    useEffect(()=>{ try{ localStorage.setItem("sx-rail-w", String(railWidth)); }catch(_){} },[railWidth]);
+    useEffect(()=>{ try{ localStorage.setItem("sx-rail-collapsed", railCollapsed?"1":"0"); }catch(_){} },[railCollapsed]);
+    const onRailWidth = useCallback((w)=>setRailWidth(clampRail(w)),[]);
+    const toggleRail = useCallback(()=>setRailCollapsed(v=>!v),[]);
+
+    // Left nav (TASK-141): a resizable + collapsible shell sidebar — mirrors the
+    // right rail pattern. Width clamped to 200–420px (default 284 = the flow2 width).
+    const SIDE_MIN = 200, SIDE_MAX = 420;
+    const clampSide = (w)=>Math.max(SIDE_MIN, Math.min(SIDE_MAX, Math.round(w)));
+    const [sideWidth, setSideWidth] = useState(()=>{ try{ const v=parseInt(localStorage.getItem("sx-side-w")||"",10); return isNaN(v)?284:clampSide(v); }catch(_){ return 284; } });
+    const [sideCollapsed, setSideCollapsed] = useState(()=>{ try{ return localStorage.getItem("sx-side-collapsed")==="1"; }catch(_){ return false; } });
+    useEffect(()=>{ try{ localStorage.setItem("sx-side-w", String(sideWidth)); }catch(_){} },[sideWidth]);
+    useEffect(()=>{ try{ localStorage.setItem("sx-side-collapsed", sideCollapsed?"1":"0"); }catch(_){} },[sideCollapsed]);
+    const onSideWidth = useCallback((w)=>setSideWidth(clampSide(w)),[]);
+    const toggleSide = useCallback(()=>setSideCollapsed(v=>!v),[]);
 
     // prefetch artifact records so the sidebar can group by review-state and an
     // open is instant. Fine at dash scale; a very large bucket would want paging.
@@ -163,7 +263,8 @@
         if(!subj || !f) return;
         const text = frameText(f.record);
         const at = frameTime(f) || Date.now();
-        const msg = { id:f.id, author:f.author, text, ts:at };
+        // carry the raw record so companion-topic status-change markers survive into discussion
+        const msg = { id:f.id, author:f.author, text, ts:at, record:f.record||null };
         setConvos(prev=>{
           const cur = prev[subj] || { msgs:[] };
           if(cur.msgs.some(x=>x.id===msg.id)) return prev;
@@ -235,6 +336,12 @@
           const rec=(a&&a.Record)||null;
           setHome(prev => JSON.stringify(prev)===JSON.stringify(rec) ? prev : rec);
         }).catch(()=>{});
+        // the `assistant` artifact (ADR-0039) lights up at v0.5.0 — poll so the FAB
+        // wires to violet's DM the moment it appears (and degrades if it's removed).
+        apiGet("/api/artifacts/assistant").then(a=>{
+          const rec=(a&&a.Record)||null;
+          setAssistant(prev => JSON.stringify(prev)===JSON.stringify(rec) ? prev : rec);
+        }).catch(()=>setAssistant(prev => prev===null ? prev : null));
         apiGet("/api/clients").then(cs=>{
           if(!Array.isArray(cs)) return;
           setClients(prev => JSON.stringify(prev)===JSON.stringify(cs) ? prev : cs);
@@ -242,6 +349,32 @@
       }, 4000);
       return ()=>clearInterval(id);
     },[]);
+
+    // build-staleness poll (TASK-140). build.json is a static file written by
+    // scripts/build-dash-ui.sh at `make ui` time ({sha,builtAt}); the Go process
+    // serves it from the live UIDir (--ui) or the embedded FS. Fetch it once to
+    // record the SHA this page loaded with, then poll every ~20s for the SHA now
+    // served. A mismatch (both SHAs present) means a newer build is live → the
+    // nudge shows. Robust to absence: an older/embedded dash without build.json
+    // (404 or non-JSON) leaves both null → no nudge, no errors. Plain fetch (not
+    // apiGet): build.json is a static, token-free asset like index.html.
+    const fetchBuild = useCallback(()=>fetch("/build.json", { cache:"no-store" })
+      .then(r=> r.ok ? r.json() : null)
+      .then(b=> (b && typeof b.sha==="string" && b.sha) ? b : null)
+      .catch(()=>null), []);
+    useEffect(()=>{
+      let cancelled=false;
+      fetchBuild().then(b=>{ if(!cancelled && b) setLoadedBuild(b); });
+      const id=setInterval(()=>{
+        fetchBuild().then(b=>{ if(cancelled || !b) return; setCurrentBuild(prev=> (prev && prev.sha===b.sha) ? prev : b); });
+      }, 20000);
+      return ()=>{ cancelled=true; clearInterval(id); };
+    },[fetchBuild]);
+    // a newer build is served iff both SHAs are present and differ. A fresh
+    // mismatch (new served SHA) re-arms the nudge even if a prior one was dismissed.
+    const staleBuild = !!(loadedBuild && currentBuild && loadedBuild.sha!==currentBuild.sha);
+    const servedSha = currentBuild && currentBuild.sha;
+    useEffect(()=>{ setBuildNudgeOff(false); },[servedSha]);
 
     // theme application
     useEffect(()=>{
@@ -271,7 +404,70 @@
       };
     }),[clients, records]);
 
-    // review-state from the artifact's record (convention); absent ⇒ "review"
+    // derived: goals (the goal primitive, ADR-0035). Each goal is a latest-value
+    // artifact named goal.<id> whose record carries $type:"goal" + a northstar +
+    // criteria[]. Goal STATUS is derived from the criteria rollup (goals.jsx) —
+    // there is no stored goal-status field. Evidence is found by scanning ALL
+    // records for a `relates` entry pointing at this goal (+crit): kind:"proof"
+    // backs a met criterion, kind:"related" is a generic association. Everything
+    // is guarded against missing/malformed fields so a half-written goal can't
+    // crash the view.
+    const goals = useMemo(()=>{
+      // index relates entries once: goalId -> { crit:{<critId>:[{name,kind}]}, goal:[{name,kind}] }
+      const rel = {};
+      for(const a of artifacts){
+        const rec = records[a.Name];
+        const rs = rec && Array.isArray(rec.relates) ? rec.relates : null;
+        if(!rs) continue;
+        for(const e of rs){
+          if(!e || typeof e.goal!=="string" || !e.goal) continue;
+          const bucket = rel[e.goal] || (rel[e.goal]={ crit:{}, goal:[] });
+          const ref = { name:a.Name, kind:(e.kind==="proof"?"proof":"related") };
+          if(typeof e.crit==="string" && e.crit){ (bucket.crit[e.crit] || (bucket.crit[e.crit]=[])).push(ref); }
+          else bucket.goal.push(ref);
+        }
+      }
+      // a goal is the latest-value artifact goal.<id> carrying a goal record;
+      // require BOTH the goal. name and the $type so a stray $type:"goal" under
+      // another name can't surface in Goals while still showing in the Artifacts
+      // list (which excludes the goal. namespace) — no cross-view double-listing.
+      return artifacts.filter(a=>{ const r=records[a.Name]; return a.Name.startsWith("goal.") && r && r.$type==="goal"; }).map(a=>{
+        const r = records[a.Name] || {};
+        const id = a.Name.replace(/^goal\./,"");
+        const bucket = rel[id] || { crit:{}, goal:[] };
+        const criteria = (Array.isArray(r.criteria)?r.criteria:[]).map((c,i)=>{
+          const cid = (c && typeof c.id==="string" && c.id) || ("crit-"+(i+1));
+          return {
+            id: cid,
+            text: (c && typeof c.text==="string") ? c.text : "",
+            status: (c && GOAL_CRIT_STATES.indexOf(c.status)>=0) ? c.status : "not-started",
+            owner: (c && typeof c.owner==="string") ? c.owner : "",
+            evidence: bucket.crit[cid] || [],
+          };
+        });
+        return {
+          id, name:a.Name,
+          stream: (typeof r.stream==="string"?r.stream:""),
+          northstar: (typeof r.northstar==="string"?r.northstar:""),
+          updated: r.updated||"", by: r.by||"",
+          // the artifact revision — so a review-flagged goal sorts into the needs-you
+          // queue by recency ALONGSIDE review artifacts (same key artItems sorts on),
+          // not always behind them (TASK-157).
+          version: a.Revision,
+          // review-state from the goal artifact's record (same convention as any
+          // artifact — TASK-157). A goal flagged review.state="review" is awaiting
+          // the operator's sign-off; it projects into the needs-you/review queue
+          // and is signable in the Goals view. Absent/invalid ⇒ "" (neutral).
+          review: (r.review && REVIEW_STATES.indexOf(r.review.state)>=0) ? r.review.state : "",
+          criteria,
+          evidence: bucket.goal, // goal-level relates (no crit) — optional
+        };
+      });
+    },[artifacts, records]);
+
+    // review-state from the artifact's record (convention); absent ⇒ neutral
+    // (draft) — needs-review is set explicitly by the producer. Reads only
+    // rec.review.state (no by/at/rev assumed), so a state-only block is fine.
     const statusOf = useCallback((name)=>{
       const rec = records[name];
       const st = rec && rec.review && rec.review.state;
@@ -280,9 +476,11 @@
 
     // derived: artifacts in the component shape (topic/author stay stubbed — no
     // primitive yet; status now comes from the review convention)
-    // 'home' is the curated Home page and 'status.<id>' artifacts are the per-agent
-    // status records (rendered in the Agent-status panel), so hide both from the list.
-    const artItems = useMemo(()=>artifacts.filter(a=>a.Name!=="home" && !a.Name.startsWith("status.")).map(a=>({
+    // 'home' is the curated Home page, 'status.<id>' artifacts are the per-agent
+    // status records (rendered in the Agent-status panel), and 'goal.<id>'
+    // artifacts are the goal primitive (rendered in the Goals view), so hide all
+    // three from the plain documents list.
+    const artItems = useMemo(()=>artifacts.filter(a=>a.Name!=="home" && !a.Name.startsWith("status.") && !a.Name.startsWith("goal.")).map(a=>({
       name:a.Name, version:a.Revision, status:statusOf(a.Name), topic:"", type:"markdown",
       id:a.Name, author:{ name:"", kind:"agent" }, updated:relTime(a.Updated),
     })),[artifacts, statusOf]);
@@ -291,6 +489,8 @@
     // classify each discovered subject: inbox (a one-way client drop), dm (a
     // 2-participant topic), or a regular topic. An inbox is NOT a conversation.
     const convList = useMemo(()=>Object.entries(convos)
+      // artifact-discussion topics live only in the artifact view's inline panel, not the convo list (TASK-128)
+      .filter(([subj])=>!subj.startsWith("msg.topic.artifact."))
       .sort((a,b)=>(b[1].last||0)-(a[1].last||0))
       .map(([subj,c])=>{
         let type="topic", name=topicLabel(subj);
@@ -311,9 +511,43 @@
       }));
     },[convos, activeConvo, nameOf, kindOf, self.id]);
 
+    // derived: violet, the operator's assistant (ADR-0039). The `assistant`
+    // artifact names the live assistant by its bus client_id; absent (pre-v0.5.0)
+    // or malformed ⇒ null, and the FAB falls back to its "not live yet" state.
+    const violet = (assistant && typeof assistant.client_id==="string" && assistant.client_id)
+      ? { id:assistant.client_id, name:(typeof assistant.name==="string" && assistant.name ? assistant.name : "violet"), accent:(typeof assistant.accent==="string"?assistant.accent:"") }
+      : null;
+    // violet is "live" when a matching online bus client is present — drives the
+    // header dot. Absent client / offline ⇒ no dot (the convention is just an
+    // artifact; the agent need not be connected).
+    const violetOnline = !!(violet && clients.some(c=>c.ID===violet.id && c.Online));
+
+    // the violet DM subject (the same canonical 2-party topic startDM derives) and
+    // the discovered+backfilled message thread, shaped exactly like `messages` so
+    // the FAB can feed window.MessageList. Both null/empty when violet is absent.
+    const asstSubject = (violet && self.id) ? dmSubject(self.id, violet.id) : "";
+    const assistantMessages = useMemo(()=>{
+      const c = asstSubject ? convos[asstSubject] : null; if(!c) return [];
+      return c.msgs.map((m,i)=>({
+        id:m.id||i, kind:"msg", author:nameOf(m.author),
+        role: (kindOf(m.author)==="client"||kindOf(m.author)==="human")?"human":"agent",
+        self: m.author===self.id, time:relMs(m.ts), text:m.text,
+      }));
+    },[convos, asstSubject, nameOf, kindOf, self.id]);
+
+    // discover + backfill the violet DM as soon as both ends are known, so the
+    // existing thread loads into `convos` (the same ensureConvo+backfill openArtifact
+    // / startDM use). Re-runs only when the subject changes (not per render).
+    useEffect(()=>{
+      if(!asstSubject) return;
+      ensureConvo(asstSubject); backfill(asstSubject);
+    },[asstSubject]);
+
     // the open artifact's companion-topic discussion, rendered inline in the
     // artifact view (TASK-83). Same shape as `messages`, keyed on the artifact's
     // companion subject msg.topic.artifact.<name>.
+    // Each item carries a `review` field (or null) so review.jsx can render
+    // status-change events inline as timeline entries (distinct from plain comments).
     const discussion = useMemo(()=>{
       const c = activeArtifact ? convos[companionTopic(activeArtifact)] : null;
       if(!c) return [];
@@ -321,6 +555,7 @@
         id:m.id||i, kind:"msg", author:nameOf(m.author),
         role: kindOf(m.author)==="client"?"human":"agent",
         self: m.author===self.id, time:relMs(m.ts), text:m.text,
+        review: (m.record && m.record.review) || null,
       }));
     },[convos, activeArtifact, nameOf, kindOf, self.id]);
 
@@ -328,37 +563,100 @@
       who:nameOf(a.author), text:a.text, time:relMs(a.ts),
     })),[activity, nameOf]);
 
-    const artifact = artItems.find(a=>a.name===activeArtifact) || artItems[0] ||
-      { name:"", version:0, status:"review", topic:"", author:{name:"",kind:"agent"}, updated:"" };
-    const status = artifact.status;
-    const reviewRev = (artRecord && artRecord.review && artRecord.review.rev) || 0;
+    // No artItems[0] fallback — when activeArtifact isn't cached yet, fall back to a
+    // minimal object named for it (NOT the first artifact, which would flash the wrong
+    // doc); the record streams in via openArtifact's fetch.
+    const artifact = artItems.find(a=>a.name===activeArtifact) ||
+      { name:activeArtifact, version:0, status:statusOf(activeArtifact), topic:"", author:{name:"",kind:"agent"}, updated:"" };
     const convo = convList.find(c=>c.key===activeConvo) || convList[0] || { type:"topic", name:"", participants:0 };
 
-    // keep the conversation pinned to the newest message: scroll to the bottom on
-    // open and whenever a message arrives.
-    useEffect(()=>{
-      if(stageMode!=="conversation") return;
-      const el = convBodyRef.current;
-      if(el) el.scrollTop = el.scrollHeight;
-    },[messages, stageMode, activeConvo]);
-
-    // keep the inline artifact discussion pinned to the newest message too.
-    useEffect(()=>{
-      if(stageMode!=="artifact") return;
-      const el = discBodyRef.current;
-      if(el) el.scrollTop = el.scrollHeight;
-    },[discussion, stageMode, activeArtifact]);
-
-    function openArtifact(name){
-      setActiveArtifact(name); setStageMode("artifact");
+    // Open an artifact. Default → full-page review stage (Artifacts list, Home,
+    // Goals, doc-body [[wikilinks]]). With opts.popup → the dismissible modal over
+    // the current stage (used for a chat artifact-reference, so the conversation
+    // stays behind it). Both paths share the same load + the stale-fetch guard.
+    function openArtifact(name, opts){
+      touchRecent("art:"+name);
+      setActiveArtifact(name); setArtMissing(false);
+      if(opts && opts.popup){ setArtifactOpen(true); /* leave stageMode — the convo stays behind the modal */ }
+      else { setStageMode("artifact"); setArtifactOpen(false); }
+      artReqRef.current = name; // mark this as the current open — the fetch below only applies if it's still current
       const subj = companionTopic(name); ensureConvo(subj); backfill(subj); // load the inline discussion (TASK-83)
       const cached = records[name];
       setArtRecord(cached!==undefined ? cached : null);
+      // Fetch by name (the API resolves names not in the cached list). A 404 or a
+      // null record for a name that isn't in the directory means the ref is stale
+      // — flag it so the stage/modal shows a graceful "not found" instead of the
+      // wrong (fallback) document. Cache the record regardless, but only apply it to
+      // the view (artRecord/artMissing) if THIS open is still current — a slower
+      // earlier fetch must not clobber a newer review.
       apiGet("/api/artifacts/"+encodeURIComponent(name)).then(a=>{
-        const rec=(a&&a.Record)||null; setArtRecord(rec); setRecords(prev=>({...prev,[name]:rec}));
-      }).catch(()=>{});
+        const rec=(a&&a.Record)||null; setRecords(prev=>({...prev,[name]:rec}));
+        if(artReqRef.current!==name) return;
+        setArtRecord(rec);
+        if(!rec && !artifacts.some(x=>x.Name===name)) setArtMissing(true);
+      }).catch(()=>{ if(artReqRef.current===name && !artifacts.some(x=>x.Name===name)) setArtMissing(true); });
     }
+    // dismiss the review modal — the stage underneath is untouched, so this drops
+    // you back exactly where you were. Clear the active artifact + the request ref
+    // so a re-open is a fresh load and a late fetch can't repopulate a closed modal.
+    function closeArtifact(){ setArtifactOpen(false); setActiveArtifact(""); setArtMissing(false); artReqRef.current=""; }
+    // the modal's "Open in full page" action: close the modal, then re-open the
+    // same artifact on the full-page stage.
+    function openArtifactFullPage(name){ closeArtifact(); openArtifact(name); }
     function goHome(){ setStageMode("home"); }
+    // ⌘K no-match → open the Assistant FAB with the typed query prefilled in the
+    // composer (never auto-sent — the operator hits send). When violet is live the
+    // FAB is the DM thread; when absent it shows the "not live yet" state. We set
+    // BOTH asstPrompt (shown as the carried query) and asstDraft (the live composer
+    // value) so the operator can edit + send.
+    function askAssistant(query){ setPalette(false); const q=query||""; setAsstPrompt(q); setAsstDraft(q); setAsstOpen(true); }
+    // send the FAB composer to violet's DM (the canonical 2-party topic), then
+    // clear the FAB draft. No-op until violet + self are both known.
+    function sendToAssistant(text){
+      const body=(text||"").trim(); if(!body || !violet || !self.id) return;
+      apiPublish(dmSubject(self.id, violet.id),{ "$type":"chat.message", text:body }).then(()=>{ setAsstDraft(""); setAsstPrompt(""); }).catch(()=>{});
+    }
+    // Workspace nav (flow2 chrome): Home / Artifacts / Goals / Agents swap the
+    // white stage.
+    // onNav(key[, arg]): swap the stage. For "goals", an optional arg is a goal id
+    // to deep-link to (TASK-157) — set it so the remounted GoalsView opens that
+    // goal's detail; a plain Goals nav (no arg) clears it and lands on the portfolio.
+    function onNav(key, arg){ touchRecent("nav:"+key); if(key==="goals"){ setGoalsOpenId(typeof arg==="string"?arg:null); setGoalsEpoch(e=>e+1); } setStageMode(key); }
+
+    // renderWiki: shared wikilink renderer for any view that shows goal/artifact
+    // wikilinks in plain-text fields (goals north-star, criteria, etc.).
+    // Splits text on [[name]] / [[name|alias]], resolves each target against the
+    // known artifact names and goal names/ids, and returns an array of React nodes.
+    // Known → clickable sx-artlink span; unknown → muted sx-artlink-dead span.
+    // goal.<id> targets navigate to the Goals view; other targets open the artifact.
+    function renderWiki(text) {
+      if (!text) return text;
+      const known = new Set();
+      for (const a of artifacts) { if (a && a.Name) known.add(a.Name); }
+      for (const g of goals) {
+        if (g && g.name) known.add(g.name);
+        if (g && g.id) known.add("goal." + g.id);
+      }
+      const parts = text.split(/(\[\[[^\]|]+(?:\|[^\]]+)?\]\])/g);
+      if (parts.length === 1) return text;
+      return parts.map((part, i) => {
+        const m = part.match(/^\[\[([^\]|]+)(?:\|([^\]]+))?\]\]$/);
+        if (!m) return part;
+        const target = m[1].trim();
+        const display = m[2] != null ? m[2].trim() : target;
+        if (known.has(target)) {
+          const onClick = (e) => {
+            e.stopPropagation();
+            if (target.indexOf("goal.") === 0) { onNav("goals"); }
+            else { openArtifact(target); }
+          };
+          return <span key={i} className="sx-artlink" role="link" tabIndex={0} onClick={onClick}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(e); } }}>{display}</span>;
+        }
+        return <span key={i} className="sx-artlink-dead">{display}</span>;
+      });
+    }
+
     function backfill(subj){
       // /api/messages reads FORWARD from `since` (since=0 is the oldest), so a
       // single page returns the OLDEST messages. Page to the tail following
@@ -373,7 +671,8 @@
       });
       page(0,MAX_PAGES).then(()=>{
         if(!acc.length) return;
-        const hist=acc.map(f=>({ id:f.id, author:f.author, text:frameText(f.record), ts:0 }));
+        // carry record so review-marker fields survive into discussion (same as live stream)
+        const hist=acc.map(f=>({ id:f.id, author:f.author, text:frameText(f.record), ts:0, record:f.record||null }));
         setConvos(prev=>{
           const cur=prev[subj]||{msgs:[]};
           const seen=new Set(cur.msgs.map(m=>m.id));
@@ -384,7 +683,7 @@
     }
     function ensureConvo(subj){ setConvos(prev=>prev[subj]?prev:{ ...prev, [subj]:{ msgs:[], last:Date.now(), lastText:"" } }); }
     function openConvo(key){ ensureConvo(key); setActiveConvo(key); backfill(key); }
-    function expandConvo(key){ ensureConvo(key); setActiveConvo(key); setStageMode("conversation"); backfill(key); }
+    function expandConvo(key){ touchRecent("conv:"+key); ensureConvo(key); setActiveConvo(key); setStageMode("conversation"); backfill(key); }
     function send(){
       if(!draft.trim()||!activeConvo) return;
       const text=draft.trim();
@@ -397,12 +696,40 @@
       apiPublish(companionTopic(activeArtifact),{ "$type":"chat.message", text }).then(()=>setDraft("")).catch(()=>{});
     }
     // approve / request-changes: persist the review-state, refresh the record,
-    // and post an event to the artifact's companion discussion topic.
-    function setReview(name, state){
+    // and post a status-change event to the artifact's companion discussion topic.
+    // The event is a backward-compatible chat.message with an extra `review` marker
+    // so review.jsx can render it as a timeline status-change entry inline with comments.
+    // An optional `note` (TASK-154) is the operator's feedback — posted as a plain
+    // comment to the SAME companion topic BEFORE the marker, so the WHAT travels to
+    // the agent (esp. on request-changes) and reads feedback→status-change in order.
+    function setReview(name, state, note){
+      let latestRev = null;
       apiReview(name, state)
         .then(()=>apiGet("/api/artifacts/"+encodeURIComponent(name)))
-        .then(a=>{ const rec=(a&&a.Record)||null; setRecords(prev=>({...prev,[name]:rec})); if(name===activeArtifact) setArtRecord(rec); })
-        .then(()=>apiPublish(companionTopic(name),{ "$type":"chat.message", text:(REVIEW_VERB[state]||state)+" "+name }))
+        .then(a=>{
+          const rec=(a&&a.Record)||null;
+          // capture the current revision for the marker (null if unavailable)
+          latestRev = (a && typeof a.Revision==="number") ? a.Revision : (rec && rec.review && rec.review.rev) || null;
+          setRecords(prev=>({...prev,[name]:rec}));
+          if(name===activeArtifact) setArtRecord(rec);
+        })
+        .then(()=>{
+          const n = (note||"").trim();
+          if(!n) return; // no feedback note — skip the comment
+          // a note-publish failure must NOT block the verdict marker below — swallow
+          // it locally so the status-change event still posts (codex Q4).
+          return apiPublish(companionTopic(name),{ "$type":"chat.message", text:n }).catch(()=>{});
+        })
+        .then(()=>{
+          const marker = { state };
+          if(latestRev !== null) marker.rev = latestRev;
+          // returned into the chain so a publish failure is caught below.
+          return apiPublish(companionTopic(name),{
+            "$type":"chat.message",
+            text: REVIEW_ACTION[state] || state,
+            review: marker,
+          });
+        })
         .catch(()=>{});
     }
     // a DM is a 2-participant topic with a canonical subject from the sorted
@@ -414,23 +741,68 @@
     function hideConvo(key){ setHidden(prev=>{ const n=new Set(prev); n.add(key); persistHidden(n); return n; }); }
     function unhideConvo(key){ setHidden(prev=>{ const n=new Set(prev); n.delete(key); persistHidden(n); return n; }); }
 
+    // per-view review counts (the sidebar nav badges): the Artifacts badge counts
+    // review-pending artifacts; the Goals badge counts goals awaiting the operator's
+    // sign-off (TASK-157). Kept separate so each badge reflects what that view holds
+    // (a review goal lives under Goals, not in the Artifacts list).
+    const reviewCount = artItems.filter(a=>a.status==="review").length;
+    const goalReviewCount = goals.filter(g=>g.review==="review").length;
+    const workingCount = agents.filter(a=>a.state==="working").length;
+
     const ctx = {
       conversations:convList, activeConvo, stageMode, onOpenConvo:openConvo, onExpandConvo:expandConvo,
       messages, draft, setDraft, onSend:send, onArtifactRef:openArtifact,
       artifacts:artItems, activeArtifact, onOpenArtifact:openArtifact,
-      goals:GOALS, agents, activity:homeActivity, self, onGoHome:goHome, home, onDM:startDM,
+      goals, agents, activity:homeActivity, self, onGoHome:goHome, home, onDM:startDM,
       hidden, onHide:hideConvo, onUnhide:unhideConvo,
+      onNav, onSearch:()=>setPalette(true), reviewCount, goalReviewCount, workingCount,
+    };
+
+    // ⌘K search index — only what's already loaded (artifacts, agents, conversation
+    // subjects). Selecting a result opens it via the existing handlers; the
+    // artifact `go` uses openArtifact (which fetches by name), so it resolves even
+    // for a name not in the cached list.
+    const searchIndex = ()=>{
+      const items=[];
+      // "Go to" — the four Workspace nav hubs as jump targets (same as clicking
+      // the sidebar nav). Listed first so a name-clash still surfaces the hub.
+      [["Home","home"],["Artifacts","artifacts"],["Goals","goals"],["Agents","agents"]]
+        .forEach(([label,key])=>items.push({ key:"nav:"+key, type:"Go to", label,
+          sub:"workspace", kw:("go to "+label+" "+key).toLowerCase(), go:()=>onNav(key) }));
+      artItems.forEach(a=>items.push({ key:"art:"+a.name, type:"Artifact", label:a.name,
+        sub:(a.updated?("updated "+a.updated+" ago"):"")+(a.status?(" · "+a.status):""),
+        kw:(a.name+" "+a.status).toLowerCase(), go:()=>openArtifact(a.name) }));
+      // Agent rows keep a distinct "agent:<id>" key (a DM subject can also surface
+      // as a Channel row, so reusing "conv:<subject>" would collide). startDM
+      // records recency under the conversation; we ALSO touch the agent key here
+      // so the Agent row itself accumulates recency and ranks up over time.
+      agents.forEach(a=>items.push({ key:"agent:"+a.id, type:"Agent", label:a.name, sub:a.meta,
+        kw:(a.name+" "+(a.headline||"")+" "+a.state).toLowerCase(),
+        go:()=>{ if(a.id){ touchRecent("agent:"+a.id); startDM(a.id); } else onNav("agents"); } }));
+      convList.forEach(c=>items.push({ key:"conv:"+c.key, type:"Channel",
+        label:(c.type==="topic"?"# ":"@ ")+c.name, sub:c.snippet||"conversation",
+        kw:(c.name+" "+(c.snippet||"")).toLowerCase(), go:()=>expandConvo(c.key) }));
+      return items;
     };
 
     const hasAuthor = artifact.author && artifact.author.name;
 
     return (
-      <div className="sx-app">
+      <div className="sx-app" style={{"--sx-side-w": sideCollapsed ? "0px" : sideWidth+"px"}}>
         <div style={{display:"contents"}}>
-          <Sidebar ctx={ctx} busName={(self.display_name||"bus")} navMode={t.sideNav} />
+          <Sidebar ctx={ctx} busName={(self.display_name||"bus")} navMode={t.sideNav}
+            sideWidth={sideWidth} sideCollapsed={sideCollapsed}
+            onSideWidth={onSideWidth} onToggleSide={toggleSide} />
         </div>
 
         <main className="sx-stage">
+          {staleBuild && !buildNudgeOff && (
+            <div className="sx-buildnudge" role="status">
+              <span className="sx-buildnudge-dot" />
+              <span className="sx-buildnudge-text">new version available — refresh (⌘R)</span>
+              <button className="sx-buildnudge-x" title="Dismiss until the next update" aria-label="Dismiss" onClick={()=>setBuildNudgeOff(true)}>×</button>
+            </div>
+          )}
           <div className="sx-topbar">
             <div className="sx-crumb">
               {stageMode==="home" ? (
@@ -439,6 +811,12 @@
                   <span className="sx-crumb-sep">/</span>
                   <span className="sx-crumb-art">{self.display_name?("you are "+self.display_name):"live bus"}</span>
                 </React.Fragment>
+              ) : stageMode==="artifacts" ? (
+                <span className="sx-crumb-topic">Artifacts</span>
+              ) : stageMode==="goals" ? (
+                <span className="sx-crumb-topic">Goals</span>
+              ) : stageMode==="agents" ? (
+                <span className="sx-crumb-topic">Agents</span>
               ) : stageMode==="artifact" ? (
                 <React.Fragment>
                   <span className="sx-crumb-topic">Artifact</span>
@@ -464,66 +842,132 @@
             <div className="sx-canvas">
               <div className="sx-page sx-page--doc sx-page--home"><HomePage ctx={ctx} /></div>
             </div>
-          ) : stageMode==="artifact" ? (
-            <React.Fragment>
-              <div className="sx-arthead">
-                <div className="sx-arthead-l">
-                  <div className="sx-arthead-title">{artifact.name}</div>
-                  <div className="sx-arthead-meta">
-                    {artifact.updated && <span className="sx-arthead-time">updated {artifact.updated} ago</span>}
-                    {status==="approved" && reviewRev>0 && <span className="sx-arthead-time">· approved at v{reviewRev}</span>}
-                    <span className="sx-arthead-v mono" style={{opacity:.5}}>· rev {artifact.version}</span>
+          ) : stageMode==="artifacts" ? (
+            <div className="sx-canvas sx-canvas--list">
+              <div className="sx-page sx-page--doc"><ArtifactsView artifacts={artItems} activeArtifact={activeArtifact} onOpenArtifact={openArtifact} /></div>
+            </div>
+          ) : stageMode==="goals" ? (
+            <div className="sx-canvas sx-canvas--list">
+              <div className="sx-page sx-page--doc"><GoalsView key={goalsEpoch} goals={goals} initialGoalId={goalsOpenId} onOpenArtifact={openArtifact} onSetReview={setReview} renderWiki={renderWiki} /></div>
+            </div>
+          ) : stageMode==="agents" ? (
+            <div className="sx-canvas sx-canvas--list">
+              <div className="sx-page sx-page--doc"><AgentsView agents={agents} onDM={startDM} /></div>
+            </div>
+          ) : stageMode==="artifact" && artMissing ? (
+            <div className="sx-canvas sx-canvas--list">
+              <div className="sx-page sx-page--doc">
+                <div className="fx-scroll"><div className="fx-col sx-conv-light">
+                  <h1 className="fx-h1">Artifact not found</h1>
+                  <p className="fx-psub">Nothing on the bus is named <span className="mono">{activeArtifact}</span> right now.</p>
+                  <div className="fx-stub">
+                    <span className="fx-stub-ic">⌕</span>
+                    <div>
+                      <div className="fx-stub-title">The reference may be stale.</div>
+                      <div className="fx-stub-sub">It might have been renamed or removed, or it never existed. Open the Artifacts list to see what's actually here.</div>
+                    </div>
                   </div>
-                </div>
-                <div className="sx-arthead-r">
-                  <StatusPill status={status} big />
-                  {(status==="archived"||status==="rejected") ? (
-                    <button className="sx-sbtn sx-sbtn-req" onClick={()=>setReview(artifact.name,"review")}>Reopen</button>
-                  ) : (
-                    <React.Fragment>
-                      {status!=="approved" && <button className="sx-sbtn sx-sbtn-approve" onClick={()=>setReview(artifact.name,"approved")}>✓ Approve</button>}
-                      {status!=="changes" && <button className="sx-sbtn sx-sbtn-req" onClick={()=>setReview(artifact.name,"changes")}>Request changes</button>}
-                      <button className="sx-sbtn sx-sbtn-req" onClick={()=>setReview(artifact.name,"archived")}>Archive</button>
-                      <button className="sx-sbtn sx-sbtn-req" onClick={()=>setReview(artifact.name,"rejected")}>Reject</button>
-                    </React.Fragment>
-                  )}
-                  <button className="sx-sbtn sx-sbtn-req" onClick={()=>expandConvo(companionTopic(artifact.name))}>Discussion ↗</button>
-                </div>
-              </div>
-              <div className={"sx-canvas sx-canvas--artifact " + (discSplit?"sx-canvas--split":"sx-canvas--stacked")}>
-                <div className="sx-page sx-page--doc"><MarkdownArtifact record={artRecord} name={artifact.name} revision={artifact.version} /></div>
-                <div className="sx-artdisc sx-conv-light">
-                  <div className="sx-artdisc-head">
-                    <span className="sx-artdisc-title">Discussion</span>
-                    <span className="sx-artdisc-sub">{companionTopic(artifact.name)}</span>
-                    <button className="sx-icon-btn sx-artdisc-toggle" title={discSplit?"Stack below the document":"Split beside the document"} onClick={()=>setDiscSplit(v=>!v)}>{discSplit?"▤":"▥"}</button>
+                  <div style={{marginTop:18}}>
+                    <button className="sx-sbtn sx-sbtn-req" onClick={()=>setStageMode("artifacts")}>Browse artifacts →</button>
                   </div>
-                  <div className="sx-artdisc-body" ref={discBodyRef}>
-                    {discussion.length
-                      ? <MessageList messages={discussion} onArtifactRef={openArtifact} />
-                      : <div className="sx-artdisc-empty">No discussion yet — start the thread below.</div>}
-                  </div>
-                  <Composer draft={draft} setDraft={setDraft} onSend={sendDiscussion} placeholder={"Discuss " + artifact.name} />
-                </div>
-              </div>
-            </React.Fragment>
-          ) : (
-            <div className="sx-canvas">
-              <div className="sx-page sx-page--doc sx-conv-light">
-                <div className="sx-convstage">
-                  <div className="sx-convstage-head">
-                    <span className="sx-convstage-title">{convo.type==="topic"?"# ":"@ "}{convo.name}</span>
-                    <span className="sx-convstage-meta">live on the bus</span>
-                  </div>
-                  <div className="sx-convstage-body" ref={convBodyRef}>
-                    <MessageList messages={messages} onArtifactRef={openArtifact} artifactNames={artifacts.map(a=>a.Name)} />
-                  </div>
-                  <Composer draft={draft} setDraft={setDraft} onSend={send} placeholder={"Message "+(convo.type==="topic"?"#":"@")+convo.name} />
-                </div>
+                </div></div>
               </div>
             </div>
+          ) : stageMode==="artifact" ? (
+            <div className="sx-canvas sx-canvas--review sx-conv-light">
+              <ReviewView
+                artifact={artifact}
+                record={artRecord}
+                discussion={discussion}
+                draft={draft} setDraft={setDraft}
+                onSetReview={setReview}
+                onSendComment={sendDiscussion}
+                onExpandDiscussion={(n)=>expandConvo(companionTopic(n))}
+                onBrowse={()=>setStageMode("artifacts")}
+                railWidth={railWidth} railCollapsed={railCollapsed}
+                onRailWidth={onRailWidth} onToggleRail={toggleRail}
+                onOpenArtifact={openArtifact}
+                artifactNames={artifacts.map(a=>a.Name)}
+              />
+            </div>
+          ) : (
+            <ConversationView
+              convo={convo}
+              messages={messages}
+              draft={draft} setDraft={setDraft} onSend={send}
+              onArtifactRef={(n)=>openArtifact(n,{popup:true})}
+              artifactNames={artifacts.map(a=>a.Name)}
+              agents={agents}
+              self={self}
+            />
           )}
         </main>
+
+        {/* The artifact-review MODAL — an OPTION, not the default (Lena's
+            #ui-feedback). Opened only when an artifact is referenced from a
+            conversation (openArtifact(name,{popup:true})); it floats over the chat
+            instead of taking the stage over, so dismissing returns you to the thread.
+            Exits: the "Open in full page" button (escalates to the full-page review)
+            · × · scrim · Esc. The scrim closes on a click of itself only — the panel
+            stops propagation. */}
+        {artifactOpen && (
+          <div className="sx-artmodal-scrim" onMouseDown={(e)=>{ if(e.target===e.currentTarget) closeArtifact(); }}>
+            <div className="sx-artmodal-panel" role="dialog" aria-modal="true"
+              aria-label={artMissing ? "Artifact not found" : ("Review "+(artifact.name||activeArtifact))}
+              tabIndex={-1} ref={el=>{ if(el && !el.dataset.focused){ el.dataset.focused="1"; el.focus(); } }}
+              onMouseDown={(e)=>e.stopPropagation()}>
+              <div className="sx-artmodal-actions">
+                <button className="sx-artmodal-fp" title="Open in full page view" onClick={()=>openArtifactFullPage(activeArtifact)}>Open in full page ⤢</button>
+                <button className="sx-artmodal-x" aria-label="Close" title="Close (Esc)" onClick={closeArtifact}>×</button>
+              </div>
+              {artMissing ? (
+                <div className="sx-artmodal-missing sx-conv-light">
+                  <h1 className="fx-h1">Artifact not found</h1>
+                  <p className="fx-psub">Nothing on the bus is named <span className="mono">{activeArtifact}</span> right now.</p>
+                  <div className="fx-stub">
+                    <span className="fx-stub-ic">⌕</span>
+                    <div>
+                      <div className="fx-stub-title">The reference may be stale.</div>
+                      <div className="fx-stub-sub">It might have been renamed or removed, or it never existed. Open the Artifacts list to see what's actually here.</div>
+                    </div>
+                  </div>
+                  <div style={{marginTop:18}}>
+                    <button className="sx-sbtn sx-sbtn-req" onClick={()=>{ closeArtifact(); setStageMode("artifacts"); }}>Browse artifacts →</button>
+                  </div>
+                </div>
+              ) : (
+                <div className="sx-canvas--review sx-conv-light">
+                  <ReviewView
+                    artifact={artifact}
+                    record={artRecord}
+                    discussion={discussion}
+                    draft={draft} setDraft={setDraft}
+                    onSetReview={setReview}
+                    onSendComment={sendDiscussion}
+                    onExpandDiscussion={(n)=>{ closeArtifact(); expandConvo(companionTopic(n)); }}
+                    inModal={true}
+                    onBrowse={closeArtifact}
+                    onClose={closeArtifact}
+                    railWidth={railWidth} railCollapsed={railCollapsed}
+                    onRailWidth={onRailWidth} onToggleRail={toggleRail}
+                    onOpenArtifact={openArtifact}
+                    artifactNames={artifacts.map(a=>a.Name)}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        <AssistantFab open={asstOpen} prompt={asstPrompt}
+          assistant={violet} online={violetOnline}
+          messages={assistantMessages} self={self}
+          draft={asstDraft} setDraft={setAsstDraft}
+          onSend={sendToAssistant} onArtifactRef={openArtifact}
+          artifactNames={artifacts.map(a=>a.Name)}
+          onOpen={()=>{ setAsstPrompt(""); setAsstDraft(""); setAsstOpen(true); }}
+          onClose={()=>{ setAsstOpen(false); setAsstPrompt(""); }} />
+        {palette && <CmdK index={searchIndex()} recents={recents} assistantLive={!!violet} onClose={()=>setPalette(false)} onAsk={askAssistant} />}
 
         <TweaksPanel title="Tweaks">
           <TweakSection label="Accent" />

@@ -6,7 +6,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added
+### Added (prior unreleased)
 
 - **`sextant dash --serve`: a local web API + debug surface** (ADR-0032) — runs the
   dash's one bus identity as a token-gated HTTP API on `127.0.0.1` (the Go process
@@ -267,3 +267,111 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   identity the bus stamps, not a client-set field. `pkg/sextant`'s
   `Message.Envelope` is now `Message.Frame`. First step of implementing
   ADR-0018 / ADR-0019.
+
+## [0.5.0] — 2026-06-17
+
+### Added
+
+- **Goal bus primitive** (ADR-0035, #155) — a *goal* is a shared objective the
+  crew works toward: a north-star text + acceptance criteria with a derived
+  status. Modelled as the latest-value artifact `goal.<id>` plus a
+  `goal.update` stream on `msg.topic.goals`. Evidence is declared artifact-side
+  via a generic `relates` link; criteria move to `met` once ≥1 proof artifact is
+  approved. Signal-not-manage: zero new bus operations, the same convention-not-
+  primitive discipline as the cockpit (ADR-0034).
+
+- **Goals UI** (v0.5, #175, #182, #183) — Goals portfolio view, per-goal detail
+  page with criteria and linked artifacts, and a Home rollup showing open
+  criteria and blocked goals. Review-flagged goals surface in the "needs you"
+  queue with operator sign-off; goal verdicts carry operator feedback (required
+  for request-changes). Approve a proof artifact closes the criterion loop
+  automatically (#177).
+
+- **Heartbeat / presence** (ADR-0036, #162) — a client sends a periodic
+  heartbeat (`agent.status` ping) so presence is visible across leaf-node links
+  and during idle reconnects. The hub derives each client's online/idle/offline
+  state from the heartbeat cadence rather than the connection table alone —
+  unblocking accurate presence in cross-machine topologies.
+
+- **Durable subscriptions — self-healing across session resume** (ADR-0037,
+  TASK-124, #179) — the MCP plugin adapter persists each session's manual
+  subscriptions (subject + last-delivered seq) and its `context_use` choice
+  beside the attest cursor, keyed by the stable `CLAUDE_CODE_SESSION_ID`. On
+  every connect (resume, compaction, MCP restart) it re-pins the context, then
+  re-subscribes and catches up by seq — so delivery self-heals instead of
+  silently dropping. An adapter-layer convention; the protocol epoch is
+  unchanged.
+
+- **Leaf-node federation** (ADR-0038, #174) — a remote box joins the bus by
+  running a local embedded bus in NATS leaf mode. The leaf federates the
+  per-client wire-API subjects to the hub over one SEXTANT account (JetStream
+  stays at the hub). The hub's subject-derived author stamp remains trustworthy
+  because the leaf installs only the hub's PUBLIC account JWTs — no seed, so it
+  cannot mint new identities. Presence over the federated link is served by the
+  ADR-0036 heartbeat. Additive and default-off.
+
+- **Assistant convention** (ADR-0039, #172) — **violet**, the operator's
+  assistant, is defined as a convention over the existing primitives: a plain
+  client distinguished by a **role prompt** (two duties: answer read-only
+  questions, curate the operator's Home/inbox) and a swappable **`assistant`
+  designation artifact** `{client_id, name, accent}`. Zero new bus operations;
+  the thin core is untouched. The dash de-stubs its assistant surface (the FAB
+  panel and ⌘K "Ask the assistant" entry) by reading this artifact for the live
+  client id and accent. **The violet runtime ships in v0.5.1**; the convention
+  and dash entry points ship now and degrade gracefully when violet is absent
+  (the FAB is present but the assistant is not live by default).
+
+- **v0.5 Live Flow dash reskin** (#156, #158) — shell restructure, token-bar,
+  `[[wikilink]]` rendering in artifact bodies and the Home agenda (valid = live
+  link; unknown = muted), and a ⌘K command palette that ranks recently-opened
+  destinations with an extensible scoring seam.
+
+- **Dash review rail + document view** (#163, #166) — inline status-change
+  timeline with a "waiting for author" label; full-page artifact review by
+  default (popup for chat references); review-posted consequence as a popup.
+
+- **Needs-review convention wired end to end** (#161) — `review.state = review`
+  in an artifact surfaces it in the "needs you" queue; approve / request-changes
+  persist via `POST /api/artifacts/{name}/review` and post an event on the
+  artifact's companion topic.
+
+- **Conversations reskin + DM-status strip** (#165) — reskinned conversations
+  view with DM-status indicator, auto-scroll on new messages (#180), and
+  artifact-topic topics hidden from the conversation list (#160).
+
+- **Resizable / collapsible left nav** (TASK-141, #167) — the left navigation
+  pane is drag-resizable and can be collapsed; state persists across reloads.
+
+- **Distinct pill color for "waiting on you" vs "waiting on agent"** (#168) —
+  status pills now use separate color tokens so the operator can distinguish
+  items that need their action from items in-flight with the crew.
+
+- **Collapsible artifact status sections** (#171) — artifact status groups
+  collapse independently; drafts no longer lead the list.
+
+- **Build-staleness nudge** (TASK-140, #159) — the dash shows a "new version
+  available" refresh banner when the served bundle is older than the one on disk.
+
+- **Agentic dev workflow** (TASK-98, #157) — a v0.5 variant of the agentic
+  development workflow (LLM orchestrator drives plan → codex-review → fix →
+  brief → human-gate → open-PR); sirius gates the resulting PR.
+
+- **JS bundles generated at build time** (TASK-121, #154) — committed `.js`
+  artefacts replaced with a build step; the source-of-truth is the `.jsx` +
+  `.css` in `web/app/`.
+
+### Fixed
+
+- **Wikilinks in artifact bodies** (#169) — `[[name]]` tokens in artifact
+  bodies render as live links when the target artifact exists, muted otherwise.
+
+- **Self-healing subscriptions** (TASK-124, #179) — MCP subscriptions and the
+  active context now survive a session resume, compaction, or MCP restart
+  (see above in Added).
+
+### Changed
+
+- **`review.state` is one enum — intent and verdict** (TASK-145, #170) —
+  clarified in CONTEXT.md and ADR-0034: `review.state` encodes both the
+  producer's intent (set it to `review`) and the reviewer's verdict (set it to
+  `approved` / `changes-requested`); it is a single field, not two.

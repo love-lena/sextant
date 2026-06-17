@@ -24,6 +24,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # release.sh regenerates the dash UI bundles (TASK-121) via esbuild, which
+      # needs Node/npx; they're generated, not committed.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
       - name: build tarballs
         run: scripts/release.sh "$GITHUB_REF_NAME"
       - name: smoke the linux binary

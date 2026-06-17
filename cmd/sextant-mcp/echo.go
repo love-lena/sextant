@@ -59,3 +59,14 @@ func (s *selfEchoSet) contains(id string) bool {
 	s.mu.Unlock()
 	return ok
 }
+
+// idRing is the bounded id-ring reused for delivery de-duplication (separate
+// from self-echo): the hub records every frame id it successfully delivers and
+// drops a repeat, so the restore catch-up (channel.go) and the live subscription
+// can both run during the post-resume overlap window without showing a frame
+// twice. The id is recorded only after a confirmed push (see emit), so a failed
+// push never marks a frame delivered. Keyed on the unique bus frame id, so it
+// never coalesces distinct frames.
+type idRing = selfEchoSet
+
+func newIDRing() *idRing { return newSelfEchoSet() }

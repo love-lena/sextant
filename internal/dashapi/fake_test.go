@@ -3,6 +3,7 @@ package dashapi_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 
 	"github.com/love-lena/sextant/pkg/sextant"
@@ -24,12 +25,13 @@ type fakeBus struct {
 	frames    []wire.Frame
 	nextCur   uint64
 
-	clientsErr  error
-	fetchErr    error
-	artifactErr error
-	publishErr  error
-	subErr      error
-	failUpdates int // when >0, UpdateArtifact returns errConflict and decrements (exercises the CAS retry)
+	clientsErr     error
+	fetchErr       error
+	artifactErr    error
+	publishErr     error
+	subErr         error
+	failUpdates    int // when >0, UpdateArtifact returns errConflict and decrements (exercises the CAS retry)
+	failGoalUpdate int // like failUpdates but only for goal.* writes — targets the closed-loop's CAS retry without tripping the verdict write
 
 	mu             sync.Mutex
 	published      []publishedMsg
@@ -84,6 +86,10 @@ func (f *fakeBus) UpdateArtifact(_ context.Context, name string, record json.Raw
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if strings.HasPrefix(name, "goal.") && f.failGoalUpdate > 0 {
+		f.failGoalUpdate--
+		return 0, errConflict
+	}
 	if f.failUpdates > 0 {
 		f.failUpdates--
 		return 0, errConflict

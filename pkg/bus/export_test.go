@@ -4,9 +4,20 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/love-lena/sextant/pkg/sx"
 )
+
+// SetFreshnessWindow overrides the heartbeat freshness window so a test can make
+// a seeded last_seen count as fresh or stale deterministically (TASK-126).
+func (b *Bus) SetFreshnessWindow(d time.Duration) { b.freshnessWindow = d }
+
+// SetHeartbeatAfterReadHook installs a hook the heartbeat handler runs after it
+// reads the registry record but before it writes back — the window where a
+// concurrent retire-delete could be made to land deterministically, so the
+// beat-vs-retire resurrection race can be regression-tested (TASK-126).
+func (b *Bus) SetHeartbeatAfterReadHook(f func()) { b.hbAfterReadHook = f }
 
 // Test-only seams. This file is a _test.go file, so it is compiled only into the
 // bus package's test binary and never ships in any production build — yet because

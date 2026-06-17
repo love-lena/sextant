@@ -199,10 +199,12 @@ func newHarness(t *testing.T) *harness {
 func (h *harness) childEnv(extra map[string]string) []string {
 	env := make([]string, 0, len(os.Environ())+len(extra)+1)
 	for _, kv := range os.Environ() {
-		// Strip SEXTANT_* (so a real ~/.config context can't leak in) and the
-		// Claude Code session id (so the developer's own session can't key an
-		// MCP child's identity); tests set CLAUDE_CODE_SESSION_ID explicitly.
-		if strings.HasPrefix(kv, "SEXTANT_") || strings.HasPrefix(kv, "CLAUDE_CODE_SESSION_ID=") {
+		// Strip SEXTANT_* (so a real ~/.config context can't leak in) and ALL
+		// CLAUDE_* (so the developer's own Claude Code session can't key an MCP
+		// child's identity, durable substate, or attest cursor — CLAUDE_CODE_SESSION_ID
+		// and CLAUDE_PLUGIN_DATA both key per-session state on disk). Tests that need
+		// either set it explicitly in `extra`, which is appended below and wins.
+		if strings.HasPrefix(kv, "SEXTANT_") || strings.HasPrefix(kv, "CLAUDE_") {
 			continue
 		}
 		env = append(env, kv)

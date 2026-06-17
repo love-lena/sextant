@@ -15,7 +15,16 @@
 #                                           # bus + a real sextant worktree. The operator
 #                                           # drives this (the safety classifier blocks an
 #                                           # unattended agent from launching autonomous
-#                                           # editing agents). Opens a PR; never merges.
+#                                           # editing agents). Opens a PR to main; never merges.
+#
+#   agentic-dev-workflow.sh run-v05 "<task>"# LIVE v0.5 VARIANT: same workflow, but it targets
+#                                           # the v0.5 integration branch — worktree off
+#                                           # origin/v0.5, PR base v0.5, and the release GATE
+#                                           # pings the PSEUDO-OPERATOR (sirius), not the
+#                                           # principal. The workflow still only OPENS a PR (the
+#                                           # gh/git shims still refuse merge/push/tag); sirius
+#                                           # merges to v0.5 separately. Dangerous/irreversible
+#                                           # steps still escalate to the REAL principal (Lena).
 #
 # The orchestration logic lives in the orchestrator's playbook (an LLM), NOT here — this
 # is setup + the wf-* helper tools the orchestrator calls.
@@ -24,6 +33,11 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 MODE="${1:-demo}"
 TASK="${2:-}"
+
+# sirius — the v0.5 pseudo-operator (the gate approver for the v0.5 variant). Overridable
+# (e.g. WF_PSEUDO_OPERATOR=<orion's id> to gate orion instead). This is a *bus client id*,
+# not the principal — WF_PRINCIPAL stays the real principal for dangerous-escalation gates.
+SIRIUS_ID="01KTYFK00J6RXP4CFPHPWRBRS1"
 
 # --- shared helper-script generation -----------------------------------------------
 # The orchestrator's Bash calls these by name; they read the WF_* env exported below.
@@ -51,11 +65,25 @@ t="$("$WF_BIN/_wf-esc" "$1")"
   --creds "$WF_ORCH_CREDS" --store "$SEXTANT_STORE" >/dev/null 2>&1
 EOF
 
-  # wf-dm "<text>" — DM the principal (headline only).
+  # wf-dm "<text>" — DM the GATE PEER (headline only). In the default run that's the
+  # principal; in the v0.5 variant it's the pseudo-operator (sirius) — see WF_DM.
   cat >"$bin/wf-dm" <<'EOF'
 #!/usr/bin/env sh
 t="$("$WF_BIN/_wf-esc" "$1")"
 "$WF_SEXTANT" publish "$WF_DM" \
+  "{\"\$type\":\"chat.message\",\"text\":\"$t\"}" \
+  --creds "$WF_ORCH_CREDS" --store "$SEXTANT_STORE" >/dev/null 2>&1
+EOF
+
+  # wf-dm-principal "<text>" — DM the REAL principal (escalation gate), regardless of variant.
+  # Use ONLY for dangerous/irreversible escalations (merge to main, tag, force-push, history
+  # rewrite, other repos, destructive, credentials). Falls back to the gate-peer DM if the
+  # principal DM isn't set (the demo/main run, where they're the same peer).
+  cat >"$bin/wf-dm-principal" <<'EOF'
+#!/usr/bin/env sh
+t="$("$WF_BIN/_wf-esc" "$1")"
+to="${WF_PRINCIPAL_DM:-$WF_DM}"
+"$WF_SEXTANT" publish "$to" \
   "{\"\$type\":\"chat.message\",\"text\":\"$t\"}" \
   --creds "$WF_ORCH_CREDS" --store "$SEXTANT_STORE" >/dev/null 2>&1
 EOF
@@ -200,10 +228,19 @@ EOF
   # wf-release-pr <pr create args...> — the ONLY sanctioned release operation (TASK-122).
   # It runs `gh pr create` and nothing else; any other verb is refused, so the release
   # STEP has a single auditable door that can only OPEN a PR (never merge/push/tag).
+  # If WF_PR_BASE is set (the v0.5 variant: WF_PR_BASE=v0.5) and the caller didn't pass an
+  # explicit --base, the wrapper injects it — so the variant opens to v0.5 even if the
+  # orchestrator omits the flag (defense in depth; the default main run leaves base to gh).
   cat >"$bin/wf-release-pr" <<'EOF'
 #!/usr/bin/env sh
 if [ "$1" = pr ] && [ "$2" = create ]; then
   shift 2
+  if [ -n "${WF_PR_BASE:-}" ]; then
+    case " $* " in
+      *" --base "*|*" -B "*) ;;                 # caller set the base explicitly — respect it
+      *) set -- --base "$WF_PR_BASE" "$@" ;;     # default to the variant's base (v0.5)
+    esac
+  fi
   exec gh pr create "$@"
 fi
 echo "wf-release-pr: refused — this wrapper only runs 'gh pr create' (open a PR; never merge/push/tag/force). Got: $*" >&2
@@ -223,6 +260,13 @@ if [ "$MODE" = demo ]; then
 
   rm -rf "$P"; mkdir -p "$S"
   echo "== build binaries =="
+  # The dash JS bundles are generated, not committed (TASK-121), and embedded by the Go build
+  # (go:embed in internal/dashapi). Generate them first or `go build ./cmd/sextant` fails on a
+  # fresh checkout. Best-effort: if esbuild/npx is unavailable, fall through and let go build
+  # report the missing embed.
+  if [ -x "$ROOT/scripts/build-dash-ui.sh" ]; then
+    ( cd "$ROOT" && bash scripts/build-dash-ui.sh ) >"$P/dash-ui.log" 2>&1 || echo "  (dash UI build emitted warnings; see $P/dash-ui.log)"
+  fi
   ( cd "$ROOT" && go build -o "$SX" ./cmd/sextant && go build -o "$SXPOC" ./cmd/spawn-poc ) || { echo "build failed"; exit 2; }
 
   echo "== throwaway bus on :$PORT =="
@@ -262,6 +306,47 @@ if [ "$MODE" = demo ]; then
   guard_allows "git shim allows a normal add"         git add -A
   guard_allows "git shim allows feature-branch push"  git push origin my-feature
   guard_allows "wf-release-pr allows pr create"       wf-release-pr pr create --title x --body y
+
+  echo "== v0.5 variant wiring (token-free inspection: base, PR base → v0.5, gate → sirius) =="
+  # 1) `run-v05` mode sets the variant config: WF_BASE=origin/v0.5, WF_PR_BASE=v0.5,
+  #    WF_PSEUDO_OPERATOR=sirius. Exercise the SAME mode-prelude the live run uses (no claude),
+  #    in a subshell so it can't leak into the demo's env.
+  ( MODE=run-v05
+    : "${WF_BASE:=origin/v0.5}"; : "${WF_PR_BASE:=v0.5}"; : "${WF_PSEUDO_OPERATOR:=$SIRIUS_ID}"; : "${WF_VARIANT:=v05}"
+    [ "$WF_BASE" = origin/v0.5 ] && [ "$WF_PR_BASE" = v0.5 ] && [ "$WF_PSEUDO_OPERATOR" = "$SIRIUS_ID" ] && [ "$WF_VARIANT" = v05 ]
+  ) && ok "run-v05 sets base=origin/v0.5, PR base=v0.5, gate peer=sirius ($SIRIUS_ID)" \
+     || no "run-v05 variant config wrong"
+
+  # 2) the routine gate DM resolves to the PSEUDO-OPERATOR (sirius), not the principal —
+  #    the GATE_PEER selection the run path makes when WF_PSEUDO_OPERATOR is set.
+  ( ORCH_ID="ZZZORCH"; PRINCIPAL="AAAPRIN"; WF_PSEUDO_OPERATOR="$SIRIUS_ID"
+    GATE_PEER="$PRINCIPAL"; [ -n "$WF_PSEUDO_OPERATOR" ] && GATE_PEER="$WF_PSEUDO_OPERATOR"
+    [ "$GATE_PEER" = "$SIRIUS_ID" ] && [ "$GATE_PEER" != "$PRINCIPAL" ]
+  ) && ok "routine gate peer = sirius (pseudo-operator), distinct from the principal" \
+     || no "gate peer did not redirect to the pseudo-operator"
+
+  # 3) wf-release-pr injects --base v0.5 when WF_PR_BASE is set and the caller omits --base
+  #    (defense in depth: the variant opens to v0.5 even if the orchestrator forgets the flag).
+  #    Use a fake `gh` (in $FAKEGH, FIRST on PATH) that just echoes its args — so the wrapper's
+  #    `exec gh pr create …` resolves to it and we can read what base it passed (no real PR).
+  FAKEGH="$P/fakegh"; mkdir -p "$FAKEGH"
+  cat >"$FAKEGH/gh" <<'GHEOF'
+#!/usr/bin/env sh
+echo "GH-ARGS: $*"
+GHEOF
+  chmod +x "$FAKEGH/gh"
+  inj="$(WF_PR_BASE=v0.5 PATH="$FAKEGH:$WF_BIN:$PATH" "$WF_BIN/wf-release-pr" pr create --title x --body y 2>&1)"
+  printf '%s' "$inj" | grep -q -- '--base v0.5' \
+    && ok "wf-release-pr injects '--base v0.5' under WF_PR_BASE (opens the PR to v0.5)" \
+    || no "wf-release-pr did not inject --base v0.5 (got: $inj)"
+  # and it RESPECTS an explicit base (never double-injects).
+  resp="$(WF_PR_BASE=v0.5 PATH="$FAKEGH:$WF_BIN:$PATH" "$WF_BIN/wf-release-pr" pr create --base main --title x 2>&1)"
+  [ "$(printf '%s' "$resp" | grep -o -- '--base' | wc -l | tr -d ' ')" = 1 ] \
+    && ok "wf-release-pr respects an explicit --base (no double-inject)" \
+    || no "wf-release-pr double-injected --base (got: $resp)"
+
+  # 4) the gh-merge shim STILL refuses merge under the variant (the workflow never merges to v0.5).
+  guard_blocks "v0.5 variant: gh shim still refuses 'gh pr merge'" gh pr merge 7 --merge
 
   # stub worker: registered identity already minted by wf-spawn; here we just emit the
   # canned output the orchestrator reads. The reviewer returns changes-requested once,
@@ -352,8 +437,19 @@ EOF
 fi
 
 # ================================ LIVE RUN (operator) ================================
+# `run` targets main; `run-v05` is the v0.5 variant (worktree off origin/v0.5, PR base v0.5,
+# gate → the pseudo-operator). The variant is pure CONFIG: it sets WF_BASE, WF_PSEUDO_OPERATOR,
+# WF_PR_BASE, and the variant playbook, then falls through the SAME run path. WF_PRINCIPAL stays
+# the real principal in both — only the routine release gate is redirected to the pseudo-operator.
+if [ "$MODE" = run-v05 ]; then
+  : "${WF_BASE:=origin/v0.5}"; export WF_BASE                 # worktree + PR base = v0.5
+  : "${WF_PR_BASE:=v0.5}"; export WF_PR_BASE                  # `gh pr create --base v0.5`
+  : "${WF_PSEUDO_OPERATOR:=$SIRIUS_ID}"; export WF_PSEUDO_OPERATOR  # gate → sirius's DM (override for orion)
+  : "${WF_VARIANT:=v05}"; export WF_VARIANT                   # selects the v0.5 playbook below
+  MODE=run
+fi
 if [ "$MODE" = run ]; then
-  [ -n "$TASK" ] || { echo "usage: agentic-dev-workflow.sh run \"<task>\""; exit 2; }
+  [ -n "$TASK" ] || { echo "usage: agentic-dev-workflow.sh (run | run-v05) \"<task>\""; exit 2; }
   : "${SEXTANT_STORE:?set SEXTANT_STORE to the live bus store}"
   SX="$(command -v sextant)"; SXMCP="$(command -v sextant-mcp)"; SXPOC="${SXPOC:-}"
   [ -n "$SX" ] || { echo "sextant not on PATH"; exit 2; }
@@ -363,8 +459,11 @@ if [ "$MODE" = run ]; then
 
   WF_ID="${WF_ID:-wf$(date +%s 2>/dev/null || echo run)}"
   WT="$ROOT/.claude/worktrees/$WF_ID"
-  echo "== isolated worktree + branch =="
-  git -C "$ROOT" worktree add "$WT" -b "agentic/$WF_ID" "${WF_BASE:-origin/main}" || { echo "worktree add failed"; exit 2; }
+  # Feature-branch prefix: the v0.5 variant brands its branches so they're obviously
+  # v0.5-bound; the default (main-targeting) run keeps `agentic/`.
+  BRANCH_PREFIX="agentic"; [ "${WF_VARIANT:-}" = v05 ] && BRANCH_PREFIX="agentic-v05"
+  echo "== isolated worktree + branch (base ${WF_BASE:-origin/main}) =="
+  git -C "$ROOT" worktree add "$WT" -b "$BRANCH_PREFIX/$WF_ID" "${WF_BASE:-origin/main}" || { echo "worktree add failed"; exit 2; }
 
   echo "== register the orchestrator (top-level; uses your active context) =="
   # OUTSIDE the worktree, so a worker's `git add -A` can never stage the orchestrator's
@@ -374,14 +473,34 @@ if [ "$MODE" = run ]; then
   ORCH_ID="$("$SX" clients list --store "$SEXTANT_STORE" --creds "$WORKERS/orch.creds" | awk -v r="orchestrator-$WF_ID" '$0 ~ r {print $1}' | head -1)"
   PRINCIPAL="$("$SX" principal get --store "$SEXTANT_STORE" --creds "$WORKERS/orch.creds" 2>/dev/null | grep -oE '01[0-9A-HJKMNP-TV-Z]{24}' | head -1)"
   [ -n "$PRINCIPAL" ] || { echo "could not read principal"; exit 2; }
-  if [ "$PRINCIPAL" \< "$ORCH_ID" ]; then DM="msg.topic.dm.$PRINCIPAL.$ORCH_ID"; else DM="msg.topic.dm.$ORCH_ID.$PRINCIPAL"; fi
+
+  # The routine release gate pings the GATE PEER. Default = the principal. The v0.5 variant
+  # (WF_PSEUDO_OPERATOR set) redirects ONLY this routine gate to the pseudo-operator (sirius),
+  # whose authority is scoped to v0.5-PR-open. WF_PRINCIPAL stays the REAL principal — the
+  # playbook still escalates anything dangerous/irreversible to a separate principal gate.
+  GATE_PEER="$PRINCIPAL"
+  if [ -n "${WF_PSEUDO_OPERATOR:-}" ]; then
+    GATE_PEER="$WF_PSEUDO_OPERATOR"
+    echo "== v0.5 variant: routine gate → pseudo-operator $GATE_PEER (escalation still → principal $PRINCIPAL) =="
+  fi
+  if [ "$GATE_PEER" \< "$ORCH_ID" ]; then DM="msg.topic.dm.$GATE_PEER.$ORCH_ID"; else DM="msg.topic.dm.$ORCH_ID.$GATE_PEER"; fi
+  # The principal-escalation DM (dangerous/irreversible steps) — always the REAL principal,
+  # distinct from the routine gate DM above. The playbook posts here for an escalation gate.
+  if [ "$PRINCIPAL" \< "$ORCH_ID" ]; then PRINCIPAL_DM="msg.topic.dm.$PRINCIPAL.$ORCH_ID"; else PRINCIPAL_DM="msg.topic.dm.$ORCH_ID.$PRINCIPAL"; fi
 
   export SEXTANT_STORE WF_ID WF_DM="$DM" WF_TASK="$TASK" WF_WORKTREE="$WT" WF_PRINCIPAL="$PRINCIPAL"
+  export WF_PRINCIPAL_DM="$PRINCIPAL_DM"
   export WF_SEXTANT="$SX" WF_SEXTANT_MCP="$SXMCP" WF_ORCH_CREDS="$WORKERS/orch.creds" WF_WORKERS="$WORKERS"
   export WF_STATE="$WORKERS/progress.tsv" WF_BIN="$WORKERS/bin"
   gen_helpers "$WF_BIN"; export PATH="$WF_BIN:$PATH"
 
+  # The v0.5 variant uses an APPEND playbook on top of the generic one: the generic executor
+  # plus the variant deltas (pseudo-operator gate, PR base v0.5, dangerous→principal escalation).
   export WF_PLAYBOOK="$ROOT/docs/demos/agentic-dev-workflow-orchestrator.md"
+  export WF_VARIANT_PLAYBOOK=""
+  if [ "${WF_VARIANT:-}" = v05 ]; then
+    export WF_VARIANT_PLAYBOOK="$ROOT/docs/demos/agentic-dev-workflow-v05-orchestrator.md"
+  fi
   export WF_MCP="$WORKERS/orch.mcp.json"
   export WF_SESSION="$WORKERS/orch.session"
   export WF_TURN1="$WORKERS/turn1.json"
@@ -401,6 +520,8 @@ if [ "$MODE" = run ]; then
 #!/usr/bin/env sh
 set -u
 common="--append-system-prompt-file $WF_PLAYBOOK --mcp-config $WF_MCP --strict-mcp-config --add-dir $WF_WORKTREE --permission-mode acceptEdits --allowedTools $WF_ALLOWED --model $WF_ORCH_MODEL"
+# Variant deltas (v0.5): a second appended playbook layered over the generic executor.
+[ -n "${WF_VARIANT_PLAYBOOK:-}" ] && common="$common --append-system-prompt-file $WF_VARIANT_PLAYBOOK"
 if [ -s "$WF_SESSION" ]; then
   # resume turn: the supervisor loop woke us with $SX_WAKE_TEXT (a gate control, or a
   # "continue" nudge when the prior turn ended mid-pipeline). -s (non-empty), not -f:
@@ -464,4 +585,4 @@ EOF
   [ "$turn" -ge "$MAX_TURNS" ] && echo "supervisor: hit MAX_TURNS=$MAX_TURNS — stopping (possible loop; inspect $WF_ID.run)"
 fi
 
-echo "usage: agentic-dev-workflow.sh (demo | run \"<task>\")"; exit 2
+echo "usage: agentic-dev-workflow.sh (demo | run \"<task>\" | run-v05 \"<task>\")"; exit 2

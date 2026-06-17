@@ -308,7 +308,72 @@ func clientPermissions(clientID string) jwt.Permissions {
 	p.Sub.Allow = []string{
 		wireapi.DeliverPrefix + clientID + ".>",
 		wireapi.InboxPrefix(clientID) + ".>",
+		// This client's own heartbeat-echo subject (sx.hb.<id>, TASK-126): the
+		// echo watcher subscribes it to confirm its push path is live. Scoped to
+		// the client's own id like the delivery space, so no client can read
+		// another's beat. Additive — a credential minted before this lands omits
+		// the entry, and the echo watcher then simply receives nothing (graceful).
+		wireapi.HeartbeatSubject(clientID),
 	}
+	return p
+}
+
+// leafLinkPermissions is the leaf link's grant (ADR-0038): the federation set,
+// minus the reserved issuance identities. The remote leaf authenticates the link
+// to the hub as a SEXTANT user carrying this credential, and the link forwards the
+// per-client wire-API subjects across it — so the link needs pub+sub on those
+// subjects, wildcarded across all ids because it carries traffic for every agent
+// behind the leaf. It is deliberately NOT operatorPermissions(): possession of
+// the link credential must not be an operator key.
+//
+// The federation wildcards (sx.api.>, _INBOX.>, sx.deliver.>) would otherwise also
+// cover the reserved operator/enroll subjects. So the grant DENIES those reserved
+// prefixes (deny-wins in NATS): the link can forward any ordinary agent's traffic
+// but can never itself ask the bus to mint/retire/claim, nor reach operator/enroll
+// state. Per-client SCOPING for honest agents is still enforced on each agent's OWN
+// credential at the leaf's edge — not on the link.
+//
+// The deny is SYMMETRIC across pub and sub and covers the WHOLE reserved surface —
+// the call space (`sx.api.operator/enroll.>`), the reply inbox
+// (`_INBOX.operator/enroll.>`), and the push-delivery space
+// (`sx.deliver.operator/enroll.>`). The operator/enroll identities are hub-local —
+// no client ever connects to them over a leaf — so the link has no legitimate
+// reason to touch their subjects, and denying all of them closes three distinct
+// exposures with one consistent rule: it cannot make an issuance call, cannot
+// intercept an issuance reply's freshly-minted credential, and cannot eavesdrop
+// the operator's push streams (principal.watch / artifact.watch deliveries). What
+// remains — by necessity, not oversight — is access to NORMAL federated clients'
+// inbox/delivery subjects, which the link must carry; see ADR-0038's trust
+// boundary.
+func leafLinkPermissions() jwt.Permissions {
+	var p jwt.Permissions
+	fed := []string{
+		wireapi.APIPrefix + ">",       // sx.api.<id>.>  — per-client calls
+		wireapi.DeliverPrefix + ">",   // sx.deliver.<id>.> — push delivery
+		"_INBOX.>",                    // _INBOX.<id>.> — call replies
+		wireapi.HeartbeatPrefix + ">", // sx.hb.<id> — heartbeat echo
+	}
+	// The whole operator/enroll surface, carved out of the federation wildcards.
+	// Applied to BOTH pub and sub: the link touches no reserved subject in either
+	// direction. (Heartbeat-echo is omitted — operator/enroll do not heartbeat, so
+	// there is no sx.hb.operator/enroll to deny.)
+	var denyReserved []string
+	for _, id := range []string{wireapi.OperatorID, wireapi.EnrollID} {
+		denyReserved = append(
+			denyReserved,
+			wireapi.APIPrefix+id+".>",     // sx.api.<reserved>.>     — issuance/retire/claim calls
+			wireapi.InboxPrefix(id)+".>",  // _INBOX.<reserved>.>     — issuance reply (minted creds)
+			wireapi.DeliverPrefix+id+".>", // sx.deliver.<reserved>.> — operator push streams
+		)
+	}
+	// Both directions: the link forwards calls TO the hub and carries
+	// deliveries/replies/echoes BACK to the leaf, so the federation set is allowed
+	// on pub and sub alike. The author the hub stamps still comes from the call
+	// subject, which each agent's own credential already scoped at the leaf edge.
+	p.Pub.Allow = append([]string(nil), fed...)
+	p.Pub.Deny = append([]string(nil), denyReserved...)
+	p.Sub.Allow = append([]string(nil), fed...)
+	p.Sub.Deny = append([]string(nil), denyReserved...)
 	return p
 }
 

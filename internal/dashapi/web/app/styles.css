@@ -19,6 +19,16 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
   --act:#1a1c1f; --act-strong:#000;
   /* brand set by JS: --brand --brand-strong --brand-soft */
   --brand:#4f9d68; --brand-strong:#3f8a58; --brand-soft:rgba(79,157,104,.16);
+
+  /* ===== Sextant Live Flow v0.5 design tokens (from flow2.css) ===== */
+  /* ink scale + hairlines */
+  --fx-ink:#16181c; --fx-ink2:#5c6069; --fx-ink3:#9a9ea7; --fx-line:#ececef; --fx-line2:#f4f4f6;
+  /* status — met green / in-progress blue / waiting red / blocked amber / todo+idle GREY */
+  --met:#3f8f59; --prog:#3a82c4; --wait:#c0573b; --blk:#b9842a; --todo:#9a9ea7;
+  /* assistant violet + brand teal/purple */
+  --asst:#5b6ef0; --fx-teal:#4AA2AA; --fx-purple:#8280E5;
+  /* charcoal sidebar */
+  --fx-sbg:#15171c; --fx-sbg2:#1a1d23; --fx-shover:#22262d; --fx-stx:#eceae4; --fx-smut:#cfd0d2; --fx-sfai:#6a6e75;
 }
 #app.tone-paper{
   --sbg:#ffffff; --sbg2:#f5f5f6; --sbg3:#ededef; --stx:#18191c; --smut:#6c707a; --sfai:#a0a4ab;
@@ -135,6 +145,8 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 .sx-msg-text a{color:var(--brand);}
 .sx-artlink{color:var(--brand);cursor:pointer;text-decoration:none;border-bottom:1px solid var(--brand-soft);}
 .sx-artlink:hover{border-bottom-color:var(--brand);}
+/* an unknown [[name]] wikilink: muted + inert (it has no artifact to open) */
+.sx-artlink-dead{color:var(--fx-ink3);cursor:default;text-decoration:none;}
 .sx-msg.is-self .sx-msg-name{color:var(--brand);}
 .sx-msg.is-self .sx-msg-body{background:var(--brand-soft);border-radius:10px;padding:6px 11px;}
 .sx-msg:hover{cursor:default;}
@@ -211,6 +223,15 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 .sx-live-dot{width:8px;height:8px;border-radius:50%;background:var(--c-approved);animation:sxpulse 1.8s infinite;}
 .sx-icon-btn{border:1px solid var(--hair);background:#fff;border-radius:7px;width:28px;height:28px;color:var(--ink-2);cursor:pointer;font-size:13px;}
 .sx-icon-btn:hover{color:var(--ink);}
+
+/* build-staleness nudge (TASK-140): a quiet, dismissible slim bar above the
+   topbar. Toned to flow2's blocked-amber (--blk), not loud — it informs, the
+   operator refreshes when ready (no auto-reload). */
+.sx-buildnudge{display:flex;align-items:center;gap:8px;flex:0 0 auto;height:30px;padding:0 14px;font-family:var(--font-mono);font-size:11.5px;color:var(--blk);background:rgba(185,132,42,.08);border-bottom:1px solid rgba(185,132,42,.22);animation:sxin .3s ease both;}
+.sx-buildnudge-dot{width:7px;height:7px;border-radius:50%;background:var(--blk);flex:0 0 auto;}
+.sx-buildnudge-text{flex:1;letter-spacing:.01em;}
+.sx-buildnudge-x{border:none;background:transparent;color:var(--blk);opacity:.6;cursor:pointer;font-size:15px;line-height:1;padding:2px 4px;border-radius:5px;}
+.sx-buildnudge-x:hover{opacity:1;background:rgba(185,132,42,.14);}
 
 .sx-canvas{flex:1;overflow:auto;padding:0;display:flex;justify-content:center;align-items:flex-start;}
 .sx-canvas:has(.sx-page--home){overflow:hidden;align-items:stretch;}
@@ -356,17 +377,7 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 .sx-state-changes{color:var(--c-changes);background:rgba(210,103,74,.16);}
 .sx-state-draft{color:var(--c-draft);background:rgba(139,144,152,.16);}
 
-/* ============ STAGE: artifact header ============ */
-.sx-arthead{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;row-gap:11px;flex-wrap:wrap;padding:11px 30px 11px;border-bottom:1px solid var(--hair);background:var(--paper);flex:0 0 auto;}
-.sx-arthead-l{flex:1 1 240px;min-width:0;}
-.sx-arthead-title{font-family:var(--font-ui);font-size:19px;font-weight:600;letter-spacing:-.02em;color:var(--ink);}
-.sx-arthead-meta{display:flex;align-items:center;gap:8px;margin-top:5px;font-size:12.5px;color:var(--ink-2);}
-.sx-arthead-meta .sx-av{text-shadow:none;}
-.sx-arthead-v{color:var(--ink);}
-.sx-dotsep{color:var(--ink-2);opacity:.4;}
-.sx-arthead-by{color:var(--ink);font-weight:500;}
-.sx-arthead-time{color:var(--ink-2);}
-.sx-arthead-r{display:flex;align-items:center;gap:10px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;}
+/* ============ STAGE: small action button (artMissing / stub CTAs) ============ */
 .sx-sbtn{font-family:var(--font-ui);font-size:13px;font-weight:600;border-radius:8px;padding:8px 14px;cursor:pointer;border:none;transition:filter .12s;white-space:nowrap;}
 .sx-sbtn:active{transform:translateY(1px);}
 .sx-sbtn-approve{background:var(--act);color:#fff;}
@@ -382,24 +393,12 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 .sx-convstage-meta{font-family:var(--font-mono);font-size:12px;color:var(--ink-2);}
 .sx-convstage-body{flex:1;min-height:0;overflow-y:auto;padding-top:6px;}
 .sx-convstage .sx-composer{flex:0 0 auto;border-top:1px solid var(--hair);background:transparent;}
-/* TASK-83: the artifact view pairs the document with its inline companion discussion.
-   Split (doc | discussion) by default; a head toggle switches to stacked for tight widths. */
-.sx-canvas--artifact{align-items:stretch;overflow:hidden;}
-.sx-canvas--artifact .sx-page--doc{flex:1;overflow-y:auto;}
-.sx-artdisc{display:flex;flex-direction:column;min-height:0;background:var(--sbg);}
-.sx-canvas--split{flex-direction:row;}
-.sx-canvas--split .sx-page--doc{min-width:0;}
-.sx-canvas--split .sx-artdisc{flex:0 0 38%;min-width:300px;max-width:520px;border-left:1px solid var(--shair);}
-.sx-canvas--stacked{flex-direction:column;}
-.sx-canvas--stacked .sx-page--doc{min-height:0;}
-.sx-canvas--stacked .sx-artdisc{flex:0 0 auto;max-height:42%;border-top:1px solid var(--shair);}
-.sx-artdisc-toggle{margin-left:auto;align-self:center;}
-.sx-artdisc-head{display:flex;align-items:baseline;gap:10px;padding:9px 24px;border-bottom:1px solid var(--shair);flex:0 0 auto;}
-.sx-artdisc-title{font-family:var(--font-ui);font-size:14px;font-weight:600;letter-spacing:-.01em;color:var(--stx);}
-.sx-artdisc-sub{font-family:var(--font-mono);font-size:11px;color:var(--smut);}
-.sx-artdisc-body{flex:1;min-height:0;overflow-y:auto;padding:6px 0;}
-.sx-artdisc-empty{padding:16px 24px;font-family:var(--font-ui);font-size:13px;color:var(--smut);}
-.sx-artdisc .sx-composer{flex:0 0 auto;border-top:1px solid var(--shair);background:transparent;}
+/* DM-status strip (TASK-129): sits between the message body and the composer,
+   visible only in DM conversations where the counterpart is a known agent. */
+.sx-dm-strip{display:flex;align-items:center;gap:7px;padding:7px 18px;border-top:1px solid var(--shair);background:var(--sbg2);flex:0 0 auto;}
+.sx-dm-strip-label{font-family:var(--font-mono);font-size:11px;font-weight:500;letter-spacing:.01em;}
+.sx-dm-strip-sep{color:var(--sfai);font-size:11px;}
+.sx-dm-strip-headline{font-family:var(--font-ui);font-size:12px;color:var(--smut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}
 
 @media(max-width:1080px){
   .sx-side{width:340px;flex-basis:340px;}
@@ -453,3 +452,557 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 #app.dark .md-step{background:#1a1d23;border-color:#2a2d33;} #app.dark .md-step b{color:#f0efe9;}
 #app.dark .md-tag{border-color:#2a2d33;color:#9aa0a6;}
 #app.dark .md-raw{background:#1a1d23;color:#cdd0d6;}
+
+/* ============================================================
+   SEXTANT LIVE FLOW v0.5 — shell (charcoal sidebar + white stage),
+   command palette, assistant FAB, goals stub, list-view stage frame.
+   Recreated from flow2.css. The fx- prefix matches the design source;
+   the existing sx- stage views render inside this shell unchanged.
+   ============================================================ */
+
+/* ---- charcoal sidebar (284px default, resizable + collapsible, TASK-141) ---- */
+/* Width is driven by the --sx-side-w CSS custom property set on .sx-app (app.jsx
+   inline style) so resizing / collapsing reflows the layout automatically. The
+   inline style on the <aside> itself carries the explicit px value while expanded. */
+.fx-side{width:var(--sx-side-w,284px);flex:0 0 var(--sx-side-w,284px);background:var(--fx-sbg);color:var(--fx-stx);display:flex;flex-direction:column;height:100vh;border-right:1px solid rgba(255,255,255,.07);animation:sxin .45s ease both;position:relative;overflow:hidden;}
+
+/* right-edge drag handle — mirrors .fx-rail-resize on the left-rail */
+.fx-side-resize{position:absolute;right:-3px;top:0;bottom:0;width:7px;cursor:col-resize;z-index:5;}
+.fx-side-resize:hover{background:var(--brand-soft);}
+
+/* collapse button — sits at the end of the brand bar, right of the ⌘K search */
+.fx-brand-end{display:flex;align-items:center;gap:6px;flex:0 0 auto;}
+.fx-side-collapse{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);color:#9a9da4;font-family:var(--font-mono);font-size:14px;width:26px;height:26px;border-radius:7px;cursor:pointer;display:grid;place-items:center;line-height:1;padding:0;}
+.fx-side-collapse:hover{background:rgba(255,255,255,.12);color:var(--fx-stx);}
+
+/* collapsed sidebar — a thin strip with a single expand affordance */
+.fx-side--collapsed{width:32px!important;flex:0 0 32px!important;min-width:32px;overflow:hidden;cursor:default;}
+.fx-side-reveal{display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:none;border:none;color:var(--fx-sfai);cursor:pointer;padding:0;}
+.fx-side-reveal:hover{color:var(--fx-stx);background:rgba(255,255,255,.04);}
+.fx-side-reveal-ic{font-family:var(--font-mono);font-size:18px;line-height:1;}
+
+.fx-brand{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:15px 16px 15px 18px;border-bottom:1px solid rgba(255,255,255,.06);}
+.fx-mark{display:flex;align-items:center;gap:12px;min-width:0;}
+.fx-logomark{flex:0 0 auto;display:block;}
+.fx-word{font-family:var(--font-ui);font-size:14px;font-weight:600;letter-spacing:.32em;text-transform:uppercase;color:var(--fx-stx);}
+.fx-side-search{display:flex;align-items:center;gap:7px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);color:#9a9da4;font-family:inherit;font-size:11px;padding:6px 9px;border-radius:8px;cursor:pointer;flex:0 0 auto;}
+.fx-side-search:hover{background:rgba(255,255,255,.1);color:var(--fx-stx);}
+.fx-side-search .fx-search-ic{font-size:13px;}
+.fx-side-search .fx-kbd{font-family:var(--font-mono);font-size:10px;background:rgba(255,255,255,.09);border-radius:5px;padding:2px 5px;letter-spacing:.02em;}
+
+.fx-nav{flex:1;min-height:0;padding:8px 12px;overflow-y:auto;}
+.fx-navsec{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--fx-sfai);padding:15px 8px 8px;}
+.fx-navrow{display:flex;align-items:center;gap:11px;width:100%;background:none;border:none;color:var(--fx-smut);font-family:var(--font-ui);font-size:13.5px;padding:7px 9px;border-radius:8px;cursor:pointer;text-align:left;}
+.fx-navrow:hover{background:rgba(255,255,255,.04);}
+.fx-navrow.is-on{background:var(--fx-shover);color:#fff;font-weight:600;}
+.fx-navrow.dim{color:#9a9da4;}
+.fx-navrow span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.fx-navic{width:23px;height:23px;border-radius:6px;background:transparent;display:grid;place-items:center;font-size:13px;flex:0 0 auto;color:#aeb1b8;}
+.fx-navrow.is-on .fx-navic{background:rgba(255,255,255,.08);color:#fff;}
+.fx-navhash{font-family:var(--font-mono);color:var(--fx-sfai);width:23px;text-align:center;flex:0 0 auto;}
+.fx-navbadge{margin-left:auto;min-width:18px;height:18px;padding:0 6px;border-radius:9px;font-family:var(--font-mono);font-size:10.5px;font-weight:600;display:grid;place-items:center;background:rgba(192,87,59,.2);color:var(--wait);flex:0 0 auto;}
+.fx-navbadge.tone-met{background:rgba(63,143,89,.2);color:var(--met);}
+
+.fx-conv{position:relative;display:flex;align-items:center;}
+.fx-conv .fx-navrow{flex:1;min-width:0;}
+.fx-conv-actions{position:absolute;right:7px;display:flex;gap:2px;opacity:0;}
+.fx-conv:hover .fx-conv-actions{opacity:1;}
+.fx-conv-act{background:rgba(255,255,255,.07);border:none;color:#9a9da4;width:22px;height:22px;border-radius:6px;cursor:pointer;font-size:12px;display:grid;place-items:center;}
+.fx-conv-act:hover{background:rgba(255,255,255,.16);color:#fff;}
+.fx-navadd{display:flex;align-items:center;gap:11px;width:100%;background:none;border:none;color:var(--fx-sfai);font-family:var(--font-ui);font-size:13px;padding:7px 9px;border-radius:8px;cursor:pointer;text-align:left;}
+.fx-navadd:hover{color:var(--fx-smut);background:rgba(255,255,255,.04);}
+.fx-navadd .fx-navhash{color:inherit;}
+
+.fx-me{display:flex;align-items:center;gap:10px;padding:13px 16px;border-top:1px solid rgba(255,255,255,.06);background:var(--fx-sbg2);}
+.fx-me-name{font-size:13px;font-weight:600;color:var(--fx-stx);}
+.fx-me-key{margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--fx-sfai);}
+
+/* ---- list-view stage frame (Artifacts / Goals / Agents) ---- */
+.sx-canvas--list{overflow:hidden;align-items:stretch;}
+.sx-canvas--list .sx-page--doc{overflow:hidden;}
+.fx-scroll{height:100%;overflow-y:auto;}
+.fx-col{max-width:720px;margin:0 auto;padding:40px 40px 90px;}
+.fx-h1{font-family:var(--font-ui);font-size:30px;font-weight:600;letter-spacing:-.022em;margin:0 0 8px;color:var(--ink);}
+.fx-psub{font-size:13.5px;color:var(--fx-ink2);margin:0;}
+.fx-stub{display:flex;gap:14px;align-items:center;padding:22px;border:1px dashed var(--paper-edge);border-radius:14px;background:rgba(20,21,24,.015);margin-top:22px;}
+.fx-stub-ic{width:38px;height:38px;border-radius:11px;background:rgba(154,158,167,.14);color:var(--fx-ink3);display:grid;place-items:center;font-size:18px;flex:0 0 auto;}
+.fx-stub-title{font-size:16px;font-weight:600;color:var(--ink);}
+.fx-stub-sub{font-size:13px;color:var(--fx-ink2);margin-top:2px;}
+
+/* ---- floating assistant FAB (visible STUB — not wired) ---- */
+.fx-asst-btn{position:fixed;right:22px;bottom:22px;z-index:60;display:grid;place-items:center;width:56px;height:56px;background:#16181c;color:#fff;border:none;border-radius:50%;cursor:pointer;box-shadow:0 14px 34px -10px rgba(20,21,30,.6);transition:transform .12s,background .12s;}
+.fx-asst-btn:hover{background:#000;transform:translateY(-1px);}
+.fx-asst-spark{color:var(--asst);font-size:22px;}
+.fx-asst-panel{position:fixed;right:24px;bottom:24px;width:360px;max-width:calc(100vw - 32px);background:#fff;border:1px solid #e4e4e9;border-radius:16px;box-shadow:0 30px 70px -20px rgba(20,21,40,.45);display:flex;flex-direction:column;overflow:hidden;z-index:61;animation:fxrise .16s ease-out both;}
+.fx-asst-head{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--fx-line);flex:0 0 auto;}
+.fx-asst-mark{width:28px;height:28px;border-radius:8px;background:#16181c;color:var(--asst);display:grid;place-items:center;font-size:14px;flex:0 0 auto;}
+.fx-asst-title{font-size:14px;font-weight:600;line-height:1.1;color:var(--fx-ink);}
+.fx-asst-sub{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--wait);}
+.fx-asst-close{margin-left:auto;background:none;border:none;color:var(--fx-ink3);font-size:20px;cursor:pointer;line-height:1;padding:2px 6px;}
+.fx-asst-close:hover{color:var(--fx-ink);}
+.fx-asst-stub{padding:18px 16px;}
+/* a carried-over ⌘K query shown as the operator's prompt bubble (never answered) */
+.fx-asst-msg{display:flex;gap:8px;align-items:flex-end;max-width:90%;padding:14px 16px 0;}
+.fx-asst-msg.you{align-self:flex-end;margin-left:auto;flex-direction:row-reverse;}
+.fx-asst-bub{padding:9px 13px;border-radius:13px;font-size:13.5px;line-height:1.5;word-break:break-word;}
+.fx-asst-msg.you .fx-asst-bub{background:var(--asst);color:#fff;border-bottom-right-radius:4px;}
+.fx-asst-stub-lead{font-size:14px;font-weight:600;color:var(--fx-ink);margin:0 0 8px;}
+.fx-asst-stub-body{font-size:13px;line-height:1.5;color:var(--fx-ink2);margin:0;}
+.fx-asst-composer{display:flex;gap:8px;align-items:center;border-top:1px solid var(--fx-line);padding:11px 12px;flex:0 0 auto;}
+.fx-asst-field{flex:1;border:1px solid var(--fx-line);border-radius:10px;background:#fcfcfd;color:var(--fx-ink3);font-size:13px;padding:10px 12px;}
+.fx-asst-send{background:#e7e7ea;color:#fff;border:none;border-radius:9px;width:38px;height:38px;font-size:15px;cursor:not-allowed;flex:0 0 auto;}
+/* live violet DM (ADR-0039): the panel becomes a bounded, scrollable thread that
+   hosts window.MessageList + window.Composer. The thread flexes to fill; the
+   composer pins to the bottom. accent-tinted dot = violet's live bus presence. */
+.fx-asst-panel.is-live{height:520px;max-height:calc(100vh - 48px);}
+.fx-asst-live{display:flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:9.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--fx-ink3);}
+.fx-asst-dot{width:7px;height:7px;border-radius:50%;background:#c4c4cc;flex:0 0 auto;}
+.fx-asst-dot.is-on{background:var(--met);}
+.fx-asst-thread{flex:1 1 auto;min-height:0;overflow-y:auto;padding:6px 4px;}
+.fx-asst-empty{font-size:13px;line-height:1.5;color:var(--fx-ink2);padding:18px 16px 4px;margin:0;}
+.fx-asst-panel.is-live .sx-composer{border-top:1px solid var(--fx-line);flex:0 0 auto;}
+
+/* ---- ⌘K command palette (REAL) ---- */
+.fx-cmdk-scrim{position:fixed;inset:0;background:rgba(20,21,28,.42);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);z-index:80;display:flex;align-items:flex-start;justify-content:center;padding-top:13vh;}
+.fx-cmdk{width:580px;max-width:92vw;background:#fff;border:1px solid #e4e4e9;border-radius:15px;box-shadow:0 32px 84px -20px rgba(20,21,40,.5);overflow:hidden;animation:fxrise .16s ease-out both;}
+.fx-cmdk-input{width:100%;border:none;border-bottom:1px solid var(--fx-line);padding:17px 20px;font-family:var(--font-ui);font-size:16px;color:var(--fx-ink);outline:none;}
+.fx-cmdk-input::placeholder{color:var(--fx-ink3);}
+.fx-cmdk-results{max-height:354px;overflow-y:auto;padding:8px;}
+.fx-cmdk-empty{padding:24px;text-align:center;color:var(--fx-ink3);font-size:13.5px;}
+.fx-cmdk-row{display:flex;align-items:center;gap:12px;width:100%;text-align:left;background:none;border:none;border-radius:10px;padding:11px 12px;cursor:pointer;}
+.fx-cmdk-row.is-sel{background:#f4f5f7;}
+.fx-cmdk-type{font-family:var(--font-mono);font-size:9px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;border:1px solid var(--fx-line);border-radius:5px;padding:4px 0;flex:0 0 auto;width:88px;text-align:center;}
+.fx-cmdk-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.fx-cmdk-label{font-size:14px;font-weight:600;color:var(--fx-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.fx-cmdk-sub{font-size:12px;color:var(--fx-ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.fx-cmdk-enter{font-family:var(--font-mono);font-size:13px;color:var(--fx-ink3);opacity:0;flex:0 0 auto;}
+.fx-cmdk-row.is-sel .fx-cmdk-enter{opacity:1;}
+.fx-cmdk-foot{display:flex;gap:18px;padding:10px 18px;border-top:1px solid var(--fx-line);font-family:var(--font-mono);font-size:10.5px;color:var(--fx-ink3);}
+
+/* ---- entrance + agent pulse, gated under prefers-reduced-motion ---- */
+@media (prefers-reduced-motion: no-preference){
+  .fx-in{animation:fxrise .5s cubic-bezier(.2,.7,.3,1) both;}
+  .fx-pulse-live{animation:fxpulse 2s ease-out infinite;}
+}
+@keyframes fxrise{from{opacity:0;transform:translateY(7px);}to{opacity:1;transform:none;}}
+@keyframes fxpulse{0%{box-shadow:0 0 0 0 rgba(63,143,89,.5);}70%{box-shadow:0 0 0 6px rgba(63,143,89,0);}100%{box-shadow:0 0 0 0 rgba(63,143,89,0);}}
+
+/* ============================================================
+   ARTIFACT-REVIEW MODAL (an OPTION, not the default — Lena's #ui-feedback).
+   Full-page is the default for every open; an artifact referenced from a
+   CONVERSATION pops here, floating over the chat as a dismissible overlay
+   (× · scrim · Esc · "Open in full page"). Mirrors the ⌘K palette scrim; the
+   panel is capped + margined so the dimmed stage shows through around it.
+   ============================================================ */
+.sx-artmodal-scrim{position:fixed;inset:0;background:rgba(20,21,28,.42);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);z-index:82;display:flex;align-items:center;justify-content:center;padding:40px;}
+.sx-artmodal-panel{position:relative;width:1080px;max-width:calc(100vw - 80px);height:88vh;max-height:calc(100vh - 80px);background:#fff;border:1px solid #e4e4e9;border-radius:16px;box-shadow:0 40px 90px -24px rgba(20,21,40,.55);overflow:hidden;display:flex;outline:none;}
+.sx-artmodal-panel .sx-canvas--review{flex:1;min-width:0;}
+.sx-artmodal-actions{position:absolute;top:10px;right:12px;z-index:6;display:flex;align-items:center;gap:8px;}
+.sx-artmodal-fp{background:rgba(20,21,24,.05);border:none;height:30px;padding:0 12px;border-radius:9px;color:var(--fx-ink2);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:5px;}
+.sx-artmodal-fp:hover{background:var(--brand-soft);color:var(--brand-strong);}
+.sx-artmodal-x{background:rgba(20,21,24,.05);border:none;width:30px;height:30px;border-radius:9px;color:var(--fx-ink2);font-size:21px;line-height:1;cursor:pointer;display:grid;place-items:center;}
+.sx-artmodal-x:hover{background:rgba(20,21,24,.10);color:var(--fx-ink);}
+.sx-artmodal-missing{flex:1;min-width:0;overflow-y:auto;padding:48px 44px;}
+@media (max-width:760px){
+  .sx-artmodal-scrim{padding:14px;}
+  .sx-artmodal-panel{width:100%;max-width:none;height:92vh;max-height:calc(100vh - 28px);}
+}
+@media (prefers-reduced-motion: no-preference){
+  .sx-artmodal-panel{animation:fxrise .18s cubic-bezier(.2,.7,.3,1) both;}
+}
+/* dark mode: the panel + buttons flip to charcoal (the review internals already
+   flip via .sx-conv-light). */
+#app.dark .sx-artmodal-panel{background:#15171c;border-color:#2a2d33;}
+#app.dark .sx-artmodal-fp{background:rgba(255,255,255,.06);color:#b8bcc2;}
+#app.dark .sx-artmodal-x{background:rgba(255,255,255,.06);color:#b8bcc2;}
+#app.dark .sx-artmodal-x:hover{background:rgba(255,255,255,.12);color:#eceae4;}
+
+/* dark mode: the palette + assistant panel surfaces flip to charcoal */
+#app.dark .fx-cmdk,#app.dark .fx-asst-panel{background:#15171c;border-color:#2a2d33;}
+#app.dark .fx-cmdk-input,#app.dark .fx-cmdk-label,#app.dark .fx-asst-title,#app.dark .fx-asst-stub-lead{color:#eceae4;}
+#app.dark .fx-cmdk-row.is-sel{background:#1f232a;}
+#app.dark .fx-cmdk-input{border-bottom-color:#2a2d33;}
+#app.dark .fx-cmdk-foot,#app.dark .fx-asst-head,#app.dark .fx-asst-composer{border-color:#2a2d33;}
+#app.dark .fx-asst-field{background:#1a1d23;border-color:#2a2d33;}
+#app.dark .fx-stub{border-color:#2a2d33;background:rgba(255,255,255,.02);}
+#app.dark .fx-stub-title{color:#f0efe9;} #app.dark .fx-stub-sub,#app.dark .fx-asst-stub-body{color:#b8bcc2;}
+/* live violet DM in dark mode: the thread/composer flip via .sx-conv-light, but
+   the FAB-specific separators + empty line need their own dark colours. */
+#app.dark .fx-asst-panel.is-live .sx-composer{border-top-color:#2a2d33;}
+#app.dark .fx-asst-empty{color:#b8bcc2;}
+
+/* ============================================================
+   SEXTANT LIVE FLOW v0.5 — stage (b): Home / Artifacts / Agents
+   view internals. Recreated from flow2.css (HomeInbox + Hero/QRow/
+   GoalRow, ArtifactsList, AgentsList). The fx- prefix matches the
+   design; tokens are the stage-(a) --fx-*/--paper set so dark mode
+   flows. Status tones reuse the v0.5 token scale.
+   ============================================================ */
+
+/* second entrance variant (live row arrival) */
+@media (prefers-reduced-motion: no-preference){
+  .fx-fadein{animation:fxrise .55s cubic-bezier(.2,.7,.3,1) both;}
+}
+
+/* shared headings + group labels (wider home column) */
+.fx-col--home{max-width:1040px;}
+.fx-grouplbl{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--fx-ink3);margin:28px 0 12px;white-space:nowrap;}
+.fx-starthead{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:#46474e;font-weight:600;margin:26px 0 11px;}
+.fx-sechead{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:32px 0 12px;}
+.fx-sechead .fx-grouplbl{margin:0;}
+.fx-seclink{background:none;border:none;font-family:var(--font-mono);font-size:11px;color:var(--fx-ink2);cursor:pointer;padding:0;}
+.fx-seclink:hover{color:var(--ink);}
+.fx-card-stream{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--fx-ink3);border:1px solid var(--fx-line);border-radius:4px;padding:2px 6px;flex:0 0 auto;}
+
+/* ---- shared status chip (Met / In progress / Waiting / Blocked / Todo) ---- */
+.fx-chip-status{font-family:var(--font-mono);font-size:9.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;padding:3px 9px;border-radius:20px;white-space:nowrap;flex:0 0 auto;}
+.t-met{color:var(--met);background:rgba(63,143,89,.12);}
+.t-progress{color:var(--prog);background:rgba(58,130,196,.12);}
+.t-waiting{color:var(--wait);background:rgba(192,87,59,.12);}
+.t-blocked{color:var(--blk);background:rgba(185,132,42,.14);}
+.t-todo{color:var(--todo);background:rgba(120,124,132,.10);}
+
+/* ---- list-rows (Artifacts + Agents rosters) ---- */
+.fx-list{display:flex;flex-direction:column;}
+.fx-row{display:flex;align-items:center;gap:13px;width:100%;text-align:left;background:none;border:none;border-top:1px solid var(--fx-line);padding:14px 6px;cursor:pointer;color:var(--ink);}
+.fx-row:first-child{border-top:none;}
+.fx-row:hover{background:rgba(20,21,24,.025);}
+.fx-row-ic{width:30px;height:30px;border-radius:8px;background:rgba(20,21,24,.045);color:var(--fx-ink2);display:grid;place-items:center;font-size:14px;flex:0 0 auto;}
+.fx-row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;}
+.fx-row-name{font-size:14.5px;font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.fx-row-meta{font-size:12.5px;color:var(--fx-ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.fx-row-right{display:flex;align-items:center;gap:9px;flex:0 0 auto;}
+.fx-row .sx-av{text-shadow:none;}
+.fx-crit-status{font-family:var(--font-mono);font-size:10px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;white-space:nowrap;}
+.fx-pulse{width:8px;height:8px;border-radius:50%;flex:0 0 auto;}
+.fx-pulse.is-live{box-shadow:0 0 0 0 rgba(63,143,89,.5);}
+@media (prefers-reduced-motion: no-preference){ .fx-pulse.is-live{animation:fxpulse 2s ease-out infinite;} }
+#app.no-pulse .fx-pulse.is-live{animation:none;}
+
+/* ---- list-view group header (Artifacts grouped by review-state) ---- */
+.fx-group{margin-top:18px;}
+.fx-group-h{display:flex;align-items:center;gap:9px;padding:0 6px 6px;font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--fx-ink3);}
+.fx-group-h .fx-dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;}
+.fx-group-n{margin-left:auto;}
+/* collapsible section toggle — clickable variant, caret affordance */
+.fx-group-h--toggle{cursor:pointer;user-select:none;border-radius:5px;transition:background .12s;}
+.fx-group-h--toggle:hover{background:rgba(20,21,24,.05);}
+.fx-group-caret{font-size:9px;color:var(--fx-ink3);opacity:.7;margin-left:4px;}
+#app.dark .fx-group-h--toggle:hover{background:rgba(255,255,255,.05);}
+
+/* ============ HOME · morning unblock board ============ */
+.fx-home-empty{padding:40px 6px;color:var(--fx-ink2);font-size:14px;}
+
+/* "Start here" hero — flow2 routing-slip card */
+.fx-dhero{position:relative;display:flex;width:100%;text-align:left;background:#fff;border:1px solid #e2e2e8;border-radius:16px;overflow:hidden;cursor:pointer;box-shadow:0 14px 36px -22px rgba(20,21,30,.45);transition:box-shadow .14s,transform .14s,border-color .14s;color:var(--ink);}
+.fx-dhero:hover{box-shadow:0 20px 46px -22px rgba(20,21,30,.52);transform:translateY(-1px);border-color:#d4d4dc;}
+.fx-dhero-rail{position:relative;width:6px;flex:0 0 6px;background:var(--asst);}
+.fx-dhero-rail-plus{position:absolute;top:9px;left:50%;transform:translateX(-50%);color:#fff;font-size:11px;font-weight:700;line-height:1;}
+.fx-dhero-body{flex:1;min-width:0;padding:22px 24px;position:relative;overflow:hidden;}
+.fx-dhero-tline{display:flex;align-items:center;gap:9px;margin-bottom:13px;flex-wrap:wrap;}
+.fx-dhero-badge{font-family:var(--font-mono);font-size:9px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--asst);background:rgba(91,110,240,.1);border:1px solid rgba(91,110,240,.28);border-radius:5px;padding:3px 8px;white-space:nowrap;}
+.fx-dhero-tmeta{font-family:var(--font-mono);font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--fx-ink3);white-space:nowrap;}
+.fx-dhero-title{font-size:25px;font-weight:600;letter-spacing:-.022em;line-height:1.12;position:relative;word-break:break-word;}
+.fx-dhero-sum{font-size:14.5px;line-height:1.5;color:var(--fx-ink2);margin-top:9px;max-width:480px;position:relative;}
+.fx-dhero-unb{font-family:var(--font-mono);font-size:11px;color:var(--fx-ink2);margin-top:13px;position:relative;}
+.fx-dhero-unb b{color:var(--ink);font-weight:600;}
+.fx-dhero-foot{display:flex;align-items:center;gap:9px;margin-top:16px;position:relative;}
+.fx-dhero-foot .fx-meta{font-size:12px;color:var(--fx-ink2);}
+.fx-dhero-foot .sx-av{text-shadow:none;}
+.fx-dhero-route{width:190px;flex:0 0 190px;border-left:1px solid var(--fx-line);padding:19px 20px 17px;display:flex;flex-direction:column;gap:12px;background:#fcfcfd;}
+.fx-dhero-rlbl{font-family:var(--font-mono);font-size:8.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--fx-ink3);margin-bottom:3px;}
+.fx-dhero-rval{font-family:var(--font-mono);font-size:11.5px;color:var(--fx-ink2);word-break:break-word;}
+.fx-dhero-rval.is-pri{font-weight:600;color:var(--ink);display:flex;align-items:center;gap:6px;text-transform:uppercase;letter-spacing:.02em;white-space:nowrap;}
+.fx-dhero-rval .spark{color:var(--asst);}
+.fx-dhero-open{margin-top:auto;align-self:flex-end;display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:var(--asst);white-space:nowrap;}
+
+/* postmark seal in the hero */
+.fx-seal{position:absolute;right:-22px;top:50%;transform:translateY(-50%);width:178px;height:125px;opacity:.13;color:#3b3f57;pointer-events:none;}
+.fx-seal text{font-family:var(--font-mono);font-weight:600;fill:currentColor;}
+.fx-seal-top{font-size:9px;letter-spacing:2px;}
+.fx-seal-bot{font-size:9px;letter-spacing:3px;}
+.fx-seal-spark{font-size:9px;}
+
+/* "Then · N more" queue rows */
+.fx-then-list{display:flex;flex-direction:column;gap:9px;}
+.fx-then-row{display:flex;align-items:center;gap:15px;width:100%;text-align:left;background:#fff;border:1px solid var(--fx-line);border-left:3px solid var(--tn,#9a9ea7);border-radius:11px;padding:14px 16px;cursor:pointer;transition:box-shadow .14s,transform .14s,border-color .14s;color:var(--ink);}
+.fx-then-row:hover{box-shadow:0 9px 24px -18px rgba(20,21,30,.45);transform:translateY(-1px);}
+.fx-then-idx{display:flex;align-items:center;gap:10px;flex:0 0 auto;}
+.fx-then-num{font-family:var(--font-mono);font-size:12px;font-weight:600;color:var(--fx-ink3);}
+.fx-then-glyph{font-size:11px;line-height:1;}
+.fx-then-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:7px;}
+.fx-then-title{font-size:15px;font-weight:600;letter-spacing:-.006em;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.fx-then-sub{display:flex;align-items:center;gap:9px;flex-wrap:wrap;}
+.fx-tbadge{font-family:var(--font-mono);font-size:9px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;border:1px solid;border-radius:5px;padding:2px 7px;}
+.fx-then-meta{font-family:var(--font-mono);font-size:10.5px;color:var(--fx-ink3);white-space:nowrap;}
+.fx-then-unb{font-family:var(--font-mono);font-size:10.5px;color:var(--fx-ink3);}
+.fx-then-right{display:flex;align-items:center;gap:12px;flex:0 0 auto;}
+.fx-then-age{display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:10.5px;color:var(--fx-ink3);white-space:nowrap;}
+.fx-then-age .sx-av{text-shadow:none;}
+.fx-then-chev{color:#c4c4cc;font-size:18px;line-height:1;}
+
+/* "Goals · N need you" box — PLACEHOLDER (no goals primitive in the UI yet) */
+.fx-goalsbox{border:1px solid var(--fx-line);border-radius:13px;overflow:hidden;}
+.fx-goalstub{display:flex;gap:14px;align-items:center;padding:22px;background:rgba(20,21,24,.012);}
+.fx-goalstub-ic{width:38px;height:38px;border-radius:11px;background:rgba(154,158,167,.14);color:var(--fx-ink3);display:grid;place-items:center;font-size:18px;flex:0 0 auto;}
+.fx-goalstub-title{font-size:15px;font-weight:600;color:var(--ink);}
+.fx-goalstub-sub{font-size:13px;color:var(--fx-ink2);margin-top:2px;}
+
+/* "moved overnight" reassurance line */
+.fx-moved{margin-top:24px;}
+.fx-moved-bar{display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:12px 14px;border:1px dashed #d8d8de;border-radius:10px;font-size:12.5px;color:var(--fx-ink2);background:rgba(20,21,24,.012);cursor:pointer;}
+.fx-moved-bar:hover{border-color:#c9c9d0;}
+.fx-moved-dot{width:7px;height:7px;border-radius:50%;background:var(--met);flex:0 0 auto;}
+.fx-moved-go{margin-left:auto;font-family:var(--font-mono);font-size:10px;color:var(--fx-ink3);text-decoration:underline;}
+.fx-moved-list{margin-top:8px;border:1px solid var(--fx-line);border-radius:10px;padding:4px 14px;}
+.fx-moved-item{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--fx-line2);font-size:12.5px;color:var(--fx-ink2);}
+.fx-moved-item:first-child{border-top:none;}
+.fx-moved-icheck{color:var(--met);font-size:12px;flex:0 0 auto;}
+
+/* inbox-zero state */
+.fx-zero{display:flex;gap:14px;align-items:center;padding:22px;border:1px solid var(--fx-line);border-radius:14px;background:rgba(63,143,89,.03);margin-top:8px;}
+.fx-zero-ic{width:38px;height:38px;border-radius:50%;background:rgba(63,143,89,.13);color:var(--met);display:grid;place-items:center;font-size:18px;flex:0 0 auto;}
+.fx-zero-title{font-size:16px;font-weight:600;color:var(--ink);}
+.fx-zero-sub{font-size:13px;color:var(--fx-ink2);margin-top:2px;}
+
+/* new-item pill (live arrival) */
+.fx-newpill{display:inline-flex;align-items:center;gap:7px;font-family:var(--font-mono);font-size:11px;font-weight:600;color:var(--met);background:rgba(63,143,89,.1);border:1px solid rgba(63,143,89,.3);border-radius:20px;padding:6px 13px;margin-bottom:10px;cursor:pointer;}
+.fx-newpill:hover{background:rgba(63,143,89,.16);}
+
+/* ---- dark mode (stage b surfaces) ---- */
+#app.dark .fx-dhero{background:#1a1d23;border-color:#2a2d33;}
+#app.dark .fx-dhero:hover{border-color:#3a3f47;}
+#app.dark .fx-dhero-route{background:#16181d;border-left-color:#2a2d33;}
+#app.dark .fx-then-row,#app.dark .fx-goalstub{background:#1a1d23;}
+#app.dark .fx-then-row{border-color:#2a2d33;}
+#app.dark .fx-goalsbox{border-color:#2a2d33;}
+#app.dark .fx-row:hover{background:rgba(255,255,255,.03);}
+#app.dark .fx-row-ic{background:#22262d;color:#9aa0a6;}
+#app.dark .fx-moved-bar{background:rgba(255,255,255,.02);border-color:#2a2d33;}
+#app.dark .fx-moved-list,#app.dark .fx-zero{border-color:#2a2d33;}
+#app.dark .fx-moved-item{border-top-color:#23272e;}
+#app.dark .fx-starthead{color:#cfd3d9;}
+#app.dark .fx-zero{background:rgba(63,143,89,.06);}
+
+/* ============================================================
+   SEXTANT LIVE FLOW v0.5 — Goals (Track 2, TASK Track 2)
+   The goal primitive (goal.<id> latest-value artifacts, ADR-0035): a north-star
+   sentence + acceptance criteria, in two layers — L1 Portfolio + L2 Goal detail.
+   Ported from the design's dxg- classes onto the dash token system
+   (--fx-* / --ink / --paper / status tokens) so it tracks light + dark mode.
+   Newsreader (loaded in index.html) carries the north-star prose. Read-only.
+   ============================================================ */
+.dxg-scroll{height:100%;overflow-y:auto;}
+.dxg-col{width:100%;max-width:680px;margin:0 auto;padding:38px 36px 60px;}
+.dxg-phead{margin-bottom:6px;}
+.dxg-h1{font-family:var(--font-ui);font-weight:600;font-size:30px;letter-spacing:-.022em;color:var(--ink);margin:0 0 8px;line-height:1;}
+.dxg-psub{font-size:13.5px;color:var(--fx-ink2);}
+.dxg-group-lbl{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--fx-ink3);margin:26px 0 11px;}
+.dxg-cards{display:flex;flex-direction:column;gap:11px;}
+.dxg-card{display:block;width:100%;text-align:left;background:var(--paper);border:1px solid var(--fx-line);border-radius:13px;padding:16px 18px;cursor:pointer;font-family:inherit;transition:box-shadow .14s,transform .14s,border-color .14s;color:var(--ink);}
+.dxg-card:hover{box-shadow:0 6px 22px -12px rgba(28,26,20,.3);transform:translateY(-1px);}
+.dxg-card:active{transform:translateY(0);}
+.dxg-card-top{display:flex;align-items:center;gap:10px;margin-bottom:9px;}
+.dxg-card-name{font-size:16px;font-weight:600;color:var(--ink);letter-spacing:-.01em;}
+.dxg-card-stream{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--fx-ink3);border:1px solid var(--fx-line);border-radius:4px;padding:2px 6px;}
+.dxg-verdict{margin-left:auto;font-family:var(--font-mono);font-size:10px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;padding:3px 9px;border-radius:20px;white-space:nowrap;}
+.dxg-northstar{font-family:'Newsreader',Georgia,serif;font-size:17px;line-height:1.4;color:var(--fx-ink);margin-bottom:14px;}
+.dxg-northstar.is-undef{color:var(--fx-ink3);font-style:italic;}
+.dxg-rollup{display:flex;align-items:center;gap:11px;}
+.dxg-segs{display:flex;gap:3px;flex:1;}
+.dxg-seg{height:6px;border-radius:3px;flex:1;}
+.dxg-seg.is-empty{background:var(--fx-line);}
+.dxg-rollup-txt{font-family:var(--font-mono);font-size:11px;color:var(--fx-ink2);white-space:nowrap;}
+
+.dxg-detail{display:flex;flex-direction:column;height:100%;}
+.dxg-topbar{display:flex;align-items:center;gap:14px;padding:0 24px;height:48px;flex:0 0 auto;border-bottom:1px solid var(--hair);}
+.dxg-back{background:none;border:none;font-family:var(--font-ui);font-size:12.5px;font-weight:500;color:var(--ink-2);cursor:pointer;padding:6px 0;}
+.dxg-back:hover{color:var(--ink);}
+.dxg-topbar-stream{font-family:var(--font-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--fx-ink3);}
+.dxg-topbar-roll{margin-left:auto;font-family:var(--font-mono);font-size:11.5px;color:var(--ink-2);}
+.dxg-doc{width:100%;max-width:640px;margin:0 auto;padding:34px 36px 60px;}
+.dxg-ns-block{border-left:3px solid var(--c-review);padding:4px 0 4px 18px;margin-bottom:26px;}
+.dxg-ns-lbl{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--fx-ink3);margin-bottom:7px;}
+.dxg-ns-text{font-family:'Newsreader',Georgia,serif;font-size:24px;line-height:1.3;color:var(--ink);letter-spacing:-.01em;}
+.dxg-ns-text.is-undef{color:var(--fx-ink3);font-style:italic;}
+.dxg-donewhen{display:flex;align-items:baseline;gap:10px;margin-bottom:12px;}
+.dxg-donewhen-lbl{font-family:var(--font-mono);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--fx-ink2);}
+.dxg-donewhen-sub{font-size:13px;color:var(--fx-ink3);}
+.dxg-crits{display:flex;flex-direction:column;}
+.dxg-crit{display:grid;grid-template-columns:26px 1fr auto;gap:13px;align-items:start;padding:15px 0;border-top:1px solid var(--fx-line);}
+.dxg-crit:first-child{border-top:none;}
+.dxg-crit-icon{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;flex:0 0 auto;margin-top:1px;}
+.dxg-crit-main{min-width:0;}
+.dxg-crit-text{font-size:15px;line-height:1.45;color:var(--ink);font-weight:500;}
+.dxg-crit-evi{display:flex;align-items:center;flex-wrap:wrap;gap:7px;margin-top:8px;}
+.dxg-chip{font-family:var(--font-mono);font-size:10px;border:1px solid var(--fx-line);border-radius:5px;padding:3px 7px;color:var(--fx-ink2);background:var(--paper);cursor:pointer;transition:border-color .12s,color .12s;}
+.dxg-chip:hover{border-color:var(--brand);color:var(--brand);}
+.dxg-noevi{font-family:var(--font-mono);font-size:11px;color:var(--fx-ink3);font-style:italic;}
+.dxg-crit-right{display:flex;flex-direction:column;align-items:flex-end;gap:7px;flex:0 0 auto;}
+.dxg-crit-status{font-family:var(--font-mono);font-size:10px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;white-space:nowrap;background:none !important;padding:0;}
+.dxg-crit-owner .sx-av{text-shadow:none;}
+.dxg-maintained{margin-top:22px;padding-top:16px;border-top:1px solid var(--fx-line);font-size:12.5px;line-height:1.5;color:var(--fx-ink3);}
+
+/* sign-off (TASK-157): a review-flagged goal awaiting the operator's verdict.
+   Tones reuse the v0.5 status scale — review=--wait (attention), changes=--prog
+   (the agent's turn), approved=--met (settled). The Portfolio card flags it via the
+   shared verdict chip ("Awaiting your sign-off"); the detail carries the verdict bar. */
+.dxg-signoff{margin-bottom:24px;border-radius:12px;padding:14px 16px;border:1px solid var(--fx-line);}
+.dxg-signoff.is-review{border-color:color-mix(in srgb,var(--wait) 42%,var(--fx-line));background:color-mix(in srgb,var(--wait) 6%,transparent);}
+.dxg-signoff.is-changes{display:flex;align-items:center;gap:10px;border-color:color-mix(in srgb,var(--prog) 38%,var(--fx-line));background:color-mix(in srgb,var(--prog) 5%,transparent);}
+.dxg-signoff.is-approved{display:flex;align-items:center;gap:10px;border-color:color-mix(in srgb,var(--met) 38%,var(--fx-line));background:color-mix(in srgb,var(--met) 5%,transparent);}
+.dxg-signoff-lead{display:flex;align-items:flex-start;gap:10px;}
+.dxg-signoff-ic{flex:0 0 auto;font-size:14px;line-height:1.4;color:var(--wait);}
+.dxg-signoff.is-changes .dxg-signoff-ic{color:var(--prog);}
+.dxg-signoff.is-approved .dxg-signoff-ic{color:var(--met);}
+.dxg-signoff-txt{font-size:14px;line-height:1.45;color:var(--ink);}
+.dxg-signoff-note{width:100%;margin-top:12px;box-sizing:border-box;font-family:var(--font-ui);font-size:13.5px;line-height:1.45;color:var(--ink);background:var(--paper);border:1px solid var(--fx-line);border-radius:9px;padding:9px 11px;resize:vertical;}
+.dxg-signoff-note::placeholder{color:var(--fx-ink3);}
+.dxg-signoff-note:focus{outline:none;border-color:color-mix(in srgb,var(--wait) 55%,var(--fx-line));}
+.dxg-signoff-acts{display:flex;gap:10px;margin-top:13px;}
+.dxg-signoff-btn{font-family:var(--font-ui);font-size:13px;font-weight:600;padding:8px 17px;border-radius:8px;border:1px solid var(--fx-line);background:var(--paper);color:var(--ink);cursor:pointer;transition:border-color .12s,background .12s,transform .1s;}
+.dxg-signoff-btn:disabled{opacity:.45;cursor:not-allowed;}
+.dxg-signoff-btn:disabled:hover{border-color:var(--fx-line);}
+.dxg-signoff-btn:hover{border-color:var(--ink-2);}
+.dxg-signoff-btn:active{transform:translateY(1px);}
+.dxg-signoff-btn.is-approve{background:var(--met);border-color:var(--met);color:#fff;}
+.dxg-signoff-btn.is-approve:hover{background:color-mix(in srgb,var(--met) 88%,#000);border-color:color-mix(in srgb,var(--met) 88%,#000);}
+.dxg-signoff-reopen{margin-left:auto;font-family:var(--font-ui);font-size:12.5px;font-weight:600;background:none;border:none;color:var(--met);cursor:pointer;padding:4px 6px;}
+#app.dark .dxg-signoff{border-color:#2a2d33;}
+#app.dark .dxg-signoff-txt{color:var(--ink);}
+#app.dark .dxg-signoff-note{background:#1a1d23;border-color:#2a2d33;color:var(--ink);}
+#app.dark .dxg-signoff-btn{background:#1a1d23;border-color:#2a2d33;color:var(--ink);}
+#app.dark .dxg-signoff-btn:hover{border-color:#3a3f47;}
+#app.dark .dxg-signoff-btn.is-approve{background:var(--met);border-color:var(--met);color:#fff;}
+
+/* the chip/icon/verdict colours come from the shared .t-* tone classes (met /
+   progress / waiting / blocked / todo). The crit-icon wants the tone's tint as a
+   true background; the crit-status wants only its ink (background cleared above). */
+
+/* dark mode — mirror the home/agents surfaces */
+#app.dark .dxg-card{background:#1a1d23;border-color:#2a2d33;}
+#app.dark .dxg-card:hover{border-color:#3a3f47;}
+#app.dark .dxg-card-stream{border-color:#2a2d33;}
+#app.dark .dxg-seg.is-empty{background:#2a2d33;}
+#app.dark .dxg-topbar,#app.dark .dxg-crit,#app.dark .dxg-maintained,#app.dark .dxg-crits .dxg-crit{border-color:#2a2d33;}
+#app.dark .dxg-crit:first-child{border-top:none;}
+#app.dark .dxg-chip{background:#1a1d23;border-color:#2a2d33;}
+/* the flow2 ink tokens (--fx-ink*) aren't theme-aware; remap the dxg text that
+   uses them to the dark-aware --ink/--ink-2 so card prose + meta stay legible on
+   the dark stage (the detail north-star + card name already use --ink). */
+#app.dark .dxg-northstar{color:var(--ink);}
+#app.dark .dxg-psub,#app.dark .dxg-rollup-txt,#app.dark .dxg-donewhen-lbl,#app.dark .dxg-chip{color:var(--ink-2);}
+
+/* ============================================================
+   SEXTANT LIVE FLOW v0.5 — Review / DocumentView (stage c, TASK Track 1)
+   The artifact-under-review: a doc column + a resizable/collapsible comments
+   rail (TASK-141) + a review composer wired to the review-state primitive.
+   Recreates flow2's DocumentView on the dash token system (--fx-* / --ink /
+   --paper / status tokens) so it tracks light + dark mode.
+   ============================================================ */
+.sx-canvas--review{flex:1;min-height:0;overflow:hidden;padding:0;}
+.fx-docwrap{display:flex;height:100%;min-height:0;width:100%;}
+.fx-doccol{flex:1;min-width:0;overflow-y:auto;display:flex;flex-direction:column;}
+.fx-doccol .fx-topbar{display:flex;align-items:center;gap:14px;padding:0 24px;height:48px;flex:0 0 auto;border-bottom:1px solid var(--hair);}
+.fx-back{background:none;border:none;font-family:var(--font-ui);font-size:12.5px;font-weight:500;color:var(--ink-2);cursor:pointer;padding:6px 0;}
+.fx-back:hover{color:var(--ink);}
+.fx-top-tag{font-family:var(--font-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--fx-ink3);}
+.fx-top-right{margin-left:auto;background:none;border:none;font-family:var(--font-mono);font-size:11px;letter-spacing:.04em;color:var(--ink-2);cursor:pointer;padding:6px 0;}
+.fx-top-right:hover{color:var(--ink);}
+.fx-docinner{max-width:680px;margin:0 auto;width:100%;padding:30px 40px 60px;}
+.fx-crumbs{display:flex;align-items:center;gap:11px;margin-bottom:16px;flex-wrap:wrap;}
+.fx-type{font-family:var(--font-mono);font-size:9.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--fx-ink2);border:1px solid var(--fx-line);border-radius:5px;padding:3px 9px;}
+.fx-stream{font-family:var(--font-mono);font-size:11px;letter-spacing:.04em;text-transform:uppercase;font-weight:600;color:var(--brand-strong);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%;}
+.fx-title{font-family:var(--font-ui);font-size:31px;font-weight:600;line-height:1.1;letter-spacing:-.03em;margin:0 0 14px;color:var(--ink);}
+.fx-byline{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:13.5px;color:var(--ink-2);margin-bottom:20px;}
+.fx-byline b{color:var(--ink);font-weight:600;}
+.fx-byline .sx-av{text-shadow:none;}
+.fx-sep{color:var(--fx-ink3);}
+.fx-why{display:flex;flex-direction:column;gap:5px;padding:13px 16px;margin-bottom:8px;background:rgba(20,21,24,.025);border-radius:10px;border-left:2px solid var(--brand);}
+.fx-why-lbl{font-family:var(--font-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--fx-ink3);}
+.fx-why-text{font-size:13.5px;line-height:1.5;color:var(--ink-2);}
+/* the markdown body keeps its own md-doc styling; drop its inner left/right pad
+   here since the doc column already provides the reading measure + gutters. */
+.fx-docmd .md-inner{max-width:none;padding:18px 0 0;}
+.fx-docmd .md-doc h1{display:none;} /* the title is rendered above as fx-title */
+
+/* ---- right comments rail (resizable + collapsible, TASK-141) ---- */
+.fx-rail{position:relative;flex:0 0 auto;border-left:1px solid var(--hair);display:flex;flex-direction:column;background:var(--paper);min-height:0;}
+.fx-rail-resize{position:absolute;left:-3px;top:0;bottom:0;width:7px;cursor:col-resize;z-index:5;}
+.fx-rail-resize:hover{background:var(--brand-soft);}
+.fx-rail-head{display:flex;align-items:center;gap:8px;padding:13px 16px;border-bottom:1px solid var(--hair);font-family:var(--font-ui);font-size:14px;font-weight:600;color:var(--ink);flex:0 0 auto;}
+.fx-rail-count{font-family:var(--font-mono);font-size:11px;color:var(--fx-ink3);font-weight:400;}
+.fx-rail-pop{margin-left:auto;background:none;border:none;color:var(--fx-ink3);font-size:14px;cursor:pointer;padding:2px 6px;border-radius:6px;}
+.fx-rail-pop:hover{color:var(--ink);background:rgba(20,21,24,.05);}
+.fx-rail-body{flex:1;min-height:0;overflow-y:auto;padding:14px 14px 8px;}
+.fx-rail-sec{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--fx-ink3);margin:6px 2px 10px;}
+.fx-rail-sec.mt{margin-top:20px;}
+.fx-noevi{font-family:var(--font-mono);font-size:11px;color:var(--fx-ink3);font-style:italic;}
+.fx-comment{border:1px solid var(--fx-line);border-radius:11px;padding:11px 12px;margin-bottom:9px;background:var(--paper);}
+.fx-comment-head{display:flex;align-items:center;gap:7px;font-size:12.5px;}
+.fx-comment-head b{font-weight:600;color:var(--ink);}
+.fx-comment-head .sx-av{text-shadow:none;}
+.fx-comment-tag{font-family:var(--font-mono);font-size:8.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--prog);background:rgba(58,130,196,.12);border-radius:5px;padding:2px 6px;}
+.fx-comment-time{font-family:var(--font-mono);font-size:10.5px;color:var(--fx-ink3);margin-left:auto;}
+.fx-comment-text{font-size:13px;line-height:1.5;color:var(--ink-2);margin:6px 0 0;white-space:pre-wrap;word-break:break-word;}
+.fx-event-time{font-family:var(--font-mono);font-size:10px;color:var(--fx-ink3);}
+
+/* ---- rail current-status header bar ---- */
+.fx-rail-status-bar{display:flex;align-items:center;gap:10px;padding:9px 2px 12px;border-bottom:1px solid var(--hair);margin-bottom:12px;}
+.fx-rail-status-note{font-size:11.5px;color:var(--fx-ink3);line-height:1.4;}
+
+/* ---- unified timeline: inline status-change events ---- */
+/* a centered inset "event line" row distinct from the bordered comment bubbles */
+.fx-timeline-event{position:relative;display:flex;flex-direction:column;align-items:stretch;margin:2px 0 10px;padding:0 2px;}
+.fx-timeline-event-line{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:100%;height:1px;background:var(--hair);z-index:0;}
+.fx-timeline-event-body{position:relative;z-index:1;display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:center;background:var(--paper);padding:5px 8px;border-radius:20px;margin:0 auto;max-width:calc(100% - 8px);}
+.fx-timeline-event-text{font-size:11.5px;color:var(--ink-2);line-height:1.4;}
+.fx-timeline-event-text b{color:var(--ink);font-weight:600;}
+
+/* ---- dark mode (timeline events) ---- */
+#app.dark .fx-rail-status-bar{border-color:#2a2d33;}
+/* .fx-timeline-event-body uses --paper which dark mode already overrides globally */
+
+/* ---- review composer (pinned at the rail foot, wired to setReview) ---- */
+.fx-review{border-top:1px solid var(--hair);padding:13px 14px;background:var(--paper);flex:0 0 auto;}
+.fx-review-head{font-size:13px;font-weight:600;margin-bottom:10px;line-height:1.3;color:var(--ink);}
+.fx-rinput{width:100%;border:1px solid var(--fx-line);border-radius:9px;background:var(--paper);color:var(--ink);font-family:var(--font-ui);font-size:12.5px;line-height:1.45;padding:9px 11px;margin-bottom:9px;resize:none;outline:none;}
+.fx-rinput::placeholder{color:var(--fx-ink3);}
+.fx-rinput:focus{border-color:var(--brand);}
+.fx-verdict{display:flex;gap:3px;background:rgba(20,21,24,.05);border-radius:9px;padding:3px;margin-bottom:9px;}
+.fx-vopt{flex:1;text-align:center;font-size:11px;font-weight:500;color:var(--ink-2);padding:7px 4px;border-radius:7px;cursor:pointer;user-select:none;}
+.fx-vopt.is-on{background:var(--paper);color:var(--ink);font-weight:600;box-shadow:0 1px 3px rgba(20,21,40,.12);}
+.fx-submit{width:100%;background:var(--act);color:#fff;border:none;border-radius:9px;padding:10px;font-family:var(--font-ui);font-weight:600;font-size:13.5px;cursor:pointer;}
+.fx-submit:hover{background:var(--act-strong);}
+
+/* ---- ReviewDone consequence popup — floats OVER the still-full-page review ----
+   (Lena's #ui-feedback: the artifact stays a full page; only the "review posted"
+   note is a popup). The scrim is fixed over the viewport so it cleanly overlays the
+   full-page review + rail; the small card is dismissible (× / scrim / "Stay here" /
+   Esc). The .fx-done-icon/-title/-line/-actions content rules are shared below. */
+.fx-donepop-scrim{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;padding:40px;background:rgba(20,21,24,.28);}
+.fx-donepop-card{position:relative;max-width:420px;width:100%;text-align:center;background:var(--paper);border:1px solid var(--hair);border-radius:16px;box-shadow:0 30px 70px -20px rgba(20,21,40,.45);padding:30px 30px 24px;}
+.fx-donepop-x{position:absolute;top:10px;right:12px;background:none;border:none;color:var(--fx-ink3);font-size:22px;line-height:1;cursor:pointer;padding:2px 6px;border-radius:6px;}
+.fx-donepop-x:hover{color:var(--ink);background:rgba(20,21,24,.05);}
+.fx-done-icon{width:54px;height:54px;border-radius:50%;display:grid;place-items:center;font-size:26px;margin:0 auto 20px;}
+.fx-done-title{font-family:var(--font-ui);font-size:23px;font-weight:600;letter-spacing:-.02em;line-height:1.2;margin:0 0 10px;color:var(--ink);}
+.fx-done-line{font-size:15px;line-height:1.55;color:var(--ink-2);margin:0 0 18px;}
+.fx-done-line b{color:var(--ink);font-weight:600;}
+.fx-done-actions{display:flex;justify-content:center;align-items:center;gap:10px;}
+.fx-done-actions .fx-submit{width:auto;padding:11px 22px;}
+.fx-donepop-stay{background:none;border:none;font-family:var(--font-ui);font-size:13px;font-weight:500;color:var(--ink-2);cursor:pointer;padding:11px 6px;}
+.fx-donepop-stay:hover{color:var(--ink);}
+
+/* ---- dark mode (Review view) ---- */
+#app.dark .fx-doccol .fx-topbar,#app.dark .fx-rail,#app.dark .fx-rail-head,#app.dark .fx-rail-body,#app.dark .fx-review{border-color:#2a2d33;}
+#app.dark .fx-rail,#app.dark .fx-review,#app.dark .fx-comment,#app.dark .fx-rinput{background:#16181d;}
+#app.dark .fx-type,#app.dark .fx-comment,#app.dark .fx-rinput{border-color:#2a2d33;}
+#app.dark .fx-why{background:rgba(255,255,255,.03);}
+#app.dark .fx-verdict{background:#22262d;}
+#app.dark .fx-vopt.is-on{background:#2f343c;}
+#app.dark .fx-rail-pop:hover{background:rgba(255,255,255,.06);}
+/* the consequence popup: card uses --paper (already dark) + --hair border; deepen
+   the scrim and lighten the × hover for the dark stage. */
+#app.dark .fx-donepop-scrim{background:rgba(0,0,0,.5);}
+#app.dark .fx-donepop-card{border-color:#2a2d33;}
+#app.dark .fx-donepop-x:hover{background:rgba(255,255,255,.06);}

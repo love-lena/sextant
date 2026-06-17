@@ -131,6 +131,77 @@ _Avoid_: orchestrator, manager, controller
 A client that turns spawn requests into running clients.
 _Avoid_: scheduler, supervisor (it launches; it never supervises)
 
+**Goal**:
+A shared objective the crew works toward — a **north-star** plus its acceptance
+**criteria** — held as the latest-value artifact `goal.<id>`. Its **status is
+derived** from the criteria rollup (how many are met of the total), never stored
+as its own field. A record convention over the artifact operations, not a core
+concept; distinct from a **client's** `agent.status` (what one client is doing
+now) — a goal is an outcome many clients move.
+_Avoid_: task, milestone, project; storing a goal-level state (it is derived)
+
+**Criterion**:
+One acceptance condition of a **goal**, embedded in the goal record as
+`{id, text, status, owner?}` — `status` ∈ `met · in-progress · waiting-on-you ·
+blocked · not-started`. A *met* criterion has at least one **proof**-kind related
+artifact (the invariant). Who marks it met is fuzzy and uncoded — an agent that
+ran a check, an inference from a human-approved artifact, or the operator
+directly; no gate is baked in.
+_Avoid_: acceptance test, requirement, subtask
+
+**`relates` (artifact convention)**:
+An optional field a **record** may carry to associate an **artifact** with a
+**goal** or **criterion**: `relates: [{goal, crit?, kind}]`, where `kind` is
+`proof` (evidence backing a met criterion) or `related` (default; a generic
+association). A criterion's proof/related sets are **projected** from these
+declarations — read from the artifact side, never written onto the criterion.
+Content-opaque to the core; a convention, not a schema change.
+_Avoid_: link, dependency, parent/child
+
+**Needs-review (review-state default)**:
+An artifact's `review` block (ADR-0034) defaults to **neutral** — a new artifact
+is not awaiting the operator. A producer (agent, workflow, or operator) sets
+`review.state = review` **explicitly** when the artifact is for the operator's
+judgment (brief, proposal, design, decision-doc) — the *intent* half, settable
+by anyone, no rev. The operator's *verdict* (`by/at/rev`) is server-set by the
+review endpoint on approve/changes. `review.state` is ONE enum: the producer
+intent `review` plus the operator verdicts `approved`/`changes`/`rejected`/
+`archived`, discriminated by `by/at/rev` presence. Context / working / done
+stay neutral.
+Home/inbox surfaces only `review`-state artifacts (+ criteria-waiting +
+question-messages). A **norm, not enforcement** (signal-not-manage).
+_Avoid_: default-to-review, auto-flag
+
+**`goal.update` (the goals stream)**:
+A signalled transition on a **goal**, published on the topic `msg.topic.goals` —
+an observation that a goal moved (a criterion met, a goal opened), not the goal's
+value. It **signals; it never manages**: the owner and operator stay
+authoritative and nothing gains authority over a **client**. Mirrors the
+current-value-artifact + event-stream pairing the **workflow** harness uses.
+_Avoid_: command, assignment, directive
+
+**Assistant**:
+The operator's own **client**, run as an agent — one identity with two duties:
+it **answers** (read-only) when the operator messages it, reading the workspace
+to reply on the operator's DM; and it **defends** the operator's attention by
+curating the Home/inbox projection so "Needs you" holds only the real calls with
+one clear top action. A **convention**, not a core concept (ADR-0039): a role
+prompt plus the swappable `assistant` designation artifact, over the existing
+client, artifact, and message operations — no new operation, no privileged tier,
+no operator authority. **Signal-not-manage**: it curates the *view*, never a
+review verdict or an owner's state. The reference assistant is named **violet**.
+_Avoid_: bot, secretary, manager; an assistant that *acts* on the operator's
+behalf (it answers and curates a projection; it never acts)
+
+**`assistant` (designation artifact)**:
+The latest-value artifact **`assistant`** that names which live **client** is the
+current **assistant**: `{client_id, name, accent}` (its bus identity, display
+name, and identity colour). The dash and crew read it to know who the assistant
+is and how to reach it; re-pointing it swaps the assistant with no code change.
+Mirrors the `goal.<id>` / `status.<id>` latest-value pattern; a convention, not a
+schema change.
+_Avoid_: hardcoding the assistant's identity; registry, account
+
 **Epoch**:
 The protocol version; a client checks it on connect.
 _Avoid_: version, schema version
@@ -151,9 +222,16 @@ _Avoid_: kill (reserve that for forcing a process from the outside)
   **artifacts**.
 - A **workflow** is run by a **coordinator**; a **dispatcher** spawns new
   **clients**. Both coordinator and dispatcher are just clients.
+- A **goal** holds its **criteria**; its status is derived from their rollup. An
+  **artifact** declares (via `relates`) which goal/criterion it backs as **proof**
+  or is generically **related** to; a **workflow** is one in-flight "how" toward a
+  criterion. Movement is signalled on the `goal.update` stream — it reports, it
+  never directs a **client**.
 - The **clients registry** lists every issued client; **presence** is its liveness
-  view — who is connected right now, derived at read time from the bus's live
-  connection table.
+  view — who is alive right now, derived at read time from the bus's live
+  connection table OR a fresh client **heartbeat** (`last_seen`), so a client
+  behind a leaf node — invisible to the connection table — still reads online
+  while it beats ([ADR-0036](docs/adr/0036-presence-and-liveness-derive-from-a-client-heartbeat.md)).
 - A **client** makes a **call** to invoke an **operation** on the **bus**; the bus
   stamps a **frame** around the record and stores or relays it via the **backend**.
 - A **bus** has at most one **principal** (a human's client), designated at
@@ -161,6 +239,11 @@ _Avoid_: kill (reserve that for forcing a process from the outside)
   adopt it. It is an opinionated extension over the core — the universal protocol
   has no principal. A client that is not the principal is just a **client**;
   there is no separate role for the trusting side.
+- The **assistant** is a **client** named by the latest-value `assistant`
+  artifact. It **answers** the operator (read-only) and **defends** the
+  operator's attention by curating the Home/inbox projection over the
+  `review`-state **artifacts**, goal criteria, and question-**messages** in the
+  pool — it curates the *view*, never an owner's state (a convention, ADR-0039).
 
 ## Flagged ambiguities
 

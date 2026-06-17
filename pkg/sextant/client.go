@@ -25,6 +25,7 @@ import (
 	"log"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/love-lena/sextant/internal/wireapi"
@@ -52,7 +53,31 @@ type Options struct {
 	SkewTolerance time.Duration
 	// Logf receives announcements; defaults to log.Printf.
 	Logf func(string, ...any)
+
+	// HeartbeatInterval is how often the SDK sends clients.heartbeat once
+	// connected (TASK-126): each beat refreshes the bus-stamped last_seen that
+	// keeps the client derived-online across a leaf link, and is echoed back on
+	// the client's dedicated subject so the SDK can confirm its push path. Zero
+	// means the default (defaultHeartbeatInterval, ~15s). A bus that does not
+	// implement the op answers "unknown operation"; the SDK then stops beating
+	// and falls back to connection-table presence — never crashes.
+	HeartbeatInterval time.Duration
+
+	// HeartbeatFreshness is how recently an echo must have arrived for the client
+	// to consider its push path live — surfaced via HeartbeatState for a future
+	// watchdog (TASK-124). Zero means the default (defaultHeartbeatFreshness, a
+	// small multiple of the interval). It governs the SDK's own staleness view,
+	// independent of the bus's presence freshness window.
+	HeartbeatFreshness time.Duration
 }
+
+// Heartbeat defaults (TASK-126). The interval is the beat cadence; the freshness
+// window is how long an echo is considered current — a small multiple of the
+// interval so an occasional missed beat does not look like a dead path.
+const (
+	defaultHeartbeatInterval  = 15 * time.Second
+	defaultHeartbeatFreshness = 45 * time.Second
+)
 
 // Client is a connected Sextant client. Its kind is a property of the identity,
 // set at issuance (`sextant clients register --kind`), not at connect — so a
@@ -125,6 +150,20 @@ type Client struct {
 	// goroutines do not outlive the client. Nil when subscribeInbox has not
 	// run (e.g. in tests that construct a Client directly without Connect).
 	inboxSub *subscription
+
+	// Heartbeat plumbing (TASK-126). hbFreshness is the SDK's own echo-staleness
+	// window. hbEchoSub is the plain core-NATS subscription on sx.hb.<self> that
+	// the echo watcher reads (torn down on Close before nc.Close). hbMu guards the
+	// recorded echo state (last echo seq + arrival time), written by the watcher
+	// and read by HeartbeatState. hbSeq is the monotonic beat counter (atomic),
+	// owned by the heartbeat loop. The echo is internal — never surfaced to the
+	// user as a message — so it has no channel.
+	hbFreshness   time.Duration
+	hbEchoSub     *nats.Subscription
+	hbMu          sync.Mutex
+	hbLastEchoSeq uint64
+	hbLastEchoAt  time.Time
+	hbSeq         atomic.Uint64
 }
 
 // Connect dials the bus and runs the connect handshake. ctx governs the
@@ -163,6 +202,15 @@ func Connect(ctx context.Context, opts Options) (*Client, error) {
 		logf = log.Printf
 	}
 
+	hbInterval := opts.HeartbeatInterval
+	if hbInterval <= 0 {
+		hbInterval = defaultHeartbeatInterval
+	}
+	hbFreshness := opts.HeartbeatFreshness
+	if hbFreshness <= 0 {
+		hbFreshness = defaultHeartbeatFreshness
+	}
+
 	c := &Client{
 		id:          id,
 		displayName: displayName,
@@ -171,6 +219,7 @@ func Connect(ctx context.Context, opts Options) (*Client, error) {
 		drained:     make(chan struct{}),
 		closed:      make(chan struct{}),
 		inbox:       make(chan Message, 64),
+		hbFreshness: hbFreshness,
 	}
 
 	nc, err := nats.Connect(
@@ -219,6 +268,14 @@ func Connect(ctx context.Context, opts Options) (*Client, error) {
 		return nil, err
 	}
 	if err := c.subscribeInbox(ctx); err != nil {
+		nc.Close()
+		return nil, err
+	}
+	// Start the heartbeat last (after the inbox sub + hello): the echo watcher
+	// subscribes the client's own sx.hb.<self> before any beat, then the ticker
+	// loop runs on its own goroutine until Close. A bus without the op degrades
+	// gracefully — the loop stops itself, never failing Connect (TASK-126).
+	if err := c.startHeartbeat(ctx, hbInterval); err != nil {
 		nc.Close()
 		return nil, err
 	}
@@ -396,6 +453,12 @@ func (c *Client) Close() error {
 		c.inboxSub.teardown()
 		c.inboxSub.cancel()
 		c.deregisterSub(c.inboxSub)
+	}
+	// Tear down the heartbeat echo watcher (a plain core-NATS sub, not a relay) so
+	// it does not linger on the connection. The heartbeat loop stops itself once
+	// closed is signalled below.
+	if c.hbEchoSub != nil {
+		_ = c.hbEchoSub.Unsubscribe()
 	}
 	// Under passMu so the closed signal is atomic with any in-flight spawn's
 	// {closed re-check, passWG.Add}: after this critical section, no resume
