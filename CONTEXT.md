@@ -164,7 +164,10 @@ is not awaiting the operator. A producer (agent, workflow, or operator) sets
 `review.state = review` **explicitly** when the artifact is for the operator's
 judgment (brief, proposal, design, decision-doc) — the *intent* half, settable
 by anyone, no rev. The operator's *verdict* (`by/at/rev`) is server-set by the
-review endpoint on approve/changes. Context / working / done stay neutral.
+review endpoint on approve/changes. `review.state` is ONE enum: the producer
+intent `review` plus the operator verdicts `approved`/`changes`/`rejected`/
+`archived`, discriminated by `by/at/rev` presence. Context / working / done
+stay neutral.
 Home/inbox surfaces only `review`-state artifacts (+ criteria-waiting +
 question-messages). A **norm, not enforcement** (signal-not-manage).
 _Avoid_: default-to-review, auto-flag
