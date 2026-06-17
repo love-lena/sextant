@@ -284,7 +284,9 @@
   // activity chip. Kept local so review.jsx doesn't depend on a sidebar export beyond
   // Avatar + MarkdownArtifact.
   function STATUS_TONE(st) {
-    return { review: "t-waiting", changes: "t-waiting", approved: "t-met", rejected: "t-blocked", archived: "t-todo", draft: "t-todo" }[st] || "t-todo";
+    // review (your turn) = the attention tone; changes (the author's turn) = the calmer
+    // progress tone, so "waiting on you" reads distinctly from "waiting on the agent".
+    return { review: "t-waiting", changes: "t-progress", approved: "t-met", rejected: "t-blocked", archived: "t-todo", draft: "t-todo" }[st] || "t-todo";
   }
   function STATUS_LABEL(st) {
     return { review: "Needs review", changes: "Waiting for author", approved: "Approved", rejected: "Rejected", archived: "Archived", draft: "Draft" }[st] || "Draft";

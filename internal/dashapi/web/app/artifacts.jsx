@@ -8,20 +8,22 @@
 (function () {
 
   // review-state → flow2 group label + status-chip tone (the v0.5 token scale).
-  // Needs review/changes are "waiting on you"; approved is "met"; draft/rejected/
-  // archived are calmer "todo" grey so the eye lands on what actually needs action.
+  // "Needs review" is waiting on YOU (the attention tone); "Waiting for author" is
+  // the agent's turn (the calmer progress tone); approved is "met"; draft/rejected/
+  // archived are calmer "todo" grey so the eye lands on what actually needs you.
   const ART_GROUPS = [
   ["review", "Needs review", "Needs review", "t-waiting"],
-  ["changes", "Changes requested", "Changes requested", "t-waiting"],
+  ["changes", "Waiting for author", "Waiting for author", "t-progress"],
   ["draft", "Draft", "Draft", "t-todo"],
   ["approved", "Approved", "Approved", "t-met"],
   ["rejected", "Rejected", "Rejected", "t-blocked"],
   ["archived", "Archived", "Archived", "t-todo"]];
-  const ART_DOTC = { "t-waiting": "var(--wait)", "t-met": "var(--met)", "t-todo": "var(--todo)", "t-blocked": "var(--blk)" };
+  const ART_DOTC = { "t-waiting": "var(--wait)", "t-progress": "var(--prog)", "t-met": "var(--met)", "t-todo": "var(--todo)", "t-blocked": "var(--blk)" };
 
   function ArtifactsView({ artifacts, activeArtifact, onOpenArtifact }) {
-    const awaiting = artifacts.filter((a) => a.status === "review" || a.status === "changes").length;
-    const settled = artifacts.length - awaiting;
+    // "awaiting you" is review only (your turn); changes is the author's turn now.
+    const awaiting = artifacts.filter((a) => a.status === "review").length;
+    const settled = artifacts.filter((a) => a.status === "approved" || a.status === "rejected" || a.status === "archived").length;
     return (
       <div className="fx-scroll"><div className="fx-col sx-conv-light">
         <h1 className="fx-h1 fx-in">Artifacts</h1>
