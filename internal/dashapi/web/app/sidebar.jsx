@@ -542,6 +542,7 @@
             <button className={"fx-navrow" + (section === key ? " is-on" : "")} key={key} onClick={() => ctx.onNav(key)}>
               <span className="fx-navic">{ic}</span><span>{label}</span>
               {key === "artifacts" && ctx.reviewCount > 0 && <span className="fx-navbadge">{ctx.reviewCount}</span>}
+              {key === "goals" && ctx.goalReviewCount > 0 && <span className="fx-navbadge" title="goals awaiting your sign-off">{ctx.goalReviewCount}</span>}
               {key === "agents" && ctx.workingCount > 0 && <span className="fx-navbadge tone-met">{ctx.workingCount}</span>}
             </button>
           ))}
