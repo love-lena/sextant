@@ -67,6 +67,11 @@ func usage() {
 usage:
   sextant up    [--store DIR] [--port N]        run the embedded bus
 
+leaf-node federation (a remote box links a local bus to the hub — ADR-0038; default off):
+  sextant up --leaf-listen <host:port>          hub: accept remote leaf links (behind a secure transport)
+  sextant up --leaf-remote nats-leaf://hub:PORT --leaf-bundle B --leaf-creds C
+                                                run as a leaf (JetStream stays at the hub)
+
 identities (the bus is the sole minter; keys never leave it — ADR-0020):
   sextant clients register <name> [--kind K]    operator mints for another
   sextant clients register --self  [--kind K]   bootstrap/enrollment: mint for self
@@ -119,6 +124,11 @@ func cmdUp(args []string) {
 	fs := flag.NewFlagSet("up", flag.ExitOnError)
 	store := fs.String("store", defaultStore(), "JetStream + key-material directory (or set $SEXTANT_STORE)")
 	port := fs.Int("port", 0, "listen port (0 = random)")
+	// Leaf-node federation (ADR-0038), all default-off (no behavior change unset).
+	leafListen := fs.String("leaf-listen", "", "open a leaf listener at host:port so a remote leaf can link in (hub mode; behind a secure transport)")
+	leafRemote := fs.String("leaf-remote", "", "run as a LEAF linking to this hub's nats-leaf:// URL (JetStream stays at the hub)")
+	leafCreds := fs.String("leaf-creds", "", "leaf mode: the hub-minted link credential file (with --leaf-remote)")
+	leafBundle := fs.String("leaf-bundle", "", "leaf mode: the hub's public trust bundle file (with --leaf-remote)")
 	_ = fs.Parse(args)
 
 	if err := os.MkdirAll(*store, 0o700); err != nil { // holds key material + JS data
@@ -128,7 +138,14 @@ func cmdUp(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	b, err := bus.Start(ctx, bus.Config{StoreDir: *store, Port: *port})
+	b, err := bus.Start(ctx, bus.Config{
+		StoreDir:       *store,
+		Port:           *port,
+		LeafListenAddr: *leafListen,
+		LeafRemoteURL:  *leafRemote,
+		LeafCreds:      *leafCreds,
+		LeafBundle:     *leafBundle,
+	})
 	if err != nil {
 		fatal("%v", err)
 	}
@@ -139,11 +156,34 @@ func cmdUp(args []string) {
 		fatal("write discovery file: %v", err)
 	}
 
-	fmt.Printf("sextant bus up\n  url:        %s\n  discovery:  %s\n  operator:   %s\n\n"+
+	if *leafRemote != "" {
+		// Leaf mode: no local minting/operator credential — local agents connect with
+		// hub-minted creds, and the engine lives at the hub. Print the loopback client
+		// listener and the hub it links to.
+		fmt.Printf("sextant leaf up\n  url:        %s\n  discovery:  %s\n  hub:        %s\n\n"+
+			"local agents connect here with hub-minted creds; JetStream stays at the hub.\n\n"+
+			"Ctrl-C to stop.\n",
+			b.ClientURL(), infoPath, *leafRemote)
+		<-ctx.Done()
+		stop()
+		b.Shutdown()
+		fmt.Println("leaf down")
+		return
+	}
+
+	leafNote := ""
+	if *leafListen != "" {
+		leafNote = fmt.Sprintf("\nleaf listener: %s — carry these to the remote box (the bundle is public; the link is secret):\n"+
+			"  bundle: %s\n  link:   %s\n  (link MUST ride a secure transport — SSH-R / Tailscale / WireGuard)\n"+
+			"  note: a hub restart mints a NEW link credential — re-carry leaf-link.creds to the remote box.\n",
+			*leafListen, bus.LeafBundlePath(*store), bus.LeafLinkCredsPath(*store))
+	}
+
+	fmt.Printf("sextant bus up\n  url:        %s\n  discovery:  %s\n  operator:   %s\n%s\n"+
 		"issue a client identity (the bus mints it; keys stay in the bus):\n"+
 		"  sextant clients register <name> --store %s\n\n"+
 		"Ctrl-C to drain and stop.\n",
-		b.ClientURL(), infoPath, bus.OperatorCredsPath(*store), *store)
+		b.ClientURL(), infoPath, bus.OperatorCredsPath(*store), leafNote, *store)
 
 	<-ctx.Done()
 	stop() // restore default signal handling; a second signal force-quits

@@ -97,12 +97,9 @@
     return rec.$type || "·";
   }
 
-  // Goal metrics have no bus primitive yet — stubbed (clearly a placeholder).
-  const GOALS = [
-    { label:"Tasks merged this sprint", value:14, target:20, display:"14 / 20", note:"stub — no goals primitive yet" },
-    { label:"CI pipeline green", value:97, target:95, display:"97%", met:true, note:"stub — no goals primitive yet" },
-    { label:"Test coverage", value:81, target:85, display:"81%", note:"stub — no goals primitive yet" },
-  ];
+  // the five criterion statuses (the goal.<id> lexicon); an unknown value is
+  // normalized to not-started so the Goals view never indexes an empty STATUS slot.
+  const GOAL_CRIT_STATES = ["met", "in-progress", "waiting-on-you", "blocked", "not-started"];
 
   function App() {
     const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
@@ -112,6 +109,7 @@
     const [artifacts, setArtifacts] = useState([]);      // raw ArtifactInfo[]
     const [records, setRecords] = useState({});          // name -> Record (status + instant open)
     const [home, setHome] = useState(null);              // curated Home config (the 'home' artifact, TASK-71 #2)
+    const [assistant, setAssistant] = useState(null);    // the 'assistant' artifact (ADR-0039): { client_id, name, accent } — absent pre-v0.5.0
     const [convos, setConvos] = useState({});            // subject -> {msgs:[{id,author,text,ts}], last, lastText}
     const [activity, setActivity] = useState([]);        // recent frames across all subjects
     const [activeArtifact, setActiveArtifact] = useState("");
@@ -120,11 +118,18 @@
     const [activeConvo, setActiveConvo] = useState("");
     // stage mode: home | artifacts | goals | agents | artifact (one open) | conversation
     const [stageMode, setStageMode] = useState("home");
+    // bumped each time the Goals nav is clicked so GoalsView remounts to the
+    // portfolio (its open-goal is internal state; the nav should always land you
+    // on the list, not strand you in a detail you opened earlier).
+    const [goalsEpoch, setGoalsEpoch] = useState(0);
     const [palette, setPalette] = useState(false);       // ⌘K command palette (TASK stage a)
     // Assistant FAB (stub, not wired): lifted here so ⌘K can open it with a
     // prefilled prompt. asstPrompt is the query carried over from a no-match search.
     const [asstOpen, setAsstOpen] = useState(false);
     const [asstPrompt, setAsstPrompt] = useState("");
+    // a dedicated composer buffer for the FAB's violet DM, so it never collides
+    // with the main stage `draft` (the operator can be mid-typing in a thread).
+    const [asstDraft, setAsstDraft] = useState("");
     const [draft, setDraft] = useState("");
     const [hidden, setHidden] = useState(()=>{ try{ return new Set(JSON.parse(localStorage.getItem("sx-hidden-convos")||"[]")); }catch(_){ return new Set(); } });
 
@@ -175,6 +180,9 @@
       apiGet("/api/clients").then(cs=>setClients(Array.isArray(cs)?cs:[])).catch(()=>{});
       apiGet("/api/artifacts").then(as=>setArtifacts(Array.isArray(as)?as:[])).catch(()=>{});
       apiGet("/api/artifacts/home").then(a=>setHome((a&&a.Record)||null)).catch(()=>{});
+      // the assistant convention (ADR-0039): a latest-value `assistant` artifact
+      // names the live operator-assistant. Absent pre-v0.5.0 (404) → stays null.
+      apiGet("/api/artifacts/assistant").then(a=>setAssistant((a&&a.Record)||null)).catch(()=>setAssistant(null));
       // seed the conversation list with subjects the dash already knows about
       apiGet("/api/subjects").then(subs=>{
         if(!Array.isArray(subs)) return;
@@ -308,6 +316,12 @@
           const rec=(a&&a.Record)||null;
           setHome(prev => JSON.stringify(prev)===JSON.stringify(rec) ? prev : rec);
         }).catch(()=>{});
+        // the `assistant` artifact (ADR-0039) lights up at v0.5.0 — poll so the FAB
+        // wires to violet's DM the moment it appears (and degrades if it's removed).
+        apiGet("/api/artifacts/assistant").then(a=>{
+          const rec=(a&&a.Record)||null;
+          setAssistant(prev => JSON.stringify(prev)===JSON.stringify(rec) ? prev : rec);
+        }).catch(()=>setAssistant(prev => prev===null ? prev : null));
         apiGet("/api/clients").then(cs=>{
           if(!Array.isArray(cs)) return;
           setClients(prev => JSON.stringify(prev)===JSON.stringify(cs) ? prev : cs);
@@ -370,6 +384,58 @@
       };
     }),[clients, records]);
 
+    // derived: goals (the goal primitive, ADR-0035). Each goal is a latest-value
+    // artifact named goal.<id> whose record carries $type:"goal" + a northstar +
+    // criteria[]. Goal STATUS is derived from the criteria rollup (goals.jsx) —
+    // there is no stored goal-status field. Evidence is found by scanning ALL
+    // records for a `relates` entry pointing at this goal (+crit): kind:"proof"
+    // backs a met criterion, kind:"related" is a generic association. Everything
+    // is guarded against missing/malformed fields so a half-written goal can't
+    // crash the view.
+    const goals = useMemo(()=>{
+      // index relates entries once: goalId -> { crit:{<critId>:[{name,kind}]}, goal:[{name,kind}] }
+      const rel = {};
+      for(const a of artifacts){
+        const rec = records[a.Name];
+        const rs = rec && Array.isArray(rec.relates) ? rec.relates : null;
+        if(!rs) continue;
+        for(const e of rs){
+          if(!e || typeof e.goal!=="string" || !e.goal) continue;
+          const bucket = rel[e.goal] || (rel[e.goal]={ crit:{}, goal:[] });
+          const ref = { name:a.Name, kind:(e.kind==="proof"?"proof":"related") };
+          if(typeof e.crit==="string" && e.crit){ (bucket.crit[e.crit] || (bucket.crit[e.crit]=[])).push(ref); }
+          else bucket.goal.push(ref);
+        }
+      }
+      // a goal is the latest-value artifact goal.<id> carrying a goal record;
+      // require BOTH the goal. name and the $type so a stray $type:"goal" under
+      // another name can't surface in Goals while still showing in the Artifacts
+      // list (which excludes the goal. namespace) — no cross-view double-listing.
+      return artifacts.filter(a=>{ const r=records[a.Name]; return a.Name.startsWith("goal.") && r && r.$type==="goal"; }).map(a=>{
+        const r = records[a.Name] || {};
+        const id = a.Name.replace(/^goal\./,"");
+        const bucket = rel[id] || { crit:{}, goal:[] };
+        const criteria = (Array.isArray(r.criteria)?r.criteria:[]).map((c,i)=>{
+          const cid = (c && typeof c.id==="string" && c.id) || ("crit-"+(i+1));
+          return {
+            id: cid,
+            text: (c && typeof c.text==="string") ? c.text : "",
+            status: (c && GOAL_CRIT_STATES.indexOf(c.status)>=0) ? c.status : "not-started",
+            owner: (c && typeof c.owner==="string") ? c.owner : "",
+            evidence: bucket.crit[cid] || [],
+          };
+        });
+        return {
+          id, name:a.Name,
+          stream: (typeof r.stream==="string"?r.stream:""),
+          northstar: (typeof r.northstar==="string"?r.northstar:""),
+          updated: r.updated||"", by: r.by||"",
+          criteria,
+          evidence: bucket.goal, // goal-level relates (no crit) — optional
+        };
+      });
+    },[artifacts, records]);
+
     // review-state from the artifact's record (convention); absent ⇒ neutral
     // (draft) — needs-review is set explicitly by the producer. Reads only
     // rec.review.state (no by/at/rev assumed), so a state-only block is fine.
@@ -381,9 +447,11 @@
 
     // derived: artifacts in the component shape (topic/author stay stubbed — no
     // primitive yet; status now comes from the review convention)
-    // 'home' is the curated Home page and 'status.<id>' artifacts are the per-agent
-    // status records (rendered in the Agent-status panel), so hide both from the list.
-    const artItems = useMemo(()=>artifacts.filter(a=>a.Name!=="home" && !a.Name.startsWith("status.")).map(a=>({
+    // 'home' is the curated Home page, 'status.<id>' artifacts are the per-agent
+    // status records (rendered in the Agent-status panel), and 'goal.<id>'
+    // artifacts are the goal primitive (rendered in the Goals view), so hide all
+    // three from the plain documents list.
+    const artItems = useMemo(()=>artifacts.filter(a=>a.Name!=="home" && !a.Name.startsWith("status.") && !a.Name.startsWith("goal.")).map(a=>({
       name:a.Name, version:a.Revision, status:statusOf(a.Name), topic:"", type:"markdown",
       id:a.Name, author:{ name:"", kind:"agent" }, updated:relTime(a.Updated),
     })),[artifacts, statusOf]);
@@ -413,6 +481,38 @@
         self: m.author===self.id, time:relMs(m.ts), text:m.text,
       }));
     },[convos, activeConvo, nameOf, kindOf, self.id]);
+
+    // derived: violet, the operator's assistant (ADR-0039). The `assistant`
+    // artifact names the live assistant by its bus client_id; absent (pre-v0.5.0)
+    // or malformed ⇒ null, and the FAB falls back to its "not live yet" state.
+    const violet = (assistant && typeof assistant.client_id==="string" && assistant.client_id)
+      ? { id:assistant.client_id, name:(typeof assistant.name==="string" && assistant.name ? assistant.name : "violet"), accent:(typeof assistant.accent==="string"?assistant.accent:"") }
+      : null;
+    // violet is "live" when a matching online bus client is present — drives the
+    // header dot. Absent client / offline ⇒ no dot (the convention is just an
+    // artifact; the agent need not be connected).
+    const violetOnline = !!(violet && clients.some(c=>c.ID===violet.id && c.Online));
+
+    // the violet DM subject (the same canonical 2-party topic startDM derives) and
+    // the discovered+backfilled message thread, shaped exactly like `messages` so
+    // the FAB can feed window.MessageList. Both null/empty when violet is absent.
+    const asstSubject = (violet && self.id) ? dmSubject(self.id, violet.id) : "";
+    const assistantMessages = useMemo(()=>{
+      const c = asstSubject ? convos[asstSubject] : null; if(!c) return [];
+      return c.msgs.map((m,i)=>({
+        id:m.id||i, kind:"msg", author:nameOf(m.author),
+        role: (kindOf(m.author)==="client"||kindOf(m.author)==="human")?"human":"agent",
+        self: m.author===self.id, time:relMs(m.ts), text:m.text,
+      }));
+    },[convos, asstSubject, nameOf, kindOf, self.id]);
+
+    // discover + backfill the violet DM as soon as both ends are known, so the
+    // existing thread loads into `convos` (the same ensureConvo+backfill openArtifact
+    // / startDM use). Re-runs only when the subject changes (not per render).
+    useEffect(()=>{
+      if(!asstSubject) return;
+      ensureConvo(asstSubject); backfill(asstSubject);
+    },[asstSubject]);
 
     // the open artifact's companion-topic discussion, rendered inline in the
     // artifact view (TASK-83). Same shape as `messages`, keyed on the artifact's
@@ -454,13 +554,21 @@
       }).catch(()=>{ setActiveArtifact(cur=>{ if(cur===name && !artifacts.some(x=>x.Name===name)) setArtMissing(true); return cur; }); });
     }
     function goHome(){ setStageMode("home"); }
-    // ⌘K no-match → open the (stub) Assistant FAB with the typed query as its
-    // prompt. The assistant is NOT wired — the panel shows the prompt + the
-    // "not wired yet" placeholder; it never fabricates an answer.
-    function askAssistant(query){ setPalette(false); setAsstPrompt(query||""); setAsstOpen(true); }
+    // ⌘K no-match → open the Assistant FAB with the typed query prefilled in the
+    // composer (never auto-sent — the operator hits send). When violet is live the
+    // FAB is the DM thread; when absent it shows the "not live yet" state. We set
+    // BOTH asstPrompt (shown as the carried query) and asstDraft (the live composer
+    // value) so the operator can edit + send.
+    function askAssistant(query){ setPalette(false); const q=query||""; setAsstPrompt(q); setAsstDraft(q); setAsstOpen(true); }
+    // send the FAB composer to violet's DM (the canonical 2-party topic), then
+    // clear the FAB draft. No-op until violet + self are both known.
+    function sendToAssistant(text){
+      const body=(text||"").trim(); if(!body || !violet || !self.id) return;
+      apiPublish(dmSubject(self.id, violet.id),{ "$type":"chat.message", text:body }).then(()=>{ setAsstDraft(""); setAsstPrompt(""); }).catch(()=>{});
+    }
     // Workspace nav (flow2 chrome): Home / Artifacts / Goals / Agents swap the
-    // white stage. Goals is an inert placeholder (Track 2 owns the real view).
-    function onNav(key){ touchRecent("nav:"+key); setStageMode(key); }
+    // white stage.
+    function onNav(key){ touchRecent("nav:"+key); if(key==="goals") setGoalsEpoch(e=>e+1); setStageMode(key); }
     function backfill(subj){
       // /api/messages reads FORWARD from `since` (since=0 is the oldest), so a
       // single page returns the OLDEST messages. Page to the tail following
@@ -542,7 +650,7 @@
       conversations:convList, activeConvo, stageMode, onOpenConvo:openConvo, onExpandConvo:expandConvo,
       messages, draft, setDraft, onSend:send, onArtifactRef:openArtifact,
       artifacts:artItems, activeArtifact, onOpenArtifact:openArtifact,
-      goals:GOALS, agents, activity:homeActivity, self, onGoHome:goHome, home, onDM:startDM,
+      goals, agents, activity:homeActivity, self, onGoHome:goHome, home, onDM:startDM,
       hidden, onHide:hideConvo, onUnhide:unhideConvo,
       onNav, onSearch:()=>setPalette(true), reviewCount, workingCount,
     };
@@ -637,7 +745,7 @@
             </div>
           ) : stageMode==="goals" ? (
             <div className="sx-canvas sx-canvas--list">
-              <div className="sx-page sx-page--doc"><GoalsStub /></div>
+              <div className="sx-page sx-page--doc"><GoalsView key={goalsEpoch} goals={goals} onOpenArtifact={openArtifact} /></div>
             </div>
           ) : stageMode==="agents" ? (
             <div className="sx-canvas sx-canvas--list">
@@ -693,9 +801,14 @@
         </main>
 
         <AssistantFab open={asstOpen} prompt={asstPrompt}
-          onOpen={()=>{ setAsstPrompt(""); setAsstOpen(true); }}
+          assistant={violet} online={violetOnline}
+          messages={assistantMessages} self={self}
+          draft={asstDraft} setDraft={setAsstDraft}
+          onSend={sendToAssistant} onArtifactRef={openArtifact}
+          artifactNames={artifacts.map(a=>a.Name)}
+          onOpen={()=>{ setAsstPrompt(""); setAsstDraft(""); setAsstOpen(true); }}
           onClose={()=>{ setAsstOpen(false); setAsstPrompt(""); }} />
-        {palette && <CmdK index={searchIndex()} recents={recents} onClose={()=>setPalette(false)} onAsk={askAssistant} />}
+        {palette && <CmdK index={searchIndex()} recents={recents} assistantLive={!!violet} onClose={()=>setPalette(false)} onAsk={askAssistant} />}
 
         <TweaksPanel title="Tweaks">
           <TweakSection label="Accent" />
