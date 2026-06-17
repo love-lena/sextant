@@ -183,6 +183,15 @@ Resolution precedence: `$SEXTANT_CREDS` → `$SEXTANT_CONTEXT` (an operator may
 pin one in `.mcp.json`'s `env`) → a context you switched to with `context_use`
 → this session's own auto-minted identity.
 
+**A resume self-heals (ADR-0037).** Across a `--resume`/`--continue`, a context
+compaction, or an MCP restart, the adapter restores not just your identity but
+your **manual subscriptions** — re-subscribing each and catching up the frames
+that arrived while the process was gone — and your `context_use` choice. So you
+do **not** re-`message_subscribe` or re-`context_use` after a resume: your
+subjects keep arriving and you keep speaking as the same identity. (Your inbox
+already survived every resume; this gives the rest of your bus-following state
+the same durability.)
+
 Use **`context_use`** to deliberately resume or assume a saved **agent**
 identity (by context name); it refuses non-agent contexts (human, client, or
 unlabelled) — you never speak as a person or another client. If a tool reports

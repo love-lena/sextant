@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -86,6 +87,13 @@ func run(ctx context.Context, cf connFlags) error {
 		},
 	)
 
+	// The durable per-session store (TASK-124): subscriptions + active context
+	// survive a resume / compaction / fresh MCP process. Keyed on the stable
+	// session id under the writable plugin-data dir; a missing file degrades to
+	// empty (nothing to restore). Shared by the connManager (context) and the
+	// channel hub (subjects + seq cursors).
+	state := loadSubstate(os.Getenv("CLAUDE_PLUGIN_DATA"), os.Getenv(sessionEnv))
+
 	conn := &connManager{
 		cf:   cf,
 		base: ctx,
@@ -94,7 +102,15 @@ func run(ctx context.Context, cf connFlags) error {
 		// hook process, so the hook reads the file this server writes.
 		pluginData: os.Getenv("CLAUDE_PLUGIN_DATA"),
 		sessionID:  os.Getenv(sessionEnv),
+		state:      state,
 	}
+	// Re-pin a context_use'd identity across a resume BEFORE resolve()'s auto-mint
+	// fallback (TASK-124, mode C): a fresh process lost connManager.switched, so
+	// without this it would reconnect as the auto-mint id, not the context the
+	// agent switched to. Validated against the agent-kind guard (ADR-0029) so a
+	// since-deleted/recreated non-agent context is not assumed; an explicit
+	// --creds/--context still overrides it (resolve checks those first).
+	conn.restorePersistedContext()
 	names := newNameCache(func(ctx context.Context) ([]sextant.ClientInfo, error) {
 		c, err := conn.get(ctx)
 		if err != nil {
@@ -104,18 +120,39 @@ func run(ctx context.Context, cf connFlags) error {
 	})
 	transport := &capturingTransport{inner: &mcp.StdioTransport{}}
 	hub := newChannelHub(transport.notify, names)
-	// Bridge the SDK auto-DM channel into the channel-wake path (ADR-0030, M1):
-	// once connected, a DM to msg.client.<self> wakes the session via the same
-	// emit logic an explicit subscription uses. Connect is lazy (first tool
-	// call), so the drain begins after the worker's first sextant interaction —
-	// acceptable for v1; eager connect-at-startup would fail before the bus is up.
-	conn.onConnect = hub.startInboxDrain
-	conn.onDiscard = hub.stopInboxDrain
+	hub.state = state // share the durable store the connManager holds (TASK-124)
+	// On every connect: bridge the SDK auto-DM channel into the channel-wake path
+	// (ADR-0030, M1) AND restore the persisted manual subscriptions, catching each
+	// up from its last delivered seq (TASK-124). Connect is lazy (first tool call),
+	// so both begin after the worker's first sextant interaction — acceptable for
+	// v1; eager connect-at-startup would fail before the bus is up.
+	conn.onConnect = func(c *sextant.Client) {
+		hub.startInboxDrain(c)
+		hub.restoreSubs(c)
+	}
+	conn.onDiscard = hub.discardClient
 	registerTools(server, &deps{
 		conn:  conn,
 		names: names,
 		hub:   hub,
 	})
 
-	return server.Run(ctx, transport)
+	// Persist pending seq advances periodically — advance() only marks the state
+	// dirty to avoid a disk write per delivered frame — and once more on shutdown.
+	go func() {
+		t := time.NewTicker(2 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				state.flush()
+			}
+		}
+	}()
+
+	err := server.Run(ctx, transport)
+	state.flush()
+	return err
 }
