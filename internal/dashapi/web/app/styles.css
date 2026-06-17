@@ -768,11 +768,23 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 .fx-comment-tag{font-family:var(--font-mono);font-size:8.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--prog);background:rgba(58,130,196,.12);border-radius:5px;padding:2px 6px;}
 .fx-comment-time{font-family:var(--font-mono);font-size:10.5px;color:var(--fx-ink3);margin-left:auto;}
 .fx-comment-text{font-size:13px;line-height:1.5;color:var(--ink-2);margin:6px 0 0;white-space:pre-wrap;word-break:break-word;}
-.fx-event{display:flex;gap:10px;padding:4px 0;}
-.fx-event-body{flex:1;min-width:0;}
-.fx-event-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px;}
 .fx-event-time{font-family:var(--font-mono);font-size:10px;color:var(--fx-ink3);}
-.fx-event-text{font-size:12px;line-height:1.5;color:var(--ink-2);margin:6px 0 0;}
+
+/* ---- rail current-status header bar ---- */
+.fx-rail-status-bar{display:flex;align-items:center;gap:10px;padding:9px 2px 12px;border-bottom:1px solid var(--hair);margin-bottom:12px;}
+.fx-rail-status-note{font-size:11.5px;color:var(--fx-ink3);line-height:1.4;}
+
+/* ---- unified timeline: inline status-change events ---- */
+/* a centered inset "event line" row distinct from the bordered comment bubbles */
+.fx-timeline-event{position:relative;display:flex;flex-direction:column;align-items:stretch;margin:2px 0 10px;padding:0 2px;}
+.fx-timeline-event-line{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:100%;height:1px;background:var(--hair);z-index:0;}
+.fx-timeline-event-body{position:relative;z-index:1;display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:center;background:var(--paper);padding:5px 8px;border-radius:20px;margin:0 auto;max-width:calc(100% - 8px);}
+.fx-timeline-event-text{font-size:11.5px;color:var(--ink-2);line-height:1.4;}
+.fx-timeline-event-text b{color:var(--ink);font-weight:600;}
+
+/* ---- dark mode (timeline events) ---- */
+#app.dark .fx-rail-status-bar{border-color:#2a2d33;}
+/* .fx-timeline-event-body uses --paper which dark mode already overrides globally */
 
 /* ---- review composer (pinned at the rail foot, wired to setReview) ---- */
 .fx-review{border-top:1px solid var(--hair);padding:13px 14px;background:var(--paper);flex:0 0 auto;}

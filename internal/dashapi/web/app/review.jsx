@@ -26,7 +26,7 @@
   // `changes` are the "waiting on you" states the dash routes to your inbox.
   const WHY = {
     review:  "Flagged for your review — an agent marked it ready and it's waiting on you.",
-    changes: "You asked for changes and it's back in front of you — re-check the revision.",
+    changes: "You requested changes — it's with the author now, and returns to your inbox once they revise and re-flag it.",
     approved: "You approved this. It's settled; reopen it if something changed.",
     rejected: "You rejected this. It's settled; reopen it to put it back in review.",
     archived: "Archived — kept for the record, off your active list. Reopen to revisit.",
@@ -34,7 +34,7 @@
   };
   const VERB = {
     review:  "marked this ready for you",
-    changes: "revised this after your notes",
+    changes: "is revising this after your notes",
     approved: "wrote this",
     rejected: "wrote this",
     archived: "wrote this",
@@ -166,7 +166,7 @@
         <div className="fx-doccol">
           <div className="fx-topbar">
             <button className="fx-back" onClick={onBrowse}>← Artifacts</button>
-            <span className="fx-top-tag">{status === "review" ? "needs review" : status}</span>
+            <span className="fx-top-tag">{STATUS_LABEL(status).toLowerCase()}</span>
             <button className="fx-top-right" title={railCollapsed ? "Show the comments rail" : "Hide the comments rail"} onClick={onToggleRail}>
               {railCollapsed ? "Comments ↤" : "Hide rail ↦"}
             </button>
@@ -198,36 +198,56 @@
           <aside className="fx-rail" style={{ width: railWidth, flexBasis: railWidth }}>
             <div className="fx-rail-resize" onMouseDown={onHandleDown} title="Drag to resize" />
             <div className="fx-rail-head">
-              Comments <span className="fx-rail-count">· {discussion.length}</span>
+              Discussion <span className="fx-rail-count">· {discussion.length}</span>
               <button className="fx-rail-pop" title="Open the full discussion as a conversation" onClick={() => onExpandDiscussion(name)}>↗</button>
             </div>
             <div className="fx-rail-body" ref={commentsRef}>
-              {discussion.length === 0 && <div className="fx-noevi" style={{ padding: "4px 2px 14px" }}>No comments yet — start the thread below.</div>}
-              {discussion.map((c) => (
-                <div className="fx-comment" key={c.id}>
-                  <div className="fx-comment-head">
-                    <window.Avatar name={c.author} kind={c.role === "agent" ? "agent" : "human"} size={18} />
-                    <b>{c.self ? "you" : c.author}</b>
-                    {c.role === "agent" && !c.self && <span className="fx-comment-tag">agent</span>}
-                    <span className="fx-comment-time">{c.time}</span>
-                  </div>
-                  <p className="fx-comment-text">{c.text}</p>
-                </div>
-              ))}
-
-              <div className="fx-rail-sec mt">Activity</div>
-              <div className="fx-event">
-                <div className="fx-event-body">
-                  <div className="fx-event-head">
-                    <span className={"fx-chip-status " + STATUS_TONE(status)}>{STATUS_LABEL(status)}</span>
-                    {updated && <span className="fx-event-time">{updated} ago</span>}
-                  </div>
-                  <p className="fx-event-text">
-                    {settled ? "Settled — its review-state won't change until it's reopened." : "Live — your verdict updates its review-state on the bus."}
-                    {" "}Rev {artifact.version}{reviewRev > 0 ? <> · last reviewed at rev {reviewRev}</> : null}.
-                  </p>
-                </div>
+              {/* current-status header — one-glance context before scrolling the history */}
+              <div className="fx-rail-status-bar">
+                <span className={"fx-chip-status " + STATUS_TONE(status)}>{STATUS_LABEL(status)}</span>
+                <span className="fx-rail-status-note">
+                  {settled
+                    ? "Settled — reopening puts it back in review."
+                    : "Live — your verdict updates the state on the bus."}
+                </span>
               </div>
+
+              {discussion.length === 0 && <div className="fx-noevi" style={{ padding: "4px 2px 14px" }}>No activity yet — comments and status changes will appear here.</div>}
+
+              {/* unified timeline: status-change events inline with plain comments (oldest first) */}
+              {discussion.map((c) => {
+                if (c.review && c.review.state) {
+                  // status-change event: render as an inset timeline entry with a chip
+                  const evState = c.review.state;
+                  const evRev   = c.review.rev;
+                  return (
+                    <div className="fx-timeline-event" key={c.id}>
+                      <div className="fx-timeline-event-line" />
+                      <div className="fx-timeline-event-body">
+                        <span className={"fx-chip-status " + STATUS_TONE(evState)}>{STATUS_LABEL(evState)}</span>
+                        <span className="fx-timeline-event-text">
+                          <b>{c.self ? "you" : c.author}</b>
+                          {" "}{c.text}
+                          {evRev != null ? <span className="fx-mono"> · rev {evRev}</span> : null}
+                        </span>
+                        {c.time && <span className="fx-event-time">{c.time}</span>}
+                      </div>
+                    </div>
+                  );
+                }
+                // plain comment
+                return (
+                  <div className="fx-comment" key={c.id}>
+                    <div className="fx-comment-head">
+                      <window.Avatar name={c.author} kind={c.role === "agent" ? "agent" : "human"} size={18} />
+                      <b>{c.self ? "you" : c.author}</b>
+                      {c.role === "agent" && !c.self && <span className="fx-comment-tag">agent</span>}
+                      <span className="fx-comment-time">{c.time}</span>
+                    </div>
+                    <p className="fx-comment-text">{c.text}</p>
+                  </div>
+                );
+              })}
             </div>
 
             <div className="fx-review">
@@ -267,7 +287,7 @@
     return { review: "t-waiting", changes: "t-waiting", approved: "t-met", rejected: "t-blocked", archived: "t-todo", draft: "t-todo" }[st] || "t-todo";
   }
   function STATUS_LABEL(st) {
-    return { review: "Needs review", changes: "Changes requested", approved: "Approved", rejected: "Rejected", archived: "Archived", draft: "Draft" }[st] || "Draft";
+    return { review: "Needs review", changes: "Waiting for author", approved: "Approved", rejected: "Rejected", archived: "Archived", draft: "Draft" }[st] || "Draft";
   }
 
   Object.assign(window, { ReviewView, ReviewDone });
