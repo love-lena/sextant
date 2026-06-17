@@ -176,7 +176,12 @@ func (b *Bus) opArtifactWatch(clientID string, data []byte) (json.RawMessage, er
 	if err != nil {
 		return nil, fmt.Errorf("bus: artifact.watch: %w", err)
 	}
-	ch, err := b.backend.Watch(relayCtx, sx.BucketArtifacts, in.Name)
+	// Watch the read-bucket that currently holds the name — own bucket first, then a
+	// peer mirror (v0.6 slice 1), consistent with get/list's own-first union. A
+	// mirror bucket receives the peer's replicated writes locally, so a watch on it
+	// observes those changes the same as a local watch. An unknown name watches the
+	// own bucket (where a future local create would land).
+	ch, err := b.backend.Watch(relayCtx, b.artifactBucketForName(relayCtx, in.Name), in.Name)
 	if err != nil {
 		b.stopRelay(clientID, in.SubID)
 		return nil, fmt.Errorf("bus: artifact.watch: %w", err)

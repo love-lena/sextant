@@ -1,0 +1,340 @@
+package bus
+
+import (
+	"context"
+	"fmt"
+	"net/url"
+	"os"
+	"strings"
+
+	"github.com/love-lena/sextant/pkg/sx"
+	"github.com/nats-io/jwt/v2"
+	natsserver "github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go/jetstream"
+)
+
+// Per-node JetStream substrate (v0.6 slice 1, the foundation for offline
+// operation). The approved design is [[task125-offline-replication-options]];
+// the load-bearing mechanism is re-confirmed in-repo by
+// TestPernodeJSMirrorMechanism (pernode_mirror_test.go).
+//
+// What slice 1 IS: each node runs its OWN JetStream domain with a local artifacts
+// bucket it reads AND writes, and mirrors each known peer's artifacts bucket
+// read-locally over the leaf link via a same-name External KV mirror. A node's
+// artifact reads = its own bucket ∪ the peer mirrors (a simple union); its writes
+// = its own bucket only. This is the substrate offline operation stands on: a
+// node keeps reading (own + last-synced mirrors) and writing (its own) while
+// partitioned, and the mirrors catch up on reconnect (partition-tolerant resync).
+//
+// What slice 1 is NOT (deliberately deferred to later slices): owner-only WRITE
+// ENFORCEMENT (the per-client Pub.Deny that makes a peer mirror read-only), the
+// flat-namespace resolver + per-entry `writable` flag, the `-n` collision suffix,
+// offline MESSAGE union-merge, and the ADR. Slice 1 is the per-node-JS + mirror
+// substrate and its confirming test, nothing more.
+//
+// Additive by construction: with NO NodeID and NO peers (the default), nothing
+// here changes — the bus runs the single global ARTIFACTS bucket exactly as
+// before. The per-node bucket naming and the mirror provisioning engage only when
+// a NodeID (and optionally peers) is configured.
+
+// PeerNode names a peer whose artifacts bucket this node mirrors read-locally
+// (v0.6 slice 1). NodeID names the peer's bucket (ARTIFACTS_<NodeID>); Domain is
+// the peer's JetStream domain, reached across the leaf via the cross-domain JS API
+// ($JS.<Domain>.API). RemoteURL + LinkCreds, when set, make this node solicit a
+// leaf link to the peer so the mirror has a transport to source over.
+type PeerNode struct {
+	// NodeID is the peer's node id — the suffix of its artifacts bucket
+	// (ARTIFACTS_<NodeID>). The mirror this node provisions carries the SAME name,
+	// which is what makes a same-name External KV mirror readable via the normal KV
+	// API (the spike's load-bearing finding).
+	NodeID string
+	// Domain is the peer's JetStream domain. The mirror sources the peer's bucket
+	// across the leaf through that domain's JS API prefix ($JS.<Domain>.API). For a
+	// peer that runs its own per-node bus, Domain == the peer's NodeID.
+	Domain string
+	// RemoteURL is the peer's nats-leaf:// URL this node solicits a leaf link to, so
+	// the mirror has a federated path to source the peer's bucket over. Empty means
+	// the link is established by some other means (e.g. the peer links to US, or a
+	// shared external transport) — the mirror provisioning is the same either way.
+	RemoteURL string
+	// LinkCreds is the path to the SEXTANT-user credential this node authenticates
+	// the leaf link to the peer with. Required when RemoteURL is set. The link must
+	// carry mirror-replication traffic, so it is minted with peerLinkPermissions
+	// (the federation set plus the JetStream replication surface).
+	LinkCreds string
+}
+
+// artifactsBucketFor returns the artifacts bucket name a node with the given id
+// owns. The empty id is the single-hub case: the original global bucket name, so
+// a bus with no NodeID is byte-identical to before this slice. A non-empty id
+// gives the per-node bucket ARTIFACTS_<id>, the only bucket that node writes.
+func artifactsBucketFor(nodeID string) string {
+	if nodeID == "" {
+		return sx.BucketArtifacts
+	}
+	return sx.BucketArtifacts + "_" + nodeID
+}
+
+// ownArtifactsBucket is the bucket THIS node owns and writes — the single global
+// ARTIFACTS for a hub with no node id, or ARTIFACTS_<NodeID> for a per-node bus.
+// Every artifact WRITE (create/update/delete) targets this bucket; only its owner
+// node writes it. (Owner-only ENFORCEMENT is slice 2; here a non-owner simply has
+// no write path to a peer mirror through this node.)
+func (b *Bus) ownArtifactsBucket() string { return artifactsBucketFor(b.nodeID) }
+
+// artifactReadBuckets is the ordered set of buckets an artifact READ unions over:
+// this node's own bucket FIRST, then each peer's mirror bucket. The own-first
+// order makes the simple read-union deterministic — a name present locally wins
+// over a peer mirror of the same name. (The flat-namespace resolver and the
+// collision `-n` suffix are slice 2; slice 1's union is intentionally simple.)
+func (b *Bus) artifactReadBuckets() []string {
+	buckets := []string{b.ownArtifactsBucket()}
+	for _, p := range b.peers {
+		buckets = append(buckets, artifactsBucketFor(p.NodeID))
+	}
+	return buckets
+}
+
+// artifactBucketForName resolves which read-bucket currently holds name — own
+// bucket first, then each peer mirror (v0.6 slice 1, same own-first order as the
+// get/list union). An unknown name resolves to the own bucket: where a future
+// local create would land, so a watch started before a create still tracks it. For
+// the single hub this is always the one global bucket.
+func (b *Bus) artifactBucketForName(ctx context.Context, name string) string {
+	own := b.ownArtifactsBucket()
+	for _, bucket := range b.artifactReadBuckets() {
+		if _, _, err := b.backend.Get(ctx, bucket, name); err == nil {
+			return bucket
+		}
+	}
+	return own
+}
+
+// validateNodeConfig checks the per-node invariants before Start wires anything
+// (the fail-loud discipline): a node id and every peer id/domain must be a single
+// plain subject token (they are woven into bucket names and JS API subjects), and
+// a peer may not collide with this node. It is a no-op for the single-hub default
+// (empty NodeID and no peers).
+func validateNodeConfig(cfg Config) error {
+	if cfg.NodeID == "" {
+		if len(cfg.Peers) > 0 {
+			return fmt.Errorf("bus: peers are configured without a NodeID (a node that mirrors peers must have its own id)")
+		}
+		return nil
+	}
+	if err := validNodeToken(cfg.NodeID, "node id"); err != nil {
+		return err
+	}
+	seen := map[string]bool{cfg.NodeID: true}
+	for _, p := range cfg.Peers {
+		if err := validNodeToken(p.NodeID, "peer node id"); err != nil {
+			return err
+		}
+		if err := validNodeToken(p.Domain, "peer domain"); err != nil {
+			return err
+		}
+		if seen[p.NodeID] {
+			return fmt.Errorf("bus: peer node id %q is duplicated or collides with this node's id", p.NodeID)
+		}
+		seen[p.NodeID] = true
+	}
+	return nil
+}
+
+// validNodeToken rejects an id/domain that is not a single plain subject token. A
+// `.`, a wildcard, or whitespace would corrupt the bucket name or the JS API
+// subject the mirror is built from — fail loud rather than provision a malformed
+// mirror.
+func validNodeToken(s, what string) error {
+	if s == "" {
+		return fmt.Errorf("bus: %s is empty", what)
+	}
+	if strings.ContainsAny(s, ".*> \t\r\n/") {
+		return fmt.Errorf("bus: %s %q is not a single plain token (no . * > whitespace or /)", what, s)
+	}
+	return nil
+}
+
+// newJetStream opens the bus's JetStream handle, scoped to this node's OWN domain
+// when a NodeID is set (v0.6 slice 1). This is LOAD-BEARING: with a leaf-linked
+// peer sharing the one SEXTANT account, an UNSCOPED jetstream.New resolves the
+// generic $JS.API prefix, which BOTH domains can answer — so a KV write would
+// route ambiguously and an artifact written here could land in the peer's bucket
+// (the cross-domain leak the de-risk surfaced). Pinning to $JS.<NodeID>.API keeps
+// every storage operation on THIS node's domain. The single hub (empty NodeID)
+// uses the default unscoped handle — byte-identical to before this slice.
+func (b *Bus) newJetStream() (jetstream.JetStream, error) {
+	if b.nodeID == "" {
+		js, err := jetstream.New(b.opConn)
+		if err != nil {
+			return nil, fmt.Errorf("bus: jetstream: %w", err)
+		}
+		return js, nil
+	}
+	js, err := jetstream.NewWithDomain(b.opConn, b.nodeID)
+	if err != nil {
+		return nil, fmt.Errorf("bus: jetstream (domain %s): %w", b.nodeID, err)
+	}
+	return js, nil
+}
+
+// provisionArtifactSubstrate provisions this node's own artifacts bucket and a
+// same-name External read-mirror of each configured peer's artifacts bucket
+// (v0.6 slice 1). Called from bootstrap after the reserved buckets, in place of
+// the single global artifacts bucket when a NodeID is set. For the single-hub
+// default it provisions exactly the one global ARTIFACTS bucket bootstrap used to
+// — no behaviour change.
+//
+// The peer mirror is the spike-confirmed config: a KV bucket named the SAME as the
+// peer's source bucket (ARTIFACTS_<peer>), configured as a Mirror of that bucket's
+// backing stream (KV_ARTIFACTS_<peer>) via External.APIPrefix == the peer domain's
+// JS API ($JS.<Domain>.API). NATS sources the records across the leaf and serves
+// them locally through the normal KV API, so this node reads the peer's artifacts
+// even while later partitioned (from the last-synced copy).
+func (b *Bus) provisionArtifactSubstrate(ctx context.Context, js jetstream.JetStream) error {
+	// This node's own read-write bucket. Same shape as the global ARTIFACTS bucket
+	// (history + file storage); only the name differs for a per-node bus.
+	if _, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket:  b.ownArtifactsBucket(),
+		History: sx.ArtifactHistory,
+		Storage: jetstream.FileStorage,
+	}); err != nil {
+		return fmt.Errorf("bus: provision own artifacts bucket %s: %w", b.ownArtifactsBucket(), err)
+	}
+
+	// A same-name External read-mirror of each peer's artifacts bucket. Idempotent
+	// (CreateOrUpdate): a restart re-uses the existing mirror, which resumes its
+	// source consumer and catches up the gap.
+	for _, p := range b.peers {
+		peerBucket := artifactsBucketFor(p.NodeID)
+		if _, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
+			Bucket:  peerBucket, // SAME name as the peer's source bucket — required for KV-API readability
+			History: sx.ArtifactHistory,
+			Storage: jetstream.FileStorage,
+			Mirror: &jetstream.StreamSource{
+				Name: "KV_" + peerBucket, // a KV bucket's backing stream is KV_<bucket>
+				External: &jetstream.ExternalStream{
+					APIPrefix: peerJSAPIPrefix(p.Domain),
+				},
+			},
+		}); err != nil {
+			return fmt.Errorf("bus: provision mirror of peer %s (domain %s): %w", p.NodeID, p.Domain, err)
+		}
+	}
+	return nil
+}
+
+// peerRemoteOpts builds the RemoteLeafOpts that link this node to each peer that
+// declares a RemoteURL (v0.6 slice 1), binding the link into the one SEXTANT
+// account so the cross-domain JS API + KV subjects federate within it. A peer with
+// no RemoteURL contributes no remote (its link is solicited from the other side).
+// It fails loud if a RemoteURL is given without LinkCreds — a link with no
+// credential never authenticates to a JWT-auth peer.
+func peerRemoteOpts(peers []PeerNode, accountKey string) ([]*natsserver.RemoteLeafOpts, error) {
+	var remotes []*natsserver.RemoteLeafOpts
+	for _, p := range peers {
+		if p.RemoteURL == "" {
+			continue
+		}
+		if p.LinkCreds == "" {
+			return nil, fmt.Errorf("bus: peer %s has a RemoteURL but no LinkCreds (a leaf link needs a credential)", p.NodeID)
+		}
+		u, err := url.Parse(p.RemoteURL)
+		if err != nil {
+			return nil, fmt.Errorf("bus: peer %s: parse remote url %q: %w", p.NodeID, p.RemoteURL, err)
+		}
+		if fi, err := os.Stat(p.LinkCreds); err != nil {
+			return nil, fmt.Errorf("bus: peer %s: link credential %s: %w", p.NodeID, p.LinkCreds, err)
+		} else if fi.IsDir() {
+			return nil, fmt.Errorf("bus: peer %s: link credential %s is a directory", p.NodeID, p.LinkCreds)
+		}
+		remotes = append(remotes, &natsserver.RemoteLeafOpts{
+			URLs:         []*url.URL{u},
+			Credentials:  p.LinkCreds,
+			LocalAccount: accountKey,
+			Hub:          true,
+			// Do NOT federate the bare KV message space ($KV.>) across the leaf. This
+			// is LOAD-BEARING for write isolation: a node's KV writes land on the bare
+			// $KV.<bucket>.> subject, and because each node provisions its peer mirror
+			// with the SAME stream name as the source (KV_ARTIFACTS_<peer> on both —
+			// required for KV-API readability), letting the bare $KV space cross the
+			// leaf lets two same-named streams cross-talk, so a node's own-bucket write
+			// leaks into a peer's bucket (confirmed by a long isolation sweep). The
+			// mirror does NOT need the bare $KV space federated: it sources its peer's
+			// bucket through the DOMAIN-qualified JetStream API ($JS.<domain>.API.>),
+			// which is not denied — so replication keeps working while each node's bare
+			// KV writes stay domain-local. ADR-0038's leaf is wire-API-only and never
+			// federates $KV either; this keeps that property for the per-node leaf.
+			DenyImports: []string{kvFederationSubject},
+			DenyExports: []string{kvFederationSubject},
+		})
+	}
+	return remotes, nil
+}
+
+// peerJSAPIPrefix is the cross-domain JetStream API prefix for a peer domain
+// ($JS.<domain>.API) — the subject a same-name External mirror sources the peer's
+// bucket through. It is the one place the prefix shape lives.
+func peerJSAPIPrefix(domain string) string { return "$JS." + domain + ".API" }
+
+// kvFederationSubject is the bare KV message space the per-node leaf link denies in
+// both directions (see peerRemoteOpts): a node's KV writes land here, and
+// federating it across same-named mirror streams is what leaks a node's writes into
+// a peer's bucket. Mirror replication rides the domain-qualified $JS.<domain>.API
+// instead, so denying this does not break it.
+const kvFederationSubject = "$KV.>"
+
+// MintPeerLinkCreds mints a SEXTANT-user credential a PEER uses to link its leaf to
+// THIS node (v0.6 slice 1). It is the per-node analogue of the hub's leaf-link
+// credential, but minted with peerLinkPermissions — the federation set plus the
+// JetStream replication surface — because the link must carry the mirror
+// replication traffic that sources this node's artifacts bucket to the peer. The
+// signing keys never leave the bus (it is the minter), so this is a scoped minted
+// credential, not key material. A leaf bus has no signing identity and returns a
+// clean error.
+func (b *Bus) MintPeerLinkCreds(name string) (creds string, err error) {
+	if b.isLeaf() {
+		return "", fmt.Errorf("bus: minting a peer-link credential is unavailable on a leaf — mint at the node (it holds no signing key)")
+	}
+	j, seed, _, err := b.ident.mintUser(name, peerLinkPermissions())
+	if err != nil {
+		return "", fmt.Errorf("bus: mint peer-link credential: %w", err)
+	}
+	c, err := credsFile(j, seed)
+	if err != nil {
+		return "", fmt.Errorf("bus: format peer-link credential: %w", err)
+	}
+	return c, nil
+}
+
+// peerLinkPermissions is the leaf-link grant for a per-node bus that mirrors peers
+// (v0.6 slice 1). It is broader than leafLinkPermissions: confirmed by the
+// de-risk test (TestPernodeJSMirrorMechanism), the same-name External KV mirror
+// replicates over the leaf via the peer domain's cross-domain JetStream API
+// ($JS.<domain>.API.>) and the KV stream subjects ($KV.>) — subjects the
+// wire-API-only federation set does NOT cover, so the wire-API-only link
+// credential cannot carry mirror traffic and the mirror never catches up.
+//
+// So this grant adds the JetStream replication surface to the federation set. It
+// is still NOT operatorPermissions(): like leafLinkPermissions it carries traffic,
+// not authority, and the per-client scoping for honest agents is still enforced on
+// each agent's own credential at the leaf edge. (Owner-only WRITE enforcement —
+// denying a non-owner's write-through to a peer's bucket — is slice 2's per-client
+// Pub.Deny; this grant is about letting REPLICATION flow, not about who may write.)
+func peerLinkPermissions() jwt.Permissions {
+	p := leafLinkPermissions()
+	// ONLY the domain-qualified JetStream API ($JS.<domain>.API.>) — the cross-domain
+	// surface a same-name External mirror sources its peer's bucket over. Deliberately
+	// NOT the bare $KV.> subjects: a node's KV writes land on the bare $KV.<bucket>.>
+	// subject, and propagating those across the leaf is what lets a peer's same-named
+	// stream capture this node's writes (the cross-domain leak the de-risk surfaced).
+	// The mirror does not need bare-$KV propagation — it pulls via the domain API's
+	// consumer delivery — so confining the grant to $JS.> keeps replication working
+	// while keeping each node's bare KV writes domain-local.
+	jsReplication := []string{
+		"$JS.>", // cross-domain JetStream API (incl. $JS.<domain>.API.> + its delivery) — mirror sourcing
+	}
+	p.Pub.Allow = append(p.Pub.Allow, jsReplication...)
+	p.Sub.Allow = append(p.Sub.Allow, jsReplication...)
+	return p
+}

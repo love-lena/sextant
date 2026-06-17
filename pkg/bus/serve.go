@@ -17,7 +17,6 @@ import (
 	"github.com/love-lena/sextant/pkg/wire"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -43,7 +42,7 @@ const (
 // the Wire API call space. It runs on the bus's in-process operator connection,
 // so it has full access; clients reach it only by request/reply.
 func (b *Bus) startServing() error {
-	js, err := jetstream.New(b.opConn)
+	js, err := b.newJetStream()
 	if err != nil {
 		return fmt.Errorf("bus: serve: jetstream: %w", err)
 	}
@@ -238,7 +237,7 @@ func (b *Bus) opArtifactCreate(ctx context.Context, clientID string, data []byte
 	if err != nil {
 		return nil, fmt.Errorf("bus: artifact.create: encode: %w", err)
 	}
-	rev, err := b.backend.Create(ctx, sx.BucketArtifacts, in.Name, fb)
+	rev, err := b.backend.Create(ctx, b.ownArtifactsBucket(), in.Name, fb)
 	if errors.Is(err, backend.ErrKeyExists) {
 		return nil, fmt.Errorf("bus: artifact %q already exists", in.Name)
 	}
@@ -256,7 +255,13 @@ func (b *Bus) opArtifactUpdate(ctx context.Context, clientID string, data []byte
 	if err := validArtifactRecord(in.Record); err != nil {
 		return nil, fmt.Errorf("bus: artifact.update: %w", err)
 	}
-	cur, _, err := b.backend.Get(ctx, sx.BucketArtifacts, in.Name)
+	// An update targets the OWN bucket: writes stay on this node's bucket (v0.6
+	// slice 1). An artifact owned by a peer lives only in this node's read-only
+	// mirror of that peer, which this Get does not consult — so an update of a
+	// peer-owned artifact reads as "does not exist here" rather than silently
+	// writing the wrong bucket. (Owner-only ENFORCEMENT with a clean
+	// "owned by another node" error is slice 2; slice 1 keeps writes own-bucket.)
+	cur, _, err := b.backend.Get(ctx, b.ownArtifactsBucket(), in.Name)
 	if errors.Is(err, backend.ErrNotFound) {
 		return nil, fmt.Errorf("bus: artifact %q does not exist", in.Name)
 	}
@@ -282,7 +287,7 @@ func (b *Bus) opArtifactUpdate(ctx context.Context, clientID string, data []byte
 	if err != nil {
 		return nil, fmt.Errorf("bus: artifact.update: encode: %w", err)
 	}
-	rev, err := b.backend.CompareAndSet(ctx, sx.BucketArtifacts, in.Name, fb, in.ExpectedRev)
+	rev, err := b.backend.CompareAndSet(ctx, b.ownArtifactsBucket(), in.Name, fb, in.ExpectedRev)
 	if errors.Is(err, backend.ErrRevisionMismatch) {
 		return nil, fmt.Errorf("bus: artifact %q changed since revision %d", in.Name, in.ExpectedRev)
 	}
@@ -297,7 +302,10 @@ func (b *Bus) opArtifactGet(ctx context.Context, data []byte) (json.RawMessage, 
 	if err := json.Unmarshal(data, &in); err != nil {
 		return nil, fmt.Errorf("bus: artifact.get: bad input: %w", err)
 	}
-	val, rev, err := b.backend.Get(ctx, sx.BucketArtifacts, in.Name)
+	// Read-union over this node's own bucket then each peer mirror (own first wins),
+	// so a get resolves an artifact owned here OR mirrored from a peer (v0.6 slice 1).
+	// For the single hub this is exactly the one global bucket.
+	val, rev, err := b.getArtifactUnion(ctx, in.Name)
 	if errors.Is(err, backend.ErrNotFound) {
 		return nil, fmt.Errorf("bus: artifact %q does not exist", in.Name)
 	}
@@ -326,34 +334,65 @@ func (b *Bus) opArtifactGet(ctx context.Context, data []byte) (json.RawMessage, 
 // frame, rather than failing the whole listing for everyone. An empty bucket is
 // an empty slice, not an error.
 func (b *Bus) opArtifactList(ctx context.Context) (json.RawMessage, error) {
-	keys, err := b.backend.Keys(ctx, sx.BucketArtifacts)
-	if err != nil {
-		return nil, fmt.Errorf("bus: artifact.list: %w", err)
-	}
-	out := wireapi.ArtifactListOutput{Artifacts: make([]wireapi.ArtifactListEntry, 0, len(keys))}
-	for _, k := range keys {
-		val, rev, err := b.backend.Get(ctx, sx.BucketArtifacts, k)
-		if errors.Is(err, backend.ErrNotFound) {
-			continue // deleted between the key listing and this read
-		}
+	// Union the keys of this node's own bucket then each peer mirror, own-first so a
+	// name present locally wins over a peer mirror of the same name (v0.6 slice 1).
+	// For the single hub this is exactly the one global bucket. (The flat-namespace
+	// resolver with a per-entry `writable` flag and the `-n` collision suffix are
+	// slice 2; slice 1's union is intentionally simple — first bucket wins.)
+	seen := make(map[string]struct{})
+	out := wireapi.ArtifactListOutput{Artifacts: make([]wireapi.ArtifactListEntry, 0)}
+	for _, bucket := range b.artifactReadBuckets() {
+		keys, err := b.backend.Keys(ctx, bucket)
 		if err != nil {
-			return nil, fmt.Errorf("bus: artifact.list: read %q: %w", k, err)
+			return nil, fmt.Errorf("bus: artifact.list: %w", err)
 		}
-		frame, err := wire.Decode(val)
-		if err != nil {
-			// Skip an undecodable frame rather than fail the listing — but say so.
-			b.logf("bus: artifact.list: skipping artifact %q at revision %d: undecodable frame: %v", k, rev, err)
-			continue
+		for _, k := range keys {
+			if _, dup := seen[k]; dup {
+				continue // own bucket (or an earlier peer) already supplied this name
+			}
+			val, rev, err := b.backend.Get(ctx, bucket, k)
+			if errors.Is(err, backend.ErrNotFound) {
+				continue // deleted between the key listing and this read
+			}
+			if err != nil {
+				return nil, fmt.Errorf("bus: artifact.list: read %q: %w", k, err)
+			}
+			frame, err := wire.Decode(val)
+			if err != nil {
+				// Skip an undecodable frame rather than fail the listing — but say so.
+				b.logf("bus: artifact.list: skipping artifact %q at revision %d: undecodable frame: %v", k, rev, err)
+				continue
+			}
+			seen[k] = struct{}{}
+			out.Artifacts = append(out.Artifacts, wireapi.ArtifactListEntry{
+				Name:      k,
+				Revision:  rev,
+				CreatedAt: frame.CreatedAt,
+				UpdatedAt: frame.UpdatedAt,
+			})
 		}
-		out.Artifacts = append(out.Artifacts, wireapi.ArtifactListEntry{
-			Name:      k,
-			Revision:  rev,
-			CreatedAt: frame.CreatedAt,
-			UpdatedAt: frame.UpdatedAt,
-		})
 	}
 	sort.Slice(out.Artifacts, func(i, j int) bool { return out.Artifacts[i].Name < out.Artifacts[j].Name })
 	return json.Marshal(out)
+}
+
+// getArtifactUnion resolves an artifact name across this node's read buckets —
+// own bucket first, then each peer mirror — returning the first hit (v0.6 slice 1
+// read-union). Own-first means a name present locally wins over a peer mirror of
+// the same name. ErrNotFound if no bucket has it. For the single hub this reads
+// exactly the one global bucket.
+func (b *Bus) getArtifactUnion(ctx context.Context, name string) ([]byte, uint64, error) {
+	for _, bucket := range b.artifactReadBuckets() {
+		val, rev, err := b.backend.Get(ctx, bucket, name)
+		if errors.Is(err, backend.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, 0, err
+		}
+		return val, rev, nil
+	}
+	return nil, 0, backend.ErrNotFound
 }
 
 func (b *Bus) opArtifactDelete(ctx context.Context, data []byte) (json.RawMessage, error) {
@@ -361,7 +400,10 @@ func (b *Bus) opArtifactDelete(ctx context.Context, data []byte) (json.RawMessag
 	if err := json.Unmarshal(data, &in); err != nil {
 		return nil, fmt.Errorf("bus: artifact.delete: bad input: %w", err)
 	}
-	if err := b.backend.Delete(ctx, sx.BucketArtifacts, in.Name); err != nil {
+	// Delete targets the OWN bucket (writes stay own-bucket; a node deletes only its
+	// own artifacts — slice 1). A peer-owned artifact lives only in this node's
+	// read-only mirror, which Delete does not touch.
+	if err := b.backend.Delete(ctx, b.ownArtifactsBucket(), in.Name); err != nil {
 		return nil, fmt.Errorf("bus: artifact.delete: %w", err)
 	}
 	return json.Marshal(struct{}{})

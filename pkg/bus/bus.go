@@ -84,6 +84,22 @@ type Config struct {
 	// no seed and so CANNOT mint — minting stays at the hub (ADR-0038, the trust
 	// model's key-custody half).
 	LeafBundle string
+
+	// NodeID, when set, runs this bus as a NODE in its own JetStream domain (v0.6
+	// slice 1, the per-node-JS substrate behind offline operation): JetStreamDomain
+	// is set to NodeID and this node owns the artifacts bucket ARTIFACTS_<NodeID>,
+	// the only bucket it writes. Empty means the single-hub default — the global
+	// ARTIFACTS bucket, byte-identical to before this slice. NodeID must be a single
+	// plain subject token (no . * > whitespace or /).
+	NodeID string
+
+	// Peers names the peer nodes whose artifacts bucket this node mirrors
+	// read-locally over the leaf link (v0.6 slice 1). For each peer this node
+	// provisions a same-name External KV mirror of the peer's ARTIFACTS_<peer>
+	// bucket, so its artifact reads union its own bucket with the peer mirrors;
+	// writes stay on its own bucket. Empty (the default) means no peers — a node
+	// with no peers behaves exactly like the single hub. Requires NodeID.
+	Peers []PeerNode
 }
 
 // logf returns the resolved log function: cfg.Logf, or the stderr default.
@@ -128,6 +144,14 @@ type Bus struct {
 	// last_seen within this window. Resolved from Config.HeartbeatFreshness (or
 	// defaultHeartbeatFreshness) at Start.
 	freshnessWindow time.Duration
+
+	// nodeID and peers are the per-node JetStream substrate (v0.6 slice 1, see
+	// pernode.go). nodeID empty = the single-hub default (global ARTIFACTS bucket,
+	// no domain). A set nodeID makes this bus a node in its own JS domain owning
+	// ARTIFACTS_<nodeID>; peers are the nodes whose artifacts bucket it mirrors
+	// read-locally. Both come from Config (NodeID/Peers) at Start.
+	nodeID string
+	peers  []PeerNode
 
 	// hbAfterReadHook is a test-only seam (set via SetHeartbeatAfterReadHook):
 	// opClientsHeartbeat calls it, when non-nil, between reading the registry
@@ -201,6 +225,9 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 	if err := validateLeafConfig(cfg); err != nil {
 		return nil, err
 	}
+	if err := validateNodeConfig(cfg); err != nil {
+		return nil, err
+	}
 	if cfg.LeafRemoteURL != "" {
 		return startLeaf(ctx, cfg)
 	}
@@ -219,8 +246,13 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 		Host:       "127.0.0.1",
 		Port:       port, // set by stablePort: previous port, caller-requested, or −1 (ephemeral)
 		JetStream:  true,
-		StoreDir:   cfg.StoreDir,
-		NoSigs:     true, // the CLI owns signal handling
+		// A node runs its OWN JetStream domain (v0.6 slice 1): the domain is its
+		// NodeID, which lets a peer source its artifacts bucket across the leaf via
+		// $JS.<NodeID>.API. Empty NodeID leaves JetStreamDomain unset — the default,
+		// no behaviour change for the single hub.
+		JetStreamDomain: cfg.NodeID,
+		StoreDir:        cfg.StoreDir,
+		NoSigs:          true, // the CLI owns signal handling
 		// Start with the client TCP listener closed. No external client can
 		// connect until bootstrap has provisioned the buckets and written the
 		// epoch; we open the listener explicitly once that's done (below). This
@@ -240,6 +272,18 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 			return nil, err
 		}
 	}
+	// Peer leaf links (v0.6 slice 1): a per-node bus solicits a leaf link to each
+	// peer that declares a RemoteURL, so its read-mirror of that peer's bucket has a
+	// federated path to source over. Unlike the JS-off leaf, this node keeps JS ON
+	// (it runs its own domain) — the link carries mirror replication, not the engine.
+	// No peers (the default) means no remotes — single-hub behaviour is unchanged.
+	if len(cfg.Peers) > 0 {
+		remotes, err := peerRemoteOpts(cfg.Peers, pub(ident.acc))
+		if err != nil {
+			return nil, err
+		}
+		opts.LeafNode.Remotes = append(opts.LeafNode.Remotes, remotes...)
+	}
 
 	ns, err := natsserver.NewServer(opts)
 	if err != nil {
@@ -255,7 +299,7 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 	if freshness <= 0 {
 		freshness = defaultHeartbeatFreshness
 	}
-	b := &Bus{ns: ns, store: cfg.StoreDir, ident: ident, freshnessWindow: freshness, logf: logf}
+	b := &Bus{ns: ns, store: cfg.StoreDir, ident: ident, freshnessWindow: freshness, logf: logf, nodeID: cfg.NodeID, peers: cfg.Peers}
 
 	// The bus's own operator-tier connection is in-process: it needs no TCP
 	// listener, so bootstrap runs while the client port is still closed and
@@ -334,7 +378,7 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 // the write is unconditional — it self-heals if a prior run wrote a different
 // value (clients hard-gate on it at connect; see ADR-0010).
 func (b *Bus) bootstrap(ctx context.Context) error {
-	js, err := jetstream.New(b.opConn)
+	js, err := b.newJetStream()
 	if err != nil {
 		return fmt.Errorf("bus: jetstream: %w", err)
 	}
@@ -386,13 +430,12 @@ func (b *Bus) bootstrap(ctx context.Context) error {
 		return fmt.Errorf("bus: bootstrap messages stream: %w", err)
 	}
 
-	// The artifacts bucket (operator-provisioned; clients can't create buckets).
-	if _, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
-		Bucket:  sx.BucketArtifacts,
-		History: sx.ArtifactHistory,
-		Storage: jetstream.FileStorage,
-	}); err != nil {
-		return fmt.Errorf("bus: bootstrap artifacts bucket: %w", err)
+	// The artifacts substrate (operator-provisioned; clients can't create buckets).
+	// For the single hub this is exactly the one global ARTIFACTS bucket as before;
+	// for a per-node bus (v0.6 slice 1) it is this node's own ARTIFACTS_<node>
+	// bucket plus a same-name read-mirror of each peer's bucket. See pernode.go.
+	if err := b.provisionArtifactSubstrate(ctx, js); err != nil {
+		return err
 	}
 	return nil
 }
