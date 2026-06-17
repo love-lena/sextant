@@ -52,6 +52,7 @@ docs/demos/*.mp4
 /internal/dashapi/web/app/artifact.js
 /internal/dashapi/web/app/artifacts.js
 /internal/dashapi/web/app/conversations.js
+/internal/dashapi/web/app/goals.js
 /internal/dashapi/web/app/home.js
 /internal/dashapi/web/app/review.js
 /internal/dashapi/web/app/sidebar.js

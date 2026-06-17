@@ -3,7 +3,7 @@
    Agents) + an editable Conversations list + a "You · operator" footer. The white
    stage to the right renders the existing views (their internals unchanged).
    Exports: Sidebar, Avatar, StatusPill, MessageList, Composer, SextantGlyph,
-   GoalsStub, AssistantFab, CmdK (to window). */
+   AssistantFab, CmdK, AgentsView (to window). */
 (function () {
   const { useState, useEffect, useRef, useCallback } = React;
 
@@ -169,8 +169,8 @@
 
   /* ---------- views (rendered in the white stage). Stage (b): flow2 ArtifactsList
      + AgentsList internals, wired to the real /api/artifacts records + /api/clients
-     presence. ArtifactsView now lives in its own file (artifacts.jsx, TASK-112);
-     AgentsView + GoalsStub remain here. ---------- */
+     presence. ArtifactsView now lives in its own file (artifacts.jsx, TASK-112),
+     the Goals view in goals.jsx (Track 2); AgentsView remains here. ---------- */
 
   // agent state → flow2 status-chip tone + label + pulse dot colour.
   // IDLE is GREY (a v0.5 design rule), working pulses green, blocked is amber,
@@ -217,22 +217,6 @@
         </div>
       </div></div>);
 
-  }
-
-  /* ---------- Goals · inert placeholder (Track 2 owns the real view) ---------- */
-  function GoalsStub() {
-    return (
-      <div className="fx-scroll"><div className="fx-col">
-        <h1 className="fx-h1">Goals</h1>
-        <p className="fx-psub">Coming in Track 2 — goal north stars, criteria, and rollup.</p>
-        <div className="fx-stub">
-          <span className="fx-stub-ic">◎</span>
-          <div>
-            <div className="fx-stub-title">No goal data yet.</div>
-            <div className="fx-stub-sub">Goals get a bus primitive in a later track. This page is a placeholder.</div>
-          </div>
-        </div>
-      </div></div>);
   }
 
   /* ---------- floating Assistant FAB · visible stub (NOT wired) ----------
@@ -518,5 +502,5 @@
 
   }
 
-  Object.assign(window, { Sidebar, Avatar, StatusPill, MessageList, Composer, SextantGlyph, GoalsStub, AssistantFab, CmdK, AgentsView });
+  Object.assign(window, { Sidebar, Avatar, StatusPill, MessageList, Composer, SextantGlyph, AssistantFab, CmdK, AgentsView });
 })();
