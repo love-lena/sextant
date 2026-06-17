@@ -51,7 +51,16 @@
 
   // The review convention (TASK-66): states + the per-artifact companion topic.
   const REVIEW_STATES = ["review","approved","changes","draft","rejected","archived"];
-  const REVIEW_VERB = { approved:"approved", changes:"requested changes on", rejected:"rejected", archived:"archived", review:"reopened", draft:"reset to draft" };
+  // REVIEW_ACTION: action-phrased human-readable text for status-change events posted
+  // to the companion topic (the marker's `text` field, read as a timeline entry in review.jsx).
+  const REVIEW_ACTION = {
+    approved:  "approved this",
+    changes:   "requested changes",
+    rejected:  "rejected this",
+    archived:  "archived this",
+    review:    "marked this needs review",
+    draft:     "reset this to draft",
+  };
   function companionTopic(name){ return "msg.topic.artifact." + name; }
 
   // ---- helpers ----
@@ -215,7 +224,8 @@
         if(!subj || !f) return;
         const text = frameText(f.record);
         const at = frameTime(f) || Date.now();
-        const msg = { id:f.id, author:f.author, text, ts:at };
+        // carry the raw record so companion-topic status-change markers survive into discussion
+        const msg = { id:f.id, author:f.author, text, ts:at, record:f.record||null };
         setConvos(prev=>{
           const cur = prev[subj] || { msgs:[] };
           if(cur.msgs.some(x=>x.id===msg.id)) return prev;
@@ -396,6 +406,8 @@
     // the open artifact's companion-topic discussion, rendered inline in the
     // artifact view (TASK-83). Same shape as `messages`, keyed on the artifact's
     // companion subject msg.topic.artifact.<name>.
+    // Each item carries a `review` field (or null) so review.jsx can render
+    // status-change events inline as timeline entries (distinct from plain comments).
     const discussion = useMemo(()=>{
       const c = activeArtifact ? convos[companionTopic(activeArtifact)] : null;
       if(!c) return [];
@@ -403,6 +415,7 @@
         id:m.id||i, kind:"msg", author:nameOf(m.author),
         role: kindOf(m.author)==="client"?"human":"agent",
         self: m.author===self.id, time:relMs(m.ts), text:m.text,
+        review: (m.record && m.record.review) || null,
       }));
     },[convos, activeArtifact, nameOf, kindOf, self.id]);
 
@@ -451,7 +464,8 @@
       });
       page(0,MAX_PAGES).then(()=>{
         if(!acc.length) return;
-        const hist=acc.map(f=>({ id:f.id, author:f.author, text:frameText(f.record), ts:0 }));
+        // carry record so review-marker fields survive into discussion (same as live stream)
+        const hist=acc.map(f=>({ id:f.id, author:f.author, text:frameText(f.record), ts:0, record:f.record||null }));
         setConvos(prev=>{
           const cur=prev[subj]||{msgs:[]};
           const seen=new Set(cur.msgs.map(m=>m.id));
@@ -475,12 +489,30 @@
       apiPublish(companionTopic(activeArtifact),{ "$type":"chat.message", text }).then(()=>setDraft("")).catch(()=>{});
     }
     // approve / request-changes: persist the review-state, refresh the record,
-    // and post an event to the artifact's companion discussion topic.
+    // and post a status-change event to the artifact's companion discussion topic.
+    // The event is a backward-compatible chat.message with an extra `review` marker
+    // so review.jsx can render it as a timeline status-change entry inline with comments.
     function setReview(name, state){
+      let latestRev = null;
       apiReview(name, state)
         .then(()=>apiGet("/api/artifacts/"+encodeURIComponent(name)))
-        .then(a=>{ const rec=(a&&a.Record)||null; setRecords(prev=>({...prev,[name]:rec})); if(name===activeArtifact) setArtRecord(rec); })
-        .then(()=>apiPublish(companionTopic(name),{ "$type":"chat.message", text:(REVIEW_VERB[state]||state)+" "+name }))
+        .then(a=>{
+          const rec=(a&&a.Record)||null;
+          // capture the current revision for the marker (null if unavailable)
+          latestRev = (a && typeof a.Revision==="number") ? a.Revision : (rec && rec.review && rec.review.rev) || null;
+          setRecords(prev=>({...prev,[name]:rec}));
+          if(name===activeArtifact) setArtRecord(rec);
+        })
+        .then(()=>{
+          const marker = { state };
+          if(latestRev !== null) marker.rev = latestRev;
+          // returned into the chain so a publish failure is caught below.
+          return apiPublish(companionTopic(name),{
+            "$type":"chat.message",
+            text: REVIEW_ACTION[state] || state,
+            review: marker,
+          });
+        })
         .catch(()=>{});
     }
     // a DM is a 2-participant topic with a canonical subject from the sorted
