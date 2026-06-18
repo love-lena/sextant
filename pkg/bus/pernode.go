@@ -261,18 +261,15 @@ func peerRemoteOpts(peers []PeerNode, accountKey string) ([]*natsserver.RemoteLe
 			Credentials:  p.LinkCreds,
 			LocalAccount: accountKey,
 			Hub:          true,
-			// Do NOT federate the bare KV message space ($KV.>) across the leaf. This
-			// is LOAD-BEARING for write isolation: a node's KV writes land on the bare
-			// $KV.<bucket>.> subject, and because each node provisions its peer mirror
-			// with the SAME stream name as the source (KV_ARTIFACTS_<peer> on both —
-			// required for KV-API readability), letting the bare $KV space cross the
-			// leaf lets two same-named streams cross-talk, so a node's own-bucket write
-			// leaks into a peer's bucket (confirmed by a long isolation sweep). The
-			// mirror does NOT need the bare $KV space federated: it sources its peer's
-			// bucket through the DOMAIN-qualified JetStream API ($JS.<domain>.API.>),
-			// which is not denied — so replication keeps working while each node's bare
-			// KV writes stay domain-local. ADR-0038's leaf is wire-API-only and never
-			// federates $KV either; this keeps that property for the per-node leaf.
+			// Defense-in-depth on the transport: also deny the bare KV message space
+			// ($KV.>) at the leaf link itself. Write isolation is primarily held by the
+			// peer-link CREDENTIAL being replication-only (peerLinkPermissions grants no
+			// wire API + no bare $KV), so neither node's KV writes nor client calls
+			// cross. This transport-level deny is a second, credential-independent fence:
+			// it keeps a node's own-bucket KV writes ($KV.<bucket>.>) domain-local even
+			// if a future change widens the credential. The mirror is UNAFFECTED — it
+			// sources via the domain-qualified $JS.<domain>.API.> + the $JS.M.> / $JSC.R.>
+			// replication transport, never bare $KV.
 			DenyImports: []string{kvFederationSubject},
 			DenyExports: []string{kvFederationSubject},
 		})
@@ -286,10 +283,10 @@ func peerRemoteOpts(peers []PeerNode, accountKey string) ([]*natsserver.RemoteLe
 func peerJSAPIPrefix(domain string) string { return "$JS." + domain + ".API" }
 
 // kvFederationSubject is the bare KV message space the per-node leaf link denies in
-// both directions (see peerRemoteOpts): a node's KV writes land here, and
-// federating it across same-named mirror streams is what leaks a node's writes into
-// a peer's bucket. Mirror replication rides the domain-qualified $JS.<domain>.API
-// instead, so denying this does not break it.
+// both directions as defense-in-depth (see peerRemoteOpts): a node's KV writes land
+// here, so a transport-level deny keeps them domain-local independent of the
+// credential. Mirror replication rides the domain-qualified $JS.<domain>.API + the
+// $JS.M.> / $JSC.R.> replication transport instead, so denying this does not break it.
 const kvFederationSubject = "$KV.>"
 
 // MintPeerLinkCreds mints a SEXTANT-user credential a PEER uses to link its leaf to
@@ -319,54 +316,89 @@ func (b *Bus) MintPeerLinkCreds(name string) (creds string, err error) {
 	return c, nil
 }
 
-// peerLinkPermissions is the leaf-link grant for a per-node bus, scoped to the
-// JetStream domain(s) the link legitimately sources (v0.6 slice 1). It is the
-// wire-API federation set (leafLinkPermissions) PLUS exactly the cross-domain
-// JetStream API of each named source domain ($JS.<srcDomain>.API.>) — the surface a
-// same-name External KV mirror sources its peer's bucket over, confirmed by the
-// de-risk test (TestPernodeJSMirrorMechanism).
+// peerLinkPermissions is the leaf-link grant for a per-node bus: a JetStream
+// replication-ONLY credential, scoped to the domain(s) the link legitimately sources
+// (v0.6 slice 1). The grant is exactly the cross-domain JetStream API of each named
+// source domain ($JS.<srcDomain>.API.>) plus the two domain-independent replication
+// transport subjects a same-name External KV mirror needs ($JS.M.> push delivery,
+// $JSC.R.> consumer-create reply). Nothing else.
 //
 // It is deliberately NARROW: NOT operatorPermissions() (it carries traffic, not
-// authority) and NOT the all-domains $JS.> wildcard (a peer-link credential lives on
-// a remote box — the #174 trust boundary — so it gets exactly the source domain(s)
-// it needs, no more). And NOT the bare $KV.> subjects: a node's KV writes land on
-// the bare $KV.<bucket>.> subject, and propagating those across the leaf is what
-// lets a peer's same-named stream capture this node's writes (the cross-domain leak
-// the de-risk surfaced). The mirror does not need bare-$KV propagation — it sources
-// via the domain API's consumer delivery. (Owner-only WRITE enforcement — denying a
-// non-owner's write-through to a peer's bucket — is slice 2's per-client Pub.Deny;
-// this grant is about letting REPLICATION flow, scoped, not about who may write.)
+// authority); NOT the all-domains $JS.> wildcard (a peer-link credential lives on a
+// remote box — the #174 trust boundary — so it gets exactly the source domain(s) it
+// needs); NOT the bare $KV.> space (the mirror never needs it; see kvFederationSubject);
+// and — critically — NOT the wire-API federation set (sx.api.>/sx.deliver.>/...) that
+// leafLinkPermissions grants for an ADR-0038 engine-less leaf. A per-node bus runs its
+// OWN engine; if the link carried the wire API, both engines would serve each other's
+// client calls and a peer's create would land in this node's own bucket (the
+// cross-node write leak — TestPernodeSubstrateCrossNodeWriteIsolation). (Owner-only
+// WRITE enforcement — denying a non-owner's write-through to a peer's bucket — is slice
+// 2's per-client Pub.Deny; this grant is about letting REPLICATION flow, scoped.)
 //
 // srcDomains is the set of JetStream domains the link sources (a node minting a
 // credential for a peer to link in passes its OWN domain — the one the peer
 // mirrors). An empty/blank entry is skipped: a node with no domain has no
 // cross-domain JS surface to grant.
 func peerLinkPermissions(srcDomains ...string) jwt.Permissions {
-	p := leafLinkPermissions()
+	var p jwt.Permissions
+	// A per-node peer link is NOT the ADR-0038 wire-API leaf. There, an engine-less
+	// leaf federates the per-client wire API (sx.api.>/sx.deliver.>/_INBOX.>/sx.hb.>)
+	// so its local agents reach the HUB's engine. Here EACH node runs its OWN engine
+	// and serves its OWN clients; the only thing that crosses a per-node link is
+	// artifact DATA replication for the mirror. So this grant deliberately does NOT
+	// inherit leafLinkPermissions' wire-API set — if it did, BOTH nodes' engines would
+	// subscribe sx.api.*.> across the link and DOUBLE-SERVE each other's client calls,
+	// silently writing a peer's create into THIS node's own bucket (a cross-node write
+	// leak; see TestPernodeSubstrateCrossNodeWriteIsolation). The peer link carries
+	// JetStream replication and nothing else.
 	for _, d := range srcDomains {
 		if d == "" {
 			continue
 		}
 		// Exactly this source domain's cross-domain JetStream API — the mirror's
-		// source-consumer create/info/ack ride $JS.<srcDomain>.API.>.
+		// source-consumer CREATE/INFO requests ride $JS.<srcDomain>.API.> (the request
+		// subject has JSApiPrefix rewritten to the External.APIPrefix; nats-server
+		// stream.go generateSubject).
 		jsAPI := peerJSAPIPrefix(d) + ".>"
 		p.Pub.Allow = append(p.Pub.Allow, jsAPI)
 		p.Sub.Allow = append(p.Sub.Allow, jsAPI)
 	}
-	// The cross-domain replication DELIVERY channel ($JSC.R.>): JetStream delivers a
-	// cross-domain mirror's sourced messages to a generated $JSC.R.<token> subject,
-	// which is NOT under any $JS.<domain>.API prefix. Without it the source consumer
-	// is created but never delivers, so the mirror never catches up. It is a single
-	// internal-replication prefix shared across domains (there is no per-domain form),
-	// far narrower than the all-domains $JS.> — and it carries only replication
-	// traffic, never client or KV data.
+	// The mirror's PUSH DELIVERY subject. A same-name External KV mirror with only an
+	// APIPrefix (no DeliverPrefix) takes nats-server's default mirror deliver subject
+	// $JS.M.<token> (stream.go: deliverSubject = syncSubject("$JS.M")). The sourced
+	// records are pushed there and flow-control acks ride the same channel; without it
+	// the source consumer is created but never delivers, so the mirror stays empty
+	// (the bug that was masked by the wire-API double-serve). It is a single
+	// replication-transport prefix shared across domains — there is no per-domain form
+	// — far narrower than the all-domains $JS.> the #174 trust boundary forbids on a
+	// remote-held credential. (Sources, not mirrors, use $JS.S.<token>; slice 1
+	// provisions only mirrors, so $JS.S is not granted.)
+	p.Pub.Allow = append(p.Pub.Allow, jsMirrorDelivery)
+	p.Sub.Allow = append(p.Sub.Allow, jsMirrorDelivery)
+	// The cross-domain consumer-create REPLY channel ($JSC.R.>): the mirror's
+	// CreateConsumer request replies on an infoReplySubject() = $JSC.R.<token>
+	// (nats-server jetstream_cluster.go), NOT under any $JS.<domain>.API prefix.
+	// Without it the create round-trip never completes. Single internal-replication
+	// prefix, no per-domain form; carries only replication control, never KV data.
 	p.Pub.Allow = append(p.Pub.Allow, jsReplicationDelivery)
 	p.Sub.Allow = append(p.Sub.Allow, jsReplicationDelivery)
+	// Defensively deny the bare KV message space ($KV.>) on BOTH directions: the link
+	// never needs it (the mirror sources via the domain API + $JS.M delivery, never
+	// bare $KV), and an explicit deny keeps a node's own-bucket KV writes
+	// ($KV.<bucket>.>) domain-local even if a future change widens the allow set.
+	p.Pub.Deny = append(p.Pub.Deny, kvFederationSubject)
+	p.Sub.Deny = append(p.Sub.Deny, kvFederationSubject)
 	return p
 }
 
-// jsReplicationDelivery is the JetStream cross-domain replication delivery prefix
+// jsMirrorDelivery is the default push-delivery subject a cross-domain KV MIRROR
+// (APIPrefix-only, no DeliverPrefix) receives its sourced records on:
+// $JS.M.<token> (nats-server stream.go setupMirrorConsumer). A peer-link credential
+// must carry it or the mirror's source consumer never delivers.
+const jsMirrorDelivery = "$JS.M.>"
+
+// jsReplicationDelivery is the JetStream cross-domain consumer-create reply prefix
 // ($JSC.R.>) a peer-link credential must carry for a same-name External mirror to
-// receive its sourced messages (see peerLinkPermissions). It is internal
-// replication transport, not client/KV data.
+// complete its source-consumer create round-trip (see peerLinkPermissions). It is
+// internal replication control, not client/KV data.
 const jsReplicationDelivery = "$JSC.R.>"

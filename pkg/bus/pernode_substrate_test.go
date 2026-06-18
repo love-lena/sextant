@@ -207,39 +207,30 @@ func TestPernodeSubstrateReadUnionAcrossLeaf(t *testing.T) {
 }
 
 // TestPernodeSubstrateCrossNodeWriteIsolation is the slice-1 WRITE-ISOLATION
-// acceptance — and the ONE OPEN BLOCKER that needs a vega/sirius call. A node that
-// only OWNS its bucket and has NO peers must NOT see another node's artifacts: a
-// write to ARTIFACTS_B must stay on node B.
+// acceptance: a node that only OWNS its bucket and has NO peers must NOT see
+// another node's artifacts — a write to ARTIFACTS_B must stay on node B — AND
+// mirror replication (B reading A via the cross-domain $JS API) must STILL work
+// alongside it, through the REAL mirror (not a federated double-serve).
 //
-// It currently FAILS (so it is SKIPPED, not deleted — it documents the invariant
-// the fix must restore and re-runs green once that lands). The leak: with both
-// nodes running their own bus + JS domain over a leaf in the one SEXTANT account,
-// B's write to its own ARTIFACTS_B leaks into A's ARTIFACTS_A. B publishes only
-// $KV.ARTIFACTS_B.<key> on its own connection, yet A's KV_ARTIFACTS_A stream
-// (filter $KV.ARTIFACTS_A.>) ends up with it — so the ARTIFACTS_B→ARTIFACTS_A
-// remap happens INSIDE the JetStream mirror/leaf layer, not in a client publish.
-// Root cause (long isolation sweep, PR notes): each node provisions its peer
-// mirror with the SAME stream name as the source (KV_ARTIFACTS_<peer> on both —
-// required because a differently-named KV mirror is not KV-API-readable, the
-// spike's Test 1), and federating the bare $KV.> message space across the leaf
-// lets two same-named streams cross-talk once a node also writes its own bucket
-// while the mirror is active. The throwaway /tmp spike never wrote a node's own
-// bucket WHILE its peer mirror was actively sourcing, so it did not surface this.
+// The leak this pins, and its real cause: the per-node peer link first carried the
+// ADR-0038 wire-API federation set (sx.api.>/sx.deliver.>), inherited from
+// leafLinkPermissions. That set is correct for an engine-less v0.5 leaf (its agents
+// must reach the HUB's engine), but WRONG here — each per-node bus runs its OWN
+// engine and subscribes sx.api.*.>, so federating the wire API made BOTH nodes serve
+// each other's client calls. B's "create note-from-B" reached A, A served it, and A
+// wrote it into A's OWN ARTIFACTS_A (the leak: A authored a foreign node's write).
+// That double-serve also MASKED a second bug — B's KV mirror of A never actually
+// replicated (it was missing the $JS.M.> mirror push-delivery grant), so B "read" A
+// only because A was answering B's federated calls.
 //
-// CANDIDATE FIX (validated in ISOLATION, not yet through bus.Start): denying the
-// bare $KV.> space on the leaf link (RemoteLeafOpts.DenyImports/DenyExports) stops
-// the leak in a hand-built 2-server harness WHILE the mirror keeps replicating
-// (it sources via the domain-qualified $JS.<domain>.API, which is not denied) —
-// see TestDiagDenyKV-style sweeps in the PR notes. peerRemoteOpts NOW sets that
-// deny, but it does not yet take effect through bus.Start (the leak persists), so
-// some bus.Start-specific difference (the hub-side leaf LISTENER's export config,
-// or where/when the mirror is provisioned) still needs a vega/sirius decision —
-// possibly pairing the remote deny with a matching listener-side export scope, or
-// bringing slice-2's owner-only Pub.Deny forward. The read-union + mirror +
-// partition/resync mechanics all work; this is the write-isolation half.
+// THE FIX: the per-node peer-link credential is replication-ONLY (peerLinkPermissions
+// no longer inherits the wire-API set; it grants exactly $JS.<srcDomain>.API.> +
+// $JS.M.> + $JSC.R.>). With no wire-API grant, the engines stop double-serving (the
+// leak closes), and with $JS.M.> the mirror genuinely replicates — so B reads A from
+// its OWN local mirror, not A's backend. (Owner-only WRITE enforcement — a clean
+// "owned by another node" on a client update — is still slice 2; this is the
+// structural transport-level isolation.)
 func TestPernodeSubstrateCrossNodeWriteIsolation(t *testing.T) {
-	t.Skip("v0.6 slice-1 OPEN BLOCKER: cross-node KV write isolation — see this test's doc comment. The $KV.> leaf deny fixes it in isolation but not yet through bus.Start; needs a vega/sirius call before the substrate is sound.")
-
 	nodeA, peerLinkCreds := startNodeA(t)
 	nodeB := startNodeB(t, "", nodeA.leafURL, peerLinkCreds)
 	if err := nodeB.bus.WaitLeafLinked(linkCtx(t)); err != nil {
@@ -249,13 +240,29 @@ func TestPernodeSubstrateCrossNodeWriteIsolation(t *testing.T) {
 	clientB, idB := nodeClient(t, nodeB, "client-on-B")
 
 	createArtifact(t, clientA, idA, "plan-from-A", `{"owner":"A"}`)
+	// Mirror replication works through the REAL mirror ($JS.<A>.API source + $JS.M.>
+	// delivery), not a federated double-serve: B reads A's artifact through the union.
 	waitArtifactRecord(t, clientB, idB, "plan-from-A", `{"owner":"A"}`, 5*time.Second)
 	createArtifact(t, clientB, idB, "note-from-B", `{"owner":"B"}`)
+	// Give any (now-impossible) cross-leaf wire-API double-serve a window to NOT fire.
+	time.Sleep(500 * time.Millisecond)
 
-	// A does NOT mirror B (A has no peers configured), so A must see only its own.
+	// Isolation: A does NOT mirror B (A has no peers), so A must see ONLY its own —
+	// B's write must not have been served+authored by A's engine.
 	namesA := listArtifactNames(t, clientA, idA)
 	if !contains(namesA, "plan-from-A") || contains(namesA, "note-from-B") {
-		t.Fatalf("A has no peers, so it should list only its own artifacts; got %v", namesA)
+		t.Fatalf("write isolation broken — A (no peers) should list only its own artifacts; got %v", namesA)
+	}
+	// B reads A from its OWN local mirror bucket — assert against B's local backend,
+	// NOT the wire API, so a regressed double-serve (A answering B's call) cannot make
+	// this pass. The record must be present locally on B.
+	if rec, _, err := nodeB.bus.backend.Get(t.Context(), artifactsBucketFor("A"), "plan-from-A"); err != nil || len(rec) == 0 {
+		t.Fatalf("B must read A's artifact from its OWN local mirror (real replication, not double-serve); local get err=%v rec=%q", err, string(rec))
+	}
+	// And B still unions both its own write and A's mirror through the wire API.
+	namesB := listArtifactNames(t, clientB, idB)
+	if !contains(namesB, "plan-from-A") || !contains(namesB, "note-from-B") {
+		t.Fatalf("B should union its own bucket + A's mirror; got %v", namesB)
 	}
 }
 
@@ -316,6 +323,13 @@ func TestPernodeSubstratePartitionAndResync(t *testing.T) {
 // pkg/bus suite, unchanged; this is a focused statement of the invariant.)
 func TestPernodeSubstrateSingleHubUnchanged(t *testing.T) {
 	b := startTestBus(t)
+	// No NodeID → no JetStream domain: the bus uses the UNSCOPED jetstream handle
+	// (newJetStream's b.nodeID=="" branch), byte-identical to before this slice. The
+	// nodeID is what Start threads into Options.JetStreamDomain, so an empty nodeID is
+	// exactly "no domain set".
+	if b.nodeID != "" {
+		t.Fatalf("single hub must set no JetStream domain (nodeID), got %q", b.nodeID)
+	}
 	if got := b.ownArtifactsBucket(); got != "ARTIFACTS" {
 		t.Fatalf("single hub own bucket = %q, want the global ARTIFACTS", got)
 	}

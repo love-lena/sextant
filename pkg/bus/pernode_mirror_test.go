@@ -160,28 +160,16 @@ func startPernodeLeafOn(t *testing.T, id *identity, domain, hubLeafURL, storeDir
 }
 
 // mintLinkCredsFile mints the de-risk's peer-link credential from id, built on the
-// PRODUCTION grant — peerLinkPermissions(srcDomain), exactly what MintPeerLinkCreds
-// uses — so the de-risk exercises the real scoped grant, not a permissive operator
-// key (the prior bug this fixes). The narrow production grant ($JS.<srcDomain>.API.>
-// + the federation set + $JSC.R.>) is what carries mirror replication on the
-// PRODUCTION path; the authoritative proof of that is the substrate acceptance test
-// TestPernodeSubstrateReadUnionAcrossLeaf, which drives the real bus.Start +
-// MintPeerLinkCreds and passes with exactly this grant.
-//
-// This RAW harness builds its mirror by hand (provisionMirror on a bare embedded
-// server) rather than through bus.Start, and that manual cross-domain source
-// consumer additionally rides the generic $JS.> API surface — so the raw harness
-// link adds $JS.> on TOP of the production base. The production base is the
-// load-bearing part being proven here; the $JS.> add-on is a property of the
-// hand-rolled harness, not of the shipped credential (which the substrate test
-// pins to the narrow grant).
+// EXACT PRODUCTION grant — peerLinkPermissions(srcDomain), the same MintPeerLinkCreds
+// uses, with NOTHING added — so the de-risk exercises the real scoped grant, not a
+// permissive operator key (the prior bug this fixes) and not a widened harness
+// variant. The narrow production grant ($JS.<srcDomain>.API.> + the mirror delivery
+// $JS.M.> + the consumer-create reply $JSC.R.>) is what carries mirror replication on
+// BOTH this hand-rolled harness and the real bus.Start path; the authoritative
+// end-to-end proof is the substrate acceptance test TestPernodeSubstrateReadUnionAcrossLeaf.
 func mintLinkCredsFile(t *testing.T, id *identity, srcDomain string) string {
 	t.Helper()
 	perms := peerLinkPermissions(srcDomain) // the real production grant — the thing under test
-	// Raw-harness-only: the manual provisionMirror's cross-domain source consumer
-	// rides the generic JS API; bus.Start does not need this (see the substrate test).
-	perms.Pub.Allow = append(perms.Pub.Allow, "$JS.>")
-	perms.Sub.Allow = append(perms.Sub.Allow, "$JS.>")
 	j, seed, _, err := id.mintUser("pernode-leaf-link", perms)
 	if err != nil {
 		t.Fatalf("mint leaf-link credential: %v", err)
