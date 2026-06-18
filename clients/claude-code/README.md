@@ -25,6 +25,36 @@ Set the bus's principal with `sextant principal set <ulid>` (operator-only).
 The hook degrades silently (no injected context, never blocks the turn) on any
 bus error and is bounded well under the hard 30s `UserPromptSubmit` timeout.
 
+## The Stop-nudge hook
+
+`Stop` and `SubagentStop` hooks (`hooks/hooks.json` → `hooks/nudge.sh`) run
+when any sextant agent finishes a turn. The hook injects a **soft reminder** as
+`additionalContext` — it never sets `"decision": "block"`, so the agent stops
+normally after considering it. The nudge asks the agent to verify three things
+before ending:
+
+1. **Subscriptions** — subscribed to every subject it should be following?
+2. **Messages** — posted status, decisions, and hand-off information to the bus?
+3. **Review flags** — marked artifacts and PRs that need the operator's judgment
+   as `review_state=review`?
+
+`SubagentStop` is included so spawned workers (workflow steps, agentic
+subagents) get the same reminder — making this universal across the whole
+crew, not just the top-level session.
+
+The hook degrades silently (no output, exit 0) when the session has no bus
+identity (a non-bus session) or when `jq` is unavailable. It never blocks a
+turn.
+
+**Verify the hook fires:**
+```bash
+# Simulate a Stop event with an identity file present
+mkdir -p /tmp/test-nudge && touch /tmp/test-nudge/mysession.identity.json
+CLAUDE_PLUGIN_DATA=/tmp/test-nudge CLAUDE_CODE_SESSION_ID=mysession \
+  bash clients/claude-code/hooks/nudge.sh \
+  <<< '{"hook_event_name":"Stop"}' | jq '.hookSpecificOutput.additionalContext'
+```
+
 ## Demo
 
 ```bash
@@ -86,6 +116,7 @@ long-lived processes, because none of them reload in place.
 - `.claude-plugin/plugin.json` — the plugin manifest
 - `.claude-plugin/marketplace.json` — lets this directory be added as a local marketplace
 - `.mcp.json` — runs `sextant-mcp` (stdio MCP server, `cmd/sextant-mcp`)
-- `hooks/hooks.json` — the `UserPromptSubmit` trust hook, `sextant-mcp attest`
+- `hooks/hooks.json` — the `UserPromptSubmit` trust hook, `sextant-mcp attest`; the `Stop`/`SubagentStop` nudge hook
+- `hooks/nudge.sh` — the Stop-nudge script (soft pre-stop reminder: subs, messages, review flags)
 - `skills/sextant/SKILL.md` — conventions, topics/DMs/inboxes, verb selection, record shapes, identity setup
 - `skills/startup/SKILL.md` — unattended-worker startup: connect, subscribe to the principal DM, handle inbound by trust level
