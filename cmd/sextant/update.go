@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/love-lena/sextant/internal/components"
 	"github.com/love-lena/sextant/pkg/conninfo"
 )
 
@@ -132,18 +133,23 @@ func ensureBusUpWith(stdout, stderr io.Writer, restart func() error, healthy fun
 
 // pollHealthy polls healthy until it reports up or the budget elapses. It
 // returns the recorded bus URL and true on success, or "", false if the bus
-// never came up in time.
+// never came up in time. The bounded-poll loop is shared with the components
+// runtime health check (components.PollUntil): both apply the loaded-but-runs=0
+// lesson (#211) — never trust a restart/kickstart to have actually launched;
+// poll for the real signal, then warn loud if it never comes.
 func pollHealthy(healthy func() (string, bool), budget time.Duration) (string, bool) {
-	deadline := time.Now().Add(budget)
-	for {
-		if url, up := healthy(); up {
-			return url, true
+	var url string
+	up := components.PollUntil(func() bool {
+		u, ok := healthy()
+		if ok {
+			url = u
 		}
-		if time.Now().After(deadline) {
-			return "", false
-		}
-		time.Sleep(healthPollInterval)
+		return ok
+	}, budget, healthPollInterval)
+	if !up {
+		return "", false
 	}
+	return url, true
 }
 
 // busHealthy reports the recorded bus URL and whether something is listening on
