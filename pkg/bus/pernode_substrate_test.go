@@ -253,11 +253,23 @@ func TestPernodeSubstrateCrossNodeWriteIsolation(t *testing.T) {
 	if !contains(namesA, "plan-from-A") || contains(namesA, "note-from-B") {
 		t.Fatalf("write isolation broken — A (no peers) should list only its own artifacts; got %v", namesA)
 	}
-	// B reads A from its OWN local mirror bucket — assert against B's local backend,
-	// NOT the wire API, so a regressed double-serve (A answering B's call) cannot make
-	// this pass. The record must be present locally on B.
+	// (a) REAL replication: B reads A from its OWN local mirror bucket (ARTIFACTS_A) —
+	// assert against B's LOCAL backend, NOT the wire API, so a regressed double-serve
+	// (A answering B's call) cannot make this pass. The record must be present locally.
 	if rec, _, err := nodeB.bus.backend.Get(t.Context(), artifactsBucketFor("A"), "plan-from-A"); err != nil || len(rec) == 0 {
-		t.Fatalf("B must read A's artifact from its OWN local mirror (real replication, not double-serve); local get err=%v rec=%q", err, string(rec))
+		t.Fatalf("(a) B must read A's artifact from its OWN local mirror (real replication, not double-serve); local get err=%v rec=%q", err, string(rec))
+	}
+	// (b) WRITE ISOLATION, both directions — each node's OWN bucket holds ONLY its own
+	// write. Asserted against the LOCAL backends so a regressed wire-API double-serve
+	// (the other node's engine authoring this node's create) is caught directly:
+	//   - A's write must NOT appear in B's OWN bucket (ARTIFACTS_B); it belongs only in
+	//     B's MIRROR of A (ARTIFACTS_A, checked above).
+	if rec, _, err := nodeB.bus.backend.Get(t.Context(), artifactsBucketFor("B"), "plan-from-A"); err == nil && len(rec) > 0 {
+		t.Fatalf("(b) write isolation broken — A's write leaked into B's OWN bucket %q: %q", artifactsBucketFor("B"), string(rec))
+	}
+	//   - B's write must NOT appear in A's bucket (A has no peers, so no mirror of B).
+	if rec, _, err := nodeA.bus.backend.Get(t.Context(), artifactsBucketFor("A"), "note-from-B"); err == nil && len(rec) > 0 {
+		t.Fatalf("(b) write isolation broken — B's write leaked into A's bucket %q: %q", artifactsBucketFor("A"), string(rec))
 	}
 	// And B still unions both its own write and A's mirror through the wire API.
 	namesB := listArtifactNames(t, clientB, idB)
