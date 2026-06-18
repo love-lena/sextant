@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/love-lena/sextant/internal/components"
 	"github.com/love-lena/sextant/pkg/buscfg"
 	"github.com/love-lena/sextant/pkg/conninfo"
 )
@@ -24,7 +25,10 @@ import (
 // `Running: false` with no reason — doctor surfaces the missing facts (the
 // recorded port, whether anything is listening on it, the config pin, and the
 // launchd job state) and points at the kickstart recovery for the
-// loaded-but-not-running case. It never starts, stops, or mutates anything.
+// loaded-but-not-running case. It now also reports the managed agent runtimes
+// (dispatcher, workflow, and any components in the Registry) so the operator
+// sees the full picture — bus + runtimes — in one command. It never starts,
+// stops, or mutates anything.
 //
 //	sextant doctor [--store DIR]
 const launchdLabel = "homebrew.mxcl.sextant"
@@ -40,8 +44,13 @@ func cmdDoctor(args []string) {
 // store to w. It is read-only — every check is a file read, a TCP dial, or a
 // `launchctl print` (itself read-only). It does not fail the process; an
 // unhealthy bus is a report, not an error exit, so the operator always gets the
-// full picture.
+// full picture. lookPath and compRunner are injected for tests (pass nil to use
+// the real exec.LookPath and the real launchctl).
 func runDoctor(w io.Writer, store string) {
+	runDoctorFull(w, store, nil, nil)
+}
+
+func runDoctorFull(w io.Writer, store string, lookPath func(string) (string, error), compRunner components.Runner) {
 	fmt.Fprintf(w, "sextant doctor\n  store: %s\n", store)
 
 	// Discovery file (bus.json): the recorded URL is what every client resolves
@@ -94,6 +103,101 @@ func runDoctor(w io.Writer, store string) {
 	// launchd job (macOS / brew services): loaded vs running. The outage's worst
 	// trap — a job loaded-but-never-launched shows `Running: false` with no error.
 	reportLaunchd(w)
+
+	// Agent runtimes: each managed component in the Registry — binary installed?
+	// service loaded + running? remediation hint if anything's down.
+	reportComponents(w, lookPath, compRunner)
+}
+
+// reportComponents iterates the managed component Registry and reports each
+// component's install + service state, matching doctor's check/output style.
+// lookPath and runner are injected (nil = production defaults: exec.LookPath and
+// the real launchctl via a fresh Manager). On non-macOS the service check is
+// skipped with a clear note — binary-installed is still useful.
+func reportComponents(w io.Writer, lookPath func(string) (string, error), runner components.Runner) {
+	if lookPath == nil {
+		lookPath = exec.LookPath
+	}
+	fmt.Fprintf(w, "  runtimes:\n")
+	if !components.Supported() {
+		fmt.Fprintf(w, "    n/a (managed services are macOS-only; binary checks only)\n")
+		for _, c := range components.Registry {
+			binPath, binErr := lookPath(c.Binary)
+			if binErr != nil {
+				fmt.Fprintf(w, "    %-12s binary: MISSING (%s not on PATH)\n", c.Name, c.Binary)
+			} else {
+				fmt.Fprintf(w, "    %-12s binary: %s\n", c.Name, binPath)
+			}
+		}
+		return
+	}
+	// On macOS: build a Manager with the injected runner (or the real launchctl).
+	var mgr *components.Manager
+	if runner != nil {
+		// Tests inject a fake runner directly; uid 0 is fine for target-string
+		// formatting in tests — real status comes from the runner, not uid.
+		mgr = &components.Manager{UID: os.Getuid(), Run: runner}
+	} else {
+		self, err := os.Executable()
+		if err != nil {
+			fmt.Fprintf(w, "    could not resolve self binary: %v\n", err)
+			return
+		}
+		var merr error
+		mgr, merr = components.NewManager(self)
+		if merr != nil {
+			fmt.Fprintf(w, "    could not build component manager: %v\n", merr)
+			return
+		}
+	}
+	for _, c := range components.Registry {
+		reportDoctorComponent(w, c, mgr, lookPath)
+	}
+}
+
+// reportDoctorComponent prints one managed-runtime check line, matching the
+// `components status` reportComponent output style but writing to an io.Writer
+// so doctor's testable core can use it. Remediation hints are printed when
+// something is down.
+func reportDoctorComponent(w io.Writer, c components.Component, mgr *components.Manager, lookPath func(string) (string, error)) {
+	binPath, binErr := lookPath(c.Binary)
+	if binErr != nil {
+		fmt.Fprintf(w, "    %-12s binary: MISSING (%s not on PATH) — install sextant's binaries\n", c.Name, c.Binary)
+		return
+	}
+	st, perr := mgr.Status(c.Name)
+	switch {
+	case perr != nil:
+		fmt.Fprintf(w, "    %-12s binary: %s  service: query error — %v\n", c.Name, binPath, perr)
+	case !st.Loaded:
+		fmt.Fprintf(w, "    %-12s binary: %s  service: NOT running — run `sextant components start %s`\n", c.Name, binPath, c.Name)
+		if c.NeedsKey {
+			fmt.Fprintf(w, "      if violet has no key: run `sextant secret set anthropic` first\n")
+		}
+	case st.Running:
+		line := fmt.Sprintf("    %-12s binary: %s  service: loaded + RUNNING", c.Name, binPath)
+		// Agent-kind components (violet, Kind="agent") need a bus-online check for
+		// full liveness. The service running state is a necessary but not sufficient
+		// signal; the bus-enrolled presence is the authoritative signal. For the
+		// current slice a best-effort note plus `sextant clients list` is the right
+		// level of detail — a direct bus query in doctor adds latency and a new
+		// failure surface.
+		if c.Kind == "agent" {
+			line += " (bus presence: best-effort, see `sextant clients list`)"
+		}
+		fmt.Fprintln(w, line)
+	default:
+		fmt.Fprintf(w, "    %-12s binary: %s  service: loaded but NOT running (state=%q) — run `sextant components restart %s`\n",
+			c.Name, binPath, st.Raw, c.Name)
+		// For dispatcher specifically, NeedsClaude is a common start-failure reason.
+		if c.NeedsClaude {
+			fmt.Fprintf(w, "      if the dispatcher never started: check `claude` is on PATH\n")
+		}
+		// For key-bearing components (violet), a crash-loop may mean the key is missing.
+		if c.NeedsKey {
+			fmt.Fprintf(w, "      if violet is crash-looping: run `sextant secret set anthropic`\n")
+		}
+	}
 }
 
 // hostPort extracts the host:port from a nats:// URL for dialing.
