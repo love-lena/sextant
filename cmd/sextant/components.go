@@ -163,6 +163,15 @@ func startComponent(c components.Component, mgr *components.Manager, store strin
 	if _, err := exec.LookPath(c.Binary); err != nil {
 		return fmt.Errorf("%s not found on PATH — install sextant's binaries first (%w)", c.Binary, err)
 	}
+	// Key pre-flight (before writing any plist): a NeedsKey component (violet) with
+	// no env-file / no ANTHROPIC_API_KEY fails loud here rather than installing a
+	// service that can only crash-loop. The key itself is read again at exec time;
+	// this is the early, operator-facing check.
+	if c.NeedsKey {
+		if _, err := components.LoadKeyEnv(components.VioletEnvPath()); err != nil {
+			return err
+		}
+	}
 	// First-run identity (before resolving env so a missing bus fails here, not
 	// after writing a plist): mint the component's own creds once.
 	if err := ensureIdentity(c, store); err != nil {
@@ -250,6 +259,20 @@ func componentsExec(args []string) {
 	// (and any `claude` it spawns) inherits the full PATH + SEXTANT_MCP_BIN.
 	for k, v := range env.Map() {
 		_ = os.Setenv(k, v)
+	}
+
+	// Secure key load (the reason a NeedsKey component reuses this exec seam): read
+	// the 0600 env-file and set ANTHROPIC_API_KEY in OUR environment just before
+	// the re-exec, so sextant-violet's --api-key picks it up. The key never touches
+	// the world-readable plist; it lives only in the env-file the operator owns.
+	if c.NeedsKey {
+		keyEnv, err := components.LoadKeyEnv(components.VioletEnvPath())
+		if err != nil {
+			fatal("%v", err)
+		}
+		for k, v := range keyEnv {
+			_ = os.Setenv(k, v)
+		}
 	}
 
 	creds := components.CredsPath(name)

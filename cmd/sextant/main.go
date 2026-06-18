@@ -55,6 +55,8 @@ func main() {
 		cmdConfig(os.Args[2:])
 	case "components":
 		cmdComponents(os.Args[2:])
+	case "secret":
+		cmdSecret(os.Args[2:])
 	case "update":
 		cmdUpdate(os.Args[2:])
 	case "version", "--version":
@@ -125,7 +127,10 @@ managed runtimes (the agent runtimes as keep-alive, OS-managed services — macO
   sextant components start   [name | --all]     write the LaunchAgent + kickstart + health-check
   sextant components stop    [name | --all]     bootout the service (the plist stays on disk)
   sextant components restart [name | --all]     stop then start
-  (managed: dispatcher, workflow — the bus stays the Homebrew service)
+  (managed: dispatcher, workflow, violet — the bus stays the Homebrew service)
+
+secrets (violet's Anthropic key, stored 0600 — never in a launchd plist):
+  sextant secret set anthropic                  prompt (no echo) + write violet.env; restart violet if running
 
 staying current (Homebrew installs — see the README for taps + the plugin):
   sextant update                                brew update && brew upgrade the tap formula
