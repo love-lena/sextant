@@ -135,6 +135,67 @@ func stateName(id string) string      { return "workflow." + id }
 func eventsSubject(id string) string  { return "msg.workflow." + id + ".events" }
 func controlSubject(id string) string { return "msg.workflow." + id + ".control" }
 
+// startSubject is the well-known subject the workflow consumer watches for
+// workflow.start requests and publishes workflow.start.ack to (mirrors the
+// dispatcher's msg.topic.spawn pattern, ADR-0011 / violet mobilizer).
+const startSubject = "msg.topic.workflow.start"
+
+// workflow.start / workflow.start.ack lexicon.
+const (
+	typeWorkflowStart    = "workflow.start"
+	typeWorkflowStartAck = "workflow.start.ack"
+
+	statusOK    = "ok"
+	statusError = "error"
+)
+
+// WorkflowStartRequest is the record published on msg.topic.workflow.start to
+// ask the coordinator to start a new run. Prompt is required; Nonce is the
+// dash's opaque correlation handle (echoed verbatim in the ack so the dash can
+// correlate without knowing its own bus Frame.ID at publish time); Nickname,
+// Target, and By are informational labels.
+type WorkflowStartRequest struct {
+	Type     string `json:"$type"`
+	Prompt   string `json:"prompt"`
+	Nonce    string `json:"nonce,omitempty"`
+	Nickname string `json:"nickname,omitempty"`
+	Target   string `json:"target,omitempty"`
+	By       string `json:"by,omitempty"`
+}
+
+// WorkflowStartAck is published back on startSubject for every handled request
+// (success or failure) — fail-loud: the requester is never left waiting on
+// silence. Nonce echoes the request's nonce verbatim (the dash's correlation
+// handle). Mirrors spawn.ack (cmd/sextant-dispatch/records.go).
+type WorkflowStartAck struct {
+	Type       string `json:"$type"`
+	Nonce      string `json:"nonce,omitempty"`
+	RequestID  string `json:"requestId"`
+	WorkflowID string `json:"workflowId,omitempty"`
+	Status     string `json:"status"`
+	Error      string `json:"error,omitempty"`
+}
+
+// parseWorkflowStartRequest decodes a frame record as a workflow.start,
+// returning false for any other $type or a request missing the required prompt.
+// The consumer ignores everything it returns false for (mirrors parseSpawnRequest).
+func parseWorkflowStartRequest(record json.RawMessage) (WorkflowStartRequest, bool) {
+	var r WorkflowStartRequest
+	if err := json.Unmarshal(record, &r); err != nil {
+		return WorkflowStartRequest{}, false
+	}
+	if r.Type != typeWorkflowStart || r.Prompt == "" {
+		return WorkflowStartRequest{}, false
+	}
+	return r, true
+}
+
+func (a WorkflowStartAck) marshal() json.RawMessage {
+	a.Type = typeWorkflowStartAck
+	b, _ := json.Marshal(a)
+	return b
+}
+
 // Minimal mirror of the spawn lexicon (the contract is protocol/lexicons/spawn.*.json;
 // cmd/sextant-dispatch is the authoritative impl). A dispatch step COMPOSES M5.2 by
 // publishing a spawn.request and correlating the dispatcher's spawn.ack by requestId.
