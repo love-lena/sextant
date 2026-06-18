@@ -70,5 +70,29 @@ func (a *sdkAdapter) ListArtifacts(ctx context.Context) ([]artifactInfo, error) 
 	return out, nil
 }
 
+// FetchMessages implements the AC8 offline-gap replay pull path. It wraps the
+// SDK's FetchMessages, converting wire.Frame → fetchedFrame. Sequence is set
+// to 0 for each frame because the SDK's FetchMessages does not expose per-frame
+// stream sequences in the wire.Frame type (the bus strips them before returning);
+// only the batch NextCursor is available. The Sequence=0 frames are handled by
+// the answerDM guard: when Sequence==0 the fine-grained live-path idempotency
+// check is skipped, and the coarser replay-level `since` filter (ack.readFrom())
+// covers idempotency instead. This is safe — see replay.go for details.
+func (a *sdkAdapter) FetchMessages(ctx context.Context, subject string, since uint64, limit int) ([]fetchedFrame, uint64, error) {
+	frames, next, err := a.c.FetchMessages(ctx, subject, since, limit)
+	if err != nil {
+		return nil, since, err
+	}
+	out := make([]fetchedFrame, 0, len(frames))
+	for _, f := range frames {
+		out = append(out, fetchedFrame{
+			Author:   f.Author,
+			Sequence: 0, // not available from FetchMessages; replay uses `since` for idempotency
+			Record:   json.RawMessage(f.Record),
+		})
+	}
+	return out, next, nil
+}
+
 func (a *sdkAdapter) ID() string        { return a.c.ID() }
 func (a *sdkAdapter) Principal() string { return a.c.Principal() }

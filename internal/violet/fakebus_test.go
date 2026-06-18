@@ -16,6 +16,9 @@ import (
 // serves a small artifact store (so the deep pass's gather + home write run for
 // real). It drives the REAL role goroutines — the concurrency is genuine, only
 // the bus + model are faked.
+//
+// It also implements FetchMessages for the AC8 replay path: retained DMs are
+// stored in dmHistory so tests can inject offline-gap messages.
 type fakeBus struct {
 	self     string
 	operator string
@@ -24,6 +27,12 @@ type fakeBus struct {
 	subs      map[string]func(Message) // subject → handler
 	artifacts map[string]artifactValue
 	rev       uint64
+
+	// dmHistory holds retained DM frames for the AC8 offline-gap replay test.
+	// Each entry is a fetchedFrame; the slice is ordered oldest-first.
+	// Guarded by mu.
+	dmHistory []fetchedFrame
+	dmSeq     uint64 // next sequence number to assign to a new DM
 
 	publishMu sync.Mutex
 	publishes []publishedFrame
@@ -108,6 +117,73 @@ func (b *fakeBus) ListArtifacts(context.Context) ([]artifactInfo, error) {
 		out = append(out, artifactInfo{Name: a.Name, Revision: a.Revision})
 	}
 	return out, nil
+}
+
+// FetchMessages implements the AC8 offline-gap replay pull path, PRODUCTION-
+// FAITHFULLY (canopus's gate finding). It mirrors the real sdkAdapter:
+//   - it returns each frame with Sequence==0 (the SDK's FetchMessages exposes no
+//     per-frame stream sequence — only the batch cursor), and
+//   - it returns `next` = the last returned frame's real stream sequence + 1
+//     (the natsbackend.Read contract: next = md.Sequence.Stream + 1).
+//
+// The fake keeps the REAL stream sequence internally (dmHistory[i].Sequence) to
+// compute `next`, but never leaks it onto the returned frame — so a test that
+// drives replay through this fake exercises the exact Sequence==0 path the
+// production adapter produces. (Earlier this fake leaked real sequences, which is
+// precisely why the watermark bug hid.)
+func (b *fakeBus) FetchMessages(_ context.Context, _ string, since uint64, limit int) ([]fetchedFrame, uint64, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var out []fetchedFrame
+	next := since
+	for _, f := range b.dmHistory {
+		// natsbackend.Read uses OptStartSeq=since INCLUSIVE: a frame AT `since` is
+		// returned (the watermark is "next to read from").
+		if f.Sequence < since {
+			continue // before the cursor: already read
+		}
+		out = append(out, fetchedFrame{
+			Author:   f.Author,
+			Sequence: 0, // PRODUCTION-FAITHFUL: the real adapter cannot fill this
+			Record:   f.Record,
+		})
+		next = f.Sequence + 1 // the natsbackend.Read cursor contract
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, next, nil
+}
+
+// retainDM injects an operator DM into the bus's retained history (as if the
+// bus stored it while violet was offline). Used by AC8 tests to simulate an
+// offline-gap message.
+func (b *fakeBus) retainDM(record json.RawMessage) fetchedFrame {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.dmSeq++
+	f := fetchedFrame{
+		Author:   b.operator,
+		Sequence: b.dmSeq,
+		Record:   record,
+	}
+	b.dmHistory = append(b.dmHistory, f)
+	return f
+}
+
+// retainDMFromStranger injects a DM from a NON-operator author into history.
+// Used to assert that the replay never answers cross-client messages (criterion 1).
+func (b *fakeBus) retainDMFromStranger(authorID string, record json.RawMessage) fetchedFrame {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.dmSeq++
+	f := fetchedFrame{
+		Author:   authorID,
+		Sequence: b.dmSeq,
+		Record:   record,
+	}
+	b.dmHistory = append(b.dmHistory, f)
+	return f
 }
 
 // deliver pushes a frame to the matching subscription handler (exact subject, or
