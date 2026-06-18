@@ -424,7 +424,7 @@
   }
 
   /* ---------- sidebar shell: Workspace nav + editable conversations ---------- */
-  const WORKSPACE = [["⌂", "Home", "home"], ["❡", "Artifacts", "artifacts"], ["◎", "Goals", "goals"], ["◍", "Agents", "agents"]];
+  const WORKSPACE = [["⌂", "Home", "home"], ["❡", "Artifacts", "artifacts"], ["◎", "Goals", "goals"], ["◍", "Agents", "agents"], ["⬡", "Workflow", "workflow"]];
 
   function ConvNav({ ctx }) {
     const [showHidden, setShowHidden] = useState(false);
