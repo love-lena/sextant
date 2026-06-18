@@ -25,6 +25,15 @@
 // or deep work), a per-frame cursor (each frame once, in order), and ignoring
 // own-authored events. Real concurrency — Go goroutines + a bounded gate queue —
 // is what lets answers stay fast while a burst of events drains.
+//
+// AC8 (every-message-answered): violet catches EVERY operator DM, guarantees
+// each gets a response, and surfaces those responses to ONE unified place
+// (RepliesSubject). The ackStore (violet-ack.json beside other substate) is the
+// response-watermark: the cursor advances ONLY after a reply is durably
+// published. A startup replay pass reads the DM subject from the watermark
+// forward, re-attests each frame by its bus-stamped author, and answers any
+// unanswered messages before the live subscription takes over — so nothing falls
+// through even across a restart or offline gap.
 package violet
 
 import (
@@ -42,6 +51,10 @@ import (
 // scoped (fix #1), publishes carry the captured reply, and artifact ops drive
 // the curated home. A fake satisfies it in tests so the under-load concurrency
 // bar is exercised against real goroutines without a live bus.
+//
+// FetchMessages is needed by the AC8 offline-gap replay (replayOfflineGap): it
+// pulls retained frames from the DM subject by cursor so the startup pass can
+// answer any DMs that arrived while violet was offline.
 type busClient interface {
 	publisher
 	Subscribe(ctx context.Context, subject string, h func(Message), opts ...subOpt) (stopper, error)
@@ -49,6 +62,8 @@ type busClient interface {
 	CreateArtifact(ctx context.Context, name string, record wire.Lexicon) (uint64, error)
 	UpdateArtifact(ctx context.Context, name string, record wire.Lexicon, expectedRev uint64) (uint64, error)
 	ListArtifacts(ctx context.Context) ([]artifactInfo, error)
+	// FetchMessages pulls retained frames from a subject by cursor (AC8 replay).
+	FetchMessages(ctx context.Context, subject string, since uint64, limit int) ([]fetchedFrame, uint64, error)
 	ID() string
 	Principal() string
 }
@@ -105,6 +120,12 @@ type Config struct {
 	SpawnSubject    string
 	WorkflowSubject string
 
+	// StateDir is the directory where violet persists the durable DM cursor
+	// (violet-ack.json) across restarts (AC8). If empty, the cursor is in-memory
+	// only (no replay on reconnect — useful in tests; use a tempdir for
+	// integration tests that want durable replay).
+	StateDir string
+
 	// Logf receives diagnostics; defaults to log.Printf.
 	Logf func(string, ...any)
 }
@@ -149,6 +170,11 @@ type Violet struct {
 	operator  string
 	dmSubject string
 
+	// ack is the durable response-watermark (AC8): the cursor advances only
+	// after a reply is published. On startup the replay pass uses it to answer
+	// any DMs that arrived while violet was offline.
+	ack *ackStore
+
 	// dmCh carries operator DMs to the priority consumer; gateCh is the gate
 	// worker's bounded queue; wakeCh signals the deep refresher. The split is the
 	// answer-preempt mechanism (fix #3): the DM consumer is its own goroutine and
@@ -173,6 +199,8 @@ func (v *Violet) PublishMsg(ctx context.Context, subject string, record json.Raw
 
 // New builds a Violet over a bus client and model client. The mobilizer is wired
 // to publish under violet's own creds (TASK-158); pass a custom one to override.
+// The ackStore (AC8 response-watermark) is initialised at Run time (once the
+// DM subject is known); New keeps it nil until then.
 func New(bus busClient, model *modelClient, cfg Config) *Violet {
 	cfg.withDefaults()
 	v := &Violet{
@@ -198,8 +226,9 @@ func New(bus busClient, model *modelClient, cfg Config) *Violet {
 func (v *Violet) Mobilize() Mobilizer { return v.mob }
 
 // Run wires the scoped subscriptions and starts the three role goroutines, then
-// blocks until ctx is cancelled. It is the whole lifecycle: subscribe → seed the
-// warm context → answer/gate/refresh concurrently.
+// blocks until ctx is cancelled. It is the whole lifecycle:
+//
+//	subscribe → AC8 offline-gap replay → seed warm context → answer/gate/refresh.
 func (v *Violet) Run(ctx context.Context) error {
 	v.operator = v.cfg.OperatorID
 	if v.operator == "" {
@@ -207,6 +236,32 @@ func (v *Violet) Run(ctx context.Context) error {
 	}
 	v.dmSubject = dmSubject(v.self, v.operator)
 	v.cfg.Logf("violet: up as %s; operator=%s; DM=%s", short(v.self), short(v.operator), v.dmSubject)
+
+	// AC8: load (or create) the durable response-watermark now that the DM subject
+	// is known. The ackStore lives beside other violet substate under StateDir.
+	ack, err := newAckStore(v.cfg.StateDir, v.dmSubject)
+	if err != nil {
+		v.cfg.Logf("violet: ack store load failed (starting in-memory): %v", err)
+		ack, _ = newAckStore("", v.dmSubject) // fallback to in-memory; never nil
+	}
+	v.ack = ack
+
+	// AC8 offline-gap replay: before the live subscription takes over, answer any
+	// operator DMs that arrived while violet was offline (or that were delivered
+	// but not yet answered when violet last stopped). The replay reads from the
+	// response-watermark forward so each frame is answered exactly once across
+	// restarts (criterion 3/5). Replay runs synchronously here so the live sub
+	// starts only after the gap is closed — no live frame can race a replay frame
+	// on the dmCh.
+	replayCtx, replayCancel := context.WithTimeout(ctx, 60*time.Second)
+	missed, rerr := replayOfflineGap(replayCtx, v.bus, v.dmSubject, v.operator, v.ack, replayMaxFrames)
+	replayCancel()
+	if rerr != nil {
+		v.cfg.Logf("violet: replay pass failed (continuing without replay): %v", rerr)
+	}
+	if n := len(missed); n > 0 {
+		v.cfg.Logf("violet: replaying %d unanswered DMs from the offline gap", n)
+	}
 
 	// Fix #1 — SCOPED subscription, not the firehose. Watch only the operator DM,
 	// goals, artifact review/discussion, and crew coordination. The DM lands on
@@ -240,6 +295,14 @@ func (v *Violet) Run(ctx context.Context) error {
 	go func() { defer wg.Done(); v.dmConsumer(ctx) }()
 	go func() { defer wg.Done(); v.gateWorker(ctx) }()
 	go func() { defer wg.Done(); v.deepRefresher(ctx) }()
+
+	// Enqueue the replayed offline-gap DMs onto the priority DM channel. They
+	// arrive in delivery order (oldest first) and are indistinguishable from
+	// live frames to the consumer — the ack guard (alreadyAnswered) in answerDM
+	// provides idempotency for any that arrived both in replay and live.
+	for _, m := range missed {
+		v.dmCh <- m
+	}
 
 	// Seed the warm context with a first deep pass so the very first DM is
 	// answered from real state, not the placeholder.

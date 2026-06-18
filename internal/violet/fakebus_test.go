@@ -16,6 +16,9 @@ import (
 // serves a small artifact store (so the deep pass's gather + home write run for
 // real). It drives the REAL role goroutines — the concurrency is genuine, only
 // the bus + model are faked.
+//
+// It also implements FetchMessages for the AC8 replay path: retained DMs are
+// stored in dmHistory so tests can inject offline-gap messages.
 type fakeBus struct {
 	self     string
 	operator string
@@ -24,6 +27,12 @@ type fakeBus struct {
 	subs      map[string]func(Message) // subject → handler
 	artifacts map[string]artifactValue
 	rev       uint64
+
+	// dmHistory holds retained DM frames for the AC8 offline-gap replay test.
+	// Each entry is a fetchedFrame; the slice is ordered oldest-first.
+	// Guarded by mu.
+	dmHistory []fetchedFrame
+	dmSeq     uint64 // next sequence number to assign to a new DM
 
 	publishMu sync.Mutex
 	publishes []publishedFrame
@@ -108,6 +117,62 @@ func (b *fakeBus) ListArtifacts(context.Context) ([]artifactInfo, error) {
 		out = append(out, artifactInfo{Name: a.Name, Revision: a.Revision})
 	}
 	return out, nil
+}
+
+// FetchMessages implements the AC8 offline-gap replay pull path. It returns
+// frames from dmHistory (the operator DMs injected via retainDM) starting from
+// `since`, up to `limit` frames. The subject is ignored — a fake bus has only
+// one DM history (the test only calls this for the DM subject). Returns the
+// frames and the next cursor (since + len(frames)).
+func (b *fakeBus) FetchMessages(_ context.Context, _ string, since uint64, limit int) ([]fetchedFrame, uint64, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var out []fetchedFrame
+	for _, f := range b.dmHistory {
+		if f.Sequence <= since {
+			continue // already seen (since is "already answered up to this seq")
+		}
+		out = append(out, f)
+		if len(out) >= limit {
+			break
+		}
+	}
+	next := since
+	if len(out) > 0 {
+		next = out[len(out)-1].Sequence
+	}
+	return out, next, nil
+}
+
+// retainDM injects an operator DM into the bus's retained history (as if the
+// bus stored it while violet was offline). Used by AC8 tests to simulate an
+// offline-gap message.
+func (b *fakeBus) retainDM(record json.RawMessage) fetchedFrame {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.dmSeq++
+	f := fetchedFrame{
+		Author:   b.operator,
+		Sequence: b.dmSeq,
+		Record:   record,
+	}
+	b.dmHistory = append(b.dmHistory, f)
+	return f
+}
+
+// retainDMFromStranger injects a DM from a NON-operator author into history.
+// Used to assert that the replay never answers cross-client messages (criterion 1).
+func (b *fakeBus) retainDMFromStranger(authorID string, record json.RawMessage) fetchedFrame {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.dmSeq++
+	f := fetchedFrame{
+		Author:   authorID,
+		Sequence: b.dmSeq,
+		Record:   record,
+	}
+	b.dmHistory = append(b.dmHistory, f)
+	return f
 }
 
 // deliver pushes a frame to the matching subscription handler (exact subject, or

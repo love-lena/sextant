@@ -47,6 +47,7 @@ func main() {
 	gateModel := fs.String("gate-model", violet.ModelHaiku, "gate (significance triage) model — cheap")
 	deepModel := fs.String("deep-model", violet.ModelSonnet, "home-manager (deep refresh) model — capable")
 	safety := fs.Duration("safety-interval", 15*time.Minute, "slow safety-net interval for the deep pass (the gate is the primary trigger)")
+	stateDir := fs.String("state-dir", os.Getenv("VIOLET_STATE_DIR"), "directory for violet's durable substate (ack cursor for AC8 replay; default: $VIOLET_STATE_DIR)")
 	designate := fs.Bool("designate", false, "create/update the `assistant` designation artifact naming violet the live assistant (release-time, ADR-0039)")
 	_ = fs.Parse(os.Args[1:])
 
@@ -86,6 +87,7 @@ func main() {
 		GateModel:      *gateModel,
 		DeepModel:      *deepModel,
 		SafetyInterval: *safety,
+		StateDir:       *stateDir,
 		Logf:           logf,
 	})
 

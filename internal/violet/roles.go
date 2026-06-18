@@ -28,7 +28,24 @@ func (v *Violet) dmConsumer(ctx context.Context) {
 // captured reply. Output-capture: the model has no publish tool — the reply text
 // IS the answer, and the WRAPPER publishes it, so a forgotten publish is
 // structurally impossible (the spike's live bug).
+//
+// AC8 additions:
+//   - Idempotency (criterion 3): if ack reports this frame already answered,
+//     skip it. This fires when a frame appears both in the replay pass and live.
+//   - Response-watermark (criterion 5): the ack cursor advances ONLY after a
+//     confirmed publish. A crash before the publish leaves the cursor behind so
+//     the replay re-delivers and re-answers on the next startup.
+//   - Unified surface (criterion 4): publishReply sends to BOTH the DM subject
+//     and RepliesSubject under violet's own creds — never impersonating another.
 func (v *Violet) answerDM(ctx context.Context, m Message) {
+	// Idempotency (AC8 criterion 3): a frame can appear both in the replay pass
+	// and in the live subscription when it arrives just before the live sub starts.
+	// The ack check here (after the consumer picks it up) is the final gate.
+	if v.ack != nil && m.Sequence > 0 && v.ack.alreadyAnswered(m.Sequence) {
+		v.cfg.Logf("violet: skipping already-answered DM seq=%d (idempotent)", m.Sequence)
+		return
+	}
+
 	v.mu.Lock()
 	v.answering++
 	v.mu.Unlock()
@@ -59,12 +76,30 @@ func (v *Violet) answerDM(ctx context.Context, m Message) {
 	}
 
 	reply = trimReply(reply)
-	rec := chatMessage(reply)
-	if _, perr := v.bus.PublishMsg(ctx, v.dmSubject, rec); perr != nil {
+
+	// AC8 unified surface (criterion 4): publishReply sends to the DM subject
+	// (operator sees it in her thread) AND to RepliesSubject (the ONE unified
+	// place TASK-160 renders). Both publishes are under violet's own bus creds
+	// — never impersonating the operator or any other client (TASK-158).
+	if perr := publishReply(ctx, v.bus, v.dmSubject, reply, m.Sequence); perr != nil {
 		v.cfg.Logf("violet: publish reply failed: %v", perr)
+		// Do not advance the ack cursor — a failed publish means this DM is not
+		// yet answered. The response-watermark invariant requires the cursor to
+		// advance only AFTER a confirmed publish (AC8 criterion 5).
 		return
 	}
-	v.cfg.Logf("violet: answered operator DM (%d chars)", len(reply))
+	v.cfg.Logf("violet: answered operator DM seq=%d (%d chars)", m.Sequence, len(reply))
+
+	// AC8 response-watermark (criterion 5): advance the cursor only NOW — after
+	// the reply is confirmed published. We advance to Sequence+1 ("next to read
+	// from") so the next startup replay starts after this frame. A crash before
+	// this point leaves the cursor behind; the replay re-delivers and re-answers
+	// on the next startup (safe because publishReply is idempotent for the user).
+	if v.ack != nil && m.Sequence > 0 {
+		if aerr := v.ack.advance(m.Sequence + 1); aerr != nil {
+			v.cfg.Logf("violet: advance ack cursor failed (will re-answer on restart): %v", aerr)
+		}
+	}
 
 	// An operator DM is always significant — wake the deep pass so the context
 	// reflects the just-arrived exchange for the next question. This runs AFTER
