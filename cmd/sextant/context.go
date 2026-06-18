@@ -134,6 +134,9 @@ func contextAdd(args []string) {
 	// must NOT silently empty them, or `context_use` later refuses the context
 	// for kind=="" and the identity has to be hand-edited back (TASK-62). Load the
 	// prior record and keep any field whose flag was not explicitly passed.
+	// A prior that fails to load (e.g. corrupt json) is treated as no prior:
+	// nothing to preserve, and a --force re-add then rewrites it clean from the
+	// flags — idiomatic with List/Delete, which also skip an unreadable entry.
 	prior, priorErr := clictx.Load(name)
 	if priorErr == nil && !*force {
 		fatal("context %q already exists (use --force to replace it)", name)
