@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -130,9 +131,22 @@ func reportLaunchd(w io.Writer) {
 	}
 	target := fmt.Sprintf("gui/%d/%s", os.Getuid(), launchdLabel)
 	out, err := exec.Command("launchctl", "print", target).CombinedOutput()
+	trimmed := strings.TrimSpace(string(out))
 	if err != nil {
-		fmt.Fprintf(w, "  launchd: job %q NOT LOADED (brew services not started, or different label)\n", launchdLabel)
-		fmt.Fprintf(w, "    start it: brew services start sextant\n")
+		// `launchctl print` exits non-zero both when the job is genuinely not
+		// loaded AND when the query itself failed (a permission/domain error). Tell
+		// them apart: "Could not find service" (or exit 113) means not loaded;
+		// anything else is a query failure the operator should see verbatim rather
+		// than be wrongly told to "start the service".
+		if exitCode(err) == 113 || strings.Contains(trimmed, "Could not find service") {
+			fmt.Fprintf(w, "  launchd: job %q NOT LOADED (brew services not started, or different label)\n", launchdLabel)
+			fmt.Fprintf(w, "    start it: brew services start sextant\n")
+			return
+		}
+		fmt.Fprintf(w, "  launchd: could not query the job (%v) — state unknown\n", err)
+		if trimmed != "" {
+			fmt.Fprintf(w, "    launchctl said: %s\n", firstLine(trimmed))
+		}
 		return
 	}
 	state, logPath := parseLaunchdState(string(out))
@@ -150,6 +164,25 @@ func reportLaunchd(w io.Writer) {
 	if logPath != "" {
 		fmt.Fprintf(w, "    log: %s\n", logPath)
 	}
+}
+
+// exitCode returns the process exit code from an *exec.ExitError, or -1 when err
+// is not an exit error (e.g. launchctl could not be started at all).
+func exitCode(err error) int {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode()
+	}
+	return -1
+}
+
+// firstLine returns the first line of s — enough of a launchctl error to show
+// without dumping a multi-line dict.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 // parseLaunchdState pulls the top-level `state = X` and `stdout path = Y` from

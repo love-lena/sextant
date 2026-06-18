@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/love-lena/sextant/pkg/conninfo"
+	natsserver "github.com/nats-io/nats-server/v2/server"
 )
 
 // TestRestartKeepsPort: a bus started against a store, stopped, then restarted
@@ -173,6 +174,71 @@ func TestExplicitPortFailsLoudWhenTaken(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), taken) {
 		t.Errorf("explicit-port failure should name the port %s, got: %v", taken, err)
+	}
+}
+
+// TestRandomPortSentinelsAreEphemeral: Config.Port of 0 or -1 both mean "let the
+// OS pick" (the documented contract). -1 must NOT be treated as an explicit pin
+// (which would probe 127.0.0.1:-1, an invalid address).
+func TestRandomPortSentinelsAreEphemeral(t *testing.T) {
+	for _, p := range []int{0, -1} {
+		// Fresh store so there is no recorded port to reuse — the sentinel alone
+		// must drive an ephemeral bind.
+		port, notice, err := stablePort(t.TempDir(), p)
+		if err != nil {
+			t.Errorf("stablePort(_, %d) errored: %v (a random sentinel must not be probed as a pin)", p, err)
+		}
+		if port != -1 {
+			t.Errorf("stablePort(_, %d) = %d, want -1 (ephemeral)", p, port)
+		}
+		if notice != "" {
+			t.Errorf("stablePort(_, %d) notice = %q, want empty", p, notice)
+		}
+	}
+}
+
+// TestAcceptLoopFailsLoudWhenPortTaken proves the backstop the explicit-pin path
+// relies on: if the client port is unavailable at bind time (the rare
+// probe-close→AcceptLoop TOCTOU loser), NATS's AcceptLoop does NOT silently come
+// up — it logs and returns without a listener, so ns.Addr() is nil. Start turns
+// that into a loud error rather than a listener-less bus. This builds the server
+// exactly as Start does (DontListen + a pinned port) with the port already taken.
+func TestAcceptLoopFailsLoudWhenPortTaken(t *testing.T) {
+	squatter, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("occupy a port: %v", err)
+	}
+	t.Cleanup(func() { _ = squatter.Close() })
+	taken := mustParsePort(t, "nats://"+squatter.Addr().String())
+	takenN, _ := strconv.Atoi(taken)
+
+	ident, err := loadOrCreateIdentity(t.TempDir())
+	if err != nil {
+		t.Fatalf("identity: %v", err)
+	}
+	opts := &natsserver.Options{
+		ServerName: "sextant-test",
+		Host:       "127.0.0.1",
+		Port:       takenN, // the pinned port — already held by the squatter
+		JetStream:  true,
+		StoreDir:   t.TempDir(),
+		NoSigs:     true,
+		DontListen: true,
+	}
+	if err := ident.serverAuthOptions(opts); err != nil {
+		t.Fatalf("auth opts: %v", err)
+	}
+	ns, err := natsserver.NewServer(opts)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	t.Cleanup(ns.Shutdown)
+	ns.Start()
+
+	// Open the client listener against the taken port — the bind must fail.
+	ns.AcceptLoop(make(chan struct{}))
+	if ns.Addr() != nil {
+		t.Fatalf("AcceptLoop bound a taken port (Addr=%v) — the loud-fail backstop is gone", ns.Addr())
 	}
 }
 

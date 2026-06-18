@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -76,6 +77,26 @@ func TestRunDoctorUnreachable(t *testing.T) {
 	// A pinned port should report as pinned (no hint).
 	if !strings.Contains(s, "pinned") {
 		t.Errorf("doctor should report a pinned port; got:\n%s", s)
+	}
+}
+
+func TestExitCode(t *testing.T) {
+	// A real non-zero exit yields its code; a non-exec error yields -1.
+	err := exec.Command("sh", "-c", "exit 113").Run()
+	if got := exitCode(err); got != 113 {
+		t.Errorf("exitCode(exit 113) = %d, want 113", got)
+	}
+	if got := exitCode(fmt.Errorf("not an exec error")); got != -1 {
+		t.Errorf("exitCode(plain err) = %d, want -1", got)
+	}
+}
+
+func TestFirstLine(t *testing.T) {
+	if got := firstLine("one\ntwo\nthree"); got != "one" {
+		t.Errorf("firstLine = %q, want \"one\"", got)
+	}
+	if got := firstLine("solo"); got != "solo" {
+		t.Errorf("firstLine(no newline) = %q, want \"solo\"", got)
 	}
 }
 

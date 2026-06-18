@@ -157,11 +157,14 @@ const defaultHeartbeatFreshness = 45 * time.Second
 // OS pick") and, when a recorded port was found but unavailable, a non-empty
 // notice to log loudly before binding the random fallback.
 func stablePort(storeDir string, cfgPort int) (port int, notice string, err error) {
-	if cfgPort != 0 {
-		// Explicit pin: probe it so a conflict is a clear, port-named failure here
-		// rather than an opaque "listener failed to start" later (DontListen defers
-		// the real bind). Closing the probe is a small TOCTOU window NATS re-binds
-		// into; a loser there still fails loud at AcceptLoop.
+	if cfgPort > 0 {
+		// Explicit pin (a positive port; 0 and -1 mean "random" per Config.Port).
+		// Probe it so a conflict is a clear, port-named failure here rather than an
+		// opaque "listener failed to start" later (DontListen defers the real bind).
+		// Closing the probe leaves a small TOCTOU window before AcceptLoop re-binds;
+		// a loser there does NOT silently come up — AcceptLoop logs and returns
+		// without setting a listener, so ns.Addr() is nil and Start fails loud at
+		// the open-listener check below (regression-tested: TestExplicitPort*).
 		ln, perr := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", cfgPort))
 		if perr != nil {
 			return 0, "", fmt.Errorf("bus: requested port %d is unavailable: %w (free it or pick another with --port / `sextant config set port`)", cfgPort, perr)
@@ -322,12 +325,15 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 
 	// Bootstrap is done: open the client TCP listener. AcceptLoop binds the port
 	// and spawns the accept goroutine, then returns — so only now can a client
-	// connect, and the epoch it reads at connect is already present.
+	// connect, and the epoch it reads at connect is already present. If the bind
+	// fails (a taken port — including the rare probe-close→bind TOCTOU loser for an
+	// explicit port), AcceptLoop logs and returns WITHOUT a listener: Addr() is nil
+	// and we fail loud here rather than handing back a bus with no client listener.
 	ns.AcceptLoop(make(chan struct{}))
 	if ns.Addr() == nil {
 		opConn.Close()
 		ns.Shutdown()
-		return nil, errors.New("bus: client listener failed to start")
+		return nil, fmt.Errorf("bus: client listener failed to bind port %d (the port was taken after the pre-bind probe; free it or pin another with --port / `sextant config set port`)", port)
 	}
 	b.url = ns.ClientURL()
 
