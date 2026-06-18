@@ -218,24 +218,41 @@ func (v *Violet) writeHome(ctx context.Context, ws gatheredWorkspace) {
 	v.homeRev = rev
 }
 
-// curateHome turns the gathered state into the home projection. v1 ranking is
-// queue order (default blocks-most-downstream is a follow-up); the greeting note
-// is the curated state line: real-call count + quiet count, in her voice. The
-// deeper per-item judgement lives in the home-manager's snapshot; this is the
-// durable dash record.
+// curateHome turns the gathered state into the home projection. The agenda block
+// ranks items by blocks-most-downstream-work — the item whose approval unblocks
+// the most downstream goal criteria surfaces first. Each item carries a structured
+// "why you're seeing this" rationale (the text field the dash renders as a field,
+// not buried in prose). The greeting note is the curated state line.
 func curateHome(ws gatheredWorkspace) homeProjection {
-	names := make([]string, 0, len(ws.reviewQueue))
-	for _, it := range ws.reviewQueue {
-		names = append(names, it.Name)
-	}
+	ranked := rankReviewQueue(ws.reviewQueue)
 	note := stateLine(len(ws.reviewQueue), ws.otherCount)
 	proj := homeProjection{
 		Type:     "document",
 		Greeting: homeGreeting{Heading: "Good morning.", Note: note},
 	}
-	if len(names) > 0 {
-		proj.Blocks = append(proj.Blocks, homeBlock{Type: "pinned", Names: names})
+	if len(ranked) == 0 {
+		return proj
 	}
+	items := make([]homeAgendaItem, 0, len(ranked))
+	for _, it := range ranked {
+		items = append(items, homeAgendaItem{
+			Action: "review",
+			Ref:    it.Name,
+			Text:   whyText(it, ws),
+			Tone:   "review",
+		})
+	}
+	proj.Blocks = append(proj.Blocks, homeBlock{
+		Type:  "agenda",
+		Title: "Needs you",
+		Items: items,
+	})
+	// Keep the pinned block for backwards compatibility with the dash's PinnedPanel.
+	names := make([]string, 0, len(ranked))
+	for _, it := range ranked {
+		names = append(names, it.Name)
+	}
+	proj.Blocks = append(proj.Blocks, homeBlock{Type: "pinned", Names: names})
 	return proj
 }
 
