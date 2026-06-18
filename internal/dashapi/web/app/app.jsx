@@ -766,7 +766,7 @@
       const items=[];
       // "Go to" — the four Workspace nav hubs as jump targets (same as clicking
       // the sidebar nav). Listed first so a name-clash still surfaces the hub.
-      [["Home","home"],["Artifacts","artifacts"],["Goals","goals"],["Agents","agents"]]
+      [["Home","home"],["Artifacts","artifacts"],["Goals","goals"],["Agents","agents"],["Workflow","workflow"]]
         .forEach(([label,key])=>items.push({ key:"nav:"+key, type:"Go to", label,
           sub:"workspace", kw:("go to "+label+" "+key).toLowerCase(), go:()=>onNav(key) }));
       artItems.forEach(a=>items.push({ key:"art:"+a.name, type:"Artifact", label:a.name,
@@ -817,6 +817,8 @@
                 <span className="sx-crumb-topic">Goals</span>
               ) : stageMode==="agents" ? (
                 <span className="sx-crumb-topic">Agents</span>
+              ) : stageMode==="workflow" ? (
+                <span className="sx-crumb-topic">Workflow</span>
               ) : stageMode==="artifact" ? (
                 <React.Fragment>
                   <span className="sx-crumb-topic">Artifact</span>
@@ -844,15 +846,19 @@
             </div>
           ) : stageMode==="artifacts" ? (
             <div className="sx-canvas sx-canvas--list">
-              <div className="sx-page sx-page--doc"><ArtifactsView artifacts={artItems} activeArtifact={activeArtifact} onOpenArtifact={openArtifact} /></div>
+              <div className="sx-page sx-page--doc"><ArtifactsView artifacts={artItems} activeArtifact={activeArtifact} onOpenArtifact={openArtifact} onDM={startDM} /></div>
             </div>
           ) : stageMode==="goals" ? (
             <div className="sx-canvas sx-canvas--list">
-              <div className="sx-page sx-page--doc"><GoalsView key={goalsEpoch} goals={goals} initialGoalId={goalsOpenId} onOpenArtifact={openArtifact} onSetReview={setReview} renderWiki={renderWiki} /></div>
+              <div className="sx-page sx-page--doc"><GoalsView key={goalsEpoch} goals={goals} initialGoalId={goalsOpenId} onOpenArtifact={openArtifact} onSetReview={setReview} onDM={startDM} renderWiki={renderWiki} /></div>
             </div>
           ) : stageMode==="agents" ? (
             <div className="sx-canvas sx-canvas--list">
               <div className="sx-page sx-page--doc"><AgentsView agents={agents} onDM={startDM} /></div>
+            </div>
+          ) : stageMode==="workflow" ? (
+            <div className="sx-canvas sx-canvas--list">
+              <div className="sx-page sx-page--doc"><WorkflowView onDM={startDM} /></div>
             </div>
           ) : stageMode==="artifact" && artMissing ? (
             <div className="sx-canvas sx-canvas--list">

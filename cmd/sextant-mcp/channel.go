@@ -614,23 +614,32 @@ const catchUpCap = 1000
 // in substate. Runs async because catch-up does network I/O and must not block
 // the connManager's get() (which holds its mutex while calling onConnect).
 func (h *channelHub) restoreSubs(c *sextant.Client) {
-	_, subjects := h.state.snapshot()
+	subjects := h.gatePrimedForRestore()
 	if len(subjects) == 0 {
 		return
 	}
-	// Gate every PRIMED subject's live cursor-advance NOW — synchronously, before
-	// spawning the async restore and before any tool message_subscribe can run
-	// (a tool call shares the connManager mutex via get→onConnect, so it proceeds
-	// only after this returns). Otherwise a re-subscribe of an already-persisted
-	// primed subject that races the restore could open an UNGATED relay, letting a
-	// live frame advance the cursor past the un-backfilled gap (TASK-124, the K
-	// class). restore's catchUp clears each gate as it closes that subject's gap.
+	go h.restore(context.Background(), c, subjects, h.generation())
+}
+
+// gatePrimedForRestore is restoreSubs' SYNCHRONOUS half: snapshot the persisted
+// subjects and gate every PRIMED one's live cursor-advance NOW — before
+// restoreSubs spawns the async restore and before any tool message_subscribe can
+// run (a tool call shares the connManager mutex via get→onConnect, so it proceeds
+// only after restoreSubs returns). Otherwise a re-subscribe of an already-persisted
+// primed subject that races the restore could open an UNGATED relay, letting a live
+// frame advance the cursor past the un-backfilled gap (TASK-124, the K class).
+// restore's catchUp clears each gate as it closes that subject's gap. Returns the
+// snapshot so the async restore works the SAME set it gated. Split out so a test
+// can exercise this pre-goroutine path without a live client (the goroutine does
+// network I/O); restoreSubs is the only production caller.
+func (h *channelHub) gatePrimedForRestore() map[string]subjectCursor {
+	_, subjects := h.state.snapshot()
 	for subject, sc := range subjects {
 		if sc.Seq > 0 {
 			h.startCatchUp(subject)
 		}
 	}
-	go h.restore(context.Background(), c, subjects, h.generation())
+	return subjects
 }
 
 // restore re-subscribes each subject then backfills the frames missed while it

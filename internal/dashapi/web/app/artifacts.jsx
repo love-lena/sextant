@@ -27,7 +27,9 @@
   // e.g. ["draft","archived"]. Default: all expanded (empty array).
   const COLLAPSED_KEY = "sx-art-collapsed";
 
-  function ArtifactsView({ artifacts, activeArtifact, onOpenArtifact }) {
+  const { MobilizeButton } = window;
+
+  function ArtifactsView({ artifacts, activeArtifact, onOpenArtifact, onDM }) {
     // Seed collapsed set from localStorage; guard malformed values with try/catch.
     const [collapsed, setCollapsed] = useState(() => {
       try { return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) || "[]")); }
@@ -74,15 +76,25 @@
                     const ic = a.type === "sheet" ? "▦" : a.type === "markdown" ? "❡" : "◆";
                     const author = a.author && a.author.name;
                     return (
-                      <button key={a.name} className={"fx-row" + (a.name === activeArtifact ? " is-on" : "")} onClick={() => onOpenArtifact(a.name)}>
-                        <span className="fx-row-ic">{ic}</span>
-                        <span className="fx-row-main">
-                          <span className="fx-row-name">{a.name}</span>
-                          <span className="fx-row-meta">{a.type}{author ? " · " + author : ""}{a.updated ? " · " + a.updated + " ago" : ""}</span>
-                        </span>
-                        {author && <Avatar name={author} kind={a.author.kind} size={22} />}
-                        <span className={"fx-chip-status " + tone}>{chipLabel}</span>
-                      </button>);
+                      <div key={a.name} className={"fx-row-wrap" + (a.name === activeArtifact ? " is-on" : "")}>
+                        <button className={"fx-row fx-row--inline" + (a.name === activeArtifact ? " is-on" : "")} onClick={() => onOpenArtifact(a.name)}>
+                          <span className="fx-row-ic">{ic}</span>
+                          <span className="fx-row-main">
+                            <span className="fx-row-name">{a.name}</span>
+                            <span className="fx-row-meta">{a.type}{author ? " · " + author : ""}{a.updated ? " · " + a.updated + " ago" : ""}</span>
+                          </span>
+                          {author && <Avatar name={author} kind={a.author.kind} size={22} />}
+                          <span className={"fx-chip-status " + tone}>{chipLabel}</span>
+                        </button>
+                        {MobilizeButton && (
+                          <div className="fx-row-mobilize">
+                            <MobilizeButton
+                              context={{ type: "artifact", name: a.name }}
+                              onDM={onDM}
+                            />
+                          </div>
+                        )}
+                      </div>);
                   })}
                 </div>
               )}

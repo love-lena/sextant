@@ -183,6 +183,31 @@ Resolution precedence: `$SEXTANT_CREDS` → `$SEXTANT_CONTEXT` (an operator may
 pin one in `.mcp.json`'s `env`) → a context you switched to with `context_use`
 → this session's own auto-minted identity.
 
+**A named crew agent pins a stable identity (TASK-76).** A recurring agent
+(sirius/canopus/vega) should connect as its **registered name** from the first
+call, not a fresh `claude-<session>` mint it then has to `context_use` away every
+session. Set `$SEXTANT_CONTEXT=<name>` in the agent's **launch env** — Claude Code
+inherits the launching shell's environment and spawns the sextant-mcp with it, and
+a `--resume`/`--continue` re-launches with the same env, so the name sticks across
+sessions (no launchd-env caveat — this is a launching-shell inherit, not a service
+env). Use a per-agent wrapper or alias:
+
+```sh
+# canopus's launcher — connects as the registered `canopus` context every session
+SEXTANT_CONTEXT=canopus claude
+```
+
+This lands on the top resolution branch above, so resolve connects as `canopus`
+from the first bus call. By convention, register the named crew identity as an
+**agent** identity (register it once, like any saved context) so it stays the
+agent's own kind — this top branch isn't kind-guarded the way `context_use` is, so
+the agent-kind is a convention here, not a runtime refusal. **Backstop:** run
+`sextant context use <name>` once in the session — the adapter persists that choice
+and re-pins it on every resume (ADR-0037), closing the resume case even without a
+launch env. A brand-new session with neither set still auto-mints once (the
+default), and the adapter logs a one-line notice naming `$SEXTANT_CONTEXT` so the
+fix is self-documenting.
+
 **A resume self-heals (ADR-0037).** Across a `--resume`/`--continue`, a context
 compaction, or an MCP restart, the adapter restores not just your identity but
 your **manual subscriptions** — re-subscribing each and catching up the frames

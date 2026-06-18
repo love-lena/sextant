@@ -141,6 +141,13 @@ func (m *connManager) resolve(ctx context.Context) (clictx.ResolvedConn, error) 
 			return clictx.ResolvedConn{Creds: c.Creds, URL: orStr(*m.cf.url, c.URL), Context: c.Name}, nil
 		}
 	}
+	// Falling through to a fresh per-session auto-mint (ADR-0029's default for an
+	// un-configured session). Emit a one-line notice — symmetric to the no-bus
+	// error above (it likewise points at $SEXTANT_CONTEXT) — so the auto-mint dance
+	// is self-documenting: a named crew agent pins a stable identity by setting
+	// $SEXTANT_CONTEXT at launch (TASK-76). Notice only — the default behaviour is
+	// unchanged.
+	log.Printf("sextant-mcp: connecting as auto-mint identity %q; pin a stable identity across sessions with $SEXTANT_CONTEXT=<context> (a registered agent context)", name)
 	mint := m.mint
 	if mint == nil {
 		mint = m.mintAgent

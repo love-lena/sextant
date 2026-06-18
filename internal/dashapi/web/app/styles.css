@@ -1006,3 +1006,89 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 #app.dark .fx-donepop-scrim{background:rgba(0,0,0,.5);}
 #app.dark .fx-donepop-card{border-color:#2a2d33;}
 #app.dark .fx-donepop-x:hover{background:rgba(255,255,255,.06);}
+
+/* ============================================================
+   WORKFLOW view + MOBILIZE button (operator-triggered spawn)
+   workflow.jsx / mobilize.jsx — same token system as the rest.
+   ============================================================ */
+
+/* --- shared form primitives (reused by both files) --- */
+.wf-label{display:block;font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--fx-ink3);margin-bottom:5px;}
+.wf-optional{font-size:10px;color:var(--fx-ink3);letter-spacing:0;text-transform:none;font-family:var(--font-ui);}
+.wf-textarea{width:100%;box-sizing:border-box;font-family:var(--font-ui);font-size:14px;line-height:1.5;color:var(--ink);background:var(--paper);border:1px solid var(--fx-line);border-radius:10px;padding:10px 12px;resize:vertical;transition:border-color .13s;}
+.wf-textarea:focus{outline:none;border-color:color-mix(in srgb,var(--brand) 55%,var(--fx-line));}
+.wf-textarea.is-disabled{opacity:.55;cursor:not-allowed;}
+.wf-input{width:100%;box-sizing:border-box;font-family:var(--font-ui);font-size:14px;color:var(--ink);background:var(--paper);border:1px solid var(--fx-line);border-radius:10px;padding:9px 12px;transition:border-color .13s;}
+.wf-input:focus{outline:none;border-color:color-mix(in srgb,var(--brand) 55%,var(--fx-line));}
+.wf-input.is-disabled{opacity:.55;cursor:not-allowed;}
+.wf-input::placeholder,.wf-textarea::placeholder{color:var(--fx-ink3);}
+
+/* primary + secondary buttons */
+.wf-btn-primary{font-family:var(--font-ui);font-size:14px;font-weight:600;padding:10px 22px;border-radius:9px;border:none;background:var(--act);color:#fff;cursor:pointer;transition:background .13s,transform .1s;}
+.wf-btn-primary:hover:not(:disabled){background:var(--act-strong);}
+.wf-btn-primary:active:not(:disabled){transform:translateY(1px);}
+.wf-btn-primary:disabled{opacity:.42;cursor:not-allowed;}
+.wf-btn-secondary{font-family:var(--font-ui);font-size:13px;font-weight:600;padding:9px 18px;border-radius:9px;border:1px solid var(--fx-line);background:transparent;color:var(--ink);cursor:pointer;transition:border-color .13s;}
+.wf-btn-secondary:hover{border-color:var(--ink-2);}
+
+/* status area */
+.wf-status{display:flex;align-items:center;gap:9px;margin-top:14px;font-size:13.5px;border-radius:10px;padding:10px 13px;}
+.wf-status--polling{background:color-mix(in srgb,var(--prog) 7%,transparent);color:var(--fx-ink2);}
+.wf-status--error{background:color-mix(in srgb,var(--wait) 7%,transparent);color:var(--wait);}
+.wf-status--ok{background:color-mix(in srgb,var(--met) 7%,transparent);color:var(--met);}
+.wf-status-ic{flex:0 0 auto;font-size:16px;}
+.wf-spin{display:inline-block;animation:wfspin 1s linear infinite;flex:0 0 auto;}
+@keyframes wfspin{to{transform:rotate(360deg);}}
+.wf-ok-body{flex:1;min-width:0;}
+.wf-ok-name{font-weight:600;font-size:14px;color:var(--ink);}
+.wf-ok-id{font-size:11.5px;color:var(--fx-ink3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.wf-msg-btn{flex:0 0 auto;font-family:var(--font-ui);font-size:13px;font-weight:600;padding:6px 14px;border-radius:8px;border:none;background:var(--act);color:#fff;cursor:pointer;transition:background .13s;}
+.wf-msg-btn:hover{background:var(--act-strong);}
+.wf-retry{flex:0 0 auto;font-family:var(--font-ui);font-size:12px;font-weight:600;background:none;border:none;color:var(--wait);cursor:pointer;text-decoration:underline;padding:0;}
+
+/* --- WorkflowView page cards --- */
+.wf-card{background:var(--paper);border:1px solid var(--fx-line);border-radius:14px;padding:22px 22px 20px;margin-top:24px;}
+.wf-card--disabled{opacity:.55;pointer-events:none;}
+.wf-card-header{display:flex;align-items:flex-start;gap:14px;margin-bottom:18px;}
+.wf-card-ic{width:36px;height:36px;flex:0 0 auto;border-radius:10px;background:rgba(20,21,24,.06);color:var(--fx-ink2);display:grid;place-items:center;font-size:18px;}
+.wf-card-ic--muted{color:var(--fx-ink3);}
+.wf-card-title{font-size:16px;font-weight:600;color:var(--ink);margin-bottom:4px;}
+.wf-card-title--muted{color:var(--fx-ink3);}
+.wf-card-sub{font-size:13px;color:var(--fx-ink2);line-height:1.45;}
+.wf-actions{display:flex;gap:10px;margin-top:16px;}
+
+/* --- MobilizeButton + popover --- */
+.mb-btn{font-family:var(--font-ui);font-size:12px;font-weight:600;padding:5px 11px;border-radius:7px;border:1px solid var(--fx-line);background:transparent;color:var(--fx-ink2);cursor:pointer;transition:border-color .12s,color .12s,background .12s;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;}
+.mb-btn:hover{border-color:var(--ink-2);color:var(--ink);}
+.mb-btn--active{border-color:var(--brand);color:var(--brand);background:color-mix(in srgb,var(--brand) 8%,transparent);}
+.mb-anchor{position:relative;display:inline-flex;flex-direction:column;align-items:flex-start;}
+.mb-popover{position:absolute;top:calc(100% + 6px);left:0;z-index:200;background:var(--paper);border:1px solid var(--fx-line);border-radius:13px;box-shadow:0 8px 28px -8px rgba(20,21,24,.18);padding:16px;min-width:320px;max-width:420px;}
+.mb-pop-head{display:flex;align-items:center;margin-bottom:12px;}
+.mb-pop-title{font-size:13.5px;font-weight:600;color:var(--ink);}
+.mb-pop-x{margin-left:auto;background:none;border:none;color:var(--fx-ink3);font-size:18px;cursor:pointer;line-height:1;padding:2px 5px;border-radius:6px;}
+.mb-pop-x:hover{color:var(--ink);background:rgba(20,21,24,.06);}
+.mb-ta{min-height:72px;}
+.mb-pop-actions{display:flex;gap:8px;margin-top:12px;}
+.mb-btn-send{padding:8px 18px;font-size:13px;}
+.mb-sent{display:flex;align-items:center;gap:9px;padding:10px 2px;font-size:13.5px;color:var(--fx-ink2);}
+.mb-sent-txt{flex:1;color:var(--fx-ink2);}
+
+/* dark mode */
+#app.dark .wf-card{background:#1a1d23;border-color:#2a2d33;}
+#app.dark .wf-textarea,#app.dark .wf-input{background:#16181d;border-color:#2a2d33;color:var(--ink);}
+#app.dark .wf-textarea:focus,#app.dark .wf-input:focus{border-color:color-mix(in srgb,var(--brand) 55%,#2a2d33);}
+#app.dark .wf-card-ic{background:rgba(255,255,255,.06);}
+#app.dark .mb-popover{background:#1a1d23;border-color:#2a2d33;box-shadow:0 8px 28px -8px rgba(0,0,0,.4);}
+#app.dark .mb-pop-x:hover{background:rgba(255,255,255,.06);}
+
+/* mono utility (already used in app.jsx, aliased here for workflow labels) */
+.mono{font-family:var(--font-mono);font-size:11.5px;}
+
+/* artifact row wrapper — allows a MobilizeButton to sit beside the fx-row
+   without nesting buttons (invalid HTML). The wrapper takes the border-top
+   + first-child rules the old bare fx-row had; the inner button fills it. */
+.fx-row-wrap{position:relative;display:flex;align-items:stretch;border-top:1px solid var(--fx-line);}
+.fx-row-wrap:first-child{border-top:none;}
+.fx-row--inline{flex:1;border-top:none !important;}
+.fx-row--inline:first-child{border-top:none !important;}
+.fx-row-mobilize{display:flex;align-items:center;padding:0 6px 0 0;flex:0 0 auto;}

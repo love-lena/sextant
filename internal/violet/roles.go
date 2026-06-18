@@ -1,0 +1,350 @@
+package violet
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"time"
+)
+
+// dmConsumer is the ANSWER role's goroutine — the priority path (fix #3). It
+// drains operator DMs and answers each from the warm context, immediately. It is
+// its own goroutine with its own channel, so it NEVER waits behind a gate turn
+// or a deep refresh: a burst of bus events cannot delay an answer. This is the
+// whole reason the bar (a few seconds even under load) is met where the
+// single-loop bash impl failed (44→85s).
+func (v *Violet) dmConsumer(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case m := <-v.dmCh:
+			v.answerDM(ctx, m)
+		}
+	}
+}
+
+// answerDM runs the conversational turn from the warm snapshot and publishes the
+// captured reply. Output-capture: the model has no publish tool — the reply text
+// IS the answer, and the WRAPPER publishes it, so a forgotten publish is
+// structurally impossible (the spike's live bug).
+//
+// AC8 additions:
+//   - Idempotency (criterion 3): on the LIVE path (real m.Sequence), skip a frame
+//     already past the persisted watermark. On the REPLAY path (m.Sequence==0)
+//     idempotency is the replay's since=readFrom() filter, so no per-frame check.
+//   - Response-watermark in CURSOR space (criterion 5): the ack cursor advances
+//     to m.advanceTo ONLY after a confirmed publish. m.advanceTo is the JetStream
+//     stream cursor one past this frame — Sequence+1 on the live path, the
+//     FetchMessages `next` on the replay path. A crash before the publish leaves
+//     the cursor behind so the replay re-delivers and re-answers on next startup.
+//   - Unified surface (criterion 4): publishReply sends to BOTH the DM subject
+//     and RepliesSubject under violet's own creds — never impersonating another.
+func (v *Violet) answerDM(ctx context.Context, m Message) {
+	// Idempotency (AC8 criterion 3), LIVE path only: a live frame can appear both
+	// in the replay pass and in the live subscription when it arrives just before
+	// the live sub starts. The live path has a real m.Sequence, so we can skip a
+	// frame already past the watermark. (Replay frames carry m.Sequence==0 and are
+	// covered by the replay's since=readFrom() filter, never this check.)
+	if v.ack != nil && m.Sequence > 0 && v.ack.alreadyAnswered(m.Sequence) {
+		v.cfg.Logf("violet: skipping already-answered DM seq=%d (idempotent)", m.Sequence)
+		return
+	}
+
+	v.mu.Lock()
+	v.answering++
+	v.mu.Unlock()
+	defer func() {
+		v.mu.Lock()
+		v.answering--
+		v.mu.Unlock()
+	}()
+
+	dm := frameText(m.Record)
+	snapshot, _ := v.warm.get()
+
+	// Per-turn deadline: an answer that can't land promptly fails loud rather
+	// than hanging the operator (fail-loud, never a silent hang). The bar is a
+	// few seconds; the deadline is generous headroom over a warm turn.
+	turnCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	reply, err := v.model.turn(turnCtx, v.cfg.ConvModel, turnRequest{
+		System:    conversationalSystem,
+		MaxTokens: 256, // ≤250-char answers; the bar is terse + plain
+		Messages:  []apiMessage{{Role: "user", Content: answerPrompt(snapshot, dm)}},
+	})
+	if err != nil {
+		v.cfg.Logf("violet: answer turn failed: %v", err)
+		// Fail-loud to the operator rather than silent: a brief honest note.
+		reply = "I hit a snag answering just now — try me again in a moment."
+	}
+
+	reply = trimReply(reply)
+
+	// AC8 unified surface (criterion 4): publishReply sends to the DM subject
+	// (operator sees it in her thread) AND to RepliesSubject (the ONE unified
+	// place TASK-160 renders). Both publishes are under violet's own bus creds
+	// — never impersonating the operator or any other client (TASK-158).
+	if perr := publishReply(ctx, v.bus, v.dmSubject, reply, m.Sequence); perr != nil {
+		v.cfg.Logf("violet: publish reply failed: %v", perr)
+		// Do not advance the ack cursor — a failed publish means this DM is not
+		// yet answered. The response-watermark invariant requires the cursor to
+		// advance only AFTER a confirmed publish (AC8 criterion 5).
+		return
+	}
+	v.cfg.Logf("violet: answered operator DM (seq=%d advanceTo=%d, %d chars)", m.Sequence, m.advanceTo, len(reply))
+
+	// AC8 response-watermark (criterion 5): advance the cursor only NOW — after
+	// the reply is confirmed published. m.advanceTo is the cursor-space watermark
+	// (Sequence+1 live, FetchMessages `next` on replay), so this works on BOTH
+	// paths — including replay frames whose Sequence is 0. advance() is monotonic,
+	// so an out-of-order or duplicate advance never rewinds the cursor.
+	if v.ack != nil && m.advanceTo > 0 {
+		if aerr := v.ack.advance(m.advanceTo); aerr != nil {
+			v.cfg.Logf("violet: advance ack cursor failed (will re-answer on restart): %v", aerr)
+		}
+	}
+
+	// An operator DM is always significant — wake the deep pass so the context
+	// reflects the just-arrived exchange for the next question. This runs AFTER
+	// the answer (the answer used the already-warm context), so it never delays
+	// the reply.
+	v.requestWake()
+}
+
+// gateWorker is the GATE role's goroutine: it drains the bounded candidate queue
+// and runs a cheap haiku WAKE/SKIP turn per candidate. Candidates already passed
+// the keyword pre-filter (fix #2), so the gate runs rarely. A WAKE signals the
+// deep refresher; a SKIP costs only the one classification. The worker is
+// single-threaded by design (serial haiku turns) but bounded — and crucially it
+// shares NOTHING with the DM path, so even a full gate backlog leaves answers
+// untouched.
+func (v *Violet) gateWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case m := <-v.gateCh:
+			v.gate(ctx, m)
+		}
+	}
+}
+
+func (v *Violet) gate(ctx context.Context, m Message) {
+	event := describeEvent(m)
+	turnCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	verdict, err := v.model.turn(turnCtx, v.cfg.GateModel, turnRequest{
+		System:    gateSystem,
+		MaxTokens: 8, // one word: WAKE or SKIP
+		Messages:  []apiMessage{{Role: "user", Content: gatePrompt(event)}},
+	})
+	if err != nil {
+		// A gate failure leans WAKE: an over-eager wake costs one deep pass; a
+		// dropped significant event costs staleness. Bias toward freshness.
+		v.cfg.Logf("violet: gate turn failed (waking to be safe): %v", err)
+		v.requestWake()
+		return
+	}
+	if strings.Contains(strings.ToUpper(verdict), "WAKE") {
+		v.cfg.Logf("violet: gate WAKE on event from %s", short(m.Author))
+		v.requestWake()
+		return
+	}
+	// SKIP: gate only, no deep work. Most events land here on a busy bus.
+}
+
+// deepRefresher is the HOME-MANAGER role's goroutine. It runs a deep pass when
+// the gate wakes it (the primary trigger) or on the slow safety interval (the
+// fallback). One pass: gather the live workspace, run the sonnet curation turn,
+// capture its snapshot into the warm context, and write the curated home
+// projection. It is separate from the answer and gate paths, so a long sonnet
+// turn never blocks an answer.
+func (v *Violet) deepRefresher(ctx context.Context) {
+	ticker := time.NewTicker(v.cfg.SafetyInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-v.wakeCh:
+			v.deepPass(ctx, "wake")
+		case <-ticker.C:
+			v.deepPass(ctx, "safety-tick")
+		}
+	}
+}
+
+// deepPass is one curation + context-refresh pass. The wrapper gathers the live
+// state (read-only artifact sweep) and writes the curated home (CAS) — the model
+// supplies the judgement and the snapshot, output-captured. The model has no
+// MCP/artifact tools in this build, so it never tries to write a file it can't
+// (Bugs #2).
+func (v *Violet) deepPass(ctx context.Context, reason string) {
+	passCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+
+	ws, err := gatherWorkspace(passCtx, v.bus)
+	if err != nil {
+		v.cfg.Logf("violet: deep pass (%s) gather failed: %v", reason, err)
+		return
+	}
+
+	snapshot, err := v.model.turn(passCtx, v.cfg.DeepModel, turnRequest{
+		System:    homeManagerSystem,
+		MaxTokens: 1024,
+		Messages:  []apiMessage{{Role: "user", Content: refreshPrompt(ws.renderForCuration())}},
+	})
+	if err != nil {
+		v.cfg.Logf("violet: deep pass (%s) curation turn failed: %v", reason, err)
+		return
+	}
+
+	// Output-capture: the model's reply IS the snapshot. Swap it into the warm
+	// context so the next answer is current. set() ignores an empty snapshot, so
+	// a failed turn never blanks the context the answers depend on.
+	v.warm.set(snapshot)
+
+	// Write the curated home projection. The pinned block is the ranked review
+	// queue (the wrapper's deterministic ranking — default blocks-most-downstream;
+	// v1 uses queue order); the greeting note is the curated state line derived
+	// from the counts. The model's judgement informs the snapshot; the durable
+	// curated record is the home artifact the dash reads.
+	v.writeHome(passCtx, ws)
+	v.cfg.Logf("violet: deep pass (%s) refreshed context + home (%d review, %d goals)",
+		reason, len(ws.reviewQueue), len(ws.goals))
+}
+
+// writeHome persists the curated `home` projection (read → CAS-update, or create
+// first time). signal-not-manage: this is the ONE artifact violet owns and
+// writes — never an owner's artifact or review.state.
+func (v *Violet) writeHome(ctx context.Context, ws gatheredWorkspace) {
+	proj := curateHome(ws)
+	rec := proj.marshal()
+
+	if !v.homeKnown {
+		if art, err := v.bus.GetArtifact(ctx, "home"); err == nil {
+			v.homeRev = art.Revision
+			v.homeKnown = true
+		}
+	}
+	if !v.homeKnown {
+		rev, err := v.bus.CreateArtifact(ctx, "home", rec)
+		if err != nil {
+			// A create race (someone created it first) → fall through to update.
+			if art, gerr := v.bus.GetArtifact(ctx, "home"); gerr == nil {
+				v.homeRev = art.Revision
+				v.homeKnown = true
+			} else {
+				v.cfg.Logf("violet: create home failed: %v", err)
+				return
+			}
+		} else {
+			v.homeRev, v.homeKnown = rev, true
+			return
+		}
+	}
+	rev, err := v.bus.UpdateArtifact(ctx, "home", rec, v.homeRev)
+	if err != nil {
+		// Stale CAS: re-read and let the next pass write at the fresh rev.
+		if art, gerr := v.bus.GetArtifact(ctx, "home"); gerr == nil {
+			v.homeRev = art.Revision
+		}
+		v.cfg.Logf("violet: update home (stale CAS, will retry next pass): %v", err)
+		return
+	}
+	v.homeRev = rev
+}
+
+// curateHome turns the gathered state into the home projection. The agenda block
+// ranks items by blocks-most-downstream-work — the item whose approval unblocks
+// the most downstream goal criteria surfaces first. Each item carries a structured
+// "why you're seeing this" rationale (the text field the dash renders as a field,
+// not buried in prose). The greeting note is the curated state line.
+func curateHome(ws gatheredWorkspace) homeProjection {
+	ranked := rankReviewQueue(ws.reviewQueue)
+	note := stateLine(len(ws.reviewQueue), ws.otherCount)
+	proj := homeProjection{
+		Type:     "document",
+		Greeting: homeGreeting{Heading: "Good morning.", Note: note},
+	}
+	if len(ranked) == 0 {
+		return proj
+	}
+	items := make([]homeAgendaItem, 0, len(ranked))
+	for _, it := range ranked {
+		items = append(items, homeAgendaItem{
+			Action: "review",
+			Ref:    it.Name,
+			Text:   whyText(it, ws),
+			Tone:   "review",
+		})
+	}
+	proj.Blocks = append(proj.Blocks, homeBlock{
+		Type:  "agenda",
+		Title: "Needs you",
+		Items: items,
+	})
+	// Keep the pinned block for backwards compatibility with the dash's PinnedPanel.
+	names := make([]string, 0, len(ranked))
+	for _, it := range ranked {
+		names = append(names, it.Name)
+	}
+	proj.Blocks = append(proj.Blocks, homeBlock{Type: "pinned", Names: names})
+	return proj
+}
+
+// stateLine is the curated greeting note: plain, calm, headline-first.
+func stateLine(realCalls, quiet int) string {
+	switch {
+	case realCalls == 0:
+		return "Nothing needs you right now — it's all in hand."
+	case realCalls == 1:
+		return "1 real call needs you · the rest is handled."
+	default:
+		return plural(realCalls, "real call") + " need you · the rest is handled."
+	}
+}
+
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return itoa(n) + " " + noun + "s"
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var b [20]byte
+	i := len(b)
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(b[i:])
+}
+
+// chatMessage renders a reply as a chat.message record (the shape the dash + MCP
+// channel render as text).
+func chatMessage(text string) json.RawMessage {
+	b, _ := json.Marshal(struct {
+		Type string `json:"$type"`
+		Text string `json:"text"`
+	}{Type: "chat.message", Text: text})
+	return b
+}
+
+// describeEvent renders a frame for the gate: who, where, and what. The author
+// and subject are the bus-stamped truth; the text is the record's content.
+func describeEvent(m Message) string {
+	who := m.Author
+	if who == "" {
+		who = "someone"
+	}
+	return who + " on " + m.Subject + ": " + frameText(m.Record)
+}
