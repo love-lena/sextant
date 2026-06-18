@@ -55,7 +55,7 @@ func main() {
 	_ = fs.Parse(os.Args[1:])
 
 	if *creds == "" {
-		fatal("usage: sextant-workflow --creds F --store DIR (--plan F | --id ULID) [--spawn-subject S] [--step-timeout D]")
+		fatal("usage: sextant-workflow --creds F --store DIR (--plan F | --id ULID | <listen mode>) [--spawn-subject S] [--step-timeout D]")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -73,6 +73,25 @@ func main() {
 		fatal("connect: %v", err)
 	}
 	defer c.Close()
+
+	// Listen mode: no --plan or --id — subscribe to workflow.start and run one
+	// coordinator per request (the dash's "start a workflow from a prompt" path).
+	if *plan == "" && *id == "" {
+		sc, sub, err := newStartConsumer(ctx, c, *spawnSubject, *stepTimeout)
+		if err != nil {
+			fatal("%v", err)
+		}
+		defer sub.Stop()
+		_ = sc
+		logf("coordinator up as %s; listening on %s for workflow.start", short(c.ID()), startSubject)
+		select {
+		case <-ctx.Done():
+			logf("signalled; shutting down")
+		case <-c.Drained():
+			logf("bus drained; shutting down")
+		}
+		return
+	}
 
 	co := &coordinator{
 		ctx: ctx, c: c, spawnSubject: *spawnSubject, stepTimeout: *stepTimeout,
@@ -182,6 +201,26 @@ func (co *coordinator) load(ctx context.Context, planPath, idFlag string) error 
 		return fmt.Errorf("create workflow state: %w", err)
 	}
 	co.rev = rev
+	return nil
+}
+
+// loadDirect initialises a fresh workflow from a pre-built Workflow struct
+// (bypasses file I/O). It is the start-consumer's entry point: the consumer
+// constructs a Workflow from the workflow.start request fields and hands it
+// straight to the coordinator, reusing the same CAS + artifact machinery.
+func (co *coordinator) loadDirect(ctx context.Context, wf Workflow) error {
+	for i := range wf.Steps {
+		if wf.Steps[i].Status == "" {
+			wf.Steps[i].Status = stepPending
+		}
+	}
+	wf.Status = wfRunning
+	wf.Owner = co.c.ID()
+	rev, err := co.c.CreateArtifact(ctx, stateName(wf.ID), wf.marshal())
+	if err != nil {
+		return fmt.Errorf("create workflow state: %w", err)
+	}
+	co.wf, co.rev = wf, rev
 	return nil
 }
 
@@ -477,6 +516,115 @@ func wake(ch chan struct{}) {
 	case ch <- struct{}{}:
 	default:
 	}
+}
+
+// --- workflow.start consumer ---
+
+// startConsumer subscribes to msg.topic.workflow.start with DeliverAll, dedups
+// by frame ID (in-memory, PoC scope mirrors the dispatcher), and runs exactly
+// one workflow per fresh request. It acks every handled frame — success or
+// failure — so requesters are never left waiting on silence (fail-loud).
+type startConsumer struct {
+	ctx          context.Context
+	c            *sextant.Client
+	spawnSubject string
+	stepTimeout  time.Duration
+
+	mu   sync.Mutex
+	seen map[string]bool // request frame ids already handled (dedup across DeliverAll replay)
+}
+
+// newStartConsumer builds and subscribes a startConsumer on startSubject.
+// It returns the consumer and its subscription (caller defers sub.Stop()).
+func newStartConsumer(ctx context.Context, c *sextant.Client, spawnSubject string, stepTimeout time.Duration) (*startConsumer, sextant.Subscription, error) {
+	sc := &startConsumer{
+		ctx: ctx, c: c, spawnSubject: spawnSubject, stepTimeout: stepTimeout,
+		seen: map[string]bool{},
+	}
+	sub, err := c.Subscribe(ctx, startSubject, sc.handle, sextant.DeliverAll())
+	if err != nil {
+		return nil, nil, fmt.Errorf("subscribe %s: %w", startSubject, err)
+	}
+	return sc, sub, nil
+}
+
+// handle processes one frame on startSubject. It acts only on workflow.start
+// records (ignoring its own echoed workflow.start.acks and anything else),
+// dedups by request frame id, runs the workflow, and acks — always.
+func (sc *startConsumer) handle(m sextant.Message) {
+	req, ok := parseWorkflowStartRequest(m.Frame.Record)
+	if !ok {
+		return
+	}
+	reqID := m.Frame.ID
+
+	sc.mu.Lock()
+	if sc.seen[reqID] {
+		sc.mu.Unlock()
+		return
+	}
+	sc.seen[reqID] = true
+	sc.mu.Unlock()
+
+	logf("workflow.start %s from %s: prompt=%q nick=%q", short(reqID), short(m.Frame.Author), req.Prompt, req.Nickname)
+
+	wfID, err := sc.runWorkflow(req)
+	ack := WorkflowStartAck{RequestID: reqID}
+	if err != nil {
+		ack.Status = statusError
+		ack.Error = err.Error()
+		logf("workflow.start %s failed: %v", short(reqID), err)
+	} else {
+		ack.Status = statusOK
+		ack.WorkflowID = wfID
+		logf("workflow.start %s: started workflow %s", short(reqID), short(wfID))
+	}
+	if err := sc.c.Publish(context.Background(), startSubject, ack.marshal()); err != nil {
+		logf("publish workflow.start.ack: %v", err)
+	}
+}
+
+// runWorkflow builds a single-dispatch-step workflow from the request, creates
+// its state artifact, subscribes to its subjects, and drives the coordinator
+// run. It returns the workflow id on success.
+func (sc *startConsumer) runWorkflow(req WorkflowStartRequest) (string, error) {
+	wfID := ulid.Make().String()
+	nick := req.Nickname
+	if nick == "" {
+		nick = "step-" + short(wfID)
+	}
+	wf := Workflow{
+		ID: wfID,
+		Steps: []Step{
+			{ID: "run", Kind: "dispatch", Nickname: nick, Prompt: req.Prompt},
+		},
+	}
+	co := &coordinator{
+		ctx: sc.ctx, c: sc.c, spawnSubject: sc.spawnSubject, stepTimeout: sc.stepTimeout,
+		acks: map[string]spawnAck{}, doneEvents: map[string]bool{},
+		ackCh: make(chan struct{}, 1), evCh: make(chan struct{}, 1), ctlCh: make(chan struct{}, 1),
+	}
+	if err := co.loadDirect(sc.ctx, wf); err != nil {
+		return "", err
+	}
+
+	// Subscribe the coordinator's helper subjects for this run's lifetime.
+	for _, s := range []struct {
+		subj string
+		h    sextant.Handler
+	}{
+		{sc.spawnSubject, co.onSpawn},
+		{eventsSubject(wfID), co.onEvent},
+		{controlSubject(wfID), co.onControl},
+	} {
+		sub, err := sc.c.Subscribe(sc.ctx, s.subj, s.h, sextant.DeliverAll())
+		if err != nil {
+			return wfID, fmt.Errorf("subscribe %s: %w", s.subj, err)
+		}
+		defer sub.Stop()
+	}
+	co.settle()
+	return wfID, co.run()
 }
 
 func short(id string) string {
