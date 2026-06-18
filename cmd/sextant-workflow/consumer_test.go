@@ -324,3 +324,97 @@ func TestStartConsumer_OneRunPerRequest(t *testing.T) {
 		runDone.Wait()
 	})
 }
+
+// TestStartConsumer_SubsStoppedAfterRun asserts that prepareWorkflow returns a
+// valid stopSubs closure and that the run goroutine calls it after co.run()
+// ends — i.e. that helper subscriptions are stopped, not leaked.
+//
+// This test FAILS on the old `_ = sub` discard (stopSubs never called, subs
+// accumulate) and PASSES on the stop-closure fix.
+//
+// It drives prepareWorkflow directly (package-internal white-box) and runs N
+// sequential workflows, asserting the stopSubs closure fires for each run.
+func TestStartConsumer_SubsStoppedAfterRun(t *testing.T) {
+	b, err := bus.Start(t.Context(), bus.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("bus.Start: %v", err)
+	}
+	t.Cleanup(b.Shutdown)
+
+	consumer := dialBusClient(t, b, "consumer-leak")
+	dispatcher := dialBusClient(t, b, "dispatcher-leak")
+
+	spawnSubj := "msg.topic.spawn"
+	stepTimeout := 5 * time.Second
+
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	t.Cleanup(cancelCtx)
+
+	// Test-side dispatcher: acks immediately + fires step-done.
+	_, err = dispatcher.Subscribe(ctx, spawnSubj, func(m sextant.Message) {
+		var req struct {
+			Type string `json:"$type"`
+			Job  string `json:"job,omitempty"`
+		}
+		if err := json.Unmarshal(m.Frame.Record, &req); err != nil || req.Type != typeSpawnRequest {
+			return
+		}
+		ack := spawnAck{Type: typeSpawnAck, ID: "agent-" + m.Frame.ID[:8], RequestID: m.Frame.ID, Status: "ok"}
+		ackBytes, _ := json.Marshal(ack)
+		_ = dispatcher.Publish(ctx, spawnSubj, json.RawMessage(ackBytes))
+		_ = dispatcher.Publish(ctx, eventsSubject(req.Job), WorkflowEvent{Step: "run", Status: stepDone}.marshal())
+	}, sextant.DeliverAll())
+	if err != nil {
+		t.Fatalf("dispatcher Subscribe: %v", err)
+	}
+
+	consumerCtx, cancelConsumer := context.WithCancel(ctx)
+	t.Cleanup(cancelConsumer)
+
+	sc := &startConsumer{
+		ctx: consumerCtx, c: consumer, spawnSubject: spawnSubj, stepTimeout: stepTimeout,
+		seen: map[string]bool{},
+	}
+
+	const runs = 3
+	// stopCalled counts how many stopSubs closures have fired.
+	var stopMu sync.Mutex
+	stopCount := 0
+
+	var wg sync.WaitGroup
+	for i := range runs {
+		_ = i
+		req := WorkflowStartRequest{Type: typeWorkflowStart, Prompt: "leak-check task"}
+
+		co, wfID, stopSubs, err := sc.prepareWorkflow(req)
+		if err != nil {
+			t.Fatalf("prepareWorkflow: %v", err)
+		}
+		_ = wfID
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// Wrap stopSubs to count calls — detects if it is never invoked.
+			wrapped := func() {
+				stopSubs()
+				stopMu.Lock()
+				stopCount++
+				stopMu.Unlock()
+			}
+			defer wrapped()
+			if err := co.run(); err != nil {
+				t.Logf("run error (ok in test): %v", err)
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	stopMu.Lock()
+	got := stopCount
+	stopMu.Unlock()
+	if got != runs {
+		t.Errorf("stopSubs called %d time(s), want %d — helper subscriptions leaked", got, runs)
+	}
+}

@@ -575,7 +575,7 @@ func (sc *startConsumer) handle(m sextant.Message) {
 
 	logf("workflow.start %s from %s: prompt=%q nick=%q", short(reqID), short(m.Frame.Author), req.Prompt, req.Nickname)
 
-	co, wfID, err := sc.prepareWorkflow(req)
+	co, wfID, stopSubs, err := sc.prepareWorkflow(req)
 	ack := WorkflowStartAck{Nonce: req.Nonce, RequestID: reqID}
 	if err != nil {
 		ack.Status = statusError
@@ -596,7 +596,11 @@ func (sc *startConsumer) handle(m sextant.Message) {
 	}
 	// Run the coordinator asynchronously so handle() returns immediately,
 	// unblocking the delivery goroutine for the next request.
+	// stopSubs is deferred inside the goroutine so the helper subscriptions
+	// (spawn, events, control) are stopped once the run ends — preventing
+	// unbounded accumulation across sequential runs on a long-lived consumer.
 	go func() {
+		defer stopSubs()
 		if err := co.run(); err != nil {
 			logf("workflow %s run error: %v", short(wfID), err)
 		}
@@ -604,10 +608,14 @@ func (sc *startConsumer) handle(m sextant.Message) {
 }
 
 // prepareWorkflow creates the workflow state artifact and subscribes the
-// coordinator's helper subjects. It returns the coordinator (ready to run) and
-// the workflow id on success, or (nil, "", err) on failure. The coordinator's
-// run() is NOT called here — the caller launches it asynchronously after acking.
-func (sc *startConsumer) prepareWorkflow(req WorkflowStartRequest) (*coordinator, string, error) {
+// coordinator's helper subjects. It returns the coordinator (ready to run),
+// the workflow id, a stopSubs closure that stops the helper subscriptions, and
+// any error. On failure it returns (nil, "", noop, err).
+//
+// The caller MUST call stopSubs() after run() ends (typically via defer in the
+// run goroutine) to prevent subscription accumulation across sequential runs on
+// a long-lived consumer.
+func (sc *startConsumer) prepareWorkflow(req WorkflowStartRequest) (*coordinator, string, func(), error) {
 	wfID := ulid.Make().String()
 	nick := req.Nickname
 	if nick == "" {
@@ -625,10 +633,15 @@ func (sc *startConsumer) prepareWorkflow(req WorkflowStartRequest) (*coordinator
 		ackCh: make(chan struct{}, 1), evCh: make(chan struct{}, 1), ctlCh: make(chan struct{}, 1),
 	}
 	if err := co.loadDirect(sc.ctx, wf); err != nil {
-		return nil, "", err
+		return nil, "", func() {}, err
 	}
 
 	// Subscribe the coordinator's helper subjects for this run's lifetime.
+	// The handles are returned as a stop closure so the run goroutine can
+	// clean them up after co.run() returns — preventing unbounded accumulation
+	// across sequential runs (the old `defer sub.Stop()` in the synchronous
+	// path was correct; this restores that guarantee for the async path).
+	var subs []sextant.Subscription
 	for _, s := range []struct {
 		subj string
 		h    sextant.Handler
@@ -639,14 +652,20 @@ func (sc *startConsumer) prepareWorkflow(req WorkflowStartRequest) (*coordinator
 	} {
 		sub, err := sc.c.Subscribe(sc.ctx, s.subj, s.h, sextant.DeliverAll())
 		if err != nil {
-			return nil, wfID, fmt.Errorf("subscribe %s: %w", s.subj, err)
+			for _, s := range subs {
+				s.Stop()
+			}
+			return nil, wfID, func() {}, fmt.Errorf("subscribe %s: %w", s.subj, err)
 		}
-		// The subscription is stopped when the consumer context is cancelled;
-		// we do not defer-stop here because run() must outlive prepareWorkflow.
-		_ = sub
+		subs = append(subs, sub)
+	}
+	stopSubs := func() {
+		for _, s := range subs {
+			s.Stop()
+		}
 	}
 	co.settle()
-	return co, wfID, nil
+	return co, wfID, stopSubs, nil
 }
 
 func short(id string) string {
