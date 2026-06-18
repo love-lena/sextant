@@ -58,6 +58,7 @@ type component struct {
 	kind        string // bus kind to enroll the identity as
 	display     string // bus display name for the enrolled identity
 	needsRecipe bool   // true if the component needs the embedded agent recipe on disk
+	needsClaude bool   // true if the runtime's recipe spawns `claude` — start fails loud if it is not on PATH
 	// args builds the ProgramArguments after the binary: the resolved flags. binPath
 	// is the discovered binary path; creds is the component's own creds file; store
 	// is the bus store; recipe is the on-disk recipe path ("" when !needsRecipe).
@@ -74,6 +75,7 @@ var components = []component{
 		kind:        "dispatcher",
 		display:     "sextant-dispatch",
 		needsRecipe: true,
+		needsClaude: true,
 		args: func(binPath, creds, store, recipe string) []string {
 			// --on-behalf: the dispatcher mints children with its OWN authority
 			// (ADR-0033), so it needs no operator credential — the launchd service
@@ -285,6 +287,18 @@ func startComponent(stdout, stderr io.Writer, c component, home string, uid int,
 	binPath, err := exec.LookPath(c.binary)
 	if err != nil {
 		return fmt.Errorf("%s not found on PATH — install sextant's binaries first (%w)", c.binary, err)
+	}
+
+	// Fail loud BEFORE writing any plist if the runtime spawns `claude` and it is
+	// not on PATH (the dispatcher). A claude-less PATH would be baked into the
+	// plist and the dispatcher's spawned agents would silently fail to find
+	// `claude` at runtime — the exact silent-spawn-failure this design prevents.
+	// claude commonly lives at ~/.local/bin/claude, off launchd's default PATH.
+	if c.needsClaude {
+		if _, lerr := exec.LookPath("claude"); lerr != nil {
+			return fmt.Errorf("the %s needs the `claude` CLI on PATH to spawn agents, "+
+				"but it was not found — install it (commonly ~/.local/bin/claude) or ensure it is on your PATH, then retry (%w)", c.name, lerr)
+		}
 	}
 
 	// First-run identity: ensure the component has its own bus creds (enrolled

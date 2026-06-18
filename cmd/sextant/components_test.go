@@ -109,13 +109,21 @@ func seedComponentEnv(t *testing.T, c component) (home, binPath string) {
 		t.Fatalf("seed context: %v", err)
 	}
 
-	// A fake binary on PATH so exec.LookPath(c.binary) resolves.
+	// A fake binary on PATH so exec.LookPath(c.binary) resolves. PATH is set to
+	// ONLY this dir (hermetic — the test must not depend on the real PATH or on a
+	// `claude` happening to be installed on CI). A component that spawns claude
+	// gets a claude stub here too, so its happy path is deterministic.
 	binDir := t.TempDir()
 	bp := filepath.Join(binDir, c.binary)
 	if err := os.WriteFile(bp, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+	if c.needsClaude {
+		if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", binDir)
 
 	return t.TempDir(), bp
 }
@@ -209,6 +217,52 @@ func TestStartComponentWritesRecipe(t *testing.T) {
 	// The dispatcher mints with its own authority (no operator creds).
 	if !strings.Contains(string(plist), "--on-behalf") {
 		t.Fatalf("dispatch plist should use --on-behalf; plist=%s", plist)
+	}
+}
+
+// TestStartDispatchFailsLoudWithoutClaude: the dispatcher's recipe spawns
+// `claude`, so starting it with no claude on PATH must FAIL LOUD with a clear
+// error and write NO plist — never a claude-less plist whose spawned agents
+// silently fail to find claude at runtime. The workflow component (needsClaude
+// false) is unaffected.
+func TestStartDispatchFailsLoudWithoutClaude(t *testing.T) {
+	fastComponentBudgets(t)
+	c, _ := findComponent("dispatch")
+	home, _ := seedComponentEnv(t, c)
+
+	// Remove the claude stub seedComponentEnv placed for the dispatcher, so
+	// LookPath("claude") fails — the absent-claude case. PATH is the single
+	// hermetic binDir here.
+	if err := os.Remove(filepath.Join(os.Getenv("PATH"), "claude")); err != nil {
+		t.Fatalf("removing the claude stub: %v", err)
+	}
+
+	f := &fakeLaunchctl{printOut: func(int) (string, error) { return "x = {\n\tstate = running\n}", nil }}
+	var out, errOut strings.Builder
+	err := startComponent(&out, &errOut, c, home, 501, t.TempDir(), f.run)
+	if err == nil {
+		t.Fatalf("dispatch start with no claude must fail loud")
+	}
+	if !strings.Contains(err.Error(), "claude") {
+		t.Fatalf("error should name the missing claude CLI; got %v", err)
+	}
+	// No plist may have been written.
+	if _, serr := os.Stat(plistPath(home, c.name)); serr == nil {
+		t.Fatalf("no plist must be written when claude is absent for a dispatcher")
+	}
+	// And launchctl must not have been touched (no bootout/bootstrap/kickstart).
+	if len(f.verbs()) != 0 {
+		t.Fatalf("launchctl must not be invoked when claude is absent; verbs=%v", f.verbs())
+	}
+
+	// The workflow component does not need claude — it starts fine with no claude
+	// on PATH (its binDir has no claude stub since needsClaude is false).
+	wf, _ := findComponent("workflow")
+	whome, _ := seedComponentEnv(t, wf)
+	wf2 := &fakeLaunchctl{printOut: func(int) (string, error) { return "x = {\n\tstate = running\n}", nil }}
+	var wOut, wErr strings.Builder
+	if err := startComponent(&wOut, &wErr, wf, whome, 501, t.TempDir(), wf2.run); err != nil {
+		t.Fatalf("workflow (needsClaude=false) must start without claude; got %v\nstderr=%s", err, wErr.String())
 	}
 }
 
