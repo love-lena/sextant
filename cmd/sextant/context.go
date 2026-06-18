@@ -43,7 +43,11 @@ func contextUsage() {
 	fmt.Fprint(os.Stderr, `usage: sextant context <command>
 
   list                       list saved contexts (the active one marked *)
-  add <name> --creds F       save a context (URL from --url or --store discovery)
+  add <name> --creds F        save a context (URL from --url or --store discovery)
+       [--kind K] [--id ULID] record what the client is and its bus identity; an
+       [--display N] [--force] agent context needs --kind agent for 'context use'.
+                              A --force re-add preserves id/kind/display unless
+                              the flag is given (no silent clobber on recovery).
   use <name>                 make <name> the active context
   current                    print the active context name
   delete <name> [--purge]    remove a context (--purge also deletes its creds)
@@ -125,9 +129,29 @@ func contextAdd(args []string) {
 	if *creds == "" {
 		fatal("context add needs --creds <file>")
 	}
-	if !*force {
-		if _, err := clictx.Load(name); err == nil {
-			fatal("context %q already exists (use --force to replace it)", name)
+	// On a re-add, the existing record's id/kind/display are the recovery anchor:
+	// a --force re-add that omits those flags (as discovery-mode recovery does)
+	// must NOT silently empty them, or `context_use` later refuses the context
+	// for kind=="" and the identity has to be hand-edited back (TASK-62). Load the
+	// prior record and keep any field whose flag was not explicitly passed.
+	// A prior that fails to load (e.g. corrupt json) is treated as no prior:
+	// nothing to preserve, and a --force re-add then rewrites it clean from the
+	// flags — idiomatic with List/Delete, which also skip an unreadable entry.
+	prior, priorErr := clictx.Load(name)
+	if priorErr == nil && !*force {
+		fatal("context %q already exists (use --force to replace it)", name)
+	}
+	if priorErr == nil {
+		set := map[string]bool{}
+		fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+		if !set["id"] {
+			*id = prior.ID
+		}
+		if !set["kind"] {
+			*kind = prior.Kind
+		}
+		if !set["display"] {
+			*display = prior.Display
 		}
 	}
 	blob, err := os.ReadFile(*creds)

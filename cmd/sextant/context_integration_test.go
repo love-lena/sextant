@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -115,5 +116,83 @@ func TestContextLifecycle(t *testing.T) {
 	// using a missing context errors
 	if out, code := runCtx(t, home, "context", "use", "ghost"); code == 0 {
 		t.Fatalf("use ghost should fail: out=%q", out)
+	}
+}
+
+// ctxRow mirrors `context list --json`'s row shape (the fields this test asserts).
+type ctxRow struct {
+	Name string `json:"name"`
+	ID   string `json:"id"`
+	Kind string `json:"kind"`
+}
+
+func ctxRowByName(t *testing.T, home, name string) ctxRow {
+	t.Helper()
+	out, code := runCtx(t, home, "context", "list", "--json")
+	if code != 0 {
+		t.Fatalf("list --json: code=%d out=%q", code, out)
+	}
+	var rows []ctxRow
+	if err := json.Unmarshal([]byte(out), &rows); err != nil {
+		t.Fatalf("parse list --json %q: %v", out, err)
+	}
+	for _, r := range rows {
+		if r.Name == name {
+			return r
+		}
+	}
+	t.Fatalf("context %q not in list --json: %q", name, out)
+	return ctxRow{}
+}
+
+// TestContextAddPreservesIDAndKindOnReadd is TASK-62's regression lock: the
+// v0.5.1 restart incident stranded the whole crew because a discovery-mode
+// `context add --force` re-add (which does not repeat --id/--kind) EMPTIED the
+// id and omitted the kind, so `context use` then refused the context for
+// kind=="" — each named agent had to hand-edit its context json to recover.
+//
+// A named agent context is created with `--kind agent` carrying a bus identity,
+// and a bare `--force` re-add must PRESERVE both id and kind=agent so the
+// context still satisfies the (unchanged) context_use agent-kind guard with no
+// manual edit. We drive the real binary so the flag-parsing + write path that
+// actually stranded the crew is the thing under test.
+func TestContextAddPreservesIDAndKindOnReadd(t *testing.T) {
+	home := t.TempDir()
+	dummy := filepath.Join(home, "agent.creds")
+	if err := os.WriteFile(dummy, []byte("CREDS-BLOB"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	const id = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+
+	// Create a named agent context carrying a bus identity, exactly as a named
+	// crew agent is enrolled (--kind agent so context_use will attach to it).
+	if out, code := runCtx(t, home, "context", "add", "sirius",
+		"--creds", dummy, "--url", "nats://crew", "--kind", "agent", "--id", id); code != 0 {
+		t.Fatalf("add sirius: code=%d out=%q", code, out)
+	}
+	if r := ctxRowByName(t, home, "sirius"); r.ID != id || r.Kind != "agent" {
+		t.Fatalf("after add: id=%q kind=%q, want id=%q kind=agent", r.ID, r.Kind, id)
+	}
+
+	// The recovery re-add: --force, NO --id/--kind (the operator does not repeat
+	// them in discovery mode). The id and kind must SURVIVE — this is the exact
+	// regression that emptied them and stranded the crew.
+	if out, code := runCtx(t, home, "context", "add", "sirius",
+		"--creds", dummy, "--url", "nats://crew", "--force"); code != 0 {
+		t.Fatalf("re-add sirius --force: code=%d out=%q", code, out)
+	}
+	if r := ctxRowByName(t, home, "sirius"); r.ID != id || r.Kind != "agent" {
+		t.Fatalf("after --force re-add: id=%q kind=%q, want id=%q kind=agent (PRESERVED, not emptied)", r.ID, r.Kind, id)
+	}
+
+	// An explicit flag on re-add still overrides — preserve fills only the gaps.
+	const id2 = "01BRZ3NDEKTSV4RRFFQ69G5FAV"
+	if out, code := runCtx(t, home, "context", "add", "sirius",
+		"--creds", dummy, "--url", "nats://crew", "--force", "--id", id2); code != 0 {
+		t.Fatalf("re-add sirius with --id: code=%d out=%q", code, out)
+	}
+	if r := ctxRowByName(t, home, "sirius"); r.ID != id2 || r.Kind != "agent" {
+		t.Fatalf("after --id re-add: id=%q kind=%q, want id=%q (overridden) kind=agent (preserved)", r.ID, r.Kind, id2)
 	}
 }
