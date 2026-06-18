@@ -83,10 +83,26 @@ func TestGatherWorkspaceClassifies(t *testing.T) {
 		t.Fatalf("otherCount = %d, want 2 (working-notes + approved-thing)", ws.otherCount)
 	}
 
-	// The curated home pins the review-ready brief and states the real-call count.
+	// The curated home emits an agenda block first (ranked real calls) then a pinned block.
 	proj := curateHome(ws)
-	if len(proj.Blocks) != 1 || proj.Blocks[0].Type != "pinned" || proj.Blocks[0].Names[0] != "the-brief" {
-		t.Fatalf("home pinned block = %+v", proj.Blocks)
+	if len(proj.Blocks) < 2 {
+		t.Fatalf("home blocks = %d, want >=2 (agenda + pinned)", len(proj.Blocks))
+	}
+	if proj.Blocks[0].Type != "agenda" || len(proj.Blocks[0].Items) == 0 {
+		t.Fatalf("first block is not a non-empty agenda: %+v", proj.Blocks[0])
+	}
+	if proj.Blocks[0].Items[0].Ref != "the-brief" {
+		t.Fatalf("agenda first item ref = %q, want the-brief", proj.Blocks[0].Items[0].Ref)
+	}
+	var pinned *homeBlock
+	for i := range proj.Blocks {
+		if proj.Blocks[i].Type == "pinned" {
+			pinned = &proj.Blocks[i]
+			break
+		}
+	}
+	if pinned == nil || pinned.Names[0] != "the-brief" {
+		t.Fatalf("pinned block missing or wrong: %+v", proj.Blocks)
 	}
 	if !strings.Contains(proj.Greeting.Note, "1 real call") {
 		t.Fatalf("greeting note = %q, want a 1-real-call state line", proj.Greeting.Note)
@@ -104,6 +120,93 @@ func TestRenderForCurationIncludesGoalAndQueue(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("renderForCuration missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestHomeRankingByDownstreamBlocking(t *testing.T) {
+	// item-b blocks 2 criteria; item-a blocks 0; item-c blocks 1.
+	// Expected order: item-b first, then item-c, then item-a.
+	ws := gatheredWorkspace{
+		reviewQueue: []reviewItem{
+			{Name: "item-a", State: "review"}, // no proof relations
+			{Name: "item-b", State: "review", Relates: []relateEntry{
+				{Goal: "v1", Crit: "crit1", Kind: "proof"},
+				{Goal: "v1", Crit: "crit2", Kind: "proof"},
+			}},
+			{Name: "item-c", State: "review", Relates: []relateEntry{
+				{Goal: "v1", Crit: "crit3", Kind: "proof"},
+			}},
+		},
+		goals: []goalDigest{{Name: "goal.v1", Headline: "v1.0 milestone"}},
+	}
+	proj := curateHome(ws)
+	var agenda *homeBlock
+	for i := range proj.Blocks {
+		if proj.Blocks[i].Type == "agenda" {
+			agenda = &proj.Blocks[i]
+			break
+		}
+	}
+	if agenda == nil {
+		t.Fatal("curateHome produced no agenda block")
+	}
+	if len(agenda.Items) != 3 {
+		t.Fatalf("agenda items = %d, want 3", len(agenda.Items))
+	}
+	if agenda.Items[0].Ref != "item-b" {
+		t.Errorf("first item = %q, want item-b (blocks 2 criteria)", agenda.Items[0].Ref)
+	}
+	if agenda.Items[1].Ref != "item-c" {
+		t.Errorf("second item = %q, want item-c (blocks 1 criterion)", agenda.Items[1].Ref)
+	}
+	if agenda.Items[2].Ref != "item-a" {
+		t.Errorf("third item = %q, want item-a (blocks 0 criteria)", agenda.Items[2].Ref)
+	}
+	if !strings.Contains(agenda.Items[0].Text, "item-b") {
+		t.Errorf("first item why text does not mention item-b: %q", agenda.Items[0].Text)
+	}
+	if !strings.Contains(agenda.Items[0].Text, "2 criteria") {
+		t.Errorf("first item why text does not quantify 2 criteria: %q", agenda.Items[0].Text)
+	}
+}
+
+func TestHomeAgendaItemHasStructuredWhy(t *testing.T) {
+	ws := gatheredWorkspace{
+		reviewQueue: []reviewItem{
+			{
+				Name:  "my-brief",
+				State: "review",
+				Title: "My Brief",
+				Relates: []relateEntry{
+					{Goal: "goal1", Crit: "criterion-A", Kind: "proof"},
+				},
+			},
+		},
+		goals: []goalDigest{{Name: "goal.goal1", Headline: "Goal One"}},
+	}
+	proj := curateHome(ws)
+	var agenda *homeBlock
+	for i := range proj.Blocks {
+		if proj.Blocks[i].Type == "agenda" {
+			agenda = &proj.Blocks[i]
+			break
+		}
+	}
+	if agenda == nil || len(agenda.Items) == 0 {
+		t.Fatal("no agenda items")
+	}
+	item := agenda.Items[0]
+	if item.Text == "" {
+		t.Error("agenda item has no why text (text field empty)")
+	}
+	if item.Ref != "my-brief" {
+		t.Errorf("item ref = %q, want my-brief", item.Ref)
+	}
+	if item.Tone == "" {
+		t.Error("agenda item has no tone")
+	}
+	if !strings.Contains(item.Text, "criterion-A") && !strings.Contains(item.Text, "Goal One") {
+		t.Errorf("why text does not reference criterion or goal: %q", item.Text)
 	}
 }
 

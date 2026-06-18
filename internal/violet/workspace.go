@@ -44,11 +44,20 @@ type gatheredWorkspace struct {
 	otherCount  int
 }
 
+// relateEntry is one entry of an artifact record's `relates` array — mirrors
+// dashapi's relate shape without creating a cross-package dependency.
+type relateEntry struct {
+	Goal string
+	Crit string
+	Kind string
+}
+
 type reviewItem struct {
 	Name     string
 	Revision uint64
 	State    string
-	Title    string // best-effort: a human label pulled from the record if present
+	Title    string        // best-effort: a human label pulled from the record if present
+	Relates  []relateEntry // proof relations parsed from the record's `relates` array
 }
 
 type goalDigest struct {
@@ -94,6 +103,7 @@ func gatherWorkspace(ctx context.Context, r artifactReader) (gatheredWorkspace, 
 				Revision: art.Revision,
 				State:    state,
 				Title:    recordTitle(rec),
+				Relates:  parseRelates(rec),
 			})
 			continue
 		}
@@ -132,6 +142,31 @@ func recordTitle(rec map[string]json.RawMessage) string {
 		}
 	}
 	return ""
+}
+
+// parseRelates parses the `relates` array from an artifact record into relateEntry
+// values. A missing or malformed relates field yields nil (not an error — most
+// artifacts carry no relations).
+func parseRelates(rec map[string]json.RawMessage) []relateEntry {
+	raw, ok := rec["relates"]
+	if !ok {
+		return nil
+	}
+	var all []struct {
+		Goal string `json:"goal"`
+		Crit string `json:"crit"`
+		Kind string `json:"kind"`
+	}
+	if json.Unmarshal(raw, &all) != nil {
+		return nil
+	}
+	out := make([]relateEntry, 0, len(all))
+	for _, r := range all {
+		if r.Goal != "" {
+			out = append(out, relateEntry{Goal: r.Goal, Crit: r.Crit, Kind: r.Kind})
+		}
+	}
+	return out
 }
 
 // parseGoal recognises a goal record by its criteria array and digests each
@@ -197,11 +232,91 @@ func (ws gatheredWorkspace) renderForCuration() string {
 	return b.String()
 }
 
+// downstreamScore returns the number of goal criteria this item is a proof for.
+// A higher score means this item blocks more downstream work — rank it first.
+func downstreamScore(it reviewItem) int {
+	n := 0
+	for _, r := range it.Relates {
+		if r.Kind == "proof" {
+			n++
+		}
+	}
+	return n
+}
+
+// rankReviewQueue sorts items by blocks-most-downstream-work (descending). Items
+// with the most proof relations to goal criteria rank first — they unblock the
+// most downstream work. Ties are broken by name (lexicographic) for determinism.
+func rankReviewQueue(items []reviewItem) []reviewItem {
+	ranked := make([]reviewItem, len(items))
+	copy(ranked, items)
+	sort.SliceStable(ranked, func(i, j int) bool {
+		si, sj := downstreamScore(ranked[i]), downstreamScore(ranked[j])
+		if si != sj {
+			return si > sj
+		}
+		return ranked[i].Name < ranked[j].Name
+	})
+	return ranked
+}
+
+// whyText produces the "why you're seeing this" rationale for a home agenda item.
+// If the item has proof relations, it names the downstream goal criteria it
+// unblocks. Otherwise it falls back to a terse needs-review line.
+func whyText(it reviewItem, ws gatheredWorkspace) string {
+	var proofs []relateEntry
+	for _, r := range it.Relates {
+		if r.Kind == "proof" {
+			proofs = append(proofs, r)
+		}
+	}
+	if len(proofs) == 0 {
+		return "[[" + it.Name + "]] needs your review."
+	}
+	goalHeadlines := make(map[string]string, len(ws.goals))
+	for _, g := range ws.goals {
+		goalHeadlines[g.Name] = g.Headline
+	}
+	if len(proofs) == 1 {
+		p := proofs[0]
+		goal := p.Goal
+		if h := goalHeadlines["goal."+goal]; h != "" {
+			goal = h
+		}
+		if p.Crit != "" {
+			return "[[" + it.Name + "]] unblocks " + p.Crit + " on " + goal + "."
+		}
+		return "[[" + it.Name + "]] is proof for " + goal + " — your approval advances the goal."
+	}
+	return "[[" + it.Name + "]] unblocks " + itoa(len(proofs)) + " criteria across " + itoa(len(uniqueGoals(proofs))) + " goals."
+}
+
+func uniqueGoals(proofs []relateEntry) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range proofs {
+		if !seen[p.Goal] {
+			seen[p.Goal] = true
+			out = append(out, p.Goal)
+		}
+	}
+	return out
+}
+
+// homeAgendaItem is one item in the curated agenda block — the structured "why
+// you're seeing this" shape the dash reads as a field (home.jsx AgendaCall).
+type homeAgendaItem struct {
+	Action string `json:"action,omitempty"` // e.g. "review", "decide", "sign-off"
+	Ref    string `json:"ref,omitempty"`    // artifact name or goal.<id>
+	Text   string `json:"text"`             // "why you're seeing this" — the rationale
+	Tone   string `json:"tone,omitempty"`   // "review", "call", "context"
+}
+
 // homeProjection is the curated `home` artifact record the dash reads
 // (internal/dashapi/web/app/home.jsx): a greeting note (the curated state line)
-// and a pinned block (the ranked real calls). The wrapper writes this; the
-// home-manager supplied the judgement (which calls are real, the state line) via
-// its snapshot, and the wrapper ranks the review queue into pinned names.
+// and blocks (agenda + pinned). The wrapper writes this; the home-manager
+// supplied the judgement (which calls are real, the state line) via its snapshot,
+// and the wrapper ranks the review queue into the agenda and pinned blocks.
 type homeProjection struct {
 	Type     string       `json:"$type"`
 	Greeting homeGreeting `json:"greeting"`
@@ -214,8 +329,10 @@ type homeGreeting struct {
 }
 
 type homeBlock struct {
-	Type  string   `json:"type"`
-	Names []string `json:"names,omitempty"`
+	Type  string           `json:"type"`
+	Names []string         `json:"names,omitempty"`
+	Items []homeAgendaItem `json:"items,omitempty"`
+	Title string           `json:"title,omitempty"`
 }
 
 // marshal renders the projection as a wire.Lexicon for CreateArtifact/UpdateArtifact.
