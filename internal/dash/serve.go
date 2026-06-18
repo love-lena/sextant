@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -83,8 +85,21 @@ func runServe(ctx context.Context, opts Options, out io.Writer) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	fmt.Fprintf(out, "sextant dash --serve: API + debug surface at http://%s/?token=%s\n", ln.Addr(), token)
+	// Build the tokenized URL once so both the announce line and the state file
+	// use the same value.
+	serveURL := fmt.Sprintf("http://%s/?token=%s", ln.Addr(), token)
+	fmt.Fprintf(out, "sextant dash --serve: API + debug surface at %s\n", serveURL)
 	fmt.Fprintf(out, "  (the URL carries the access token — keep it local; Ctrl-C to stop)\n")
+
+	// Write the state file when a path was given. The file lets a managed/
+	// backgrounded dash expose its URL without the operator having to capture
+	// stdout (`sextant dash url` reads it). Written after the listener binds so
+	// the port is final; removed on clean shutdown so absence means not running.
+	if opts.StateFile != "" {
+		if err := writeStateFile(opts.StateFile, serveURL, token, ln.Addr()); err != nil {
+			return fmt.Errorf("write state file: %w", err)
+		}
+	}
 
 	serveErr := make(chan error, 1)
 	go func() {
@@ -102,10 +117,48 @@ func runServe(ctx context.Context, opts Options, out io.Writer) error {
 		sctx, scancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer scancel()
 		_ = srv.Shutdown(sctx)
+		if opts.StateFile != "" {
+			_ = os.Remove(opts.StateFile)
+		}
 		return nil
 	case err := <-serveErr:
 		return err
 	}
+}
+
+// DashState is the on-disk record written by runServe when a StateFile is
+// configured. It lets a managed/backgrounded dash expose its URL after launch.
+type DashState struct {
+	URL   string `json:"url"`
+	Token string `json:"token"`
+	Port  int    `json:"port"`
+}
+
+// writeStateFile writes a DashState JSON record to path with 0600 permissions.
+// addr is the net.Addr returned by the listener (host:port).
+func writeStateFile(path, url, token string, addr net.Addr) error {
+	_, portStr, _ := net.SplitHostPort(addr.String())
+	port, _ := strconv.Atoi(portStr)
+	state := DashState{URL: url, Token: token, Port: port}
+	b, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, b, 0o600)
+}
+
+// ReadStateFile reads a DashState from path. Returns an error if the file is
+// absent or unparseable.
+func ReadStateFile(path string) (DashState, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return DashState{}, err
+	}
+	var s DashState
+	if err := json.Unmarshal(b, &s); err != nil {
+		return DashState{}, fmt.Errorf("parse state file: %w", err)
+	}
+	return s, nil
 }
 
 // serveAddr is the loopback listen address for the given port. The host is
