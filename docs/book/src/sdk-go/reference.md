@@ -131,6 +131,14 @@ func (c *Client) GetPrincipal(ctx context.Context) (string, error)
 
 GetPrincipal reads the current principal ULID as a one-shot principal.get call. Empty means no principal is designated. A connected client usually reads the cached value with Principal() instead; GetPrincipal is the explicit re-read (e.g. a CLI \`principal get\`).
 
+### func `(*Client) HeartbeatState`
+
+```go
+func (c *Client) HeartbeatState() HeartbeatState
+```
+
+HeartbeatState returns a snapshot of the heartbeat round-trip state. It never blocks; it reads the locally recorded values under a short lock.
+
 ### func `(*Client) ID`
 
 ```go
@@ -263,6 +271,24 @@ type Handler func(Message)
 
 Handler processes a received message.
 
+## type `HeartbeatState`
+
+```go
+type HeartbeatState struct {
+	// LastBeatSeq is the highest beat sequence the SDK has sent.
+	LastBeatSeq uint64
+	// LastEchoSeq is the sequence of the most recent echo recorded by the watcher.
+	LastEchoSeq uint64
+	// LastEchoAt is when that echo arrived (local clock). Zero until the first echo.
+	LastEchoAt time.Time
+	// Fresh reports whether the last echo is within the SDK's freshness window —
+	// the watchdog's "push path is live" signal. False when no echo has arrived.
+	Fresh bool
+}
+```
+
+HeartbeatState is the SDK's in-process view of its own liveness round-trip (TASK-126): the last beat sent and the last echo the bus pushed back on the dedicated sx.hb.\<self> subject. It is for a future watchdog (TASK-124) to consume — a beat sent but not echoed within the freshness window is a stale push path. The echo itself is internal; it is never surfaced to the user as a message. Read with HeartbeatState; the zero value means no echo has arrived.
+
 ## type `IssuedClient`
 
 ```go
@@ -374,6 +400,22 @@ type Options struct {
 	SkewTolerance time.Duration
 	// Logf receives announcements; defaults to log.Printf.
 	Logf func(string, ...any)
+
+	// HeartbeatInterval is how often the SDK sends clients.heartbeat once
+	// connected (TASK-126): each beat refreshes the bus-stamped last_seen that
+	// keeps the client derived-online across a leaf link, and is echoed back on
+	// the client's dedicated subject so the SDK can confirm its push path. Zero
+	// means the default (defaultHeartbeatInterval, ~15s). A bus that does not
+	// implement the op answers "unknown operation"; the SDK then stops beating
+	// and falls back to connection-table presence — never crashes.
+	HeartbeatInterval time.Duration
+
+	// HeartbeatFreshness is how recently an echo must have arrived for the client
+	// to consider its push path live — surfaced via HeartbeatState for a future
+	// watchdog (TASK-124). Zero means the default (defaultHeartbeatFreshness, a
+	// small multiple of the interval). It governs the SDK's own staleness view,
+	// independent of the bus's presence freshness window.
+	HeartbeatFreshness time.Duration
 }
 ```
 
