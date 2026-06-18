@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 
 	"github.com/love-lena/sextant/pkg/buscfg"
 )
@@ -16,7 +17,8 @@ import (
 //
 //	sextant config set leaf-listen <addr>   write the hub leaf listener address
 //	sextant config set leaf-listen ""       clear it (back to default-off)
-//	sextant config get [leaf-listen]        print the current config
+//	sextant config set port <n>             pin the bus listen port (0 clears it)
+//	sextant config get [leaf-listen|port]   print the current config
 func cmdConfig(args []string) {
 	if len(args) == 0 {
 		fatal("config: expected a subcommand (set|get) — see `sextant help`")
@@ -42,30 +44,47 @@ func cmdConfigSet(args []string) {
 }
 
 // runConfigSet is the testable core: it sets a single config key, preserving any
-// other keys already on disk. Only leaf-listen is settable in v0.5.1. The value
-// is NOT validated here — the bus validates the leaf address on `up`, so this
-// stays a plain writer and there is a single validation site.
+// other keys already on disk. Settable keys: leaf-listen (an address; the bus
+// validates it on `up`) and port (an integer the bus pins deterministically).
+// Values are not range-validated here beyond port being a parseable int — the
+// bus is the single validation site (it probes the port and fails loud if taken).
 func runConfigSet(stdout io.Writer, store string, kv []string) error {
 	if len(kv) != 2 {
-		return fmt.Errorf("config set: usage: sextant config set leaf-listen <addr>")
+		return fmt.Errorf("config set: usage: sextant config set leaf-listen <addr> | port <n>")
 	}
 	key, val := kv[0], kv[1]
-	if key != "leaf-listen" {
-		return fmt.Errorf("config set: unknown key %q (only leaf-listen is settable)", key)
-	}
 	path := buscfg.Path(store)
 	cfg, err := buscfg.Load(path)
 	if err != nil {
 		return err // malformed existing config: fail loud, do not clobber
 	}
-	cfg.LeafListen = val
-	if err := buscfg.Save(path, cfg); err != nil {
-		return err
-	}
-	if val == "" {
-		fmt.Fprintf(stdout, "leaf-listen cleared in %s (leaf listener OFF on next `sextant up`)\n", path)
-	} else {
-		fmt.Fprintf(stdout, "leaf-listen = %s in %s\n  restart the bus to apply: brew services restart sextant\n", val, path)
+	switch key {
+	case "leaf-listen":
+		cfg.LeafListen = val
+		if err := buscfg.Save(path, cfg); err != nil {
+			return err
+		}
+		if val == "" {
+			fmt.Fprintf(stdout, "leaf-listen cleared in %s (leaf listener OFF on next `sextant up`)\n", path)
+		} else {
+			fmt.Fprintf(stdout, "leaf-listen = %s in %s\n  restart the bus to apply: brew services restart sextant\n", val, path)
+		}
+	case "port":
+		n, perr := strconv.Atoi(val)
+		if perr != nil || n < 0 || n > 65535 {
+			return fmt.Errorf("config set: port must be an integer 0-65535 (0 clears the pin), got %q", val)
+		}
+		cfg.Port = n
+		if err := buscfg.Save(path, cfg); err != nil {
+			return err
+		}
+		if n == 0 {
+			fmt.Fprintf(stdout, "port cleared in %s (bus picks the recorded-or-random port on next `sextant up`)\n", path)
+		} else {
+			fmt.Fprintf(stdout, "port = %d in %s\n  restart the bus to apply: brew services restart sextant\n", n, path)
+		}
+	default:
+		return fmt.Errorf("config set: unknown key %q (settable: leaf-listen, port)", key)
 	}
 	return nil
 }
@@ -89,13 +108,23 @@ func runConfigGet(stdout io.Writer, store string, keys []string) error {
 	}
 	switch {
 	case len(keys) == 0:
-		fmt.Fprintf(stdout, "config: %s\n  leaf-listen = %s\n", path, quoteEmpty(cfg.LeafListen))
+		fmt.Fprintf(stdout, "config: %s\n  leaf-listen = %s\n  port        = %s\n", path, quoteEmpty(cfg.LeafListen), quotePort(cfg.Port))
 	case len(keys) == 1 && keys[0] == "leaf-listen":
 		fmt.Fprintln(stdout, cfg.LeafListen)
+	case len(keys) == 1 && keys[0] == "port":
+		fmt.Fprintln(stdout, cfg.Port)
 	default:
-		return fmt.Errorf("config get: unknown key %q (only leaf-listen is known)", keys[0])
+		return fmt.Errorf("config get: unknown key %q (known: leaf-listen, port)", keys[0])
 	}
 	return nil
+}
+
+// quotePort renders an unset port (0) with a visible marker, like quoteEmpty.
+func quotePort(n int) string {
+	if n == 0 {
+		return `0 (unset — recorded-or-random port)`
+	}
+	return strconv.Itoa(n)
 }
 
 // quoteEmpty renders an empty value as a visible marker so `config get` does not

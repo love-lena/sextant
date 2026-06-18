@@ -29,6 +29,8 @@ func main() {
 	switch os.Args[1] {
 	case "up":
 		cmdUp(os.Args[2:])
+	case "doctor":
+		cmdDoctor(os.Args[2:])
 	case "publish":
 		cmdPublish(os.Args[2:])
 	case "subscribe":
@@ -77,7 +79,11 @@ leaf-node federation (a remote box links a local bus to the hub — ADR-0038; de
 
 bus config (settings 'up' reads on startup — the brew-services path; flag > env > config):
   sextant config set leaf-listen <host:port>    enable the leaf listener via the config file
-  sextant config get [leaf-listen]              show the current config
+  sextant config set port <n>                   pin a deterministic listen port (survives brew restart; 0 clears)
+  sextant config get [leaf-listen|port]         show the current config
+
+health / observability (read-only — diagnose a bus that won't come up):
+  sextant doctor    [--store DIR]               report bus reachability, port, leaf state, launchd job
 
 identities (the bus is the sole minter; keys never leave it — ADR-0020):
   sextant clients register <name> [--kind K]    operator mints for another
@@ -153,6 +159,11 @@ func cmdUp(args []string) {
 		fatal("%v", err)
 	}
 	*leafListen = resolveLeafListen(fs, *leafListen, os.Getenv("SEXTANT_LEAF_LISTEN"), cfg.LeafListen)
+	// Port precedence mirrors leaf-listen: an explicit --port wins; otherwise the
+	// config-file pin (the brew-services path) applies. A pinned port is
+	// deterministic — bus.Start probes it and fails loud if it is unavailable
+	// rather than silently rebinding random (the v0.5.1 outage).
+	*port = resolvePort(fs, *port, cfg.Port)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -164,6 +175,13 @@ func cmdUp(args []string) {
 		LeafRemoteURL:  *leafRemote,
 		LeafCreds:      *leafCreds,
 		LeafBundle:     *leafBundle,
+		// Surface the bus's diagnostics (notably the loud random-port fallback) on
+		// our stderr so an operator running `up` sees a port change rather than
+		// being silently stranded. The default would also write to stderr; wiring it
+		// explicitly with a prefix keeps the source unambiguous.
+		Logf: func(format string, args ...any) {
+			fmt.Fprintf(os.Stderr, "sextant: "+format+"\n", args...)
+		},
 	})
 	if err != nil {
 		fatal("%v", err)
@@ -256,6 +274,28 @@ func resolveLeafListen(fs *flag.FlagSet, flagVal, envVal, cfgVal string) string 
 	default:
 		return cfgVal
 	}
+}
+
+// resolvePort applies the listen-port precedence for `up`:
+//
+//	--port flag (when explicitly passed)  >  config-file port  >  0 (auto)
+//
+// The flag wins only when EXPLICITLY passed (flag.Visit) — a default --port=0
+// must not mask a config pin, but an explicit --port=0 (or any value) is a
+// deliberate override. 0 is the auto case (reuse the recorded port if free, else
+// random); a non-zero result is a deterministic pin the bus fails loud on if
+// taken.
+func resolvePort(fs *flag.FlagSet, flagVal, cfgVal int) int {
+	flagSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "port" {
+			flagSet = true
+		}
+	})
+	if flagSet {
+		return flagVal
+	}
+	return cfgVal
 }
 
 func fatal(format string, args ...any) {

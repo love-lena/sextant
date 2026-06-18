@@ -34,6 +34,15 @@ type Config struct {
 	// address is validated by the bus when the listener is wired (a malformed or
 	// non-loopback address fails `up` loudly there), not here.
 	LeafListen string `json:"leaf-listen,omitempty"`
+
+	// Port, when non-zero, pins the bus client listen port deterministically. It
+	// is the brew-services equivalent of `--port` (launchd inherits neither flag
+	// nor env across a restart): a recorded value the bus reads on `up`, so the
+	// port survives `brew services restart` and clients stay reachable instead of
+	// re-resolving after a silent random rebind. Zero means OFF — the bus reuses
+	// the recorded port from bus.json when free, else binds random (ADR-0025). An
+	// unavailable pinned port fails `up` loudly (the bus probes it), never silently.
+	Port int `json:"port,omitempty"`
 }
 
 // Load reads the config file at path. A missing file is NOT an error — it is the

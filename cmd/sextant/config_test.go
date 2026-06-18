@@ -55,6 +55,42 @@ func TestResolveLeafListenPrecedence(t *testing.T) {
 	}
 }
 
+// parsePortFlag builds a FlagSet with the same --port flag `up` uses and parses
+// args into it, so resolvePort sees the real flag.Visit state.
+func parsePortFlag(t *testing.T, args []string) (*flag.FlagSet, int) {
+	t.Helper()
+	fs := flag.NewFlagSet("up", flag.ContinueOnError)
+	port := fs.Int("port", 0, "")
+	if err := fs.Parse(args); err != nil {
+		t.Fatalf("parse %v: %v", args, err)
+	}
+	return fs, *port
+}
+
+func TestResolvePortPrecedence(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string // up args (whether --port was passed)
+		cfg  int
+		want int
+	}{
+		{"unset is auto", nil, 0, 0},
+		{"config only", nil, 63527, 63527},
+		{"flag only", []string{"--port", "4222"}, 0, 4222},
+		{"flag overrides config", []string{"--port", "4222"}, 63527, 4222},
+		// An explicit --port=0 is a deliberate override (force auto) over a config pin.
+		{"explicit zero flag wins", []string{"--port", "0"}, 63527, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs, flagVal := parsePortFlag(t, tc.args)
+			if got := resolvePort(fs, flagVal, tc.cfg); got != tc.want {
+				t.Errorf("resolvePort = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRunConfigSetWritesLeafListen(t *testing.T) {
 	store := t.TempDir()
 	var out strings.Builder
@@ -90,12 +126,69 @@ func TestRunConfigSetClearLeafListen(t *testing.T) {
 
 func TestRunConfigSetRejectsUnknownKey(t *testing.T) {
 	var out strings.Builder
-	err := runConfigSet(&out, t.TempDir(), []string{"port", "4222"})
+	err := runConfigSet(&out, t.TempDir(), []string{"bogus", "x"})
 	if err == nil {
 		t.Fatal("want error for unknown key, got nil")
 	}
-	if !strings.Contains(err.Error(), "leaf-listen") {
-		t.Errorf("error should name the only settable key; got %v", err)
+	if !strings.Contains(err.Error(), "leaf-listen") || !strings.Contains(err.Error(), "port") {
+		t.Errorf("error should name the settable keys; got %v", err)
+	}
+}
+
+func TestRunConfigSetWritesPort(t *testing.T) {
+	store := t.TempDir()
+	var out strings.Builder
+	if err := runConfigSet(&out, store, []string{"port", "63527"}); err != nil {
+		t.Fatalf("runConfigSet port: %v", err)
+	}
+	cfg, err := buscfg.Load(buscfg.Path(store))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Port != 63527 {
+		t.Errorf("Port = %d, want 63527", cfg.Port)
+	}
+	if !strings.Contains(out.String(), "brew services restart") {
+		t.Errorf("set output should point at the restart step; got %q", out.String())
+	}
+}
+
+func TestRunConfigSetPortPreservesLeafListen(t *testing.T) {
+	// Setting one key must not clobber the other already on disk.
+	store := t.TempDir()
+	if err := buscfg.Save(buscfg.Path(store), buscfg.Config{LeafListen: "127.0.0.1:7422"}); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	if err := runConfigSet(&out, store, []string{"port", "63527"}); err != nil {
+		t.Fatalf("runConfigSet port: %v", err)
+	}
+	cfg, _ := buscfg.Load(buscfg.Path(store))
+	if cfg.Port != 63527 || cfg.LeafListen != "127.0.0.1:7422" {
+		t.Errorf("set port clobbered leaf-listen: %+v", cfg)
+	}
+}
+
+func TestRunConfigSetRejectsBadPort(t *testing.T) {
+	var out strings.Builder
+	for _, bad := range []string{"99999", "-1", "abc", ""} {
+		if err := runConfigSet(&out, t.TempDir(), []string{"port", bad}); err == nil {
+			t.Errorf("port %q: want error, got nil", bad)
+		}
+	}
+}
+
+func TestRunConfigGetPort(t *testing.T) {
+	store := t.TempDir()
+	if err := buscfg.Save(buscfg.Path(store), buscfg.Config{Port: 63527}); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	if err := runConfigGet(&out, store, []string{"port"}); err != nil {
+		t.Fatalf("runConfigGet port: %v", err)
+	}
+	if got := strings.TrimSpace(out.String()); got != "63527" {
+		t.Errorf("get port = %q, want 63527", got)
 	}
 }
 

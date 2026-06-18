@@ -1,0 +1,171 @@
+package main
+
+import (
+	"bufio"
+	"flag"
+	"fmt"
+	"io"
+	"net"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"time"
+
+	"github.com/love-lena/sextant/pkg/buscfg"
+	"github.com/love-lena/sextant/pkg/conninfo"
+)
+
+// cmdDoctor is the read-only health command: it diagnoses a bus that won't come
+// up. The v0.5.1 outage was hard to recover because `brew services` showed only
+// `Running: false` with no reason — doctor surfaces the missing facts (the
+// recorded port, whether anything is listening on it, the config pin, and the
+// launchd job state) and points at the kickstart recovery for the
+// loaded-but-not-running case. It never starts, stops, or mutates anything.
+//
+//	sextant doctor [--store DIR]
+const launchdLabel = "homebrew.mxcl.sextant"
+
+func cmdDoctor(args []string) {
+	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
+	store := fs.String("store", defaultStore(), "bus store dir: discovery + config (or set $SEXTANT_STORE)")
+	_ = fs.Parse(args)
+	runDoctor(os.Stdout, *store)
+}
+
+// runDoctor is the testable core: it writes a health report for the store at
+// store to w. It is read-only — every check is a file read, a TCP dial, or a
+// `launchctl print` (itself read-only). It does not fail the process; an
+// unhealthy bus is a report, not an error exit, so the operator always gets the
+// full picture.
+func runDoctor(w io.Writer, store string) {
+	fmt.Fprintf(w, "sextant doctor\n  store: %s\n", store)
+
+	// Discovery file (bus.json): the recorded URL is what every client resolves
+	// to. Its presence + port is the first thing to know.
+	infoPath := filepath.Join(store, conninfo.DefaultFile)
+	info, err := conninfo.Read(infoPath)
+	var recordedURL, recordedHostPort string
+	switch {
+	case err != nil:
+		fmt.Fprintf(w, "  discovery (bus.json): MISSING or unreadable — %v\n", err)
+		fmt.Fprintf(w, "    the bus has not written one (never started?), or the store dir is wrong.\n")
+	default:
+		recordedURL = info.URL
+		recordedHostPort = hostPort(info.URL)
+		fmt.Fprintf(w, "  discovery (bus.json): %s\n    url: %s\n", infoPath, recordedURL)
+	}
+
+	// Config pin (the brew-services path): a deterministic port + leaf state. A
+	// pin is what keeps clients reachable across a restart.
+	cfg, cerr := buscfg.Load(buscfg.Path(store))
+	switch {
+	case cerr != nil:
+		fmt.Fprintf(w, "  config: UNREADABLE — %v (this fails `sextant up` loudly)\n", cerr)
+	default:
+		port := "0 (unset — recorded-or-random)"
+		if cfg.Port != 0 {
+			port = fmt.Sprintf("%d (pinned — deterministic across restart)", cfg.Port)
+		}
+		leaf := "off"
+		if cfg.LeafListen != "" {
+			leaf = cfg.LeafListen
+		}
+		fmt.Fprintf(w, "  config: port=%s  leaf-listen=%s\n", port, leaf)
+		if cfg.Port == 0 {
+			fmt.Fprintf(w, "    hint: pin a port with `sextant config set port <n>` so clients survive a bus restart.\n")
+		}
+	}
+
+	// Reachability: is anything actually listening on the recorded address? This
+	// is the single most useful fact `brew services` omits.
+	if recordedHostPort != "" {
+		if reachable(recordedHostPort, 2*time.Second) {
+			fmt.Fprintf(w, "  reachable: YES — something is listening on %s\n", recordedHostPort)
+		} else {
+			fmt.Fprintf(w, "  reachable: NO — nothing is listening on %s\n", recordedHostPort)
+			fmt.Fprintf(w, "    the bus is down, or it rebound to a different port (clients pinned to this address are stranded).\n")
+		}
+	}
+
+	// launchd job (macOS / brew services): loaded vs running. The outage's worst
+	// trap — a job loaded-but-never-launched shows `Running: false` with no error.
+	reportLaunchd(w)
+}
+
+// hostPort extracts the host:port from a nats:// URL for dialing.
+func hostPort(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Host
+}
+
+// reachable reports whether a TCP connection to addr succeeds within timeout. It
+// is the read-only liveness probe — a successful dial means a listener is there
+// (it does not authenticate or speak NATS, just confirms the port is open).
+func reachable(addr string, timeout time.Duration) bool {
+	conn, err := net.DialTimeout("tcp", addr, timeout)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+// reportLaunchd reports the brew-services launchd job state on macOS. On other
+// platforms (or when launchctl is unavailable) it says so and stops — doctor is
+// useful without it. It runs `launchctl print`, which is read-only.
+func reportLaunchd(w io.Writer) {
+	if runtime.GOOS != "darwin" {
+		fmt.Fprintf(w, "  launchd: n/a (not macOS — brew services uses launchd only on macOS)\n")
+		return
+	}
+	if _, err := exec.LookPath("launchctl"); err != nil {
+		fmt.Fprintf(w, "  launchd: launchctl not found on PATH\n")
+		return
+	}
+	target := fmt.Sprintf("gui/%d/%s", os.Getuid(), launchdLabel)
+	out, err := exec.Command("launchctl", "print", target).CombinedOutput()
+	if err != nil {
+		fmt.Fprintf(w, "  launchd: job %q NOT LOADED (brew services not started, or different label)\n", launchdLabel)
+		fmt.Fprintf(w, "    start it: brew services start sextant\n")
+		return
+	}
+	state, logPath := parseLaunchdState(string(out))
+	switch state {
+	case "running":
+		fmt.Fprintf(w, "  launchd: job %q LOADED + running\n", launchdLabel)
+	case "":
+		fmt.Fprintf(w, "  launchd: job %q LOADED (state unknown)\n", launchdLabel)
+	default:
+		// Loaded but not running (e.g. "waiting", "not running"): the throttle trap.
+		fmt.Fprintf(w, "  launchd: job %q LOADED but NOT running (state=%q)\n", launchdLabel, state)
+		fmt.Fprintf(w, "    likely a launchd throttle from rapid restarts. Force a relaunch:\n")
+		fmt.Fprintf(w, "    launchctl kickstart -k gui/%d/%s\n", os.Getuid(), launchdLabel)
+	}
+	if logPath != "" {
+		fmt.Fprintf(w, "    log: %s\n", logPath)
+	}
+}
+
+// parseLaunchdState pulls the top-level `state = X` and `stdout path = Y` from
+// `launchctl print` output. The job dict nests sub-states (e.g. endpoint
+// `state = active`) — we take the FIRST `state =`, which is the job's own.
+func parseLaunchdState(out string) (state, logPath string) {
+	sc := bufio.NewScanner(strings.NewReader(out))
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if state == "" && strings.HasPrefix(line, "state = ") {
+			state = strings.TrimSpace(strings.TrimPrefix(line, "state = "))
+			continue
+		}
+		if logPath == "" && strings.HasPrefix(line, "stdout path = ") {
+			logPath = strings.TrimSpace(strings.TrimPrefix(line, "stdout path = "))
+		}
+	}
+	return state, logPath
+}

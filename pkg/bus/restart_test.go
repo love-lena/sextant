@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -110,12 +111,14 @@ func TestRestartFallsBackWhenPortTaken(t *testing.T) {
 	}
 	var sawNotice bool
 	for _, line := range rec2.all() {
-		if strings.Contains(line, "recorded port "+firstPort+" is in use") {
+		// The notice must be LOUD about a RANDOM rebind so clients pinned to the
+		// recorded port know to re-resolve (the v0.5.1 outage).
+		if strings.Contains(line, "recorded port "+firstPort+" unavailable") && strings.Contains(line, "RANDOM") {
 			sawNotice = true
 		}
 	}
 	if !sawNotice {
-		t.Errorf("port-fallback notice did not arrive through Config.Logf: %q", rec2.all())
+		t.Errorf("loud port-fallback notice did not arrive through Config.Logf: %q", rec2.all())
 	}
 	b2.Shutdown()
 
@@ -127,6 +130,50 @@ func TestRestartFallsBackWhenPortTaken(t *testing.T) {
 		t.Fatalf("Start with nil Logf should use the stderr default, not fail: %v", err)
 	}
 	t.Cleanup(b3.Shutdown)
+}
+
+// TestExplicitPortBindsDeterministically: a non-zero Config.Port is a pin — the
+// bus binds exactly that port (no recorded-port reuse, no random fallback).
+func TestExplicitPortBindsDeterministically(t *testing.T) {
+	// Pick a free port to pin, then release it so the bus can claim it.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve a port: %v", err)
+	}
+	want := mustParsePort(t, "nats://"+ln.Addr().String())
+	_ = ln.Close()
+
+	wantN, _ := strconv.Atoi(want)
+	b, err := Start(t.Context(), Config{StoreDir: t.TempDir(), Port: wantN})
+	if err != nil {
+		t.Fatalf("Start with explicit port %d: %v", wantN, err)
+	}
+	t.Cleanup(b.Shutdown)
+	if got := mustParsePort(t, b.ClientURL()); got != want {
+		t.Errorf("explicit port not honored: want %s, got %s", want, got)
+	}
+}
+
+// TestExplicitPortFailsLoudWhenTaken: a pinned port that is unavailable must
+// FAIL LOUD (an error naming the port), never silently fall back to random —
+// the operator who pinned a port gets that port or a clear reason why not.
+func TestExplicitPortFailsLoudWhenTaken(t *testing.T) {
+	// Occupy a port, then ask the bus to pin it.
+	squatter, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("occupy a port: %v", err)
+	}
+	t.Cleanup(func() { _ = squatter.Close() })
+	taken := mustParsePort(t, "nats://"+squatter.Addr().String())
+	takenN, _ := strconv.Atoi(taken)
+
+	_, err = Start(t.Context(), Config{StoreDir: t.TempDir(), Port: takenN})
+	if err == nil {
+		t.Fatalf("Start with a taken explicit port should fail loud, not fall back")
+	}
+	if !strings.Contains(err.Error(), taken) {
+		t.Errorf("explicit-port failure should name the port %s, got: %v", taken, err)
+	}
 }
 
 // TestFreshStoreBoot: a fresh store (no bus.json) starts without error and
