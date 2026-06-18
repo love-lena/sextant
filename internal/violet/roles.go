@@ -30,17 +30,22 @@ func (v *Violet) dmConsumer(ctx context.Context) {
 // structurally impossible (the spike's live bug).
 //
 // AC8 additions:
-//   - Idempotency (criterion 3): if ack reports this frame already answered,
-//     skip it. This fires when a frame appears both in the replay pass and live.
-//   - Response-watermark (criterion 5): the ack cursor advances ONLY after a
-//     confirmed publish. A crash before the publish leaves the cursor behind so
-//     the replay re-delivers and re-answers on the next startup.
+//   - Idempotency (criterion 3): on the LIVE path (real m.Sequence), skip a frame
+//     already past the persisted watermark. On the REPLAY path (m.Sequence==0)
+//     idempotency is the replay's since=readFrom() filter, so no per-frame check.
+//   - Response-watermark in CURSOR space (criterion 5): the ack cursor advances
+//     to m.advanceTo ONLY after a confirmed publish. m.advanceTo is the JetStream
+//     stream cursor one past this frame — Sequence+1 on the live path, the
+//     FetchMessages `next` on the replay path. A crash before the publish leaves
+//     the cursor behind so the replay re-delivers and re-answers on next startup.
 //   - Unified surface (criterion 4): publishReply sends to BOTH the DM subject
 //     and RepliesSubject under violet's own creds — never impersonating another.
 func (v *Violet) answerDM(ctx context.Context, m Message) {
-	// Idempotency (AC8 criterion 3): a frame can appear both in the replay pass
-	// and in the live subscription when it arrives just before the live sub starts.
-	// The ack check here (after the consumer picks it up) is the final gate.
+	// Idempotency (AC8 criterion 3), LIVE path only: a live frame can appear both
+	// in the replay pass and in the live subscription when it arrives just before
+	// the live sub starts. The live path has a real m.Sequence, so we can skip a
+	// frame already past the watermark. (Replay frames carry m.Sequence==0 and are
+	// covered by the replay's since=readFrom() filter, never this check.)
 	if v.ack != nil && m.Sequence > 0 && v.ack.alreadyAnswered(m.Sequence) {
 		v.cfg.Logf("violet: skipping already-answered DM seq=%d (idempotent)", m.Sequence)
 		return
@@ -88,15 +93,15 @@ func (v *Violet) answerDM(ctx context.Context, m Message) {
 		// advance only AFTER a confirmed publish (AC8 criterion 5).
 		return
 	}
-	v.cfg.Logf("violet: answered operator DM seq=%d (%d chars)", m.Sequence, len(reply))
+	v.cfg.Logf("violet: answered operator DM (seq=%d advanceTo=%d, %d chars)", m.Sequence, m.advanceTo, len(reply))
 
 	// AC8 response-watermark (criterion 5): advance the cursor only NOW — after
-	// the reply is confirmed published. We advance to Sequence+1 ("next to read
-	// from") so the next startup replay starts after this frame. A crash before
-	// this point leaves the cursor behind; the replay re-delivers and re-answers
-	// on the next startup (safe because publishReply is idempotent for the user).
-	if v.ack != nil && m.Sequence > 0 {
-		if aerr := v.ack.advance(m.Sequence + 1); aerr != nil {
+	// the reply is confirmed published. m.advanceTo is the cursor-space watermark
+	// (Sequence+1 live, FetchMessages `next` on replay), so this works on BOTH
+	// paths — including replay frames whose Sequence is 0. advance() is monotonic,
+	// so an out-of-order or duplicate advance never rewinds the cursor.
+	if v.ack != nil && m.advanceTo > 0 {
+		if aerr := v.ack.advance(m.advanceTo); aerr != nil {
 			v.cfg.Logf("violet: advance ack cursor failed (will re-answer on restart): %v", aerr)
 		}
 	}

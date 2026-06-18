@@ -119,27 +119,38 @@ func (b *fakeBus) ListArtifacts(context.Context) ([]artifactInfo, error) {
 	return out, nil
 }
 
-// FetchMessages implements the AC8 offline-gap replay pull path. It returns
-// frames from dmHistory (the operator DMs injected via retainDM) starting from
-// `since`, up to `limit` frames. The subject is ignored — a fake bus has only
-// one DM history (the test only calls this for the DM subject). Returns the
-// frames and the next cursor (since + len(frames)).
+// FetchMessages implements the AC8 offline-gap replay pull path, PRODUCTION-
+// FAITHFULLY (canopus's gate finding). It mirrors the real sdkAdapter:
+//   - it returns each frame with Sequence==0 (the SDK's FetchMessages exposes no
+//     per-frame stream sequence — only the batch cursor), and
+//   - it returns `next` = the last returned frame's real stream sequence + 1
+//     (the natsbackend.Read contract: next = md.Sequence.Stream + 1).
+//
+// The fake keeps the REAL stream sequence internally (dmHistory[i].Sequence) to
+// compute `next`, but never leaks it onto the returned frame — so a test that
+// drives replay through this fake exercises the exact Sequence==0 path the
+// production adapter produces. (Earlier this fake leaked real sequences, which is
+// precisely why the watermark bug hid.)
 func (b *fakeBus) FetchMessages(_ context.Context, _ string, since uint64, limit int) ([]fetchedFrame, uint64, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	var out []fetchedFrame
+	next := since
 	for _, f := range b.dmHistory {
-		if f.Sequence <= since {
-			continue // already seen (since is "already answered up to this seq")
+		// natsbackend.Read uses OptStartSeq=since INCLUSIVE: a frame AT `since` is
+		// returned (the watermark is "next to read from").
+		if f.Sequence < since {
+			continue // before the cursor: already read
 		}
-		out = append(out, f)
-		if len(out) >= limit {
+		out = append(out, fetchedFrame{
+			Author:   f.Author,
+			Sequence: 0, // PRODUCTION-FAITHFUL: the real adapter cannot fill this
+			Record:   f.Record,
+		})
+		next = f.Sequence + 1 // the natsbackend.Read cursor contract
+		if limit > 0 && len(out) >= limit {
 			break
 		}
-	}
-	next := since
-	if len(out) > 0 {
-		next = out[len(out)-1].Sequence
 	}
 	return out, next, nil
 }

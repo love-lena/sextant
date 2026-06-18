@@ -47,7 +47,7 @@ func main() {
 	gateModel := fs.String("gate-model", violet.ModelHaiku, "gate (significance triage) model — cheap")
 	deepModel := fs.String("deep-model", violet.ModelSonnet, "home-manager (deep refresh) model — capable")
 	safety := fs.Duration("safety-interval", 15*time.Minute, "slow safety-net interval for the deep pass (the gate is the primary trigger)")
-	stateDir := fs.String("state-dir", os.Getenv("VIOLET_STATE_DIR"), "directory for violet's durable substate (ack cursor for AC8 replay; default: $VIOLET_STATE_DIR)")
+	stateDir := fs.String("state-dir", os.Getenv("VIOLET_STATE_DIR"), "directory for violet's durable substate (ack cursor for AC8 replay; default: a violet/ subdir under the sextant config root)")
 	designate := fs.Bool("designate", false, "create/update the `assistant` designation artifact naming violet the live assistant (release-time, ADR-0039)")
 	_ = fs.Parse(os.Args[1:])
 
@@ -56,6 +56,13 @@ func main() {
 	}
 	if *apiKey == "" {
 		fatal("no Anthropic API key (set --api-key or $ANTHROPIC_API_KEY) — violet drives models for her three roles")
+	}
+	// Gate point 1: the durable cursor MUST persist across a real restart. When
+	// neither --state-dir nor $VIOLET_STATE_DIR is set, default to the persistent
+	// per-user path (violet/ under the sextant config root) so the AC8 watermark
+	// survives a restart with zero operator config.
+	if *stateDir == "" {
+		*stateDir = violet.DefaultStateDir()
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

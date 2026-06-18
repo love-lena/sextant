@@ -40,12 +40,29 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/love-lena/sextant/internal/clictx"
 	"github.com/love-lena/sextant/pkg/wire"
 )
+
+// DefaultStateDir is the persistent directory where violet keeps its durable
+// substate (the AC8 ack cursor) when the caller does not pass an explicit one.
+// It is a violet/ subdir under the sextant client-config root (clictx.Root() —
+// $SEXTANT_HOME, else <user-config>/sextant), the same root that already holds
+// conninfo and contexts. Using it means the response-watermark survives a real
+// process restart with ZERO operator config (gate point 1) — the durable cursor
+// is genuinely durable in production, not just in tmpdir tests.
+//
+// cmd/sextant-violet resolves this when --state-dir / $VIOLET_STATE_DIR is unset.
+// The violet package itself never defaults StateDir (an empty Config.StateDir
+// stays in-memory) so tests remain hermetic and never touch the real config dir.
+func DefaultStateDir() string {
+	return filepath.Join(clictx.Root(), "violet")
+}
 
 // busClient is the slice of *sextant.Client violet needs. Subscriptions are
 // scoped (fix #1), publishes carry the captured reply, and artifact ops drive
@@ -77,11 +94,29 @@ type publishResult struct{ ID string }
 
 // Message is one delivered frame as violet sees it: the bus-stamped author and
 // subject (the only trust signal — fix #5), the record, and the cursor.
+//
+// Sequence is the live relay's stream sequence (md.Sequence.Stream), set on the
+// Subscribe path. It is the SAME stream-sequence space the FetchMessages cursor
+// (since/next) lives in — confirmed against natsbackend.Read (next =
+// md.Sequence.Stream+1) and the relay (e.Seq = md.Sequence.Stream). On the
+// replay path Sequence is 0 (FetchMessages exposes no per-frame sequence — only
+// a bus ULID + the batch cursor); the watermark advance there rides advanceTo.
+//
+// advanceTo is the cursor-space watermark to persist AFTER this frame's reply is
+// confirmed published (response-watermark, criterion 5):
+//   - live path: Sequence+1 (one past the answered frame's stream sequence),
+//   - replay path: the FetchMessages `next` cursor for this exact frame (its
+//     stream sequence + 1), carried out of replayOfflineGap so answerDM can
+//     advance the durable cursor without a per-frame sequence it does not have.
+//
+// Both spaces are the JetStream stream sequence, so mixing them is sound.
 type Message struct {
 	Author   string
 	Subject  string
 	Record   json.RawMessage
 	Sequence uint64
+
+	advanceTo uint64 // cursor to persist after a confirmed reply (0 = no advance)
 }
 
 // subOpt / stopper mirror the SDK's SubOption / Subscription so the fake and the
@@ -122,8 +157,11 @@ type Config struct {
 
 	// StateDir is the directory where violet persists the durable DM cursor
 	// (violet-ack.json) across restarts (AC8). If empty, the cursor is in-memory
-	// only (no replay on reconnect — useful in tests; use a tempdir for
-	// integration tests that want durable replay).
+	// only — which loses the watermark on a real process restart. Production
+	// callers MUST pass a persistent path: cmd/sextant-violet defaults it to
+	// DefaultStateDir() (a violet/ subdir under the sextant client-config root,
+	// where conninfo/contexts already live) so the cursor survives restart with
+	// zero operator config. Tests leave it empty (in-memory) to stay hermetic.
 	StateDir string
 
 	// Logf receives diagnostics; defaults to log.Printf.
@@ -327,6 +365,12 @@ func (v *Violet) onFrame(m Message) {
 	// Operator DM → priority answer path (fix #3). The DM subject is exact, and
 	// trust is the bus-stamped author, never what the record claims.
 	if m.Subject == v.dmSubject && m.Author == v.operator {
+		// The live relay carries a real stream sequence. Set the cursor-space
+		// watermark to persist after this reply lands: one past this frame's
+		// sequence (the same space the replay path's advanceTo uses).
+		if m.Sequence > 0 {
+			m.advanceTo = m.Sequence + 1
+		}
 		select {
 		case v.dmCh <- m:
 		default:

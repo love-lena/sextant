@@ -12,12 +12,14 @@ import (
 // ackStore is the durable response-watermark for violet's operator DM subject.
 // It tracks the "next sequence to read from" on the DM subject — the cursor to
 // pass to FetchMessages so we only read messages NOT yet answered. This is a
-// response-watermark, not a read-watermark:
+// response-watermark, not a read-watermark.
 //
-//   - In the live path (Subscribe): after a confirmed publish, advance to
-//     Sequence+1 (the sequence after the answered frame).
-//   - In the replay path (FetchMessages): after each successfully answered
-//     batch, advance to the batch's NextCursor.
+// The advance is PER-FRAME on BOTH paths. Replayed frames and live frames both
+// flow through answerDM, which calls advance(m.Sequence+1) after each frame's
+// reply is confirmed published — so the watermark moves one frame at a time, in
+// delivery order, never in a batch. (replayOfflineGap itself does NOT advance
+// the cursor; it is a pure read. The advance happens only in answerDM, after the
+// publish — see roles.go.)
 //
 // Because the cursor advances only AFTER a confirmed publish, a crash between
 // "received DM" and "published reply" leaves the cursor behind. On the next
@@ -93,8 +95,12 @@ func (a *ackStore) readFrom() uint64 {
 // forward (monotonic; idempotent; a retry must never rewind). Must be called
 // only AFTER the reply is confirmed published (response-watermark, criterion 5).
 //
-// In the live path: pass Sequence+1 (one past the answered frame's sequence).
-// In the replay path: pass the FetchMessages NextCursor after the answered batch.
+// The single caller is answerDM (roles.go), which passes m.Sequence+1 (one past
+// the just-answered frame's sequence) for EVERY answered frame — replayed and
+// live alike, since both flow through answerDM. The advance is therefore
+// per-frame on both paths, never batched. Do NOT change this to a batch advance:
+// per-frame is what makes a crash mid-batch re-deliver only the unanswered tail
+// (criterion 3/5) rather than the whole batch or none of it.
 func (a *ackStore) advance(nextCursor uint64) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()

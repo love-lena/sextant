@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -162,24 +163,17 @@ func TestAC8SecurityDMSubjectScopeOnly(t *testing.T) {
 	)
 	ownDM := dmSubject(violetID, operatorID)
 
-	type fakeMsg struct {
-		subject string
-		author  string
-		text    string
-	}
-	// Build a fake message reader that holds messages on MULTIPLE subjects.
-	// The replay must only return the one on the operator's DM subject.
+	// The reader holds three frames on the DM subject (internal seqs 1,2,3): two
+	// from the operator, one from a stranger. The replay must return ONLY the two
+	// operator frames; the stranger frame must be rejected by the bus-stamped
+	// author re-attestation (criterion 2). Replayed frames carry Sequence==0
+	// (production-faithful), so we assert on AUTHOR + COUNT + the record text,
+	// never on a per-frame sequence.
 	fakeReader := &scopeCheckReader{
 		ownDM: ownDM,
 		frames: []fetchedFrame{
-			// This is the operator's message on the correct DM subject — must be returned.
-			{Author: operatorID, Sequence: 1, Record: chatMessage("operator DM on own subject")},
-			// This looks like an operator message but is on a DIFFERENT DM subject — must NOT be returned.
-			// (In practice the caller always passes ownDM, so a cross-subject message
-			// would never reach FetchMessages. This test proves the replay itself
-			// filters by author as the trust signal, not by trusting the passed subject.)
-			{Author: operatorID, Sequence: 2, Record: chatMessage("a message, but stranger injected it")},
-			// This is from a stranger (non-operator) on the operator's DM subject — must NOT be returned.
+			{Author: operatorID, Sequence: 1, Record: chatMessage("first operator DM")},
+			{Author: operatorID, Sequence: 2, Record: chatMessage("second operator DM")},
 			{Author: strangerID, Sequence: 3, Record: chatMessage("message from stranger on DM subject")},
 		},
 	}
@@ -190,55 +184,61 @@ func TestAC8SecurityDMSubjectScopeOnly(t *testing.T) {
 		t.Fatalf("replayOfflineGap error: %v", err)
 	}
 
-	// Only the operator-authored frames on the ownDM subject should be returned.
-	// Frames 1 and 2 are both from operatorID — both should be returned.
-	// Frame 3 (from strangerID) must NOT appear.
+	// Exactly the two operator frames are returned; the stranger frame is rejected.
+	if len(msgs) != 2 {
+		t.Fatalf("AC8 security: replay returned %d frames, want 2 (the operator's; stranger rejected)", len(msgs))
+	}
 	for _, m := range msgs {
 		if m.Author != operatorID {
-			t.Fatalf("AC8 security: replay returned a frame from non-operator author %q (criterion 1 violated)", m.Author)
+			t.Fatalf("AC8 security: replay returned a frame from non-operator author %q (criterion 1/2 violated)", m.Author)
 		}
 		if m.Subject != ownDM {
 			t.Fatalf("AC8 security: replay returned a frame on subject %q (want %q, criterion 1 violated)", m.Subject, ownDM)
 		}
-	}
-
-	// Explicitly assert that stranger frame (seq=3) is NOT in the results.
-	for _, m := range msgs {
-		if m.Sequence == 3 {
-			t.Fatalf("AC8 security: stranger frame (seq=3, author=%q) was returned by replay (criterion 1 violated)", strangerID)
+		if strings.Contains(string(m.Record), "stranger") {
+			t.Fatalf("AC8 security: a stranger-authored frame leaked into replay: %s (criterion 1/2 violated)", m.Record)
 		}
 	}
-
-	// And the operator frames (seq=1, seq=2) ARE returned.
-	seqsSeen := map[uint64]bool{}
+	// Both operator messages are present (by their record text).
+	texts := map[string]bool{}
 	for _, m := range msgs {
-		seqsSeen[m.Sequence] = true
+		texts[frameText(m.Record)] = true
 	}
-	for _, want := range []uint64{1, 2} {
-		if !seqsSeen[want] {
-			t.Fatalf("AC8 security: operator frame seq=%d was NOT returned (should be included)", want)
+	for _, want := range []string{"first operator DM", "second operator DM"} {
+		if !texts[want] {
+			t.Fatalf("AC8 security: operator message %q was NOT returned (should be included)", want)
 		}
 	}
 	t.Logf("AC8 security: replay returned %d operator-authored frames, 0 stranger frames", len(msgs))
 }
 
-// scopeCheckReader is a minimal messageReader for the scope-check test.
-// It always returns the same frames regardless of `since` and `subject`.
+// scopeCheckReader is a production-faithful messageReader for the scope/re-attest
+// tests. Its `frames` carry a stream sequence used INTERNALLY for paging (the
+// `since`/`next` cursor), but FetchMessages returns each frame with Sequence==0
+// — exactly like the real sdkAdapter — and `next` = last returned frame's stream
+// sequence + 1. It honors `limit` so the replay's limit=1 paging works correctly.
 type scopeCheckReader struct {
 	ownDM  string
-	frames []fetchedFrame
+	frames []fetchedFrame // .Sequence here is the INTERNAL stream sequence for paging
 }
 
-func (r *scopeCheckReader) FetchMessages(_ context.Context, _ string, since uint64, _ int) ([]fetchedFrame, uint64, error) {
+func (r *scopeCheckReader) FetchMessages(_ context.Context, _ string, since uint64, limit int) ([]fetchedFrame, uint64, error) {
 	var out []fetchedFrame
+	next := since
 	for _, f := range r.frames {
-		if f.Sequence > since {
-			out = append(out, f)
+		// INCLUSIVE of `since` (natsbackend.Read OptStartSeq contract).
+		if f.Sequence < since {
+			continue
 		}
-	}
-	var next uint64
-	if len(out) > 0 {
-		next = out[len(out)-1].Sequence
+		out = append(out, fetchedFrame{
+			Author:   f.Author,
+			Sequence: 0, // PRODUCTION-FAITHFUL: real adapter cannot fill this
+			Record:   f.Record,
+		})
+		next = f.Sequence + 1
+		if limit > 0 && len(out) >= limit {
+			break
+		}
 	}
 	return out, next, nil
 }
@@ -260,9 +260,12 @@ func TestAC8SecurityReAttestByBusAuthor(t *testing.T) {
 	ack, _ := newAckStore("", ownDM)
 	_ = ack.advance(5) // watermark at 5 (read from seq 5 next time)
 
-	// Now a new session starts. The bus history has two frames starting at seq 6:
-	// frame 6: authored by stranger (bus-stamped — not the operator). Must NOT be answered.
-	// frame 7: authored by operator. Must be answered.
+	// Now a new session starts. The bus history (internal stream seqs) has two
+	// frames at/after the watermark:
+	//   seq 6: authored by stranger (bus-stamped — not the operator). Must NOT be answered.
+	//   seq 7: authored by operator. Must be answered.
+	// Replayed frames carry Sequence==0 (production-faithful); we assert on author
+	// + record text, never on a per-frame sequence.
 	reader := &scopeCheckReader{
 		ownDM: ownDM,
 		frames: []fetchedFrame{
@@ -276,21 +279,27 @@ func TestAC8SecurityReAttestByBusAuthor(t *testing.T) {
 		t.Fatalf("replayOfflineGap: %v", err)
 	}
 
-	// Only the operator-authored frame (seq=7) must be returned.
+	// Only the operator-authored frame must be returned; the stranger rejected.
 	if len(msgs) != 1 {
-		t.Fatalf("AC8 re-attest: want 1 frame (seq=7), got %d", len(msgs))
+		t.Fatalf("AC8 re-attest: want 1 frame (the operator's), got %d", len(msgs))
 	}
-	if msgs[0].Sequence != 7 || msgs[0].Author != operatorID {
-		t.Fatalf("AC8 re-attest: got frame seq=%d author=%q, want seq=7 author=%s",
-			msgs[0].Sequence, msgs[0].Author, operatorID)
+	if msgs[0].Author != operatorID {
+		t.Fatalf("AC8 re-attest: returned frame author=%q, want %s", msgs[0].Author, operatorID)
 	}
-	// The stranger frame at seq=6 must NOT appear.
+	if frameText(msgs[0].Record) != "genuine operator question" {
+		t.Fatalf("AC8 re-attest: returned the wrong frame: %s", msgs[0].Record)
+	}
+	// The replayed operator frame must carry the cursor-space watermark (next=8).
+	if msgs[0].advanceTo != 8 {
+		t.Errorf("AC8 re-attest: operator frame advanceTo=%d, want 8 (cursor past seq 7)", msgs[0].advanceTo)
+	}
+	// The stranger frame must NOT appear.
 	for _, m := range msgs {
 		if m.Author == strangerID {
-			t.Fatalf("AC8 re-attest: stranger frame returned (criterion 2 violated: trust not re-derived from bus-stamp)")
+			t.Fatal("AC8 re-attest: stranger frame returned (criterion 2: trust not re-derived from bus-stamp)")
 		}
 	}
-	t.Logf("AC8 re-attest: correctly returned 1 operator frame, rejected stranger frame")
+	t.Logf("AC8 re-attest: returned 1 operator frame (advanceTo=8), rejected stranger frame")
 }
 
 // TestAC8DurableResponseWatermark (criterion 5): the response-watermark is the
@@ -350,13 +359,23 @@ func TestAC8DurableResponseWatermark(t *testing.T) {
 		t.Fatalf("AC8 watermark: want 1 missed DM, got %d", len(missed))
 	}
 
+	// The replayed frame carries Sequence==0 (production-faithful) and the
+	// cursor-space watermark in advanceTo.
+	if missed[0].Sequence != 0 {
+		t.Fatalf("AC8 watermark: replayed frame Sequence=%d, want 0 (production adapter)", missed[0].Sequence)
+	}
+	if missed[0].advanceTo == 0 {
+		t.Fatal("AC8 watermark: replayed frame has no advanceTo cursor")
+	}
+
 	// Answer the missed DM (as answerDM would).
 	reply := "yes, still here"
 	if perr := publishReply(ctx, bus, dmSubj, reply, missed[0].Sequence); perr != nil {
 		t.Fatalf("publishReply: %v", perr)
 	}
-	// Advance the watermark AFTER the publish (criterion 5).
-	if aerr := ack.advance(missed[0].Sequence + 1); aerr != nil {
+	// Advance the watermark AFTER the publish, to the cursor-space watermark
+	// (criterion 5) — NOT Sequence+1 (Sequence is 0 on replay).
+	if aerr := ack.advance(missed[0].advanceTo); aerr != nil {
 		t.Fatalf("advance: %v", aerr)
 	}
 
@@ -526,6 +545,61 @@ func TestAC8AckStoreSubjectScoping(t *testing.T) {
 		t.Errorf("advance did not update ownDM cursor: got %d, want 15", a.next[ownDM])
 	}
 	t.Logf("AC8 ackStore subject scoping: own DM watermark advanced to 15; foreign DM cursor untouched")
+}
+
+// TestAC8DefaultStateDirIsPersistent (gate point 1): the production default
+// state dir resolves to a NON-EMPTY, persistent on-disk path — never in-memory.
+// A default of "" would make the durable cursor (criterion 5) pass tmpdir tests
+// but lose the watermark on a real restart. This asserts the default is a real
+// directory path under a config root.
+func TestAC8DefaultStateDirIsPersistent(t *testing.T) {
+	// Pin $SEXTANT_HOME so the default resolves deterministically and we don't
+	// touch the developer's real config dir.
+	root := t.TempDir()
+	t.Setenv("SEXTANT_HOME", root)
+
+	got := DefaultStateDir()
+	if got == "" {
+		t.Fatal("DefaultStateDir() is empty — the durable cursor would be in-memory and lost on restart (gate point 1)")
+	}
+	// It must be an on-disk path under the config root, not a sentinel.
+	wantPrefix := root
+	if !strings.HasPrefix(got, wantPrefix) {
+		t.Fatalf("DefaultStateDir() = %q, want a path under the config root %q", got, wantPrefix)
+	}
+	if filepath.Base(got) != "violet" {
+		t.Errorf("DefaultStateDir() = %q, want a violet/ subdir", got)
+	}
+	t.Logf("AC8 default state dir: %q (persistent, under the config root)", got)
+}
+
+// TestAC8AckStorePersistsAcrossRestart (gate point 1, durability): an ackStore
+// built with a real on-disk dir round-trips the watermark across a simulated
+// process restart — a new ackStore over the SAME dir reads back the advanced
+// cursor. This is the live behaviour the empty-default would silently break.
+func TestAC8AckStorePersistsAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	dm := dmSubject("01VIOLET", "01OPERATOR")
+
+	// Session 1: advance the cursor and let it persist.
+	a1, err := newAckStore(dir, dm)
+	if err != nil {
+		t.Fatalf("newAckStore (session 1): %v", err)
+	}
+	if err := a1.advance(42); err != nil {
+		t.Fatalf("advance: %v", err)
+	}
+
+	// Session 2 (simulated restart): a fresh ackStore over the same dir reads
+	// back the watermark — the durable cursor survives the restart.
+	a2, err := newAckStore(dir, dm)
+	if err != nil {
+		t.Fatalf("newAckStore (session 2): %v", err)
+	}
+	if got := a2.readFrom(); got != 42 {
+		t.Fatalf("watermark did not survive restart: readFrom() = %d, want 42 (criterion 5, durable)", got)
+	}
+	t.Logf("AC8 ack durability: watermark 42 survived a simulated restart from %q", dir)
 }
 
 // mockFailModelServer returns an httptest.Server that always responds with HTTP
