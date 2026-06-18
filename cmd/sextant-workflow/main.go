@@ -550,7 +550,14 @@ func newStartConsumer(ctx context.Context, c *sextant.Client, spawnSubject strin
 
 // handle processes one frame on startSubject. It acts only on workflow.start
 // records (ignoring its own echoed workflow.start.acks and anything else),
-// dedups by request frame id, runs the workflow, and acks — always.
+// dedups by request frame id, creates the workflow, ACKS IMMEDIATELY (accepted
+// + workflowId), then runs the coordinator in a goroutine so the handler does
+// not block the delivery loop for the duration of the run.
+//
+// The ack means "accepted/started"; run failures surface on the workflow's
+// msg.workflow.<id>.events stream (the coordinator emits a failed status event),
+// NOT via a second ack. ack status:error is ONLY for couldn't-start failures
+// (loadDirect / artifact-create) that occur before the goroutine launches.
 func (sc *startConsumer) handle(m sextant.Message) {
 	req, ok := parseWorkflowStartRequest(m.Frame.Record)
 	if !ok {
@@ -568,26 +575,47 @@ func (sc *startConsumer) handle(m sextant.Message) {
 
 	logf("workflow.start %s from %s: prompt=%q nick=%q", short(reqID), short(m.Frame.Author), req.Prompt, req.Nickname)
 
-	wfID, err := sc.runWorkflow(req)
+	co, wfID, stopSubs, err := sc.prepareWorkflow(req)
 	ack := WorkflowStartAck{Nonce: req.Nonce, RequestID: reqID}
 	if err != nil {
 		ack.Status = statusError
 		ack.Error = err.Error()
-		logf("workflow.start %s failed: %v", short(reqID), err)
+		logf("workflow.start %s: prepare failed: %v", short(reqID), err)
 	} else {
 		ack.Status = statusOK
 		ack.WorkflowID = wfID
-		logf("workflow.start %s: started workflow %s", short(reqID), short(wfID))
+		logf("workflow.start %s: accepted, workflow %s", short(reqID), short(wfID))
 	}
+	// Publish the ack BEFORE launching the run — the dash needs workflowId
+	// promptly to subscribe to the events stream; the run may take minutes.
 	if err := sc.c.Publish(context.Background(), startSubject, ack.marshal()); err != nil {
 		logf("publish workflow.start.ack: %v", err)
 	}
+	if co == nil {
+		return // couldn't-start: already acked error above
+	}
+	// Run the coordinator asynchronously so handle() returns immediately,
+	// unblocking the delivery goroutine for the next request.
+	// stopSubs is deferred inside the goroutine so the helper subscriptions
+	// (spawn, events, control) are stopped once the run ends — preventing
+	// unbounded accumulation across sequential runs on a long-lived consumer.
+	go func() {
+		defer stopSubs()
+		if err := co.run(); err != nil {
+			logf("workflow %s run error: %v", short(wfID), err)
+		}
+	}()
 }
 
-// runWorkflow builds a single-dispatch-step workflow from the request, creates
-// its state artifact, subscribes to its subjects, and drives the coordinator
-// run. It returns the workflow id on success.
-func (sc *startConsumer) runWorkflow(req WorkflowStartRequest) (string, error) {
+// prepareWorkflow creates the workflow state artifact and subscribes the
+// coordinator's helper subjects. It returns the coordinator (ready to run),
+// the workflow id, a stopSubs closure that stops the helper subscriptions, and
+// any error. On failure it returns (nil, "", noop, err).
+//
+// The caller MUST call stopSubs() after run() ends (typically via defer in the
+// run goroutine) to prevent subscription accumulation across sequential runs on
+// a long-lived consumer.
+func (sc *startConsumer) prepareWorkflow(req WorkflowStartRequest) (*coordinator, string, func(), error) {
 	wfID := ulid.Make().String()
 	nick := req.Nickname
 	if nick == "" {
@@ -605,10 +633,15 @@ func (sc *startConsumer) runWorkflow(req WorkflowStartRequest) (string, error) {
 		ackCh: make(chan struct{}, 1), evCh: make(chan struct{}, 1), ctlCh: make(chan struct{}, 1),
 	}
 	if err := co.loadDirect(sc.ctx, wf); err != nil {
-		return "", err
+		return nil, wfID, func() {}, err
 	}
 
 	// Subscribe the coordinator's helper subjects for this run's lifetime.
+	// The handles are returned as a stop closure so the run goroutine can
+	// clean them up after co.run() returns — preventing unbounded accumulation
+	// across sequential runs (the old `defer sub.Stop()` in the synchronous
+	// path was correct; this restores that guarantee for the async path).
+	var subs []sextant.Subscription
 	for _, s := range []struct {
 		subj string
 		h    sextant.Handler
@@ -619,12 +652,20 @@ func (sc *startConsumer) runWorkflow(req WorkflowStartRequest) (string, error) {
 	} {
 		sub, err := sc.c.Subscribe(sc.ctx, s.subj, s.h, sextant.DeliverAll())
 		if err != nil {
-			return wfID, fmt.Errorf("subscribe %s: %w", s.subj, err)
+			for _, s := range subs {
+				s.Stop()
+			}
+			return nil, wfID, func() {}, fmt.Errorf("subscribe %s: %w", s.subj, err)
 		}
-		defer sub.Stop()
+		subs = append(subs, sub)
+	}
+	stopSubs := func() {
+		for _, s := range subs {
+			s.Stop()
+		}
 	}
 	co.settle()
-	return wfID, co.run()
+	return co, wfID, stopSubs, nil
 }
 
 func short(id string) string {
