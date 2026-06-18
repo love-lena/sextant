@@ -10,7 +10,7 @@
    field. Uses dxg- classes (ported into styles.css). Exports GoalsView to window. */
 (function () {
   const { useState } = React;
-  const { Avatar } = window;
+  const { Avatar, MobilizeButton } = window;
 
   // STATUS — keyed on the goal lexicon (ADR-0035): met / in-progress /
   // waiting-on-you / blocked / not-started. Tone classes are the live status
@@ -61,7 +61,7 @@
   }
 
   /* ---------- L1 · Portfolio ---------- */
-  function Card({ g, onOpen, renderWiki }) {
+  function Card({ g, onOpen, onDM, renderWiki }) {
     const r = roll(g);
     const crits = g.criteria || [];
     const rw = renderWiki || ((t) => t);
@@ -73,6 +73,12 @@
           <span className="dxg-card-name">{g.name}</span>
           {g.stream && <span className="dxg-card-stream">{g.stream}</span>}
           <span className={"dxg-verdict " + r.tone}>{r.verdict}</span>
+          {MobilizeButton && (
+            <MobilizeButton
+              context={{ type: "goal", northstar: g.northstar, id: g.id }}
+              onDM={onDM}
+            />
+          )}
         </div>
         <div className={"dxg-northstar" + (r.undef ? " is-undef" : "")}>{g.northstar ? rw(g.northstar) : "No north star yet — what does success look like?"}</div>
         <div className="dxg-rollup">
@@ -94,7 +100,7 @@
       : "todo";
   }
 
-  function Portfolio({ goals, onOpen, renderWiki }) {
+  function Portfolio({ goals, onOpen, onDM, renderWiki }) {
     const needs = goals.filter(needsYou);
     const moving = goals.filter((g) => !needsYou(g));
     return (
@@ -107,13 +113,13 @@
         {needs.length > 0 && (
           <React.Fragment>
             <div className="dxg-group-lbl">Needs your attention</div>
-            <div className="dxg-cards">{needs.map((g) => <Card g={g} onOpen={onOpen} renderWiki={renderWiki} key={g.id} />)}</div>
+            <div className="dxg-cards">{needs.map((g) => <Card g={g} onOpen={onOpen} onDM={onDM} renderWiki={renderWiki} key={g.id} />)}</div>
           </React.Fragment>
         )}
         {moving.length > 0 && (
           <React.Fragment>
             <div className="dxg-group-lbl">Moving on its own</div>
-            <div className="dxg-cards">{moving.map((g) => <Card g={g} onOpen={onOpen} renderWiki={renderWiki} key={g.id} />)}</div>
+            <div className="dxg-cards">{moving.map((g) => <Card g={g} onOpen={onOpen} onDM={onDM} renderWiki={renderWiki} key={g.id} />)}</div>
           </React.Fragment>
         )}
       </div></div>);
@@ -254,13 +260,13 @@
   // each Goals nav, so the prop seeds the initial selection). onOpenArtifact opens an
   // evidence artifact in the review stage; onSetReview persists a goal sign-off
   // verdict (the same review primitive the rest of the dash uses).
-  function GoalsView({ goals, initialGoalId, onOpenArtifact, onSetReview, renderWiki }) {
+  function GoalsView({ goals, initialGoalId, onOpenArtifact, onSetReview, onDM, renderWiki }) {
     const [openGoal, setOpenGoal] = useState(initialGoalId || null);
     const list = goals || [];
     if (list.length === 0) return <Empty />;
     const g = openGoal && list.find((x) => x.id === openGoal);
     if (g) return <Detail g={g} onBack={() => setOpenGoal(null)} onOpenArtifact={onOpenArtifact} onSetReview={onSetReview} renderWiki={renderWiki} />;
-    return <Portfolio goals={list} onOpen={(id) => setOpenGoal(id)} renderWiki={renderWiki} />;
+    return <Portfolio goals={list} onOpen={(id) => setOpenGoal(id)} onDM={onDM} renderWiki={renderWiki} />;
   }
 
   Object.assign(window, { GoalsView });
