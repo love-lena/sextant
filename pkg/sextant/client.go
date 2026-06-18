@@ -175,12 +175,18 @@ func Connect(ctx context.Context, opts Options) (*Client, error) {
 		return nil, errors.New("sextant: no credentials (set Options.CredsPath; issue one with `sextant clients register <name>`)")
 	}
 	url := opts.URL
+	// reResolvePath is set only when the URL came from a discovery file (not a
+	// caller-pinned Options.URL). When set, a custom dialer re-reads it on every
+	// (re)connect dial so a live client follows a bus that restarts on a new port
+	// (see reResolveDialer); a pinned URL is dialed as-is.
+	reResolvePath := ""
 	if url == "" && opts.ConnInfoPath != "" {
 		info, err := conninfo.Read(opts.ConnInfoPath)
 		if err != nil {
 			return nil, err
 		}
 		url = info.URL
+		reResolvePath = opts.ConnInfoPath
 	}
 	if url == "" {
 		return nil, errors.New("sextant: no bus URL (set Options.URL or Options.ConnInfoPath)")
@@ -222,8 +228,7 @@ func Connect(ctx context.Context, opts Options) (*Client, error) {
 		hbFreshness: hbFreshness,
 	}
 
-	nc, err := nats.Connect(
-		url,
+	natsOpts := []nats.Option{
 		nats.UserCredentials(opts.CredsPath),
 		nats.Name(id),
 		// Use a per-client inbox so call replies land under _INBOX.<id>, which is
@@ -250,7 +255,19 @@ func Connect(ctx context.Context, opts Options) (*Client, error) {
 			// non-superseded pass), so callers waiting on that log see a ready bus.
 			c.startResumePass()
 		}),
-	)
+	}
+	// Follow the bus across a port change: when the URL came from discovery,
+	// re-resolve bus.json on every dial so NATS auto-reconnect reaches the live
+	// port instead of hammering the dead boot address (ADR-0027 holds only for a
+	// stable address; this extends it to a moved one). See reResolveDialer.
+	if reResolvePath != "" {
+		natsOpts = append(natsOpts, nats.SetCustomDialer(&reResolveDialer{
+			connInfoPath: reResolvePath,
+			timeout:      dialReResolveTimeout,
+		}))
+	}
+
+	nc, err := nats.Connect(url, natsOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("sextant: connect: %w", err)
 	}
