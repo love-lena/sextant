@@ -127,7 +127,7 @@ func ensureBusUpWith(stdout, stderr io.Writer, restart func() error, healthy fun
 		}
 	}
 
-	warnBusDown(stderr)
+	warnBusDown(stderr, kickstart != nil)
 }
 
 // pollHealthy polls healthy until it reports up or the budget elapses. It
@@ -189,18 +189,24 @@ func runKickstart() error {
 }
 
 // warnBusDown prints a loud, explicit warning that the bus did not come back,
-// with the exact manual recovery command. Never let the operator believe the
-// upgrade succeeded when the bus is still dead.
-func warnBusDown(stderr io.Writer) {
+// with the exact RELIABLE manual recovery command. Never let the operator
+// believe the upgrade succeeded when the bus is still dead.
+//
+// When a launchd kickstart was available (kickstartAvailable — the macOS path
+// where the auto-kickstart was attempted), the manual lever is that same
+// kickstart, NOT `brew services restart`: the restart is exactly what left the
+// job loaded-but-never-launched, and the kickstart is what actually relaunches
+// it. Where no kickstart lever exists (non-macOS), the brew-services restart is
+// the only option, so name that there.
+func warnBusDown(stderr io.Writer, kickstartAvailable bool) {
 	fmt.Fprintf(stderr, "\n  WARNING: the upgrade completed but the bus did NOT come back up.\n")
 	fmt.Fprintf(stderr, "  Every client is stranded until it is relaunched. Recover it with:\n\n")
-	if runtime.GOOS == "darwin" {
+	if kickstartAvailable {
 		fmt.Fprintf(stderr, "    launchctl kickstart -k %s\n\n", kickstartTarget())
-		fmt.Fprintf(stderr, "  Then check it with: sextant doctor\n")
 	} else {
 		fmt.Fprintf(stderr, "    brew services restart %s\n\n", brewService)
-		fmt.Fprintf(stderr, "  Then check it with: sextant doctor\n")
 	}
+	fmt.Fprintf(stderr, "  Then check it with: sextant doctor\n")
 }
 
 // runBrew streams a brew invocation's output through to the caller's streams so

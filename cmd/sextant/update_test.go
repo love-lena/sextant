@@ -137,8 +137,13 @@ func TestEnsureBusUpAllFailLoudWarning(t *testing.T) {
 	if !strings.Contains(es, "did NOT come back up") {
 		t.Fatalf("expected a loud warning that the bus is down; stderr = %q", es)
 	}
+	// The RELIABLE recovery is the launchd kickstart — NOT `brew services
+	// restart`, which is the command that left the job loaded-but-never-launched.
 	if !strings.Contains(es, "launchctl kickstart -k") {
-		t.Fatalf("expected the manual recovery command in the warning; stderr = %q", es)
+		t.Fatalf("expected the kickstart recovery command in the warning; stderr = %q", es)
+	}
+	if strings.Contains(es, "brew services restart") {
+		t.Fatalf("the warning must not suggest the brew restart that caused the outage; stderr = %q", es)
 	}
 	if strings.Contains(out.String(), "bus is back up") {
 		t.Fatalf("must not claim the bus is up when it never came up; stdout = %q", out.String())
@@ -158,8 +163,13 @@ func TestEnsureBusUpNoKickstarter(t *testing.T) {
 	if strings.Contains(out.String(), "forcing a launchd relaunch") {
 		t.Fatalf("must not attempt a kickstart with a nil kickstarter; stdout = %q", out.String())
 	}
-	if !strings.Contains(errOut.String(), "did NOT come back up") {
-		t.Fatalf("expected the loud warning with no kickstarter; stderr = %q", errOut.String())
+	es := errOut.String()
+	if !strings.Contains(es, "did NOT come back up") {
+		t.Fatalf("expected the loud warning with no kickstarter; stderr = %q", es)
+	}
+	// With no launchd lever the only manual recovery is the brew-services restart.
+	if !strings.Contains(es, "brew services restart") {
+		t.Fatalf("expected the brew-services recovery command with no kickstarter; stderr = %q", es)
 	}
 }
 
