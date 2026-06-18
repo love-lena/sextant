@@ -569,7 +569,7 @@ func (sc *startConsumer) handle(m sextant.Message) {
 	logf("workflow.start %s from %s: prompt=%q nick=%q", short(reqID), short(m.Frame.Author), req.Prompt, req.Nickname)
 
 	wfID, err := sc.runWorkflow(req)
-	ack := WorkflowStartAck{RequestID: reqID}
+	ack := WorkflowStartAck{Nonce: req.Nonce, RequestID: reqID}
 	if err != nil {
 		ack.Status = statusError
 		ack.Error = err.Error()

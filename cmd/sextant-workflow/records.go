@@ -150,11 +150,14 @@ const (
 )
 
 // WorkflowStartRequest is the record published on msg.topic.workflow.start to
-// ask the coordinator to start a new run. Prompt is required; Nickname, Target,
-// and By are informational labels (mirror violet's WorkflowSpec / busMobilizer).
+// ask the coordinator to start a new run. Prompt is required; Nonce is the
+// dash's opaque correlation handle (echoed verbatim in the ack so the dash can
+// correlate without knowing its own bus Frame.ID at publish time); Nickname,
+// Target, and By are informational labels.
 type WorkflowStartRequest struct {
 	Type     string `json:"$type"`
 	Prompt   string `json:"prompt"`
+	Nonce    string `json:"nonce,omitempty"`
 	Nickname string `json:"nickname,omitempty"`
 	Target   string `json:"target,omitempty"`
 	By       string `json:"by,omitempty"`
@@ -162,9 +165,11 @@ type WorkflowStartRequest struct {
 
 // WorkflowStartAck is published back on startSubject for every handled request
 // (success or failure) — fail-loud: the requester is never left waiting on
-// silence. Mirrors spawn.ack (cmd/sextant-dispatch/records.go).
+// silence. Nonce echoes the request's nonce verbatim (the dash's correlation
+// handle). Mirrors spawn.ack (cmd/sextant-dispatch/records.go).
 type WorkflowStartAck struct {
 	Type       string `json:"$type"`
+	Nonce      string `json:"nonce,omitempty"`
 	RequestID  string `json:"requestId"`
 	WorkflowID string `json:"workflowId,omitempty"`
 	Status     string `json:"status"`

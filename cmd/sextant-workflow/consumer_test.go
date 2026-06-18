@@ -179,9 +179,11 @@ func TestStartConsumer_OneRunPerRequest(t *testing.T) {
 		ackList = nil
 		ackMu.Unlock()
 
+		const wantNonce = "dash-nonce-abc123"
 		rec := WorkflowStartRequest{
 			Type:     typeWorkflowStart,
 			Prompt:   "build something",
+			Nonce:    wantNonce,
 			Nickname: "tester",
 		}
 		recBytes, _ := json.Marshal(rec)
@@ -201,6 +203,9 @@ func TestStartConsumer_OneRunPerRequest(t *testing.T) {
 		}
 		if a.RequestID != reqID {
 			t.Errorf("ack.requestId = %q, want %q", a.RequestID, reqID)
+		}
+		if a.Nonce != wantNonce {
+			t.Errorf("ack.nonce = %q, want %q (must echo request nonce verbatim)", a.Nonce, wantNonce)
 		}
 		if a.WorkflowID == "" {
 			t.Error("ack.workflowId is empty; should carry the run id")
