@@ -17,6 +17,7 @@ import (
 
 	"github.com/love-lena/sextant/internal/version"
 	"github.com/love-lena/sextant/pkg/bus"
+	"github.com/love-lena/sextant/pkg/buscfg"
 	"github.com/love-lena/sextant/pkg/conninfo"
 )
 
@@ -48,6 +49,8 @@ func main() {
 		cmdLamp(os.Args[2:])
 	case "workflow":
 		cmdWorkflow(os.Args[2:])
+	case "config":
+		cmdConfig(os.Args[2:])
 	case "update":
 		cmdUpdate(os.Args[2:])
 	case "version", "--version":
@@ -71,6 +74,10 @@ leaf-node federation (a remote box links a local bus to the hub — ADR-0038; de
   sextant up --leaf-listen <host:port>          hub: accept remote leaf links (behind a secure transport)
   sextant up --leaf-remote nats-leaf://hub:PORT --leaf-bundle B --leaf-creds C
                                                 run as a leaf (JetStream stays at the hub)
+
+bus config (settings 'up' reads on startup — the brew-services path; flag > env > config):
+  sextant config set leaf-listen <host:port>    enable the leaf listener via the config file
+  sextant config get [leaf-listen]              show the current config
 
 identities (the bus is the sole minter; keys never leave it — ADR-0020):
   sextant clients register <name> [--kind K]    operator mints for another
@@ -116,6 +123,7 @@ environment (avoids repeating the flags):
   SEXTANT_CREDS   default for --creds (the client credentials file)
   SEXTANT_CONTEXT default for --context (the saved context to connect as)
   SEXTANT_HOME    where contexts live (default: <user-config>/sextant)
+  SEXTANT_LEAF_LISTEN  leaf-listen for 'up' when no --leaf-listen flag (overrides the config file)
 
 `)
 }
@@ -134,6 +142,17 @@ func cmdUp(args []string) {
 	if err := os.MkdirAll(*store, 0o700); err != nil { // holds key material + JS data
 		fatal("create store dir: %v", err)
 	}
+
+	// Resolve the hub leaf-listen address: flag > $SEXTANT_LEAF_LISTEN > config
+	// file > OFF. The flag wins (explicit / dev); the env var is a convenience;
+	// the config file is the brew-services path (launchd drops env + the plist on
+	// restart, so a file the bus reads is what survives `brew services restart`).
+	// A malformed/unreadable config fails loud here — never a silent default-off.
+	cfg, err := buscfg.Load(buscfg.Path(*store))
+	if err != nil {
+		fatal("%v", err)
+	}
+	*leafListen = resolveLeafListen(fs, *leafListen, os.Getenv("SEXTANT_LEAF_LISTEN"), cfg.LeafListen)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -211,6 +230,32 @@ func defaultStore() string {
 		return filepath.Join(dir, "sextant", "jetstream")
 	}
 	return filepath.Join(".sextant", "jetstream")
+}
+
+// resolveLeafListen applies the leaf-listen precedence for `up`:
+//
+//	--leaf-listen flag  >  $SEXTANT_LEAF_LISTEN  >  config-file value  >  "" (off)
+//
+// The flag wins only when it was EXPLICITLY passed (flag.Visit) — a default-empty
+// flag must not mask the env/config sources, but an explicit --leaf-listen=""
+// (or any value) is a deliberate override and takes precedence. The address is
+// not validated here; the bus validates it when wiring the listener, so a bad
+// value still fails `up` loudly (and an empty result is the default-off case).
+func resolveLeafListen(fs *flag.FlagSet, flagVal, envVal, cfgVal string) string {
+	flagSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "leaf-listen" {
+			flagSet = true
+		}
+	})
+	switch {
+	case flagSet:
+		return flagVal
+	case envVal != "":
+		return envVal
+	default:
+		return cfgVal
+	}
 }
 
 func fatal(format string, args ...any) {
