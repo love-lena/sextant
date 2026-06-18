@@ -298,28 +298,43 @@ func clientsRegister(args []string) {
 	if name == "" {
 		fatal("register needs a <name> (or use --self to enroll this process)")
 	}
-	iss, err := sextant.ConnectIssuer(ctx, sextant.Options{
-		CredsPath:    bus.OperatorCredsPath(*store),
-		URL:          *url,
-		ConnInfoPath: filepath.Join(*store, conninfo.DefaultFile),
-	})
-	if err != nil {
-		fatal("connect: %v", err)
-	}
-	defer iss.Close()
-	res, err := iss.Register(ctx, name, *kind)
+	id, path, err := registerHeld(ctx, *store, *url, name, *kind, *out)
 	if err != nil {
 		fatal("%v", err)
 	}
+	fmt.Printf("registered %s as %s\n  creds: %s\n", name, id, path)
+}
 
-	path := *out
+// registerHeld is the reusable held-identity mint-to-file core (ADR-0020): it
+// connects with the operator credential under store, mints a NEW identity named
+// name with kind, and writes the returned creds (0600) to outPath — or, when
+// outPath is empty, to <store>/<safe-name>.creds. It returns the minted id and
+// the creds path. It creates no context; the caller decides whether to record
+// one (the CLI does not; `sextant components` writes its own under
+// $SEXTANT_HOME, so the operator's active context is never disturbed). The CLI's
+// held-mode register and the components first-run mint share this one path.
+func registerHeld(ctx context.Context, store, url, name, kind, outPath string) (id, credsPath string, err error) {
+	iss, err := sextant.ConnectIssuer(ctx, sextant.Options{
+		CredsPath:    bus.OperatorCredsPath(store),
+		URL:          url,
+		ConnInfoPath: filepath.Join(store, conninfo.DefaultFile),
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("connect: %w", err)
+	}
+	defer iss.Close()
+	res, err := iss.Register(ctx, name, kind)
+	if err != nil {
+		return "", "", err
+	}
+	path := outPath
 	if path == "" {
-		path = filepath.Join(*store, safeCredsName(name, res.ID)+".creds")
+		path = filepath.Join(store, safeCredsName(name, res.ID)+".creds")
 	}
 	if err := os.WriteFile(path, []byte(res.Creds), 0o600); err != nil {
-		fatal("write creds: %v", err)
+		return res.ID, "", fmt.Errorf("write creds: %w", err)
 	}
-	fmt.Printf("registered %s as %s\n  creds: %s\n", name, res.ID, path)
+	return res.ID, path, nil
 }
 
 // clientsRetire decommissions an identity for good (operator-only). It connects
