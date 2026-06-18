@@ -53,6 +53,31 @@ everyday CLI keeps its kubectl-style active-context fallback
 ([ADR-0021](0021-saved-client-contexts.md)); the divergence is the adapter's
 alone.
 
+## Named crew agents pin a stable identity (TASK-76)
+
+Per-session auto-mint is the right default for an *ad-hoc* session, but a
+recurring crew agent (sirius/canopus/vega) has a stable registered name and
+should connect as it from the first call — not a fresh `claude-<session>` it then
+has to `context_use` away every session. That is precedence 1, used as intended:
+the agent's launcher sets `$SEXTANT_CONTEXT=<name>` in its environment (e.g.
+`SEXTANT_CONTEXT=canopus claude`), and the adapter connects as that registered
+context from the first bus call, stable across `--resume` (the env re-launches
+with the session) and across machines. This needs no new resolution branch —
+precedence 1 already sits above the auto-mint, so TASK-76 is a launch convention,
+not a code change. By **convention** the named crew identity is registered as a
+kind-`agent` context, so it stays the agent's own — *stable-named* rather than
+*per-session-ephemeral*. (Unlike `context_use`, precedence 1 is not kind-guarded:
+pinning an explicit context is a deliberate operator act, as the section above
+notes — so the agent-kind here is the launch convention, not a runtime refusal.)
+[ADR-0037](0037-subscriptions-and-context-survive-a-session-resume.md)
+is the resume backstop: a one-time `sextant context use <name>` is persisted and
+re-pinned on every resume, closing the resume case even without a launch env.
+
+**Per-session auto-mint stays the default for an un-configured session** — this
+note extends precedence 1, it does not replace the default. When resolution falls
+through to the auto-mint, the adapter logs a one-line notice naming
+`$SEXTANT_CONTEXT` so the pin-a-stable-identity path is self-documenting.
+
 ## When it can't mint
 
 Minting needs the bus's enrollment credential and a reachable bus. When either
