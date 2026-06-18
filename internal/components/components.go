@@ -49,6 +49,12 @@ type Component struct {
 	// dispatcher), so `components start` fails loud if claude is not found —
 	// never writing a plist that silently cannot spawn.
 	NeedsClaude bool
+	// NeedsKey is true when the component's runtime needs an Anthropic API key
+	// (violet's model turns). The key is read from the 0600 VioletEnvPath() at
+	// exec time and set in the environment before the re-exec — NEVER baked into
+	// the world-readable plist. `components start` fails loud if the env-file is
+	// absent or carries no key, never starting the component keyless.
+	NeedsKey bool
 	// Args builds the runtime's flags after the binary. creds is the component's
 	// own creds file (passed --creds explicitly, never the active context); store
 	// is the bus store dir; recipe is the on-disk dispatcher recipe ("" when the
@@ -59,9 +65,9 @@ type Component struct {
 	NeedsRecipe bool
 }
 
-// Registry is the set of managed runtimes for this slice: the dispatcher and the
-// workflow coordinator. The dash, violet, and other surfaces are deliberately
-// NOT here — they land in follow-up slices (violet adds an env-key path).
+// Registry is the set of managed runtimes: the dispatcher, the workflow
+// coordinator, and violet (the operator's assistant). The dash is deliberately
+// NOT here — it is the operator's foreground surface, not a keep-alive runtime.
 var Registry = []Component{
 	{
 		Name:        "dispatcher",
@@ -87,6 +93,21 @@ var Registry = []Component{
 			// Listen mode (no --plan/--id): subscribe to workflow.start and run one
 			// coordinator per request (the dash's "start a workflow" path).
 			return []string{"--creds", creds, "--store", store}
+		},
+	},
+	{
+		Name:     "violet",
+		Binary:   "sextant-violet",
+		Kind:     "agent",
+		NeedsKey: true,
+		Args: func(creds, store, recipe string) []string {
+			// --designate: on every start violet (re-)points the `assistant`
+			// designation artifact (ADR-0039) at itself — idempotent, so the live
+			// assistant is whichever violet client is currently up. The key is set
+			// in the environment by `components exec` (from VioletEnvPath()), and
+			// sextant-violet's --api-key defaults from $ANTHROPIC_API_KEY, so no
+			// secret rides in these args.
+			return []string{"--creds", creds, "--store", store, "--designate"}
 		},
 	},
 }
