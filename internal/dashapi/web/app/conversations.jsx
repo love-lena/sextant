@@ -116,6 +116,13 @@
     // conversation changes. This is the sole scroll driver — the conversation view
     // owns its own scroll now (app.jsx no longer keeps a ref for it).
     const convBodyRef = useRef(null);
+    // Key the scroll on the NEWEST message's id, not the array length. A long
+    // conversation is capped at 200 (app.jsx slice(-200)), so once it fills, a new
+    // message drops the oldest and length stays 200 — a length-keyed effect never
+    // re-fires, and the view stops following new messages (Lena's #ui-feedback:
+    // "scrolling on new message isn't working again … some edge case"). The last
+    // message's id changes on every append, capped or not, so this fires every time.
+    const lastMsgId = (messages && messages.length) ? messages[messages.length - 1].id : null;
     useEffect(() => {
       const el = convBodyRef.current;
       if (!el) return;
@@ -125,7 +132,7 @@
       // #ui-feedback: "sending messages doesn't scroll the conversation down".)
       const id = requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
       return () => cancelAnimationFrame(id);
-    }, [messages && messages.length, convo && convo.key]);
+    }, [lastMsgId, messages && messages.length, convo && convo.key]);
 
     const isDM = convo && convo.type === "dm";
     const sigil = isDM ? "@ " : "# ";

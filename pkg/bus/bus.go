@@ -148,27 +148,43 @@ type Bus struct {
 const defaultHeartbeatFreshness = 45 * time.Second
 
 // stablePort resolves the listen port for a (re)start. If cfg.Port is non-zero
-// the caller asked for a specific port — use it as-is. Otherwise look for a
+// the caller asked for a specific port: it is a deterministic pin — probe it and
+// FAIL LOUD when it is unavailable (a non-nil err), never silently fall back, so
+// an operator who pinned a port either gets that port or a clear reason why not
+// (the v0.5.1 outage: a port change must never be silent). Otherwise look for a
 // previous address in the store's bus.json: same store ⇒ same address when the
-// port is still free (ADR-0025). It returns the port to use (−1 means
-// "let the OS pick") and, when a recorded port was found but unavailable, a
-// non-empty notice to log.
-func stablePort(storeDir string, cfgPort int) (port int, notice string) {
-	if cfgPort != 0 {
-		return cfgPort, ""
+// port is still free (ADR-0025). It returns the port to use (−1 means "let the
+// OS pick") and, when a recorded port was found but unavailable, a non-empty
+// notice to log loudly before binding the random fallback.
+func stablePort(storeDir string, cfgPort int) (port int, notice string, err error) {
+	if cfgPort > 0 {
+		// Explicit pin (a positive port; 0 and -1 mean "random" per Config.Port).
+		// Probe it so a conflict is a clear, port-named failure here rather than an
+		// opaque "listener failed to start" later (DontListen defers the real bind).
+		// Closing the probe leaves a small TOCTOU window before AcceptLoop re-binds;
+		// a loser there does NOT silently come up — AcceptLoop logs and returns
+		// without setting a listener, so ns.Addr() is nil and Start fails loud at
+		// the open-listener check below (regression-tested: TestExplicitPort*).
+		ln, perr := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", cfgPort))
+		if perr != nil {
+			return 0, "", fmt.Errorf("bus: requested port %d is unavailable: %w (free it or pick another with --port / `sextant config set port`)", cfgPort, perr)
+		}
+		_ = ln.Close()
+		return cfgPort, "", nil
 	}
 	prev, ok := recordedPort(storeDir)
 	if !ok {
-		return -1, "" // fresh store or unreadable file — ephemeral is correct
+		return -1, "", nil // fresh store or unreadable file — ephemeral is correct
 	}
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", prev))
-	if err != nil {
-		// Port is taken by something else — fall back and warn.
-		return -1, fmt.Sprintf("bus: recorded port %d is in use; starting on a new port (enrolled contexts may need updating)", prev)
+	ln, perr := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", prev))
+	if perr != nil {
+		// Port is taken by something else — fall back to random and warn LOUDLY:
+		// every client pinned to the old port must re-resolve via bus.json.
+		return -1, fmt.Sprintf("bus: recorded port %d unavailable — binding a RANDOM port; clients pinned to %d must re-resolve from bus.json (pin a deterministic port with --port / `sextant config set port` to avoid this)", prev, prev), nil
 	}
 	// Port is free — release the probe listener and let NATS bind it.
 	_ = ln.Close()
-	return prev, ""
+	return prev, "", nil
 }
 
 // recordedPort reads the bus URL from the store's discovery file and returns
@@ -209,7 +225,10 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 		return nil, err
 	}
 	logf := cfg.logf()
-	port, portNotice := stablePort(cfg.StoreDir, cfg.Port)
+	port, portNotice, err := stablePort(cfg.StoreDir, cfg.Port)
+	if err != nil {
+		return nil, err
+	}
 	if portNotice != "" {
 		logf("%s", portNotice)
 	}
@@ -306,12 +325,15 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 
 	// Bootstrap is done: open the client TCP listener. AcceptLoop binds the port
 	// and spawns the accept goroutine, then returns — so only now can a client
-	// connect, and the epoch it reads at connect is already present.
+	// connect, and the epoch it reads at connect is already present. If the bind
+	// fails (a taken port — including the rare probe-close→bind TOCTOU loser for an
+	// explicit port), AcceptLoop logs and returns WITHOUT a listener: Addr() is nil
+	// and we fail loud here rather than handing back a bus with no client listener.
 	ns.AcceptLoop(make(chan struct{}))
 	if ns.Addr() == nil {
 		opConn.Close()
 		ns.Shutdown()
-		return nil, errors.New("bus: client listener failed to start")
+		return nil, fmt.Errorf("bus: client listener failed to bind port %d (the port was taken after the pre-bind probe; free it or pin another with --port / `sextant config set port`)", port)
 	}
 	b.url = ns.ClientURL()
 

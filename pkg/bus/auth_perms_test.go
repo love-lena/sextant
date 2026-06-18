@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/love-lena/sextant/internal/wireapi"
+	natsserver "github.com/nats-io/nats-server/v2/server"
 )
 
 // TestClientPermissionsAllowOwnHeartbeatEcho: the per-client allow-list must let
@@ -25,6 +26,25 @@ func TestClientPermissionsAllowOwnHeartbeatEcho(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("clientPermissions(%q) Sub.Allow = %v; missing own heartbeat echo %q", id, p.Sub.Allow, want)
+	}
+}
+
+// TestClientPermissionsDenyOtherHeartbeatEcho: the heartbeat self-sub is scoped to
+// the client's OWN id and nothing wider — a client must never be able to subscribe
+// ANOTHER client's beat, and the allow-list must never widen to the sx.hb.>
+// wildcard. The assertion uses the real NATS matcher (SubjectsCollide), so it
+// fails both on a literal sx.hb.<other> entry AND on a sx.hb.> widening that would
+// collide with every client's subject — the security boundary, not just the
+// string. (Mirrors the per-client scoping of sx.deliver.<id>/_INBOX.<id>.)
+func TestClientPermissionsDenyOtherHeartbeatEcho(t *testing.T) {
+	const id = "01HEARTBEATCLIENT0000000000"
+	const other = "01HEARTBEATOTHER00000000000"
+	p := clientPermissions(id)
+	otherBeat := wireapi.HeartbeatSubject(other)
+	for _, s := range p.Sub.Allow {
+		if natsserver.SubjectsCollide(s, otherBeat) {
+			t.Errorf("clientPermissions(%q) Sub.Allow entry %q permits another client's heartbeat %q; the self-sub must be own-id-scoped, never the sx.hb.> wildcard", id, s, otherBeat)
+		}
 	}
 }
 

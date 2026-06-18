@@ -4,11 +4,13 @@ import (
 	"net"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/love-lena/sextant/pkg/conninfo"
+	natsserver "github.com/nats-io/nats-server/v2/server"
 )
 
 // TestRestartKeepsPort: a bus started against a store, stopped, then restarted
@@ -110,12 +112,14 @@ func TestRestartFallsBackWhenPortTaken(t *testing.T) {
 	}
 	var sawNotice bool
 	for _, line := range rec2.all() {
-		if strings.Contains(line, "recorded port "+firstPort+" is in use") {
+		// The notice must be LOUD about a RANDOM rebind so clients pinned to the
+		// recorded port know to re-resolve (the v0.5.1 outage).
+		if strings.Contains(line, "recorded port "+firstPort+" unavailable") && strings.Contains(line, "RANDOM") {
 			sawNotice = true
 		}
 	}
 	if !sawNotice {
-		t.Errorf("port-fallback notice did not arrive through Config.Logf: %q", rec2.all())
+		t.Errorf("loud port-fallback notice did not arrive through Config.Logf: %q", rec2.all())
 	}
 	b2.Shutdown()
 
@@ -127,6 +131,115 @@ func TestRestartFallsBackWhenPortTaken(t *testing.T) {
 		t.Fatalf("Start with nil Logf should use the stderr default, not fail: %v", err)
 	}
 	t.Cleanup(b3.Shutdown)
+}
+
+// TestExplicitPortBindsDeterministically: a non-zero Config.Port is a pin — the
+// bus binds exactly that port (no recorded-port reuse, no random fallback).
+func TestExplicitPortBindsDeterministically(t *testing.T) {
+	// Pick a free port to pin, then release it so the bus can claim it.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve a port: %v", err)
+	}
+	want := mustParsePort(t, "nats://"+ln.Addr().String())
+	_ = ln.Close()
+
+	wantN, _ := strconv.Atoi(want)
+	b, err := Start(t.Context(), Config{StoreDir: t.TempDir(), Port: wantN})
+	if err != nil {
+		t.Fatalf("Start with explicit port %d: %v", wantN, err)
+	}
+	t.Cleanup(b.Shutdown)
+	if got := mustParsePort(t, b.ClientURL()); got != want {
+		t.Errorf("explicit port not honored: want %s, got %s", want, got)
+	}
+}
+
+// TestExplicitPortFailsLoudWhenTaken: a pinned port that is unavailable must
+// FAIL LOUD (an error naming the port), never silently fall back to random —
+// the operator who pinned a port gets that port or a clear reason why not.
+func TestExplicitPortFailsLoudWhenTaken(t *testing.T) {
+	// Occupy a port, then ask the bus to pin it.
+	squatter, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("occupy a port: %v", err)
+	}
+	t.Cleanup(func() { _ = squatter.Close() })
+	taken := mustParsePort(t, "nats://"+squatter.Addr().String())
+	takenN, _ := strconv.Atoi(taken)
+
+	_, err = Start(t.Context(), Config{StoreDir: t.TempDir(), Port: takenN})
+	if err == nil {
+		t.Fatalf("Start with a taken explicit port should fail loud, not fall back")
+	}
+	if !strings.Contains(err.Error(), taken) {
+		t.Errorf("explicit-port failure should name the port %s, got: %v", taken, err)
+	}
+}
+
+// TestRandomPortSentinelsAreEphemeral: Config.Port of 0 or -1 both mean "let the
+// OS pick" (the documented contract). -1 must NOT be treated as an explicit pin
+// (which would probe 127.0.0.1:-1, an invalid address).
+func TestRandomPortSentinelsAreEphemeral(t *testing.T) {
+	for _, p := range []int{0, -1} {
+		// Fresh store so there is no recorded port to reuse — the sentinel alone
+		// must drive an ephemeral bind.
+		port, notice, err := stablePort(t.TempDir(), p)
+		if err != nil {
+			t.Errorf("stablePort(_, %d) errored: %v (a random sentinel must not be probed as a pin)", p, err)
+		}
+		if port != -1 {
+			t.Errorf("stablePort(_, %d) = %d, want -1 (ephemeral)", p, port)
+		}
+		if notice != "" {
+			t.Errorf("stablePort(_, %d) notice = %q, want empty", p, notice)
+		}
+	}
+}
+
+// TestAcceptLoopFailsLoudWhenPortTaken proves the backstop the explicit-pin path
+// relies on: if the client port is unavailable at bind time (the rare
+// probe-close→AcceptLoop TOCTOU loser), NATS's AcceptLoop does NOT silently come
+// up — it logs and returns without a listener, so ns.Addr() is nil. Start turns
+// that into a loud error rather than a listener-less bus. This builds the server
+// exactly as Start does (DontListen + a pinned port) with the port already taken.
+func TestAcceptLoopFailsLoudWhenPortTaken(t *testing.T) {
+	squatter, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("occupy a port: %v", err)
+	}
+	t.Cleanup(func() { _ = squatter.Close() })
+	taken := mustParsePort(t, "nats://"+squatter.Addr().String())
+	takenN, _ := strconv.Atoi(taken)
+
+	ident, err := loadOrCreateIdentity(t.TempDir())
+	if err != nil {
+		t.Fatalf("identity: %v", err)
+	}
+	opts := &natsserver.Options{
+		ServerName: "sextant-test",
+		Host:       "127.0.0.1",
+		Port:       takenN, // the pinned port — already held by the squatter
+		JetStream:  true,
+		StoreDir:   t.TempDir(),
+		NoSigs:     true,
+		DontListen: true,
+	}
+	if err := ident.serverAuthOptions(opts); err != nil {
+		t.Fatalf("auth opts: %v", err)
+	}
+	ns, err := natsserver.NewServer(opts)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	t.Cleanup(ns.Shutdown)
+	ns.Start()
+
+	// Open the client listener against the taken port — the bind must fail.
+	ns.AcceptLoop(make(chan struct{}))
+	if ns.Addr() != nil {
+		t.Fatalf("AcceptLoop bound a taken port (Addr=%v) — the loud-fail backstop is gone", ns.Addr())
+	}
 }
 
 // TestFreshStoreBoot: a fresh store (no bus.json) starts without error and
