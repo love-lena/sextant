@@ -633,7 +633,7 @@ func (sc *startConsumer) prepareWorkflow(req WorkflowStartRequest) (*coordinator
 		ackCh: make(chan struct{}, 1), evCh: make(chan struct{}, 1), ctlCh: make(chan struct{}, 1),
 	}
 	if err := co.loadDirect(sc.ctx, wf); err != nil {
-		return nil, "", func() {}, err
+		return nil, wfID, func() {}, err
 	}
 
 	// Subscribe the coordinator's helper subjects for this run's lifetime.
