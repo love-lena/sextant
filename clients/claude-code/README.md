@@ -120,3 +120,4 @@ long-lived processes, because none of them reload in place.
 - `hooks/nudge.sh` — the Stop-nudge script (soft pre-stop reminder: subs, messages, review flags)
 - `skills/sextant/SKILL.md` — conventions, topics/DMs/inboxes, verb selection, record shapes, identity setup
 - `skills/startup/SKILL.md` — unattended-worker startup: connect, subscribe to the principal DM, handle inbound by trust level
+- `skills/live-verify-v053/` — `/live-verify-v053`: prove the v0.5.3 runtimes are operational on the live setup (SKILL.md + `verify.sh`)
