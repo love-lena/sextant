@@ -3,10 +3,165 @@ package main
 import (
 	"errors"
 	"io"
+	"net"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/love-lena/sextant/pkg/conninfo"
 )
+
+const testBusURL = "nats://127.0.0.1:63621"
+
+// fastHealthBudgets shrinks the polling budgets for the duration of a test so
+// the timeout paths (bus stays down) complete in milliseconds, not the 10s+5s
+// production budgets. It restores them on cleanup.
+func fastHealthBudgets(t *testing.T) {
+	t.Helper()
+	rb, kb, pi := restartHealthBudget, kickstartHealthBudget, healthPollInterval
+	restartHealthBudget = 20 * time.Millisecond
+	kickstartHealthBudget = 20 * time.Millisecond
+	healthPollInterval = 1 * time.Millisecond
+	t.Cleanup(func() {
+		restartHealthBudget, kickstartHealthBudget, healthPollInterval = rb, kb, pi
+	})
+}
+
+// TestBusHealthy proves the production health-checker resolves the recorded URL
+// from bus.json under the store dir and reports liveness from a real TCP dial —
+// the discovery-path resolution and listen probe, end to end.
+func TestBusHealthy(t *testing.T) {
+	// A live listener stands in for the bus; bus.json points at it.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	store := t.TempDir()
+	url := "nats://" + ln.Addr().String()
+	if err := conninfo.Write(filepath.Join(store, conninfo.DefaultFile), conninfo.Info{URL: url}); err != nil {
+		t.Fatalf("write discovery: %v", err)
+	}
+
+	gotURL, up := busHealthy(store)
+	if !up {
+		t.Fatalf("busHealthy should report up for a live listener at %s", url)
+	}
+	if gotURL != url {
+		t.Fatalf("busHealthy URL = %q, want %q", gotURL, url)
+	}
+
+	// No bus.json ⇒ not up, no URL.
+	if u, up := busHealthy(t.TempDir()); up || u != "" {
+		t.Fatalf("busHealthy on a store with no bus.json should be down with no URL; got %q, %v", u, up)
+	}
+
+	// bus.json present but nothing listening ⇒ down, URL still reported.
+	ln.Close()
+	if u, up := busHealthy(store); up {
+		t.Fatalf("busHealthy should report down when nothing listens on %s", url)
+	} else if u != url {
+		t.Fatalf("busHealthy should still report the recorded URL when down; got %q", u)
+	}
+}
+
+// TestEnsureBusUpRestartHealthy: a restart that brings the bus up needs no
+// kickstart, and reports the recorded URL.
+func TestEnsureBusUpRestartHealthy(t *testing.T) {
+	var out, errOut strings.Builder
+	restarted := false
+	restart := func() error { restarted = true; return nil }
+	// Healthy immediately after the restart.
+	healthy := func() (string, bool) { return testBusURL, true }
+	kickstart := func() error { t.Fatal("kickstart fired though the restart brought the bus up"); return nil }
+
+	ensureBusUpWith(&out, &errOut, restart, healthy, kickstart)
+
+	if !restarted {
+		t.Fatalf("expected the bus to be restarted")
+	}
+	if !strings.Contains(out.String(), "bus is back up at "+testBusURL) {
+		t.Fatalf("expected a back-up message with the URL; stdout = %q", out.String())
+	}
+	if errOut.Len() != 0 {
+		t.Fatalf("no warning expected on the healthy path; stderr = %q", errOut.String())
+	}
+}
+
+// TestEnsureBusUpRestartStaysDownThenKickstart: the restart leaves the bus down
+// (the loaded-but-never-launched trap), the kickstart fallback fires, and the
+// bus then comes up.
+func TestEnsureBusUpRestartStaysDownThenKickstart(t *testing.T) {
+	fastHealthBudgets(t)
+	var out, errOut strings.Builder
+	restart := func() error { return nil }
+	kicked := false
+	kickstart := func() error { kicked = true; return nil }
+	// Down until the kickstart fires, up afterward.
+	healthy := func() (string, bool) {
+		if kicked {
+			return testBusURL, true
+		}
+		return testBusURL, false
+	}
+
+	ensureBusUpWith(&out, &errOut, restart, healthy, kickstart)
+
+	if !kicked {
+		t.Fatalf("expected the kickstart fallback to fire when the restart left the bus down")
+	}
+	s := out.String()
+	if !strings.Contains(s, "forcing a launchd relaunch") {
+		t.Fatalf("expected the kickstart-relaunch notice; stdout = %q", s)
+	}
+	if !strings.Contains(s, "bus is back up at "+testBusURL) {
+		t.Fatalf("expected a back-up message after the kickstart; stdout = %q", s)
+	}
+}
+
+// TestEnsureBusUpAllFailLoudWarning: restart and kickstart both fail to bring
+// the bus up — the operator gets a loud warning with the manual recovery
+// command, never a hollow success.
+func TestEnsureBusUpAllFailLoudWarning(t *testing.T) {
+	fastHealthBudgets(t)
+	var out, errOut strings.Builder
+	restart := func() error { return nil }
+	kickstart := func() error { return nil }
+	healthy := func() (string, bool) { return testBusURL, false } // never up
+
+	ensureBusUpWith(&out, &errOut, restart, healthy, kickstart)
+
+	es := errOut.String()
+	if !strings.Contains(es, "did NOT come back up") {
+		t.Fatalf("expected a loud warning that the bus is down; stderr = %q", es)
+	}
+	if !strings.Contains(es, "launchctl kickstart -k") {
+		t.Fatalf("expected the manual recovery command in the warning; stderr = %q", es)
+	}
+	if strings.Contains(out.String(), "bus is back up") {
+		t.Fatalf("must not claim the bus is up when it never came up; stdout = %q", out.String())
+	}
+}
+
+// TestEnsureBusUpNoKickstarter: on a platform without launchd recovery (nil
+// kickstarter) a stay-down bus goes straight to the loud warning.
+func TestEnsureBusUpNoKickstarter(t *testing.T) {
+	fastHealthBudgets(t)
+	var out, errOut strings.Builder
+	restart := func() error { return nil }
+	healthy := func() (string, bool) { return testBusURL, false }
+
+	ensureBusUpWith(&out, &errOut, restart, healthy, nil)
+
+	if strings.Contains(out.String(), "forcing a launchd relaunch") {
+		t.Fatalf("must not attempt a kickstart with a nil kickstarter; stdout = %q", out.String())
+	}
+	if !strings.Contains(errOut.String(), "did NOT come back up") {
+		t.Fatalf("expected the loud warning with no kickstarter; stderr = %q", errOut.String())
+	}
+}
 
 // TestRunUpdateNoBrewOnPath: when brew is not on PATH, update prints the
 // manual-path guidance and does not error (nothing to upgrade is not a failure).
