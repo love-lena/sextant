@@ -94,11 +94,13 @@ func runServe(ctx context.Context, opts Options, out io.Writer) error {
 	// Write the state file when a path was given. The file lets a managed/
 	// backgrounded dash expose its URL without the operator having to capture
 	// stdout (`sextant dash url` reads it). Written after the listener binds so
-	// the port is final; removed on clean shutdown so absence means not running.
+	// the port is final; removed on any return so absence always means not running
+	// — the defer covers both clean-shutdown and unexpected-server-error paths.
 	if opts.StateFile != "" {
 		if err := writeStateFile(opts.StateFile, serveURL, token, ln.Addr()); err != nil {
 			return fmt.Errorf("write state file: %w", err)
 		}
+		defer os.Remove(opts.StateFile) // best-effort; failure leaves a stale file but doesn't mask a serve error
 	}
 
 	serveErr := make(chan error, 1)
@@ -117,9 +119,6 @@ func runServe(ctx context.Context, opts Options, out io.Writer) error {
 		sctx, scancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer scancel()
 		_ = srv.Shutdown(sctx)
-		if opts.StateFile != "" {
-			_ = os.Remove(opts.StateFile)
-		}
 		return nil
 	case err := <-serveErr:
 		return err
