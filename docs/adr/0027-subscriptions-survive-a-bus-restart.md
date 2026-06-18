@@ -123,3 +123,41 @@ Active subscriptions register themselves on the client at creation and
 deregister on teardown. The registry (`Client.subs`) is guarded by a mutex; a
 resume pass snapshots it under the lock and then re-establishes each relay
 without holding the lock, so delivery goroutines and Stop can run concurrently.
+
+## Addendum (2026-06-18, v0.5.2): the subscription also follows a moved address
+
+The guarantee above leaned on ADR-0025 keeping the bus at the *same* address
+across a restart. That stability is best-effort: the bus reuses its previous
+port only when that port is free at boot, and otherwise binds a new one — so a
+restart can come back on a different port (it did, in the v0.5.1 live-bus
+incident: a messy service restart left the old port briefly held, the bus fell
+back to a fresh port, and every live client was stranded). NATS auto-reconnect
+only ever redials the address it booted with and never re-reads discovery, so on
+a moved address the connection — and with it every subscription — never recovers.
+
+This addendum extends the guarantee to a moved address. When the connection's
+URL was resolved from the discovery file (`bus.json`, via `Options.ConnInfoPath`,
+the normal case), the SDK re-reads that file on **every** redial and dials the
+address recorded there, overriding the stale boot address NATS would otherwise
+reuse. Reconnect therefore follows the bus to its new port, and the resume
+machinery described above runs unchanged on the new connection — so a moved
+address self-heals with no client restart and no operator action, exactly as a
+same-address restart already did. A caller that pinned an explicit
+`Options.URL` is dialed as-is (its choice is deliberate and respected); if the
+discovery file is unreadable or unparseable at dial time the dialer falls back
+to the address NATS chose, so a transient read never makes a reconnect worse
+than before.
+
+One accepted bound: this follows a moved **port** on the same loopback host —
+the case that occurs today. A moved **host** under TLS would additionally need
+the verify-host re-resolved (TLS hostname verification keys off the server-pool
+name, not the dialed address); that is deferred with the leaf-TLS follow-up
+(ADR-0038) and not built, since the current bus is a single plaintext loopback.
+
+Implemented as a NATS `CustomDialer` (`reResolveDialer` in
+`pkg/sextant/reconnect.go`), attached in `Connect` only when the URL came from
+discovery. The regression that locks it (`TestSubscriptionFollowsBusPortChange`)
+is deliberately prod-faithful: it drives the real SDK connect path via discovery,
+restarts a real bus on a genuinely different port, rewrites `bus.json` as the bus
+does on boot, and asserts the subscription reconnects and keeps delivering — a
+port-pinning fake would pass while production broke.
