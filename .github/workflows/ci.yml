@@ -27,7 +27,8 @@ jobs:
       # pin the action's version to the installed v2 line. The import-discipline
       # bright lines (importcheck, ADR-0041) run as tests in the test step below.
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        # golangci-lint v2 needs golangci-lint-action v7+ (v6 rejects v2.x).
+        uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
       - name: gofumpt
