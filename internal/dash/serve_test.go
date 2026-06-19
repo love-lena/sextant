@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sync"
 	"testing"
@@ -121,6 +123,121 @@ func getJSON(t *testing.T, url, token string, v any) {
 	}
 	if err := json.NewDecoder(resp.Body).Decode(v); err != nil {
 		t.Fatalf("decode %s: %v", url, err)
+	}
+}
+
+// TestRunServeStateFile asserts that when StateFile is given, runServe writes a
+// valid JSON state file (correct url, token, port; 0600 permissions) on start
+// and removes it on clean shutdown.
+func TestRunServeStateFile(t *testing.T) {
+	b, err := bus.Start(t.Context(), bus.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("bus.Start: %v", err)
+	}
+	t.Cleanup(b.Shutdown)
+
+	creds, _, err := b.MintClient(t.Context(), "dash", "human")
+	if err != nil {
+		t.Fatalf("MintClient: %v", err)
+	}
+	credsPath := writeCreds(t, creds)
+	stateFile := filepath.Join(t.TempDir(), "dash.json")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out := &syncBuffer{}
+	done := make(chan error, 1)
+	go func() {
+		done <- runServe(ctx, Options{
+			CredsPath: credsPath,
+			URL:       b.ClientURL(),
+			Serve:     true,
+			Port:      0,
+			StateFile: stateFile,
+		}, out)
+	}()
+
+	// Wait for the server to print its URL (it writes the state file before then).
+	waitForServeURL(t, out)
+
+	// State file must exist with 0600 permissions.
+	info, err := os.Stat(stateFile)
+	if err != nil {
+		t.Fatalf("state file not created: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("state file permissions = %04o, want 0600", perm)
+	}
+
+	// Content must parse and match the announced URL.
+	state, err := ReadStateFile(stateFile)
+	if err != nil {
+		t.Fatalf("ReadStateFile: %v", err)
+	}
+	re := regexp.MustCompile(`(http://[^/\s]+)/\?token=(\S+)`)
+	m := re.FindStringSubmatch(out.String())
+	if m == nil {
+		t.Fatal("could not extract URL from output")
+	}
+	wantURL := m[1] + "/?token=" + m[2]
+	if state.URL != wantURL {
+		t.Fatalf("state.URL = %q, want %q", state.URL, wantURL)
+	}
+	if state.Token == "" {
+		t.Fatal("state.Token is empty")
+	}
+	if state.Port <= 0 {
+		t.Fatalf("state.Port = %d, want > 0", state.Port)
+	}
+
+	// On clean shutdown the state file must be removed.
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runServe returned error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runServe did not return within 5s of context cancel")
+	}
+	if _, err := os.Stat(stateFile); !os.IsNotExist(err) {
+		t.Fatalf("state file still exists after shutdown (err=%v)", err)
+	}
+}
+
+// TestReadStateFileAbsent: ReadStateFile on a missing file returns an error
+// wrapping os.ErrNotExist so callers can distinguish "not running" from
+// a parse failure.
+func TestReadStateFileAbsent(t *testing.T) {
+	_, err := ReadStateFile(filepath.Join(t.TempDir(), "nonexistent.json"))
+	if err == nil {
+		t.Fatal("ReadStateFile on absent file returned nil error")
+	}
+	if !os.IsNotExist(err) {
+		t.Fatalf("expected os.ErrNotExist, got %v", err)
+	}
+}
+
+// TestReadStateFileFixture: ReadStateFile parses a hand-written fixture so the
+// URL command works against any conformant file, not just the one runServe wrote.
+func TestReadStateFileFixture(t *testing.T) {
+	fixture := `{"url":"http://127.0.0.1:8765/?token=abc123","token":"abc123","port":8765}`
+	path := filepath.Join(t.TempDir(), "dash.json")
+	if err := os.WriteFile(path, []byte(fixture), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state, err := ReadStateFile(path)
+	if err != nil {
+		t.Fatalf("ReadStateFile: %v", err)
+	}
+	if state.URL != "http://127.0.0.1:8765/?token=abc123" {
+		t.Fatalf("URL = %q", state.URL)
+	}
+	if state.Token != "abc123" {
+		t.Fatalf("Token = %q", state.Token)
+	}
+	if state.Port != 8765 {
+		t.Fatalf("Port = %d", state.Port)
 	}
 }
 

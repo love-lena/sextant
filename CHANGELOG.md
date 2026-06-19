@@ -268,6 +268,55 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Message.Envelope` is now `Message.Frame`. First step of implementing
   ADR-0018 / ADR-0019.
 
+## [0.5.3] — 2026-06-18
+
+### Added
+
+- **Agent runtimes run as OS-managed components** (ADR-0040) — `sextant-dispatch`,
+  `sextant-violet`, and `sextant-workflow` now ship in the Homebrew formula
+  alongside `sextant`, `sextant-mcp`, and `sextant-dash`, so a normal install
+  puts them on PATH and leaves them operational. `sextant components
+  status|start|stop|restart [name|--all]` writes and supervises per-component
+  launchd agents (`~/Library/LaunchAgents/dev.sextant.<name>.plist`), with a
+  bootstrap → kickstart → health-check on `start` so a loaded-but-not-running
+  job never goes unnoticed. macOS-only this release (launchctl); a Linux caller
+  receives a clear "not yet" message.
+
+- **`sextant components exec` indirection** (ADR-0040) — each component's plist
+  runs `sextant components exec <name>`, which resolves the environment in Go
+  (extending PATH so co-installed tools like `claude` are findable) and loads
+  the API key from a `0600` env-file at exec time via `syscall.Exec`. The key
+  is never written into a plist; the dispatcher refuses to start if `claude` is
+  absent from PATH; violet refuses if it has no key.
+
+- **`sextant secret set anthropic`** — stores violet's Anthropic API key in the
+  `0600` env-file that `sextant components exec violet` loads at startup.
+
+- **`sextant doctor` runtime health** — reports each component's run state
+  alongside the bus, with remediation hints for the common failure modes (key
+  absent, `claude` not on PATH, launchd not bootstrapped).
+
+- **`sextant update` self-heals the bus** — after an upgrade `sextant update`
+  re-launches the bus service and health-checks it, so the operator does not have
+  to run a separate restart step.
+
+- **Dash workflow-run action live** — the Workflow page's "Start a workflow"
+  button is wired to a live `workflow.start` call; the consumer acks on accept
+  and runs the workflow asynchronously (one run per request, frame-id fenced to
+  prevent duplicates on retry).
+
+- **`/live-verify-v053` skill** — a self-validating demo skill that walks the
+  operator through proving every v0.5.3 feature operational end to end.
+
+### Fixed
+
+- **Workflow ack timing** — `workflow.start` is now acked before the workflow
+  runs (not after), so the caller does not time out waiting for ack on a
+  long-running workflow.
+
+- **Workflow goroutine leak** — a goroutine started per `workflow.start` request
+  is now bounded to the workflow's lifetime and does not leak on early exit.
+
 ## [0.5.0] — 2026-06-17
 
 ### Added

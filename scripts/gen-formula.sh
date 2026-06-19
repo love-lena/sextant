@@ -35,7 +35,8 @@ template() {
 # Sextant — a protocol + SDK for AI agents to collaborate over a bus.
 #
 # This formula installs the prebuilt release binaries (sextant, sextant-mcp,
-# sextant-dash) from the GitHub release tarballs; it does not compile from
+# sextant-dash, sextant-dispatch, sextant-violet, sextant-workflow) from the
+# GitHub release tarballs; it does not compile from
 # source. The version + the four per-platform sha256 lines below are
 # regenerated automatically by .github/workflows/release.yml on each v* tag
 # (see scripts/gen-formula.sh) — keep their shape stable so the bump diff is
@@ -77,11 +78,14 @@ class Sextant < Formula
 
   def install
     # Each tarball unpacks to a single top-level dir (Homebrew cds into it) with
-    # bin/{sextant,sextant-mcp,sextant-dash}. Those three are the user-facing
-    # binaries; install them all.
+    # bin/{sextant,sextant-mcp,sextant-dash,sextant-dispatch,sextant-violet,sextant-workflow}.
+    # Install all six binaries.
     bin.install "bin/sextant"
     bin.install "bin/sextant-mcp"
     bin.install "bin/sextant-dash"
+    bin.install "bin/sextant-dispatch"
+    bin.install "bin/sextant-violet"
+    bin.install "bin/sextant-workflow"
   end
 
   # The bus is a per-user daemon. Run it with NO --store override so it uses

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/love-lena/sextant/internal/components"
 	"github.com/love-lena/sextant/pkg/buscfg"
 	"github.com/love-lena/sextant/pkg/conninfo"
 )
@@ -125,5 +126,141 @@ func TestParseLaunchdState(t *testing.T) {
 	notRunning := fmt.Sprintf("label = x\n\tstate = %s\n", "waiting")
 	if st, _ := parseLaunchdState(notRunning); st != "waiting" {
 		t.Errorf("state = %q, want waiting", st)
+	}
+}
+
+// fakeRunner returns a components.Runner that always responds with the given
+// output and error, regardless of the args — enough for the three component
+// states doctor cares about: not-loaded, loaded+running, loaded-not-running.
+func fakeRunner(out string, err error) components.Runner {
+	return func(args ...string) (string, error) { return out, err }
+}
+
+// fakeLookPath returns a lookPath func that finds only the named binary. Anything
+// else returns "not found" — lets tests control which components appear installed.
+func fakeLookPath(found string) func(string) (string, error) {
+	return func(name string) (string, error) {
+		if name == found {
+			return "/fake/bin/" + name, nil
+		}
+		return "", fmt.Errorf("%s not found", name)
+	}
+}
+
+// fakeLookPathAll returns a lookPath func that resolves every binary to a fake
+// path — the "everything installed" case.
+func fakeLookPathAll() func(string) (string, error) {
+	return func(name string) (string, error) { return "/fake/bin/" + name, nil }
+}
+
+// TestDoctorComponentsMissing: when a binary is not on PATH, doctor reports
+// MISSING and hints at installation.
+func TestDoctorComponentsMissing(t *testing.T) {
+	// Neither binary is found.
+	lookPath := func(string) (string, error) { return "", fmt.Errorf("not found") }
+	runner := fakeRunner("x = {\n\tstate = running\n}", nil)
+	mgr := &components.Manager{UID: 501, Run: runner}
+	var out strings.Builder
+	for _, c := range components.Registry {
+		reportDoctorComponent(&out, c, mgr, lookPath)
+	}
+	s := out.String()
+	if !strings.Contains(s, "MISSING") {
+		t.Errorf("missing binary should report MISSING; got:\n%s", s)
+	}
+	if !strings.Contains(s, "install sextant") {
+		t.Errorf("missing binary should hint at installation; got:\n%s", s)
+	}
+}
+
+// TestDoctorComponentsRunning: installed + launchd running → loaded + RUNNING.
+func TestDoctorComponentsRunning(t *testing.T) {
+	runner := fakeRunner("dev.sextant.dispatcher = {\n\tstate = running\n\tpid = 9999\n}", nil)
+	mgr := &components.Manager{UID: 501, Run: runner}
+	var out strings.Builder
+	c, _ := components.Find("dispatcher")
+	reportDoctorComponent(&out, c, mgr, fakeLookPathAll())
+	s := out.String()
+	if !strings.Contains(s, "loaded + RUNNING") {
+		t.Errorf("running component should report loaded + RUNNING; got:\n%s", s)
+	}
+}
+
+// TestDoctorComponentsNotLoaded: installed + service not loaded → NOT running +
+// remediation hint pointing at `sextant components start`.
+func TestDoctorComponentsNotLoaded(t *testing.T) {
+	// launchctl exit 113 = not loaded.
+	runner := fakeRunner("Could not find service in domain", fmt.Errorf("exit 113"))
+	mgr := &components.Manager{UID: 501, Run: runner}
+	var out strings.Builder
+	c, _ := components.Find("workflow")
+	reportDoctorComponent(&out, c, mgr, fakeLookPathAll())
+	s := out.String()
+	if !strings.Contains(s, "NOT running") {
+		t.Errorf("not-loaded component should report NOT running; got:\n%s", s)
+	}
+	if !strings.Contains(s, "sextant components start") {
+		t.Errorf("not-loaded component should hint at `sextant components start`; got:\n%s", s)
+	}
+}
+
+// TestDoctorComponentsLoadedNotRunning: installed + loaded but NOT running (the
+// throttle trap) → remediation hint pointing at `sextant components restart`.
+func TestDoctorComponentsLoadedNotRunning(t *testing.T) {
+	runner := fakeRunner("dev.sextant.dispatcher = {\n\tstate = waiting\n}", nil)
+	mgr := &components.Manager{UID: 501, Run: runner}
+	var out strings.Builder
+	c, _ := components.Find("dispatcher")
+	reportDoctorComponent(&out, c, mgr, fakeLookPathAll())
+	s := out.String()
+	if !strings.Contains(s, "loaded but NOT running") {
+		t.Errorf("loaded-but-not-running should report loaded but NOT running; got:\n%s", s)
+	}
+	if !strings.Contains(s, "sextant components restart") {
+		t.Errorf("loaded-but-not-running should hint at restart; got:\n%s", s)
+	}
+	// The dispatcher NeedsClaude=true so the claude hint should appear.
+	if !strings.Contains(s, "claude") {
+		t.Errorf("dispatcher loaded-not-running should mention claude hint; got:\n%s", s)
+	}
+}
+
+// TestDoctorComponentsVioletNotLoadedHint: when violet is not loaded doctor
+// surfaces the key-setup hint in addition to the start command.
+func TestDoctorComponentsVioletNotLoadedHint(t *testing.T) {
+	runner := fakeRunner("Could not find service in domain", fmt.Errorf("exit 113"))
+	mgr := &components.Manager{UID: 501, Run: runner}
+	var out strings.Builder
+	c, ok := components.Find("violet")
+	if !ok {
+		t.Skip("violet not in Registry yet — skip")
+	}
+	reportDoctorComponent(&out, c, mgr, fakeLookPathAll())
+	s := out.String()
+	if !strings.Contains(s, "NOT running") {
+		t.Errorf("not-loaded violet should report NOT running; got:\n%s", s)
+	}
+	if !strings.Contains(s, "sextant secret set anthropic") {
+		t.Errorf("not-loaded violet should hint at `sextant secret set anthropic`; got:\n%s", s)
+	}
+}
+
+// TestDoctorComponentsRunnerIntegration: runDoctorFull with an injected runner
+// propagates component state into the full doctor output so the operator sees
+// runtimes in one report.
+func TestDoctorComponentsRunnerIntegration(t *testing.T) {
+	store := t.TempDir() // missing bus.json is fine — we want the runtimes section
+	runner := fakeRunner("dev.sextant.dispatcher = {\n\tstate = running\n\tpid = 1\n}", nil)
+	var out strings.Builder
+	runDoctorFull(&out, store, fakeLookPathAll(), runner)
+	s := out.String()
+	if !strings.Contains(s, "runtimes") {
+		t.Errorf("doctor output should contain a runtimes section; got:\n%s", s)
+	}
+	if !strings.Contains(s, "dispatcher") {
+		t.Errorf("doctor output should report the dispatcher component; got:\n%s", s)
+	}
+	if !strings.Contains(s, "workflow") {
+		t.Errorf("doctor output should report the workflow component; got:\n%s", s)
 	}
 }

@@ -108,6 +108,12 @@ type Options struct {
 	// UIDir, when set, serves a custom frontend directory instead of the
 	// built-in zero-design debug surface (the D2 hook).
 	UIDir string
+
+	// StateFile, when set, is the path where runServe writes a JSON state file
+	// on start (url, token, port) and removes it on clean shutdown. The default
+	// path when called via the components layer is $SEXTANT_HOME/dash.json;
+	// this field carries whatever the caller (flag or registry) resolved.
+	StateFile string
 }
 
 // launchTimeout bounds each launch I/O step — the whole first-run

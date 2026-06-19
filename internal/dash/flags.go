@@ -36,6 +36,7 @@ type Flags struct {
 	port        *int
 	allowOrigin *string
 	ui          *string
+	stateFile   *string
 }
 
 // AddFlags registers the dash flags on fs, defaulting from the environment the
@@ -56,6 +57,7 @@ func AddFlags(fs *flag.FlagSet) *Flags {
 		port:        fs.Int("port", defaultServePort, "port for the --serve API on 127.0.0.1 (0 picks a free port); the API is loopback-only"),
 		allowOrigin: fs.String("allow-origin", "", "comma-separated extra browser origins the --serve API accepts (localhost is always allowed)"),
 		ui:          fs.String("ui", "", "serve a custom frontend directory with --serve instead of the built-in debug surface"),
+		stateFile:   fs.String("state-file", "", "path to write a JSON state file {url,token,port} on start and remove on clean shutdown (default: $SEXTANT_HOME/dash.json when managed by components)"),
 	}
 }
 
@@ -109,6 +111,7 @@ func (f *Flags) Resolve() (Options, error) {
 		Port:           *f.port,
 		AllowedOrigins: splitOrigins(*f.allowOrigin),
 		UIDir:          *f.ui,
+		StateFile:      *f.stateFile,
 	}, nil
 }
 
