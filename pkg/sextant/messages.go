@@ -247,6 +247,15 @@ func (c *Client) subscribe(ctx context.Context, subject string, h Handler, cfg s
 // processed on a restored connection while the count still reads stale.
 func (c *Client) relayHandler(s *subscription, epoch uint64) nats.MsgHandler {
 	return func(m *nats.Msg) {
+		s.stopMu.Lock()
+		if s.stopped.Load() {
+			s.stopMu.Unlock()
+			return
+		}
+		s.inFlight.Add(1)
+		s.stopMu.Unlock()
+		defer s.inFlight.Done()
+
 		if c.nc.Stats().Reconnects != epoch {
 			return // doomed generation: a reconnect intervened; the resume re-covers it
 		}
@@ -501,6 +510,9 @@ type subscription struct {
 	// rotation's network calls; never taken while holding mu.
 	resumeMu sync.Mutex
 
+	stopMu   sync.Mutex
+	inFlight sync.WaitGroup
+
 	// mu guards the live relay generation: the (subID, natsSub) pair and the
 	// epoch (the connection's reconnect count) it was established under. Every
 	// resume pass rotates to a fresh sub-id (see reestablish), so the trio
@@ -661,7 +673,11 @@ func (s *subscription) Stop() {
 // the ctx-cancel path that bypasses Stop).
 func (s *subscription) teardown() {
 	s.once.Do(func() {
+		s.stopMu.Lock()
 		s.stopped.Store(true)
+		s.stopMu.Unlock()
+		s.inFlight.Wait()
+
 		s.mu.Lock()
 		subID, natsSub := s.subID, s.natsSub
 		s.mu.Unlock()
