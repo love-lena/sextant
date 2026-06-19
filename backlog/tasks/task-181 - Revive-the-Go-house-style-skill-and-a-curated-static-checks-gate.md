@@ -1,10 +1,10 @@
 ---
 id: TASK-181
 title: Revive the Go house-style skill and a curated static-checks gate
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-19 21:11'
-updated_date: '2026-06-19 21:31'
+updated_date: '2026-06-19 22:56'
 labels:
   - feature
   - tooling
