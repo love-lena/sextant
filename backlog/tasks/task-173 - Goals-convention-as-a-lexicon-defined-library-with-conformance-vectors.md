@@ -1,10 +1,10 @@
 ---
 id: TASK-173
 title: 'Goals convention as a lexicon-defined library, with conformance vectors'
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-19 21:11'
-updated_date: '2026-06-19 21:31'
+updated_date: '2026-06-19 23:31'
 labels:
   - feature
   - conventions
