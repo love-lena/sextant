@@ -47,7 +47,7 @@ human has signed off — see
 | [0038](0038-a-remote-box-joins-through-a-leaf-node.md) | A remote box joins the bus through a leaf node | accepted |
 | [0039](0039-the-assistant-is-a-convention-not-a-primitive.md) | The assistant is a convention, not a primitive | proposed |
 | [0040](0040-agent-runtimes-run-as-os-managed-components.md) | Agent runtimes run as OS-managed components | accepted |
-| [0041](0041-clients-are-co-equal-across-languages.md) | Clients are co-equal implementations of a language-neutral protocol | proposed |
+| [0041](0041-clients-are-co-equal-across-languages.md) | Clients are co-equal implementations of a language-neutral protocol | accepted |
 
 ## Review batches
 - **Batch 1 — substrate:** 0004–0007 — *accepted*
