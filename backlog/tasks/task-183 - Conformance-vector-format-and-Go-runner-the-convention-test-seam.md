@@ -1,9 +1,10 @@
 ---
 id: TASK-183
 title: Conformance-vector format and Go runner (the convention test seam)
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-19 21:31'
+updated_date: '2026-06-19 22:51'
 labels:
   - feature
   - conformance
