@@ -9,7 +9,7 @@ ui:
 # Build the sextant binary into ./bin (regenerates the dash bundles first, so
 # the embedded UI is present). The cross-platform release build is scripts/release.sh.
 build: ui
-	go build -o bin/sextant ./cmd/sextant
+	go build -o bin/sextant ./clients/go/apps/sextant
 
 # Run the Go test suite (regenerates the dash bundles first).
 test: ui
@@ -37,5 +37,5 @@ fmt:
 # Regenerates the generated pages from canon first (docgen), then renders.
 # Install mdbook with: cargo install mdbook (or `brew install mdbook`).
 book:
-	go run ./cmd/docgen
+	go run ./clients/go/apps/docgen
 	mdbook build docs/book

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/love-lena/sextant/internal/attest"
-	"github.com/love-lena/sextant/pkg/sx"
+	"github.com/love-lena/sextant/clients/go/apps/mcp/attest"
+	"github.com/love-lena/sextant/protocol/sx"
 )
 
 // TestAttestHookStampsByVerifiedAuthor is the TASK-56 / ADR-0030 definition-of-done

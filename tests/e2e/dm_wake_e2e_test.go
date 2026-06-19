@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/love-lena/sextant/pkg/sx"
+	"github.com/love-lena/sextant/protocol/sx"
 )
 
 // TestMCPDMWakesWithoutSubscribe is the review-M1 definition-of-done: a frame
