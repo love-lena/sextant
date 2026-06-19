@@ -4,6 +4,7 @@ title: pi headless workflow sessions with a managed handoff
 status: To Do
 assignee: []
 created_date: '2026-06-19 21:11'
+updated_date: '2026-06-19 21:31'
 labels:
   - feature
   - pi
@@ -28,4 +29,5 @@ Run pi sessions as headless workflow workers, addressable over the bus (primary)
 - [ ] #1 the dispatcher can spawn and re-spawn a pi session as a scoped bus client
 - [ ] #2 a headless pi worker is addressable over the bus and responds like a crew member
 - [ ] #3 a bus-signalled drain, manual pi resume, and dispatcher re-spawn handoff works without two processes fighting the session
+- [ ] #4 the operator (via dash DM) sends a task to the headless pi worker; it does the work and posts an artifact/reply the operator sees - indistinguishable from a Claude Code crew member in the dash
 <!-- AC:END -->

@@ -4,6 +4,7 @@ title: 'sextant pi-bus extension: a first-class pi client'
 status: To Do
 assignee: []
 created_date: '2026-06-19 21:11'
+updated_date: '2026-06-19 21:31'
 labels:
   - feature
   - pi
@@ -30,4 +31,6 @@ Build sextant-pi-bus: a pi package (in-process TS extension) that makes a pi ses
 - [ ] #2 bus tools + /set-goal work via the TS conventions (goals set through conv/goals, not hand-rolled)
 - [ ] #3 the agent's tool calls + thinking appear on a bus activity topic, viewable in the dash
 - [ ] #4 a bundled sextant skill teaches the bus conventions
+- [ ] #5 OPERATOR-VERIFIED: with a pi agent on the operator's live bus, the operator DMs it, it wakes and replies, and its tool-calls + thinking stream to the activity topic and render live in the operator's open dash - verified by the operator (or a driven PTY/browser), not a unit test
+- [ ] #6 /set-goal actually moves a goal the dash then shows (closes the loop to task-173)
 <!-- AC:END -->

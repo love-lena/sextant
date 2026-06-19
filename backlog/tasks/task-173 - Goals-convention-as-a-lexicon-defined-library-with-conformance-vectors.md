@@ -4,6 +4,7 @@ title: 'Goals convention as a lexicon-defined library, with conformance vectors'
 status: To Do
 assignee: []
 created_date: '2026-06-19 21:11'
+updated_date: '2026-06-19 21:31'
 labels:
   - feature
   - conventions
@@ -14,6 +15,7 @@ labels:
   - ready-for-agent
 dependencies:
   - TASK-172
+  - TASK-183
 ordinal: 163000
 ---
 
@@ -29,4 +31,7 @@ Establish the convention pattern end-to-end on goals: define the goal record + v
 - [ ] #2 conv/goals is the single home for goal mechanics; the label/state bug and proof-filter divergence are gone
 - [ ] #3 conformance vectors exist for the goal verbs and the Go suite passes them
 - [ ] #4 the dash backend and violet consume conv/goals instead of hand-rolling goal logic
+- [ ] #5 On the operator's live bus, the dash write path sets a goal criterion and violet's Home reads the same criterion's text+status with NO field-name fallback - a regression test sets a criterion via the dash path and asserts violet's reader sees identical text/status
+- [ ] #6 the lexicon->Go type generation is built + documented (net-new: lexicons are read at runtime today) - a fresh agent knows where it lives and when it runs
+- [ ] #7 after the swap, sextant dash --serve Goals and violet's curated Home render the same live goal identically
 <!-- AC:END -->

@@ -4,6 +4,7 @@ title: 'Spike: validate pi as a first-class sextant client'
 status: To Do
 assignee: []
 created_date: '2026-06-19 21:11'
+updated_date: '2026-06-19 21:31'
 labels:
   - spike
   - research
@@ -30,3 +31,9 @@ Spike (AFK): validate that pi can host a first-class sextant client before commi
 - [ ] #4 agent-action observability confirmed: the RPC event stream (tool calls, thinking, turn events) is consumable and bridgeable to a bus activity topic
 - [ ] #5 the security/trust posture is written up as a decision for the pi-bus extension (bus-delivered instructions vs pi permission gates; agent acts on its own scoped creds)
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Cold-start context (from the PRD): pin a specific pi version/commit (github.com/earendil-works/pi, MIT); the wake primitive is sendMessage(triggerTurn:true)/sendUserMessage, started in the session_start handler; starting template is examples/extensions/file-trigger.ts; the disposed-session risk is earendil-works/pi issue 3021. Build a minimal extension + TS SDK connection and run against a real bus.
+<!-- SECTION:NOTES:END -->

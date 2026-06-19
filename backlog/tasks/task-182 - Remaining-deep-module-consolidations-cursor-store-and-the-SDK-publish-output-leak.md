@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-19 21:11'
+updated_date: '2026-06-19 21:31'
 labels:
   - feature
   - deep-modules
@@ -29,4 +30,6 @@ The remaining deep-module consolidations the new tree enables (from the assessme
 <!-- AC:BEGIN -->
 - [ ] #1 one cursor-store module owns the monotonic/atomic/idempotent advance; mcp/violet/attest become thin callers
 - [ ] #2 the SDK publish path returns an exported value type; no caller imports internal/wireapi
+- [ ] #3 behavior unchanged: the existing mcp/violet/attest resume tests pass against the shared cursor module, and importcheck forbids the three sites re-declaring their own cursor
+- [ ] #4 importcheck asserts no package outside pkg/sextant imports internal/wireapi (the leak cannot reappear)
 <!-- AC:END -->

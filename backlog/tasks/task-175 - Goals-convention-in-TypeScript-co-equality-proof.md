@@ -4,6 +4,7 @@ title: Goals convention in TypeScript (co-equality proof)
 status: To Do
 assignee: []
 created_date: '2026-06-19 21:11'
+updated_date: '2026-06-19 21:31'
 labels:
   - feature
   - conventions
@@ -30,4 +31,5 @@ Implement the goals convention in TypeScript (clients/ts/conventions/goals) over
 - [ ] #1 clients/ts/conventions/goals implements the goal verbs over the TS SDK
 - [ ] #2 the TS goals suite passes the identical conformance vectors the Go suite passes
 - [ ] #3 record types are generated from the lexicon; verb logic is hand-written
+- [ ] #4 a single live scenario shows the TS and Go goals conventions writing/reading the same goal artifact on one bus with byte-identical record shapes - co-equality demonstrated, not two suites independently green
 <!-- AC:END -->
