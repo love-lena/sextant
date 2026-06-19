@@ -1,6 +1,5 @@
 ---
 status: accepted
-signed_off_by: lena
 date: 2026-06-18
 ---
 
