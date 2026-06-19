@@ -1,0 +1,15 @@
+{
+  "epoch": 1,
+  "description": "Sample wire vector (TASK-183): a chat.message frame and its canonical JSON bytes. TASK-174's TS codec replays this for byte-faithfulness.",
+  "frame": {
+    "author": "01J000000000000000000AUTHOR",
+    "epoch": 1,
+    "id": "01J0000000000000000000FRAME",
+    "kind": "message",
+    "record": {
+      "$type": "chat.message",
+      "text": "hello, bus"
+    }
+  },
+  "bytes": "7b22617574686f72223a2230314a303030303030303030303030303030303030415554484f52222c2265706f6368223a312c226964223a2230314a303030303030303030303030303030303030304652414d45222c226b696e64223a226d657373616765222c227265636f7264223a7b222474797065223a22636861742e6d657373616765222c2274657874223a2268656c6c6f2c20627573227d7d"
+}

@@ -209,6 +209,23 @@ func AssertBusImportsNoClients(t *testing.T, pkgPath string) {
 	}
 }
 
+// AssertProtocolImportsNoClients pins the protocol stratum's bright line
+// (ADR-0041): the language-neutral protocol stands under the co-equal clients
+// and never depends on one. Its production closure must contain no clients/
+// package. The conformance VECTORS and the vector-FORMAT data types live in
+// protocol/conformance, but the RUNNER that replays a vector by invoking a
+// convention verb lives in clients/go/conformance precisely so this edge holds
+// — a protocol package that imported a verb would invert the dependency.
+func AssertProtocolImportsNoClients(t *testing.T, pkgPath string) {
+	t.Helper()
+	const clientsNS = Module + "/clients/"
+	for dep := range Closure(t, pkgPath) {
+		if strings.HasPrefix(dep, clientsNS) {
+			t.Errorf("%s: a protocol package reaches a client (%s); the protocol never imports clients", pkgPath, dep)
+		}
+	}
+}
+
 // AssertNoDirectImport fails when pkgPath's production code itself directly
 // imports any of the forbidden paths, whatever the rest of the closure says.
 // The layout uses it to stay domain-free at its own boundary: its closure
