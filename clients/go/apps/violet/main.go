@@ -79,7 +79,7 @@ func main() {
 	if err != nil {
 		fatal("connect: %v", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	if *designate {
 		if err := designateAssistant(ctx, c); err != nil {

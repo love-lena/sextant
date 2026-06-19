@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,7 +42,8 @@ func runCtx(t *testing.T, home string, args ...string) (string, int) {
 	if err == nil {
 		return buf.String(), 0
 	}
-	if ee, ok := err.(*exec.ExitError); ok {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
 		return buf.String(), ee.ExitCode()
 	}
 	t.Fatalf("run %v: %v", args, err)

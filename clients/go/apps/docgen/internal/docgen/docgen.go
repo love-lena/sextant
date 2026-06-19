@@ -358,17 +358,35 @@ func commentRenderer(d *doc.Package) func(string) string {
 func loadSDKDoc(root string) (*doc.Package, *token.FileSet, error) {
 	fset := token.NewFileSet()
 	dir := filepath.Join(root, "clients", "go", "sdk")
-	pkgs, err := parser.ParseDir(fset, dir, func(fi os.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, parser.ParseComments)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, nil, err
 	}
-	astPkg, ok := pkgs["sextant"]
-	if !ok {
+	// Parse the package's non-test .go files into the AST set doc.NewFromFiles
+	// needs (parser.ParseDir was deprecated in Go 1.25; this is the stdlib
+	// replacement that keeps the tool dependency-free).
+	var files []*ast.File
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, perr := parser.ParseFile(fset, filepath.Join(dir, name), nil, parser.ParseComments)
+		if perr != nil {
+			return nil, nil, perr
+		}
+		if f.Name.Name != "sextant" {
+			continue
+		}
+		files = append(files, f)
+	}
+	if len(files) == 0 {
 		return nil, nil, fmt.Errorf("package sextant not found in %s", dir)
 	}
-	d := doc.New(astPkg, "github.com/love-lena/sextant/clients/go/sdk", 0)
+	d, err := doc.NewFromFiles(fset, files, "github.com/love-lena/sextant/clients/go/sdk")
+	if err != nil {
+		return nil, nil, fmt.Errorf("build SDK doc from %s: %w", dir, err)
+	}
 	return d, fset, nil
 }
 

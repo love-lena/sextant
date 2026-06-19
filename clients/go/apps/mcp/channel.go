@@ -458,7 +458,7 @@ func (h *channelHub) subscribe(ctx context.Context, c *sextant.Client, subject, 
 	// already-active: emit the subscribed notice (so the channels-enabled check
 	// still confirms) but do NOT open a redundant relay.
 	if subject == sx.ClientSubject(c.ID()) {
-		h.systemEvent("subscribed", subject, fmt.Sprintf("now following %s (your own DM — delivered automatically on connect); frames arrive as channel events", subject))
+		_ = h.systemEvent("subscribed", subject, fmt.Sprintf("now following %s (your own DM — delivered automatically on connect); frames arrive as channel events", subject))
 		// Report it as active (it IS being delivered, via the bridge) without a
 		// second relay. active() reads h.subs, which never holds the self-DM, so
 		// this can't duplicate across repeated calls.
@@ -531,13 +531,13 @@ func (h *channelHub) subscribe(ctx context.Context, c *sextant.Client, subject, 
 	h.subs[subject] = sub
 	h.mu.Unlock()
 
-	h.systemEvent("subscribed", subject, fmt.Sprintf("now following %s — frames arrive as channel events; reply with message_publish", subject))
+	_ = h.systemEvent("subscribed", subject, fmt.Sprintf("now following %s — frames arrive as channel events; reply with message_publish", subject))
 	return h.active(), nil
 }
 
 func (h *channelHub) resumeNotice(subject string, err error) {
 	if errors.Is(err, sextant.ErrResumeDeferred) {
-		h.systemEvent("resume_deferred", subject,
+		_ = h.systemEvent("resume_deferred", subject,
 			fmt.Sprintf("subscription to %s is paused by a transport blip; the SDK retries on the next reconnect — nothing delivers until then (%v)", subject, err))
 		return
 	}
@@ -554,7 +554,7 @@ func (h *channelHub) resumeNotice(subject string, err error) {
 	// gate would stop a later re-subscribe's live frames from advancing the cursor.
 	h.state.resetCursor(subject)
 	h.endCatchUp(subject)
-	h.systemEvent("resume_lost", subject,
+	_ = h.systemEvent("resume_lost", subject,
 		fmt.Sprintf("subscription to %s is LOST (%v) — messages may have been missed; catch up with message_read from your last seen cursor, then message_subscribe again", subject, err))
 }
 
@@ -679,12 +679,12 @@ func (h *channelHub) restore(ctx context.Context, c *sextant.Client, subjects ma
 		// to fill the downtime gap by reading the concrete subjects it cares about.
 		if isWildcardSubject(subject) {
 			if _, err := h.subscribe(ctx, c, subject, "new", true); err != nil {
-				h.systemEvent("resume_lost", subject, fmt.Sprintf(
+				_ = h.systemEvent("resume_lost", subject, fmt.Sprintf(
 					"could not restore the wildcard %s after a resume (%v) — message_subscribe again", subject, err,
 				))
 				continue
 			}
-			h.systemEvent("subscribed", subject, fmt.Sprintf(
+			_ = h.systemEvent("subscribed", subject, fmt.Sprintf(
 				"restored the wildcard %s live; a wildcard can't be caught up per-frame (a read can't label each frame's subject) — message_read the concrete subjects you need to fill the downtime gap", subject,
 			))
 			continue
@@ -719,7 +719,7 @@ func (h *channelHub) restore(ctx context.Context, c *sextant.Client, subjects ma
 			if primed {
 				h.endCatchUp(subject)
 			}
-			h.systemEvent("resume_lost", subject, fmt.Sprintf(
+			_ = h.systemEvent("resume_lost", subject, fmt.Sprintf(
 				"could not restore the subscription to %s after a resume (%v) — catch up with message_read, then message_subscribe again", subject, err,
 			))
 			continue
@@ -772,7 +772,7 @@ func (h *channelHub) catchUp(ctx context.Context, fetch fetchFunc, subject strin
 		}
 		frames, next, err := fetch(ctx, subject, cursor, pageSize)
 		if err != nil {
-			h.systemEvent("resume_deferred", subject, fmt.Sprintf(
+			_ = h.systemEvent("resume_deferred", subject, fmt.Sprintf(
 				"catch-up read on %s failed (%v); live delivery continues — message_read from cursor %d to fill the gap", subject, err, cursor,
 			))
 			return false
@@ -806,7 +806,7 @@ func (h *channelHub) catchUp(ctx context.Context, fetch fetchFunc, subject strin
 				// A push failed mid-page: stop and leave the cursor at this page's
 				// start so the next restore re-reads from here rather than skipping
 				// the undelivered frame.
-				h.systemEvent("resume_deferred", subject, fmt.Sprintf(
+				_ = h.systemEvent("resume_deferred", subject, fmt.Sprintf(
 					"catch-up push on %s failed (%v); message_read from cursor %d to fill the gap", subject, emitErr, cursor,
 				))
 				return false

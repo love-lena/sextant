@@ -19,15 +19,20 @@ test: ui
 vet: ui
 	go vet ./...
 
-# Lint: vet + a gofumpt formatting check (gofumpt is stricter than gofmt).
+# Lint: vet + the curated static-checks gate (.golangci.yml, ADR-0042) + a
+# gofumpt formatting check (gofumpt is stricter than gofmt) + the import-discipline
+# bright lines (importcheck, ADR-0041). The same gate runs in CI's Go job.
+# Install golangci-lint v2 with: brew install golangci-lint (or the v2 release).
 # Install gofumpt with: go install mvdan.cc/gofumpt@latest
 lint: vet
+	golangci-lint run ./...
 	@files=$$(gofumpt -l .); \
 	if [ -n "$$files" ]; then \
 		echo "gofumpt: the following files need formatting (run 'make fmt'):"; \
 		echo "$$files"; \
 		exit 1; \
 	fi
+	go test ./internal/importcheck/... ./bus/ ./clients/go/conventions/ ./clients/go/apps/internal/tui/...
 
 # Format the tree with gofumpt.
 fmt:

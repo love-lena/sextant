@@ -28,7 +28,7 @@ func TestPublishedMsgOwnerDemux(t *testing.T) {
 	fail := publishedMsg{owner: a, err: boom}
 	a.Update(fail)
 	b.Update(fail)
-	if a.err != boom {
+	if !errors.Is(a.err, boom) {
 		t.Errorf("owner did not claim its own publish failure: err=%v", a.err)
 	}
 	if b.err != nil {
@@ -51,7 +51,7 @@ func TestPublishedMsgOwnerDemux(t *testing.T) {
 	// receiving surface's own, the documented fallback the goldens rely on.
 	c := NewStream(context.Background(), nil, "msg.topic.c", th, keys, WithCompose())
 	c.Update(publishedMsg{err: boom})
-	if c.err != boom {
+	if !errors.Is(c.err, boom) {
 		t.Errorf("untagged publish result was not claimed: err=%v", c.err)
 	}
 }
@@ -71,7 +71,7 @@ func TestPublishedMsgNotCrossKind(t *testing.T) {
 	if s.err != nil {
 		t.Errorf("a stream claimed an artifact's comment failure: err=%v", s.err)
 	}
-	if art.err != boom {
+	if !errors.Is(art.err, boom) {
 		t.Errorf("the artifact did not claim its own comment failure: err=%v", art.err)
 	}
 }
@@ -87,7 +87,7 @@ func TestArtifactErrMsgOwnerDemux(t *testing.T) {
 	fail := artifactErrMsg{owner: a, err: boom}
 	a.Update(fail)
 	b.Update(fail)
-	if a.err != boom {
+	if !errors.Is(a.err, boom) {
 		t.Errorf("owner did not claim its own watch failure: err=%v", a.err)
 	}
 	if b.err != nil {
@@ -97,7 +97,7 @@ func TestArtifactErrMsgOwnerDemux(t *testing.T) {
 	// An untagged failure (nil owner — test-synthesized) is treated as own.
 	c := NewArtifact(context.Background(), nil, "doc-c", th, keys)
 	c.Update(artifactErrMsg{err: boom})
-	if c.err != boom {
+	if !errors.Is(c.err, boom) {
 		t.Errorf("untagged watch failure was not claimed: err=%v", c.err)
 	}
 }

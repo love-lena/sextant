@@ -250,7 +250,7 @@ func ensureIdentity(ctx context.Context, opts *Options, notice io.Writer) error 
 	if opts.URL == "" {
 		opts.URL = res.URL
 	}
-	fmt.Fprintf(notice, "first run — enrolled as %s\n", res.Name)
+	_, _ = fmt.Fprintf(notice, "first run — enrolled as %s\n", res.Name)
 	return nil
 }
 

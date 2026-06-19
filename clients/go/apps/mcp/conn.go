@@ -328,7 +328,7 @@ func (m *connManager) get(ctx context.Context) (*sextant.Client, error) {
 		Logf:         log.Printf,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("connect failed: %v\ntried url %s with creds %s", err, m.urlProvenance(rc), m.credsProvenance(rc))
+		return nil, fmt.Errorf("connect failed: %w\ntried url %s with creds %s", err, m.urlProvenance(rc), m.credsProvenance(rc))
 	}
 	m.client = c
 	log.Printf("connected to %s as %s (%s)", rc.URL, c.DisplayName(), c.ID())

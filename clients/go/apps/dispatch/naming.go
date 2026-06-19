@@ -210,7 +210,7 @@ func (p haikuPicker) pick(ctx context.Context, prompt, job string, avoid []strin
 	if err != nil {
 		return "", fmt.Errorf("naming: call model: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("naming: model HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))

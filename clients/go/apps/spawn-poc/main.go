@@ -74,7 +74,7 @@ func main() {
 	if err != nil {
 		fatal("connect: %v", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	logf("supervisor up as %s (%s); watching agent %s", c.DisplayName(), short(c.ID()), short(*agent))
 
 	// The agent's own DM subject is always watched; --watch adds the subjects the

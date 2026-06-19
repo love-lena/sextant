@@ -423,7 +423,13 @@ func (c *Client) subscribeInbox(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("sextant: auto-subscribe inbox (%s): %w", subject, err)
 	}
-	c.inboxSub = sub.(*subscription)
+	// Subscribe always returns the SDK's own *subscription; the comma-ok keeps the
+	// invariant explicit and fails loud rather than panicking if it ever changes.
+	is, ok := sub.(*subscription)
+	if !ok {
+		return fmt.Errorf("sextant: auto-subscribe inbox (%s): unexpected subscription type %T", subject, sub)
+	}
+	c.inboxSub = is
 	return nil
 }
 

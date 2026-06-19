@@ -206,7 +206,7 @@ func (m *Manager) Install(stdout, stderr io.Writer, name string, env Env) error 
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "  %s: wrote %s\n", name, path)
+	_, _ = fmt.Fprintf(stdout, "  %s: wrote %s\n", name, path)
 
 	if err := m.bootstrapAndKickstart(name, path); err != nil {
 		return err
@@ -216,12 +216,12 @@ func (m *Manager) Install(stdout, stderr io.Writer, name string, env Env) error 
 		return err == nil && st.Running
 	}
 	if PollUntil(running, HealthBudget, PollInterval) {
-		fmt.Fprintf(stdout, "  %s: started (loaded + running)\n", name)
+		_, _ = fmt.Fprintf(stdout, "  %s: started (loaded + running)\n", name)
 		return nil
 	}
-	fmt.Fprintf(stderr, "\n  WARNING: %s was loaded but did NOT come up running.\n", name)
-	fmt.Fprintf(stderr, "  Check its log: %s\n", LogPath(name))
-	fmt.Fprintf(stderr, "  Force a relaunch: launchctl kickstart -k %s\n", GUITarget(m.UID, name))
+	_, _ = fmt.Fprintf(stderr, "\n  WARNING: %s was loaded but did NOT come up running.\n", name)
+	_, _ = fmt.Fprintf(stderr, "  Check its log: %s\n", LogPath(name))
+	_, _ = fmt.Fprintf(stderr, "  Force a relaunch: launchctl kickstart -k %s\n", GUITarget(m.UID, name))
 	return fmt.Errorf("%s did not reach running within %s", name, HealthBudget)
 }
 
@@ -231,6 +231,6 @@ func (m *Manager) Stop(stdout io.Writer, name string) error {
 	if err := m.bootout(name); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "  %s: stopped\n", name)
+	_, _ = fmt.Fprintf(stdout, "  %s: stopped\n", name)
 	return nil
 }

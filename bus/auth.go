@@ -133,13 +133,13 @@ func writeNewSeed(path string, seed []byte) (raced bool, err error) {
 		return false, fmt.Errorf("bus: temp seed: %w", err)
 	}
 	tmp := f.Name()
-	defer os.Remove(tmp)
+	defer func() { _ = os.Remove(tmp) }()
 	if err := f.Chmod(0o600); err != nil {
-		f.Close()
+		_ = f.Close()
 		return false, err
 	}
 	if _, err := f.Write(seed); err != nil {
-		f.Close()
+		_ = f.Close()
 		return false, err
 	}
 	if err := f.Close(); err != nil {
@@ -183,10 +183,10 @@ func (id *identity) operatorClaims() (*jwt.OperatorClaims, error) {
 func (id *identity) accountJWT() (string, error) {
 	ac := jwt.NewAccountClaims(pub(id.acc))
 	ac.Name = "SEXTANT"
-	ac.Limits.JetStreamLimits.DiskStorage = -1
-	ac.Limits.JetStreamLimits.MemoryStorage = -1
-	ac.Limits.JetStreamLimits.Streams = -1
-	ac.Limits.JetStreamLimits.Consumer = -1
+	ac.Limits.DiskStorage = -1
+	ac.Limits.MemoryStorage = -1
+	ac.Limits.Streams = -1
+	ac.Limits.Consumer = -1
 	return ac.Encode(id.op)
 }
 
@@ -260,7 +260,7 @@ func reserveName(storeDir, id, subject string) error {
 		}
 		return fmt.Errorf("bus: reserve client id %q: %w", id, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if _, err := f.WriteString(subject + "\n"); err != nil {
 		return fmt.Errorf("bus: record issued id %q: %w", id, err)
 	}
@@ -494,20 +494,20 @@ func writeOwnerOnly(path, content string) error {
 	}
 	tmp := f.Name()
 	if _, err := f.WriteString(content); err != nil {
-		f.Close()
-		os.Remove(tmp)
+		_ = f.Close()
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := f.Close(); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := os.Chmod(tmp, 0o600); err != nil { // defensive against umask
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	return nil

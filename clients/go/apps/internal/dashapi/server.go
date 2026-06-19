@@ -377,7 +377,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	// An opening comment flushes headers so the client sees the stream open
 	// before the first frame arrives.
-	fmt.Fprint(w, ": stream open\n\n")
+	_, _ = fmt.Fprint(w, ": stream open\n\n")
 	flusher.Flush()
 
 	for {
@@ -389,7 +389,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				continue
 			}
-			fmt.Fprintf(w, "data: %s\n\n", b)
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", b)
 			flusher.Flush()
 		}
 	}

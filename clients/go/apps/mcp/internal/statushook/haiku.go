@@ -117,7 +117,7 @@ func (c HaikuClient) Status(ctx context.Context, activity string) (StatusResult,
 	if err != nil {
 		return StatusResult{}, fmt.Errorf("statushook: call Haiku: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != http.StatusOK {
 		return StatusResult{}, fmt.Errorf("statushook: Haiku HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))

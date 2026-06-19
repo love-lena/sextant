@@ -211,7 +211,7 @@ func attestOnce(ctx context.Context, cf connFlags, sessionID string, emit func(s
 	if err != nil {
 		return fmt.Errorf("connect as the server's identity (%s): %w", id.Creds, err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	self := c.ID()
 	inbox := sx.ClientSubject(self) // the worker's always-on inbox (TASK-55)

@@ -437,7 +437,7 @@ func (c *Client) reestablishSubs(token uint64, active []*subscription) bool {
 				// Transport failure: stay registered, retry on the next reconnect.
 				c.logf("sextant: subscription on %q: resume deferred to the next reconnect: %v", s.subject, err)
 				if s.onErr != nil {
-					s.onErr(fmt.Errorf("%w: subscription on %q delivers nothing until then: %v", ErrResumeDeferred, s.subject, err))
+					s.onErr(fmt.Errorf("%w: subscription on %q delivers nothing until then: %w", ErrResumeDeferred, s.subject, err))
 				}
 				continue
 			}

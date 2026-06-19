@@ -65,9 +65,9 @@ func runConfigSet(stdout io.Writer, store string, kv []string) error {
 			return err
 		}
 		if val == "" {
-			fmt.Fprintf(stdout, "leaf-listen cleared in %s (leaf listener OFF on next `sextant up`)\n", path)
+			_, _ = fmt.Fprintf(stdout, "leaf-listen cleared in %s (leaf listener OFF on next `sextant up`)\n", path)
 		} else {
-			fmt.Fprintf(stdout, "leaf-listen = %s in %s\n  restart the bus to apply: brew services restart sextant\n", val, path)
+			_, _ = fmt.Fprintf(stdout, "leaf-listen = %s in %s\n  restart the bus to apply: brew services restart sextant\n", val, path)
 		}
 	case "port":
 		n, perr := strconv.Atoi(val)
@@ -79,9 +79,9 @@ func runConfigSet(stdout io.Writer, store string, kv []string) error {
 			return err
 		}
 		if n == 0 {
-			fmt.Fprintf(stdout, "port cleared in %s (bus picks the recorded-or-random port on next `sextant up`)\n", path)
+			_, _ = fmt.Fprintf(stdout, "port cleared in %s (bus picks the recorded-or-random port on next `sextant up`)\n", path)
 		} else {
-			fmt.Fprintf(stdout, "port = %d in %s\n  restart the bus to apply: brew services restart sextant\n", n, path)
+			_, _ = fmt.Fprintf(stdout, "port = %d in %s\n  restart the bus to apply: brew services restart sextant\n", n, path)
 		}
 	default:
 		return fmt.Errorf("config set: unknown key %q (settable: leaf-listen, port)", key)
@@ -108,11 +108,11 @@ func runConfigGet(stdout io.Writer, store string, keys []string) error {
 	}
 	switch {
 	case len(keys) == 0:
-		fmt.Fprintf(stdout, "config: %s\n  leaf-listen = %s\n  port        = %s\n", path, quoteEmpty(cfg.LeafListen), quotePort(cfg.Port))
+		_, _ = fmt.Fprintf(stdout, "config: %s\n  leaf-listen = %s\n  port        = %s\n", path, quoteEmpty(cfg.LeafListen), quotePort(cfg.Port))
 	case len(keys) == 1 && keys[0] == "leaf-listen":
-		fmt.Fprintln(stdout, cfg.LeafListen)
+		_, _ = fmt.Fprintln(stdout, cfg.LeafListen)
 	case len(keys) == 1 && keys[0] == "port":
-		fmt.Fprintln(stdout, cfg.Port)
+		_, _ = fmt.Fprintln(stdout, cfg.Port)
 	default:
 		return fmt.Errorf("config get: unknown key %q (known: leaf-listen, port)", keys[0])
 	}

@@ -116,7 +116,7 @@ func (c *modelClient) turn(ctx context.Context, model string, req turnRequest) (
 	if err != nil {
 		return "", fmt.Errorf("violet: call model: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("violet: model HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(rb)))

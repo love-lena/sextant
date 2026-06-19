@@ -51,7 +51,7 @@ func runDoctor(w io.Writer, store string) {
 }
 
 func runDoctorFull(w io.Writer, store string, lookPath func(string) (string, error), compRunner components.Runner) {
-	fmt.Fprintf(w, "sextant doctor\n  store: %s\n", store)
+	_, _ = fmt.Fprintf(w, "sextant doctor\n  store: %s\n", store)
 
 	// Discovery file (bus.json): the recorded URL is what every client resolves
 	// to. Its presence + port is the first thing to know.
@@ -60,12 +60,12 @@ func runDoctorFull(w io.Writer, store string, lookPath func(string) (string, err
 	var recordedURL, recordedHostPort string
 	switch {
 	case err != nil:
-		fmt.Fprintf(w, "  discovery (bus.json): MISSING or unreadable — %v\n", err)
-		fmt.Fprintf(w, "    the bus has not written one (never started?), or the store dir is wrong.\n")
+		_, _ = fmt.Fprintf(w, "  discovery (bus.json): MISSING or unreadable — %v\n", err)
+		_, _ = fmt.Fprintf(w, "    the bus has not written one (never started?), or the store dir is wrong.\n")
 	default:
 		recordedURL = info.URL
 		recordedHostPort = hostPort(info.URL)
-		fmt.Fprintf(w, "  discovery (bus.json): %s\n    url: %s\n", infoPath, recordedURL)
+		_, _ = fmt.Fprintf(w, "  discovery (bus.json): %s\n    url: %s\n", infoPath, recordedURL)
 	}
 
 	// Config pin (the brew-services path): a deterministic port + leaf state. A
@@ -73,7 +73,7 @@ func runDoctorFull(w io.Writer, store string, lookPath func(string) (string, err
 	cfg, cerr := buscfg.Load(buscfg.Path(store))
 	switch {
 	case cerr != nil:
-		fmt.Fprintf(w, "  config: UNREADABLE — %v (this fails `sextant up` loudly)\n", cerr)
+		_, _ = fmt.Fprintf(w, "  config: UNREADABLE — %v (this fails `sextant up` loudly)\n", cerr)
 	default:
 		port := "0 (unset — recorded-or-random)"
 		if cfg.Port != 0 {
@@ -83,9 +83,9 @@ func runDoctorFull(w io.Writer, store string, lookPath func(string) (string, err
 		if cfg.LeafListen != "" {
 			leaf = cfg.LeafListen
 		}
-		fmt.Fprintf(w, "  config: port=%s  leaf-listen=%s\n", port, leaf)
+		_, _ = fmt.Fprintf(w, "  config: port=%s  leaf-listen=%s\n", port, leaf)
 		if cfg.Port == 0 {
-			fmt.Fprintf(w, "    hint: pin a port with `sextant config set port <n>` so clients survive a bus restart.\n")
+			_, _ = fmt.Fprintf(w, "    hint: pin a port with `sextant config set port <n>` so clients survive a bus restart.\n")
 		}
 	}
 
@@ -93,10 +93,10 @@ func runDoctorFull(w io.Writer, store string, lookPath func(string) (string, err
 	// is the single most useful fact `brew services` omits.
 	if recordedHostPort != "" {
 		if reachable(recordedHostPort, 2*time.Second) {
-			fmt.Fprintf(w, "  reachable: YES — something is listening on %s\n", recordedHostPort)
+			_, _ = fmt.Fprintf(w, "  reachable: YES — something is listening on %s\n", recordedHostPort)
 		} else {
-			fmt.Fprintf(w, "  reachable: NO — nothing is listening on %s\n", recordedHostPort)
-			fmt.Fprintf(w, "    the bus is down, or it rebound to a different port (clients pinned to this address are stranded).\n")
+			_, _ = fmt.Fprintf(w, "  reachable: NO — nothing is listening on %s\n", recordedHostPort)
+			_, _ = fmt.Fprintf(w, "    the bus is down, or it rebound to a different port (clients pinned to this address are stranded).\n")
 		}
 	}
 
@@ -118,15 +118,15 @@ func reportComponents(w io.Writer, lookPath func(string) (string, error), runner
 	if lookPath == nil {
 		lookPath = exec.LookPath
 	}
-	fmt.Fprintf(w, "  runtimes:\n")
+	_, _ = fmt.Fprintf(w, "  runtimes:\n")
 	if !components.Supported() {
-		fmt.Fprintf(w, "    n/a (managed services are macOS-only; binary checks only)\n")
+		_, _ = fmt.Fprintf(w, "    n/a (managed services are macOS-only; binary checks only)\n")
 		for _, c := range components.Registry {
 			binPath, binErr := lookPath(c.Binary)
 			if binErr != nil {
-				fmt.Fprintf(w, "    %-12s binary: MISSING (%s not on PATH)\n", c.Name, c.Binary)
+				_, _ = fmt.Fprintf(w, "    %-12s binary: MISSING (%s not on PATH)\n", c.Name, c.Binary)
 			} else {
-				fmt.Fprintf(w, "    %-12s binary: %s\n", c.Name, binPath)
+				_, _ = fmt.Fprintf(w, "    %-12s binary: %s\n", c.Name, binPath)
 			}
 		}
 		return
@@ -140,13 +140,13 @@ func reportComponents(w io.Writer, lookPath func(string) (string, error), runner
 	} else {
 		self, err := os.Executable()
 		if err != nil {
-			fmt.Fprintf(w, "    could not resolve self binary: %v\n", err)
+			_, _ = fmt.Fprintf(w, "    could not resolve self binary: %v\n", err)
 			return
 		}
 		var merr error
 		mgr, merr = components.NewManager(self)
 		if merr != nil {
-			fmt.Fprintf(w, "    could not build component manager: %v\n", merr)
+			_, _ = fmt.Fprintf(w, "    could not build component manager: %v\n", merr)
 			return
 		}
 	}
@@ -162,17 +162,17 @@ func reportComponents(w io.Writer, lookPath func(string) (string, error), runner
 func reportDoctorComponent(w io.Writer, c components.Component, mgr *components.Manager, lookPath func(string) (string, error)) {
 	binPath, binErr := lookPath(c.Binary)
 	if binErr != nil {
-		fmt.Fprintf(w, "    %-12s binary: MISSING (%s not on PATH) — install sextant's binaries\n", c.Name, c.Binary)
+		_, _ = fmt.Fprintf(w, "    %-12s binary: MISSING (%s not on PATH) — install sextant's binaries\n", c.Name, c.Binary)
 		return
 	}
 	st, perr := mgr.Status(c.Name)
 	switch {
 	case perr != nil:
-		fmt.Fprintf(w, "    %-12s binary: %s  service: query error — %v\n", c.Name, binPath, perr)
+		_, _ = fmt.Fprintf(w, "    %-12s binary: %s  service: query error — %v\n", c.Name, binPath, perr)
 	case !st.Loaded:
-		fmt.Fprintf(w, "    %-12s binary: %s  service: NOT running — run `sextant components start %s`\n", c.Name, binPath, c.Name)
+		_, _ = fmt.Fprintf(w, "    %-12s binary: %s  service: NOT running — run `sextant components start %s`\n", c.Name, binPath, c.Name)
 		if c.NeedsKey {
-			fmt.Fprintf(w, "      if violet has no key: run `sextant secret set anthropic` first\n")
+			_, _ = fmt.Fprintf(w, "      if violet has no key: run `sextant secret set anthropic` first\n")
 		}
 	case st.Running:
 		line := fmt.Sprintf("    %-12s binary: %s  service: loaded + RUNNING", c.Name, binPath)
@@ -185,17 +185,17 @@ func reportDoctorComponent(w io.Writer, c components.Component, mgr *components.
 		if c.Kind == "agent" {
 			line += " (bus presence: best-effort, see `sextant clients list`)"
 		}
-		fmt.Fprintln(w, line)
+		_, _ = fmt.Fprintln(w, line)
 	default:
-		fmt.Fprintf(w, "    %-12s binary: %s  service: loaded but NOT running (state=%q) — run `sextant components restart %s`\n",
+		_, _ = fmt.Fprintf(w, "    %-12s binary: %s  service: loaded but NOT running (state=%q) — run `sextant components restart %s`\n",
 			c.Name, binPath, st.Raw, c.Name)
 		// For dispatcher specifically, NeedsClaude is a common start-failure reason.
 		if c.NeedsClaude {
-			fmt.Fprintf(w, "      if the dispatcher never started: check `claude` is on PATH\n")
+			_, _ = fmt.Fprintf(w, "      if the dispatcher never started: check `claude` is on PATH\n")
 		}
 		// For key-bearing components (violet), a crash-loop may mean the key is missing.
 		if c.NeedsKey {
-			fmt.Fprintf(w, "      if violet is crash-looping: run `sextant secret set anthropic`\n")
+			_, _ = fmt.Fprintf(w, "      if violet is crash-looping: run `sextant secret set anthropic`\n")
 		}
 	}
 }
@@ -226,11 +226,11 @@ func reachable(addr string, timeout time.Duration) bool {
 // useful without it. It runs `launchctl print`, which is read-only.
 func reportLaunchd(w io.Writer) {
 	if runtime.GOOS != "darwin" {
-		fmt.Fprintf(w, "  launchd: n/a (not macOS — brew services uses launchd only on macOS)\n")
+		_, _ = fmt.Fprintf(w, "  launchd: n/a (not macOS — brew services uses launchd only on macOS)\n")
 		return
 	}
 	if _, err := exec.LookPath("launchctl"); err != nil {
-		fmt.Fprintf(w, "  launchd: launchctl not found on PATH\n")
+		_, _ = fmt.Fprintf(w, "  launchd: launchctl not found on PATH\n")
 		return
 	}
 	target := fmt.Sprintf("gui/%d/%s", os.Getuid(), launchdLabel)
@@ -243,30 +243,30 @@ func reportLaunchd(w io.Writer) {
 		// anything else is a query failure the operator should see verbatim rather
 		// than be wrongly told to "start the service".
 		if exitCode(err) == 113 || strings.Contains(trimmed, "Could not find service") {
-			fmt.Fprintf(w, "  launchd: job %q NOT LOADED (brew services not started, or different label)\n", launchdLabel)
-			fmt.Fprintf(w, "    start it: brew services start sextant\n")
+			_, _ = fmt.Fprintf(w, "  launchd: job %q NOT LOADED (brew services not started, or different label)\n", launchdLabel)
+			_, _ = fmt.Fprintf(w, "    start it: brew services start sextant\n")
 			return
 		}
-		fmt.Fprintf(w, "  launchd: could not query the job (%v) — state unknown\n", err)
+		_, _ = fmt.Fprintf(w, "  launchd: could not query the job (%v) — state unknown\n", err)
 		if trimmed != "" {
-			fmt.Fprintf(w, "    launchctl said: %s\n", firstLine(trimmed))
+			_, _ = fmt.Fprintf(w, "    launchctl said: %s\n", firstLine(trimmed))
 		}
 		return
 	}
 	state, logPath := parseLaunchdState(string(out))
 	switch state {
 	case "running":
-		fmt.Fprintf(w, "  launchd: job %q LOADED + running\n", launchdLabel)
+		_, _ = fmt.Fprintf(w, "  launchd: job %q LOADED + running\n", launchdLabel)
 	case "":
-		fmt.Fprintf(w, "  launchd: job %q LOADED (state unknown)\n", launchdLabel)
+		_, _ = fmt.Fprintf(w, "  launchd: job %q LOADED (state unknown)\n", launchdLabel)
 	default:
 		// Loaded but not running (e.g. "waiting", "not running"): the throttle trap.
-		fmt.Fprintf(w, "  launchd: job %q LOADED but NOT running (state=%q)\n", launchdLabel, state)
-		fmt.Fprintf(w, "    likely a launchd throttle from rapid restarts. Force a relaunch:\n")
-		fmt.Fprintf(w, "    launchctl kickstart -k gui/%d/%s\n", os.Getuid(), launchdLabel)
+		_, _ = fmt.Fprintf(w, "  launchd: job %q LOADED but NOT running (state=%q)\n", launchdLabel, state)
+		_, _ = fmt.Fprintf(w, "    likely a launchd throttle from rapid restarts. Force a relaunch:\n")
+		_, _ = fmt.Fprintf(w, "    launchctl kickstart -k gui/%d/%s\n", os.Getuid(), launchdLabel)
 	}
 	if logPath != "" {
-		fmt.Fprintf(w, "    log: %s\n", logPath)
+		_, _ = fmt.Fprintf(w, "    log: %s\n", logPath)
 	}
 }
 

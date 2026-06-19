@@ -298,10 +298,10 @@ func curateHome(ws gatheredWorkspace) homeProjection {
 
 // stateLine is the curated greeting note: plain, calm, headline-first.
 func stateLine(realCalls, quiet int) string {
-	switch {
-	case realCalls == 0:
+	switch realCalls {
+	case 0:
 		return "Nothing needs you right now — it's all in hand."
-	case realCalls == 1:
+	case 1:
 		return "1 real call needs you · the rest is handled."
 	default:
 		return plural(realCalls, "real call") + " need you · the rest is handled."

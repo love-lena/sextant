@@ -112,7 +112,7 @@ func cmdPublish(args []string) {
 
 	ctx := context.Background()
 	c := cf.connect(ctx)
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	if err := c.Publish(ctx, subject, json.RawMessage(record)); err != nil {
 		fatal("%v", err)
 	}
@@ -133,7 +133,7 @@ func cmdRead(args []string) {
 
 	ctx := context.Background()
 	c := cf.connect(ctx)
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	frames, next, err := c.FetchMessages(ctx, subject, *since, *limit)
 	if err != nil {
 		fatal("%v", err)
@@ -158,7 +158,7 @@ func cmdSubscribe(args []string) {
 	ctx, stop := signalCtx()
 	defer stop()
 	c := cf.connect(ctx)
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	var opts []sextant.SubOption
 	if *all {
@@ -203,7 +203,7 @@ func clientsList(args []string) {
 
 	ctx := context.Background()
 	c := cf.connect(ctx)
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	clients, err := c.ListClients(ctx)
 	if err != nil {
 		fatal("%v", err)
@@ -322,7 +322,7 @@ func registerHeld(ctx context.Context, store, url, name, kind, outPath string) (
 	if err != nil {
 		return "", "", fmt.Errorf("connect: %w", err)
 	}
-	defer iss.Close()
+	defer func() { _ = iss.Close() }()
 	res, err := iss.Register(ctx, name, kind)
 	if err != nil {
 		return "", "", err
@@ -361,7 +361,7 @@ func clientsRetire(args []string) {
 	if err != nil {
 		fatal("connect: %v", err)
 	}
-	defer iss.Close()
+	defer func() { _ = iss.Close() }()
 	if err := iss.Retire(ctx, id); err != nil {
 		fatal("%v", err)
 	}
@@ -402,7 +402,7 @@ func artifactList(args []string) {
 
 	ctx := context.Background()
 	c := cf.connect(ctx)
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	arts, err := c.ListArtifacts(ctx)
 	if err != nil {
 		fatal("%v", err)
@@ -432,7 +432,7 @@ func artifactWrite(args []string, update bool) {
 
 	ctx := context.Background()
 	c := cf.connect(ctx)
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	var (
 		newRev uint64
 		err    error
@@ -460,7 +460,7 @@ func artifactGet(args []string) {
 
 	ctx := context.Background()
 	c := cf.connect(ctx)
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	a, err := c.GetArtifact(ctx, name)
 	if err != nil {
 		fatal("%v", err)
@@ -483,7 +483,7 @@ func artifactDelete(args []string) {
 
 	ctx := context.Background()
 	c := cf.connect(ctx)
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	if err := c.DeleteArtifact(ctx, name); err != nil {
 		fatal("%v", err)
 	}
@@ -503,7 +503,7 @@ func artifactWatch(args []string) {
 	ctx, stop := signalCtx()
 	defer stop()
 	c := cf.connect(ctx)
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	w, err := c.WatchArtifact(ctx, name, func(ch sextant.ArtifactChange) {
 		if *asJSON {
 			emitJSON(ch)

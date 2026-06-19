@@ -55,15 +55,15 @@ func cmdUpdate(args []string) {
 func runUpdate(stdout, stderr io.Writer, lookPath func(string) (string, error), brewInstalled func() bool) error {
 	brewBin, err := lookPath("brew")
 	if err != nil {
-		fmt.Fprint(stderr, notBrewMsg)
+		_, _ = fmt.Fprint(stderr, notBrewMsg)
 		return nil
 	}
 	if !brewInstalled() {
-		fmt.Fprint(stderr, notBrewMsg)
+		_, _ = fmt.Fprint(stderr, notBrewMsg)
 		return nil
 	}
 
-	fmt.Fprintf(stdout, "updating Homebrew and upgrading %s…\n\n", brewFormula)
+	_, _ = fmt.Fprintf(stdout, "updating Homebrew and upgrading %s…\n\n", brewFormula)
 	if err := runBrew(stdout, stderr, brewBin, "update"); err != nil {
 		return fmt.Errorf("brew update: %w", err)
 	}
@@ -103,15 +103,15 @@ func ensureBusUp(stdout, stderr io.Writer, brewBin, store string) {
 // nil on platforms with no launchd recovery; the all-fail warning then names the
 // manual recovery instead.
 func ensureBusUpWith(stdout, stderr io.Writer, restart func() error, healthy func() (string, bool), kickstart func() error) {
-	fmt.Fprintf(stdout, "\nbringing the bus back up after the upgrade…\n")
+	_, _ = fmt.Fprintf(stdout, "\nbringing the bus back up after the upgrade…\n")
 	if err := restart(); err != nil {
 		// A failed restart is not fatal on its own — the kickstart fallback may
 		// still recover it — so note it and press on to the health check.
-		fmt.Fprintf(stderr, "  warning: `brew services restart %s` failed: %v\n", brewService, err)
+		_, _ = fmt.Fprintf(stderr, "  warning: `brew services restart %s` failed: %v\n", brewService, err)
 	}
 
 	if url, up := pollHealthy(healthy, restartHealthBudget); up {
-		fmt.Fprintf(stdout, "  bus is back up at %s\n", url)
+		_, _ = fmt.Fprintf(stdout, "  bus is back up at %s\n", url)
 		return
 	}
 
@@ -119,11 +119,11 @@ func ensureBusUpWith(stdout, stderr io.Writer, restart func() error, healthy fun
 	// On macOS a launchd kickstart forces the relaunch; elsewhere there is no
 	// such recovery and we go straight to the loud warning.
 	if kickstart != nil {
-		fmt.Fprintf(stdout, "  bus did not come up after restart; forcing a launchd relaunch…\n")
+		_, _ = fmt.Fprintf(stdout, "  bus did not come up after restart; forcing a launchd relaunch…\n")
 		if err := kickstart(); err != nil {
-			fmt.Fprintf(stderr, "  warning: launchd kickstart failed: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "  warning: launchd kickstart failed: %v\n", err)
 		} else if url, up := pollHealthy(healthy, kickstartHealthBudget); up {
-			fmt.Fprintf(stdout, "  bus is back up at %s\n", url)
+			_, _ = fmt.Fprintf(stdout, "  bus is back up at %s\n", url)
 			return
 		}
 	}
@@ -205,14 +205,14 @@ func runKickstart() error {
 // it. Where no kickstart lever exists (non-macOS), the brew-services restart is
 // the only option, so name that there.
 func warnBusDown(stderr io.Writer, kickstartAvailable bool) {
-	fmt.Fprintf(stderr, "\n  WARNING: the upgrade completed but the bus did NOT come back up.\n")
-	fmt.Fprintf(stderr, "  Every client is stranded until it is relaunched. Recover it with:\n\n")
+	_, _ = fmt.Fprintf(stderr, "\n  WARNING: the upgrade completed but the bus did NOT come back up.\n")
+	_, _ = fmt.Fprintf(stderr, "  Every client is stranded until it is relaunched. Recover it with:\n\n")
 	if kickstartAvailable {
-		fmt.Fprintf(stderr, "    launchctl kickstart -k %s\n\n", kickstartTarget())
+		_, _ = fmt.Fprintf(stderr, "    launchctl kickstart -k %s\n\n", kickstartTarget())
 	} else {
-		fmt.Fprintf(stderr, "    brew services restart %s\n\n", brewService)
+		_, _ = fmt.Fprintf(stderr, "    brew services restart %s\n\n", brewService)
 	}
-	fmt.Fprintf(stderr, "  Then check it with: sextant doctor\n")
+	_, _ = fmt.Fprintf(stderr, "  Then check it with: sextant doctor\n")
 }
 
 // runBrew streams a brew invocation's output through to the caller's streams so

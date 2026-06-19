@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -70,7 +71,7 @@ func runSecretSetAnthropic(stdout io.Writer, key string) error {
 	if err := components.WriteKeyEnv(path, key); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "wrote %s (0600) — violet will use this key on its next start\n", path)
+	_, _ = fmt.Fprintf(stdout, "wrote %s (0600) — violet will use this key on its next start\n", path)
 	return nil
 }
 
@@ -79,10 +80,10 @@ func runSecretSetAnthropic(stdout io.Writer, key string) error {
 // reads a single line so the command is still scriptable. A trailing newline is
 // printed after the hidden read so the cursor moves on.
 func promptSecret(in *os.File, out io.Writer, prompt string) (string, error) {
-	fmt.Fprint(out, prompt)
+	_, _ = fmt.Fprint(out, prompt)
 	if term.IsTerminal(int(in.Fd())) {
 		b, err := term.ReadPassword(int(in.Fd()))
-		fmt.Fprintln(out)
+		_, _ = fmt.Fprintln(out)
 		if err != nil {
 			return "", fmt.Errorf("read secret: %w", err)
 		}
@@ -90,7 +91,7 @@ func promptSecret(in *os.File, out io.Writer, prompt string) (string, error) {
 	}
 	// Non-TTY (piped) input: read one line.
 	var line string
-	if _, err := fmt.Fscanln(in, &line); err != nil && err != io.EOF {
+	if _, err := fmt.Fscanln(in, &line); err != nil && !errors.Is(err, io.EOF) {
 		return "", fmt.Errorf("read secret: %w", err)
 	}
 	return line, nil
