@@ -2,6 +2,7 @@ package components
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -23,6 +24,77 @@ func TestRecipeDriftGuard(t *testing.T) {
 	}
 	if string(embedded) != string(source) {
 		t.Fatalf("embedded recipe has drifted from cmd/sextant-dispatch/recipes/agent.sh — re-copy it into internal/components/embed/agent.sh")
+	}
+}
+
+// TestDispatcherHarnessQuotesSpacePath asserts that the dispatcher's built
+// --harness arg correctly quotes a recipe path that contains a space (e.g.
+// the standard macOS "$HOME/Library/Application Support/sextant/components/agent.sh").
+// Before the shellQuote fix, "sh " + recipe produced a string that sh -c would
+// split at the space, yielding exit 127 on macOS. After the fix the harness
+// string must be parseable by `sh -c` as a single file path.
+func TestDispatcherHarnessQuotesSpacePath(t *testing.T) {
+	const spacePath = "/tmp/has space/agent.sh"
+
+	dispatcher, ok := Find("dispatcher")
+	if !ok {
+		t.Fatal("dispatcher not in Registry")
+	}
+	args := dispatcher.Args("fake.creds", "/tmp/store", spacePath)
+
+	// locate the --harness value
+	harness := ""
+	for i, a := range args {
+		if a == "--harness" && i+1 < len(args) {
+			harness = args[i+1]
+			break
+		}
+	}
+	if harness == "" {
+		t.Fatalf("--harness not found in dispatcher args: %v", args)
+	}
+
+	// The harness must contain the single-quoted form of the path, not the
+	// bare unquoted form that splits on the space.
+	want := "'" + spacePath + "'"
+	if !strings.Contains(harness, want) {
+		t.Errorf("harness %q does not contain quoted path %q — paths with spaces will split under sh -c", harness, want)
+	}
+	// Sanity: it must NOT contain the bare unquoted path with a leading space
+	// before the first slash (that is the broken "sh /tmp/has" split form).
+	if strings.Contains(harness, " /tmp/has space") {
+		t.Errorf("harness %q contains unquoted space path — still broken", harness)
+	}
+
+	// Integration: write a stub recipe to a path with a space and confirm
+	// `sh -c <harness>` actually resolves to the right script (it echos a
+	// sentinel and exits 0). This catches any future regression where the
+	// quoting is syntactically present but semantically wrong.
+	dir := t.TempDir()
+	recipePath := filepath.Join(dir, "has space", "agent.sh")
+	if err := os.MkdirAll(filepath.Dir(recipePath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	sentinel := "HARNESS_OK"
+	if err := os.WriteFile(recipePath, []byte("#!/bin/sh\necho "+sentinel+"\n"), 0o755); err != nil {
+		t.Fatalf("write stub recipe: %v", err)
+	}
+
+	args2 := dispatcher.Args("fake.creds", "/tmp/store", recipePath)
+	harness2 := ""
+	for i, a := range args2 {
+		if a == "--harness" && i+1 < len(args2) {
+			harness2 = args2[i+1]
+			break
+		}
+	}
+
+	out, err := exec.Command("sh", "-c", harness2).Output()
+	if err != nil {
+		t.Fatalf("sh -c %q failed: %v (exit 127 = unquoted path split)", harness2, err)
+	}
+	if !strings.Contains(string(out), sentinel) {
+		t.Errorf("sh -c %q: got %q, want sentinel %q", harness2, string(out), sentinel)
 	}
 }
 
