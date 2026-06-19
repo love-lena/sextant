@@ -4,6 +4,7 @@ title: 'Web dash: bound the subject registry (eviction / stream-info)'
 status: To Do
 assignee: []
 created_date: '2026-06-13 03:56'
+updated_date: '2026-06-19 21:42'
 labels:
   - feature
   - dash
@@ -33,4 +34,6 @@ dash --serve keeps a per-subject counter for every msg.> frame for the life of t
 
 <!-- SECTION:NOTES:BEGIN -->
 Follow-up from D2 [[feat-dash-web-ui-d2]] (TASK-71), flagged in final review. Acceptable at current scale.
+
+Dash backend model revised by ADR-0041 / task-179 / task-180: the /api/* + SSE + bearer-token + internal/dashapi mechanism described here no longer applies. Re-frame the surviving need against the direct TS NATS-WebSocket client.
 <!-- SECTION:NOTES:END -->

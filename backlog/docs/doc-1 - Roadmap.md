@@ -3,7 +3,7 @@ id: doc-1
 title: Roadmap
 type: other
 created_date: '2026-06-04 18:18'
-updated_date: '2026-06-12 12:43'
+updated_date: '2026-06-19 14:37'
 ---
 
 Thin map of Sextant's milestones — order, goal, definition-of-done, and the
@@ -129,11 +129,24 @@ recursion works); the reference Coordinator runs a `sextant.workflow/v1`
 end-to-end (state→Artifact, control/events→Messages).
 **Tickets:** TASK-25 (Dispatcher / spawn) · TASK-26 (Workflow coordinator).
 
+## M6 · Co-equal client implementations (the monorepo refactor)
+**Goal:** the protocol is the product; the bus stays one Go server, implemented once;
+the client surface (SDK · conventions · clients) is **co-equal across languages**,
+verified by a conformance suite. The repo goes **domain-first** (`protocol/` · `bus/`
+· `clients/<language>/`). Forcing function: build the first non-Go (TypeScript)
+client now, driving a **pi** harness extension; then adopt the dash as a direct
+NATS-WebSocket TS client.
+**Decided in:** [ADR-0041](../../docs/adr/0041-clients-are-co-equal-across-languages.md);
+planned in PRD doc-2.
+**Tickets:** TASK-171–184.
+
 ## Off the line
 - **Open design questions** — unresolved decisions gating later work. Several are
   folded into **ADR-0019** for M2 (identity mechanics TASK-8, the backend-contract
   TASK-11, write-precision TASK-9); the rest stay parked (retention TASK-13,
   salvage inventory TASK-14, creds reissue TASK-16, request/reply TBD TASK-23).
 - **Future** — deferred-but-wanted (client liveness/heartbeat, DAG-CBOR, blob
-  tier, multi-backend, Mastra, golangci-lint). (The **TypeScript SDK** is *not*
-  here — it is an available, low-priority parallel track, not deferred; ADR-0022.)
+  tier, multi-backend, Mastra). (The **TypeScript SDK** is no longer low-priority:
+  under [ADR-0041](../../docs/adr/0041-clients-are-co-equal-across-languages.md) it is
+  the **forcing function built now** — the first co-equal non-Go client, driving a
+  pi harness extension — see M6 below.)

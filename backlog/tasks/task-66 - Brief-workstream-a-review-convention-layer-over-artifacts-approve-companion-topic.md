@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-12 19:43'
-updated_date: '2026-06-13 03:24'
+updated_date: '2026-06-19 21:42'
 labels:
   - feature
   - artifacts
@@ -47,4 +47,6 @@ Provenance: 2026-06-12 planning, lena on msg.topic.helm. Naming and scope are le
 Dash-side implemented as a convention in D2 (TASK-71, ADR-0033): review-state as a review block in the artifact record (POST /api/artifacts/{name}/review, read-merge-CAS); companion topic msg.topic.artifact.<name>; Approve/Request-changes/Archive/Reject + Reopen affordances; core artifact ops unchanged. All 4 ACs met on the dash side. A CLI affordance (e.g. sextant artifact review) is the remaining optional piece. Status/closure is lena's call (ready-for-human).
 
 2026-06-12: Convention: an artifact's author should subscribe to msg.topic.artifact.<name> so they receive discussion/review events on their own artifact.
+
+Dash backend model revised by ADR-0041 / task-179 / task-180: the /api/* + SSE + bearer-token + internal/dashapi mechanism described here no longer applies. Re-frame the surviving need against the direct TS NATS-WebSocket client.
 <!-- SECTION:NOTES:END -->

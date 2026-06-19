@@ -9,7 +9,7 @@ human has signed off — see
 |------|-----------------------------------------|----------|
 | [0001](0001-vision.md) | Vision — what Sextant is  | accepted |
 | [0002](0002-documentation-and-process-layout.md) | Documentation & process layout | accepted |
-| [0003](0003-high-level-architecture.md) | High-level architecture (the component map) | accepted |
+| [0003](0003-high-level-architecture.md) | High-level architecture (the component map) | accepted (sharpened by 0041) |
 | [0004](0004-conventions-are-optional.md) | Conventions are optional, not core | accepted |
 | [0005](0005-two-primitives.md) | The two primitives | accepted |
 | [0006](0006-wire-atom.md) | The wire atom | accepted (refined by 0019) |
@@ -38,14 +38,16 @@ human has signed off — see
 | [0029](0029-a-harness-speaks-as-itself.md) | A harness speaks as itself, with a per-session identity | proposed (revises 0028's identity resolution) |
 | [0030](0030-clients-act-on-a-principals-messages-as-operator-input.md) | A client acts on its principal's messages as operator-equivalent input | proposed |
 | [0031](0031-claiming-the-principal-is-frictionless-re-pointing-is-deliberate.md) | Claiming the principal is frictionless; re-pointing it is deliberate | proposed (extends 0030) |
-| [0032](0032-the-web-dash-is-a-face-on-a-local-api.md) | The web dash is a face on a local API | proposed |
+| [0032](0032-the-web-dash-is-a-face-on-a-local-api.md) | The web dash is a face on a local API | accepted (revised by 0041) |
 | [0033](0033-a-dispatcher-mints-its-own-workers.md) | A dispatcher mints its own workers (mint-on-behalf) | proposed |
-| [0034](0034-the-web-cockpit-rests-on-conventions-not-new-protocol.md) | The web cockpit rests on conventions, not new protocol | proposed |
+| [0034](0034-the-web-cockpit-rests-on-conventions-not-new-protocol.md) | The web cockpit rests on conventions, not new protocol | accepted (revised by 0041) |
 | [0035](0035-the-goal-bus-primitive.md) | The goal bus primitive | accepted |
 | [0036](0036-presence-and-liveness-derive-from-a-client-heartbeat.md) | Presence and liveness derive from a client heartbeat | accepted |
 | [0037](0037-subscriptions-and-context-survive-a-session-resume.md) | Subscriptions and the active context survive a session resume | accepted |
 | [0038](0038-a-remote-box-joins-through-a-leaf-node.md) | A remote box joins the bus through a leaf node | accepted |
 | [0039](0039-the-assistant-is-a-convention-not-a-primitive.md) | The assistant is a convention, not a primitive | proposed |
+| [0040](0040-agent-runtimes-run-as-os-managed-components.md) | Agent runtimes run as OS-managed components | accepted |
+| [0041](0041-clients-are-co-equal-across-languages.md) | Clients are co-equal implementations of a language-neutral protocol | accepted |
 
 ## Review batches
 - **Batch 1 — substrate:** 0004–0007 — *accepted*
@@ -69,3 +71,5 @@ human has signed off — see
 - **0037 — subscriptions and the active context survive a session resume** — *accepted* (TASK-124; the MCP adapter persists a session's manual subscriptions + each one's last-delivered seq + the `context_use` choice, keyed on the session id beside the attest cursor, and restores them on every connect — re-pin the context before auto-mint, re-subscribe + catch up by seq — so a resume/compaction/restart self-heals instead of silently dropping delivery. An adapter convention over `message_read` + `message_subscribe`; epoch unchanged; retires the interim keepalive. A seq-gap liveness watchdog composes with the 0036 heartbeat as a following slice. Shipped v0.5.0)
 - **0038 — a remote box joins through a leaf node** — *accepted* (TASK-125; a remote box runs a local bus in leaf mode that federates the per-client wire-API subjects to the hub over one SEXTANT account, JetStream stays at the hub; the leaf installs the hub's PUBLIC account JWTs only — no seed → can't mint, enforces per-client perms locally → the hub's subject-derived author stamp stays trustworthy; presence via the ADR-0036 heartbeat, no new machinery; link rides a secure transport, native leaf TLS is a follow-up; additive + default-off. Shipped v0.5.0)
 - **0039 — the assistant is a convention, not a primitive** — *proposed* (TASK-138/144/120; **violet**, the operator's assistant, unified as one client with two duties — *answer* read-only when messaged + *defend* the operator's attention by curating Home/inbox; named by the swappable latest-value `assistant` artifact `{client_id, name, accent}`; a convention over clients/artifacts/messages, zero new operations, signal-not-manage. Convention + dash entry points ship v0.5.0; violet **runtime ships v0.5.1**)
+- **0040 — agent runtimes run as OS-managed components** — *accepted* (v0.5.3; the dispatch/violet/workflow runtimes ship in the Homebrew formula and are managed via `sextant components` over per-component launchd agents; the bus stays the single brew service — signal-not-manage)
+- **0041 — clients are co-equal implementations of a language-neutral protocol** — *proposed* (the protocol — lexicon + conformance suite — is the product; the bus is implemented once in Go; the client surface (SDK, conventions, clients) is co-equal across languages, conventions are lexicon-defined libraries verified by conformance, and the tree is organised by what things are rather than Go visibility buckets (no top-level `pkg/`); forced now with a TS SDK + pi harness extension as the first non-Go client; sharpens 0022)

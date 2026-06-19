@@ -3,11 +3,13 @@ id: TASK-123
 title: 'Dash: token-free loopback page never live-updates (frontend !TOKEN guard)'
 status: In Progress
 assignee: []
+created_date: ''
+updated_date: '2026-06-19 21:42'
 labels:
   - bug
   - dash
   - regression
-  - slug:bug-dash-tokenfree-no-live-update
+  - 'slug:bug-dash-tokenfree-no-live-update'
   - P1
   - ready-for-agent
 dependencies: []
@@ -52,4 +54,6 @@ scripts/build-dash-ui.sh. Hot-fixed live via `--ui` on Lena's dash 2026-06-15;
 this ships the embedded fix for v0.4.1. Branch `fix-dash-tokenfree-stream`.
 Discovered in: v0.4.0 dogfood. Related: [[bug-dash-js-jsx-drift]] (TASK-121),
 [[feat-home-single-next-action]].
+
+Dash backend model revised by ADR-0041 / task-179 / task-180: the /api/* + SSE + bearer-token + internal/dashapi mechanism described here no longer applies. Re-frame the surviving need against the direct TS NATS-WebSocket client.
 <!-- SECTION:NOTES:END -->

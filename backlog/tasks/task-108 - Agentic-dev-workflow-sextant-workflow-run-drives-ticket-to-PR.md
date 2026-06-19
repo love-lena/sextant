@@ -4,6 +4,7 @@ title: 'Agentic dev workflow: sextant workflow run drives ticket to PR'
 status: To Do
 assignee: []
 created_date: '2026-06-15 17:12'
+updated_date: '2026-06-19 21:42'
 labels:
   - feature
   - workflow
@@ -35,4 +36,6 @@ A workflow that takes a backlog ticket and drives it from spec to a gated PR. Th
 
 <!-- SECTION:NOTES:BEGIN -->
 canopus built v1 proof-of-concept; full pipeline ran to gate on TASK-62. Parked at gate awaiting lena's call on clean re-run. Artifact: agentic-dev-workflow-design, agentic-dev-workflow-playbook. Related: [[feat-m5-workflow-coordinator]] (TASK-26), [[feat-cross-machine-p-workflows]] (TASK-24)
+
+Near-duplicate of task-98 (same agentic-dev-workflow slug). Reconcile - don't grab both.
 <!-- SECTION:NOTES:END -->

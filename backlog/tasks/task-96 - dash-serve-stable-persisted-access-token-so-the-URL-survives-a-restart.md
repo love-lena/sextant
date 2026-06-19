@@ -4,6 +4,7 @@ title: 'dash --serve: stable/persisted access token so the URL survives a restar
 status: To Do
 assignee: []
 created_date: '2026-06-15 01:44'
+updated_date: '2026-06-19 21:42'
 labels:
   - feature
   - dash
@@ -33,4 +34,6 @@ sextant dash --serve mints a fresh per-launch bearer token (newToken() in intern
 
 <!-- SECTION:NOTES:BEGIN -->
 Recurring friction during redeploys (v0.3.1, the history fix). ready-for-human: persisting a bearer token is a security/UX tradeoff worth a human call. Port already stable at 8765; only the token rotates.
+
+Dash backend model revised by ADR-0041 / task-179 / task-180: the /api/* + SSE + bearer-token + internal/dashapi mechanism described here no longer applies. Re-frame the surviving need against the direct TS NATS-WebSocket client.
 <!-- SECTION:NOTES:END -->

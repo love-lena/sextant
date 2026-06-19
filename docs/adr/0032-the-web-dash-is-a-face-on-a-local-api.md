@@ -1,9 +1,11 @@
 ---
-status: proposed
+status: accepted
 date: 2026-06-12
 ---
 
 # The web dash is a face on a local API
+
+> **Revised by [ADR-0041](0041-clients-are-co-equal-across-languages.md)** — its core stance, *the browser never touches the bus*, is reversed: the dash becomes a direct NATS-WebSocket co-equal TS client (decided in task-179, built in task-180), with a bus WebSocket listener and dash-minted browser credentials. Read this as the history of the local-API boundary, not the current design.
 
 The dash is a terminal cockpit today ([ADR-0023](0023-the-dash-is-a-composable-pane-cockpit.md),
 [ADR-0024](0024-the-dash-is-three-master-detail-browsers.md)): a TUI client

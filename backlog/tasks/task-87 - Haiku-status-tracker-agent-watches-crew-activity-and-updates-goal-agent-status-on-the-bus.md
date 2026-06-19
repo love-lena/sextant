@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-13 04:46'
-updated_date: '2026-06-15 02:39'
+updated_date: '2026-06-19 21:42'
 labels:
   - P2
 dependencies: []
@@ -38,4 +38,6 @@ Depends on TASK-84 (goal lexicon). Build as a supervisor-pattern agent using the
 
 <!-- SECTION:NOTES:BEGIN -->
 Proposal artifact 'proposal-haiku-status-tracker' drafted by orion (2026-06-14, requested via sirius): scopes the tracker as an observational signaling client (not a mgmt plane), surfaces the goal-source and self-report-vs-observe forks, recommends landing TASK-84 (goal lexicon) first. Pending lena's sign-off before build.
+
+Goals model is now conv/goals (task-173) under ADR-0041; the TASK-84 dependency is dangling/replaced. Confirm parked before any build - do not write a divergent goal shape.
 <!-- SECTION:NOTES:END -->

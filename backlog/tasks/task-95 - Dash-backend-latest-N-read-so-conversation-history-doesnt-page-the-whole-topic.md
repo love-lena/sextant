@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-15 01:42'
+updated_date: '2026-06-19 21:42'
 labels:
   - feature
   - dash
@@ -35,4 +36,6 @@ The dash /api/messages reads FORWARD from since (since=0 = oldest), with no tail
 
 <!-- SECTION:NOTES:BEGIN -->
 Follow-up to the oldest-100 history bug fixed in this PR (frontend paging). The frontend paging is correct but O(history); this makes it O(1 page). Related: [[feat-plugin-dm-default-over-inbox]] era dash work.
+
+Dash backend model revised by ADR-0041 / task-179 / task-180: the /api/* + SSE + bearer-token + internal/dashapi mechanism described here no longer applies. Re-frame the surviving need against the direct TS NATS-WebSocket client.
 <!-- SECTION:NOTES:END -->

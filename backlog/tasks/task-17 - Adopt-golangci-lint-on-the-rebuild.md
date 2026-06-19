@@ -1,12 +1,13 @@
 ---
 id: TASK-17
 title: Adopt golangci-lint on the rebuild
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-03 22:59'
-updated_date: '2026-06-12 17:45'
+updated_date: '2026-06-19 21:42'
 labels:
   - ready-for-human
+  - superseded
 milestone: Future
 dependencies: []
 references:
@@ -46,3 +47,9 @@ Also pending Lena's call: pre-commit hook runs full make check incl. -race; Code
 
 2026-06-12 (canopus survey): reclassified In Progress -> To Do + ready-for-human. The work is parked (PR #100 open, awaiting Lena sign-off), not actively in progress. Unblocking needs the 5 calibration decisions above: containedctx exclusion for TUI model pkgs, gochecknoglobals allowance for immutable lookup tables, the pkg/tui no-new-pkg rule, the error-wrapping policy reword, and test-file exclusions.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Superseded by task-181 (revive Go house-style skill + curated static-checks gate), which realises this. The 5 open calibration decisions are carried onto task-181 (ready-for-human).
+<!-- SECTION:FINAL_SUMMARY:END -->

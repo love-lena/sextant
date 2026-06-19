@@ -4,6 +4,7 @@ title: Artifact discussion should be embedded in the artifact view
 status: To Do
 assignee: []
 created_date: '2026-06-13 03:50'
+updated_date: '2026-06-19 21:42'
 labels:
   - feature
   - dash
@@ -33,3 +34,9 @@ When viewing an artifact in the dash, the companion topic (msg.topic.artifact.<n
 <!-- SECTION:PLAN:BEGIN -->
 The companion topic is already wired (msg.topic.artifact.<name>, TASK-66). The dash already has an SSE feed + artifact read. Embed the topic feed in the artifact panel.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Dash backend model revised by ADR-0041 / task-179 / task-180: the /api/* + SSE + bearer-token + internal/dashapi mechanism described here no longer applies. Re-frame the surviving need against the direct TS NATS-WebSocket client.
+<!-- SECTION:NOTES:END -->
