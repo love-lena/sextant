@@ -4,6 +4,7 @@ title: 'Web dash: live artifact-change stream instead of polling'
 status: To Do
 assignee: []
 created_date: '2026-06-13 03:34'
+updated_date: '2026-06-19 21:42'
 labels:
   - feature
   - dash
@@ -32,4 +33,6 @@ D2 picks up new/changed artifacts by polling /api/artifacts + /api/subjects ever
 
 <!-- SECTION:NOTES:BEGIN -->
 Follow-up from D2 [[feat-dash-web-ui-d2]] (TASK-71). 4s poll is the shipped quick fix. SDK has WatchArtifact(name) — needs watch-all.
+
+Dash backend model revised by ADR-0041 / task-179 / task-180: the /api/* + SSE + bearer-token + internal/dashapi mechanism described here no longer applies. Re-frame the surviving need against the direct TS NATS-WebSocket client.
 <!-- SECTION:NOTES:END -->

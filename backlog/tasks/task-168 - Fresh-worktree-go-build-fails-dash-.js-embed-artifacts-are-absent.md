@@ -4,6 +4,7 @@ title: 'Fresh-worktree go build fails: dash .js embed artifacts are absent'
 status: To Do
 assignee: []
 created_date: '2026-06-18 22:45'
+updated_date: '2026-06-19 21:42'
 labels:
   - bug
   - dash
@@ -40,4 +41,6 @@ Options (pick on triage): (a) a friendlier embed guard / build-time error pointi
 
 <!-- SECTION:NOTES:BEGIN -->
 Discovered in v0.5.3 (orion + canopus). Distinct from [[bug-dash-js-jsx-drift]] (TASK-121 = drift; this = absence). Fix path confirmed by sirius: `make ui` (or make test) before go build.
+
+Dash backend model revised by ADR-0041 / task-179 / task-180: the /api/* + SSE + bearer-token + internal/dashapi mechanism described here no longer applies. Re-frame the surviving need against the direct TS NATS-WebSocket client.
 <!-- SECTION:NOTES:END -->

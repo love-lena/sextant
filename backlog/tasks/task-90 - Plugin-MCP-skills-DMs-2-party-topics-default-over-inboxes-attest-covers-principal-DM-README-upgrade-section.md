@@ -6,7 +6,7 @@ title: >-
 status: In Progress
 assignee: []
 created_date: '2026-06-14 21:58'
-updated_date: '2026-06-14 22:20'
+updated_date: '2026-06-19 21:42'
 labels:
   - feature
   - plugin
@@ -51,4 +51,6 @@ TDD DMSubject in pkg/sx; TDD attest two-subject scan in cmd/sextant-mcp; edit ha
 Asked by lena (principal) on msg.topic.frontend-dash seq 520 + 521 (2026-06-14). Conventions: [[feat-web-cockpit-conventions]] (ADR-0034). Deferred follow-ups to file: SDK auto-subscribe principal DM for idle-wake; TUI/dash DM opens 2-party topic + adopt sx.DMSubject; SDK rename DMs()->Inbox(); attest scan peer/wildcard DMs.
 
 Implemented on branch task-90-dm-default: sx.DMSubject (+test); attest scans inbox + principal DM (per-subject cursors, fail-soft, +test); message_publish tool desc; both SKILL.md; README upgrade section; plugin 0.1.3; demo-dm-trust.sh (4/4 PASS on the real sextant-mcp binary). make lint + make test (race) green.
+
+Status drift: ACs largely checked / likely shippable (only the operator-update step may remain). Verify and close.
 <!-- SECTION:NOTES:END -->

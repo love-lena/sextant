@@ -4,6 +4,7 @@ title: 'Client session state: persist active subscriptions across reconnects'
 status: To Do
 assignee: []
 created_date: '2026-06-15 02:30'
+updated_date: '2026-06-19 21:42'
 labels:
   - feature
   - identity
@@ -32,4 +33,6 @@ Agents lose their topic subscriptions on MCP restart — they have to re-subscri
 
 <!-- SECTION:NOTES:BEGIN -->
 Surfaced in outbox 2026-06-14 ('maybe use context to store state like active subscriptions'). Related: [[feat-named-agent-stable-identity]] (TASK-76)
+
+Overlaps the shipped self-healing subscriptions (ADR-0037 / TASK-124, v0.5.0). Likely drift/overlap - verify before building.
 <!-- SECTION:NOTES:END -->

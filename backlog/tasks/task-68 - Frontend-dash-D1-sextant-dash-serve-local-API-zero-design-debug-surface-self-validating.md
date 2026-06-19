@@ -7,7 +7,7 @@ status: Done
 assignee:
   - orion
 created_date: '2026-06-12 19:51'
-updated_date: '2026-06-13 01:06'
+updated_date: '2026-06-19 21:42'
 labels:
   - feature
   - dash
@@ -46,6 +46,8 @@ Per frontend-dash-effort: reuse the internal/dash bus-to-viewmodel layer server-
 
 <!-- SECTION:NOTES:BEGIN -->
 Provenance: 2026-06-12 planning, frontend-dash topic; lena approved the plan + the D1-first/no-design framing. Full scope in artifact frontend-dash-effort (~4-6 wk total; D1 ~1.5-2.5 wk). D2 = designed UI, separate ticket. Written up + handed to orion by sirius (first mate) so canopus could stay on the M5 spike.
+
+Dash backend model revised by ADR-0041 / task-179 / task-180: the /api/* + SSE + bearer-token + internal/dashapi mechanism described here no longer applies. Re-frame the surviving need against the direct TS NATS-WebSocket client.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

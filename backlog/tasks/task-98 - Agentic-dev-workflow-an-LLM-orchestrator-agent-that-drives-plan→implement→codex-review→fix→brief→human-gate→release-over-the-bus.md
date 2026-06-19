@@ -6,7 +6,7 @@ title: >-
 status: In Progress
 assignee: []
 created_date: '2026-06-15 01:32'
-updated_date: '2026-06-15 02:37'
+updated_date: '2026-06-19 21:42'
 labels:
   - feature
   - orchestration
@@ -50,4 +50,6 @@ v1, Architecture B on the sextant repo: (1) orchestrator playbook prompt; (2) wo
 Discovered in: lena's orchestration-m5 session 2026-06-14, real-use-case request. Design (with the A-vs-B + blast-radius decisions): artifact agentic-dev-workflow-design. Composes [[feat-m5-dispatcher]] (spawn) + the M5.1 spawn spike (wake/resume). Decisions: B (coordinator spawns workers) over A (orchestrator does the work itself); sextant repo as the test target; real bus; release=open-PR not auto-merge for v1.
 
 Trigger redesigned per lena (2026-06-14): workflow-as-artifact + 'sextant workflow run <name>' (no env-var harness). cmd/sextant/workflow.go (commit 23c6b6e); progress artifact is <id>.run (distinct from the <id> def). First live target: def artifact 'task62'; run-instructions in artifact task62-run-instructions.
+
+Near-duplicate of task-108 (same agentic-dev-workflow slug). Reconcile - don't grab both.
 <!-- SECTION:NOTES:END -->

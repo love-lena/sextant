@@ -4,6 +4,7 @@ title: Request/Reply convention — TBD whether actually needed
 status: To Do
 assignee: []
 created_date: '2026-06-04 17:52'
+updated_date: '2026-06-19 21:42'
 labels: []
 milestone: Open design questions
 dependencies: []
@@ -26,3 +27,9 @@ Request/Reply is named as a convention in ADR-0001/0003 (fan-out/join = Promise.
 - [ ] #1 TBD: keep parked until a concrete need surfaces in a reference client
 - [ ] #2 If adopted: an SDK helper (reply subject + correlation id), not a new primitive
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+If revisited, frame against ADR-0041's library-default vs reference-client-for-single-writer split (task-26 concluded request/reply not needed).
+<!-- SECTION:NOTES:END -->

@@ -6,6 +6,8 @@ date: 2026-06-02
 
 # High-level architecture
 
+> **Sharpened by [ADR-0041](0041-clients-are-co-equal-across-languages.md)** — the client surface (SDK · conventions · clients) is co-equal across languages, verified by a conformance suite; the tree is domain-first (`protocol/` · `bus/` · `clients/<language>/`).
+
 ![Sextant high-level architecture](assets/architecture.png)
 
 The map the rest of the canon hangs off. Each decision ADR (0004+) names the

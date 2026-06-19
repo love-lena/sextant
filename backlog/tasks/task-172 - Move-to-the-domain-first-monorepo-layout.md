@@ -4,6 +4,7 @@ title: Move to the domain-first monorepo layout
 status: To Do
 assignee: []
 created_date: '2026-06-19 21:11'
+updated_date: '2026-06-19 21:42'
 labels:
   - feature
   - layout
@@ -28,3 +29,9 @@ Mechanical move to the domain-first layout (supersedes the lost feat-layout-no-p
 - [ ] #2 go build ./... and the full suite pass unchanged; the diff is renames + import paths only
 - [ ] #3 importcheck enforces: a convention imports the SDK only (never the bus); the bus never imports clients
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Blanket: pkg/... and internal/dashapi path citations throughout the ADRs and older tickets are stale after this move (no top-level pkg/; nested internal/; cmd/ -> clients/go/apps). Treat literal old paths as historical, not targets.
+<!-- SECTION:NOTES:END -->

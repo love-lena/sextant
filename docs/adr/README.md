@@ -9,7 +9,7 @@ human has signed off — see
 |------|-----------------------------------------|----------|
 | [0001](0001-vision.md) | Vision — what Sextant is  | accepted |
 | [0002](0002-documentation-and-process-layout.md) | Documentation & process layout | accepted |
-| [0003](0003-high-level-architecture.md) | High-level architecture (the component map) | accepted |
+| [0003](0003-high-level-architecture.md) | High-level architecture (the component map) | accepted (sharpened by 0041) |
 | [0004](0004-conventions-are-optional.md) | Conventions are optional, not core | accepted |
 | [0005](0005-two-primitives.md) | The two primitives | accepted |
 | [0006](0006-wire-atom.md) | The wire atom | accepted (refined by 0019) |
@@ -38,9 +38,9 @@ human has signed off — see
 | [0029](0029-a-harness-speaks-as-itself.md) | A harness speaks as itself, with a per-session identity | proposed (revises 0028's identity resolution) |
 | [0030](0030-clients-act-on-a-principals-messages-as-operator-input.md) | A client acts on its principal's messages as operator-equivalent input | proposed |
 | [0031](0031-claiming-the-principal-is-frictionless-re-pointing-is-deliberate.md) | Claiming the principal is frictionless; re-pointing it is deliberate | proposed (extends 0030) |
-| [0032](0032-the-web-dash-is-a-face-on-a-local-api.md) | The web dash is a face on a local API | proposed |
+| [0032](0032-the-web-dash-is-a-face-on-a-local-api.md) | The web dash is a face on a local API | accepted (revised by 0041) |
 | [0033](0033-a-dispatcher-mints-its-own-workers.md) | A dispatcher mints its own workers (mint-on-behalf) | proposed |
-| [0034](0034-the-web-cockpit-rests-on-conventions-not-new-protocol.md) | The web cockpit rests on conventions, not new protocol | proposed |
+| [0034](0034-the-web-cockpit-rests-on-conventions-not-new-protocol.md) | The web cockpit rests on conventions, not new protocol | accepted (revised by 0041) |
 | [0035](0035-the-goal-bus-primitive.md) | The goal bus primitive | accepted |
 | [0036](0036-presence-and-liveness-derive-from-a-client-heartbeat.md) | Presence and liveness derive from a client heartbeat | accepted |
 | [0037](0037-subscriptions-and-context-survive-a-session-resume.md) | Subscriptions and the active context survive a session resume | accepted |
