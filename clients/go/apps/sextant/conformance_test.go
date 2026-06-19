@@ -11,6 +11,13 @@ import (
 // it reads protocol/methods.json — the source of truth — and asserts the CLI
 // exposes exactly one command per operation, and no command that isn't an
 // operation. Parity is mechanical, not a thing a reviewer has to remember.
+//
+// This guards the CLI's operation-NAME surface. The conformance suite
+// (protocol/conformance, clients/go/conformance) extends the same methods.json
+// source of truth from name-set parity to full operation TRANSCRIPTS (a verb
+// produces exactly these ops); the two are complementary, not duplicates — this
+// one checks a surface (the CLI commands), that one checks behaviour (the
+// vectors). See clients/go/conformance/surface.go.
 func TestCLIMatchesOperations(t *testing.T) {
 	path := filepath.Join("..", "..", "..", "..", "protocol", "methods.json")
 	data, err := os.ReadFile(path)

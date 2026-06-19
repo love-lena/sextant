@@ -1,0 +1,31 @@
+{
+  "epoch": 1,
+  "convention": "fixture",
+  "verb": "setGoal",
+  "description": "Sample fixture vector (TASK-183): a goals-like verb emits artifact.update then message.publish. Replaced by real conv/goals vectors in TASK-173.",
+  "input": {
+    "goalId": "sample",
+    "northstar": "prove the conformance machinery"
+  },
+  "operations": [
+    {
+      "op": "artifact.update",
+      "name": "goal.sample",
+      "payload": {
+        "$type": "goal",
+        "criteria": [],
+        "northstar": "prove the conformance machinery"
+      },
+      "expectedRev": 0
+    },
+    {
+      "op": "message.publish",
+      "subject": "msg.topic.goals",
+      "payload": {
+        "$type": "goal.update",
+        "goalId": "sample",
+        "kind": "set"
+      }
+    }
+  ]
+}

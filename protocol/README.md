@@ -14,6 +14,7 @@ define the protocol by themselves.
 | `methods.json` | The **operations** index — the calls a client makes to the bus. |
 | `semantic-contract.md` | **The backend interface** — what any backend module must provide so the bus can implement the operations. |
 | `nats-binding.md` | The **NATS module** notes — how the NATS backend satisfies the interface. Internal. |
+| `conformance/` | The **conformance vectors** — recorded operation transcripts every client replays to prove co-equality (ADR-0041). `FORMAT.md` is the cross-language spec; `vectors/` holds the JSON. |
 
 ## How to read it
 
