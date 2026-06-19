@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/love-lena/sextant/internal/clictx"
 )
@@ -79,9 +80,11 @@ var Registry = []Component{
 			// --on-behalf: the dispatcher mints children with its OWN authority
 			// (ADR-0033), so the launchd service runs unattended with no operator
 			// credential. The harness is the embedded recipe written to disk.
+			// shellQuote wraps the path so "Application Support" and any other
+			// space-bearing prefix in $SEXTANT_HOME survive the sh -c split.
 			return []string{
 				"--creds", creds, "--store", store,
-				"--on-behalf", "--harness", "sh " + recipe,
+				"--on-behalf", "--harness", "sh " + shellQuote(recipe),
 			}
 		},
 	},
@@ -110,6 +113,15 @@ var Registry = []Component{
 			return []string{"--creds", creds, "--store", store, "--designate"}
 		},
 	},
+}
+
+// shellQuote wraps a path in single quotes and escapes any embedded single
+// quotes (the ' → '\” trick), so the result is safe as a single word in a
+// POSIX sh -c string. This is the minimal quoting needed to handle paths that
+// contain spaces (e.g. macOS "Application Support") without invoking eval or
+// any shell expansion.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // Find returns the registered component by name, or false.
