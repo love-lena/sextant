@@ -18,7 +18,7 @@ jobs:
         with:
           node-version: '20'
       # The dash UI bundles are generated, not committed (TASK-121); regenerate
-      # them before any Go compile so the go:embed in internal/dashapi resolves.
+      # them before any Go compile so the go:embed in clients/go/apps/internal/dashapi resolves.
       - name: build dash UI
         run: bash scripts/build-dash-ui.sh
       - name: go vet

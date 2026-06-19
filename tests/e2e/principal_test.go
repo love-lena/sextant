@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/love-lena/sextant/internal/wireapi"
-	"github.com/love-lena/sextant/pkg/sextant"
+	"github.com/love-lena/sextant/clients/go/sdk"
+	"github.com/love-lena/sextant/protocol/wireapi"
 	"github.com/nats-io/nats.go"
 )
 

@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/love-lena/sextant/pkg/sextant"
+	"github.com/love-lena/sextant/clients/go/sdk"
 )
 
 const selfEchoTopic = "msg.topic.self-echo-e2e"
