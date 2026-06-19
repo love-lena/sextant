@@ -1,8 +1,11 @@
 package components
 
 import (
+	"encoding/xml"
 	"fmt"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -259,6 +262,67 @@ func TestPollUntil(t *testing.T) {
 	}
 	if PollUntil(func() bool { return false }, 20*time.Millisecond, time.Millisecond) {
 		t.Fatalf("PollUntil should time out for a never-true cond")
+	}
+}
+
+// TestGenPlistWellFormedXML: the rendered plist must be valid XML — the header
+// must start with the literal "<?xml" (not "&lt;?xml") and the document must
+// parse cleanly. This is the gate-gap that let the html/template bug ship: the
+// earlier tests matched escaped fixtures and never validated plutil -lint.
+//
+// Failure mode before the fix: html/template HTML-escapes the XML declaration
+// to "&lt;?xml ...", making every plist malformed; launchctl bootstrap fails
+// with "Input/output error" and no component starts.
+func TestGenPlistWellFormedXML(t *testing.T) {
+	spec := plistSpec{
+		Label:   Label("dispatcher"),
+		Program: []string{"/opt/homebrew/bin/sextant", "components", "exec", "dispatcher"},
+		LogPath: "/Users/u/Library/Logs/sextant/dispatcher.log",
+		Env:     map[string]string{"PATH": "/usr/local/bin:/usr/bin:/bin"},
+	}
+	out, err := genPlist(spec)
+	if err != nil {
+		t.Fatalf("genPlist: %v", err)
+	}
+
+	// The XML declaration must be literal — not HTML-escaped.
+	if !strings.HasPrefix(out, "<?xml") {
+		pfx := out
+		if len(pfx) > 64 {
+			pfx = pfx[:64]
+		}
+		t.Errorf("plist does not start with literal <?xml — html/template escaping is corrupting the header\ngot prefix: %q", pfx)
+	}
+
+	// No HTML entity corruption anywhere in the rendered output.
+	for _, bad := range []string{"&lt;", "&gt;", "&amp;"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("plist contains HTML entity %q — text/template must be used, not html/template\n---\n%s", bad, out)
+		}
+	}
+
+	// The full document must parse as valid XML.
+	if xmlErr := xml.Unmarshal([]byte(out), new(any)); xmlErr != nil {
+		t.Errorf("plist is not well-formed XML: %v\n---\n%s", xmlErr, out)
+	}
+
+	// On macOS, also validate with plutil -lint (the exact tool launchd uses).
+	if runtime.GOOS == "darwin" {
+		if _, lookErr := exec.LookPath("plutil"); lookErr == nil {
+			f, tmpErr := os.CreateTemp("", "sextant-plist-*.plist")
+			if tmpErr != nil {
+				t.Fatalf("create temp plist: %v", tmpErr)
+			}
+			defer os.Remove(f.Name())
+			if _, werr := f.WriteString(out); werr != nil {
+				t.Fatalf("write temp plist: %v", werr)
+			}
+			f.Close()
+			lintOut, lintErr := exec.Command("plutil", "-lint", f.Name()).CombinedOutput()
+			if lintErr != nil {
+				t.Errorf("plutil -lint failed: %v\n%s\n---plist:\n%s", lintErr, lintOut, out)
+			}
+		}
 	}
 }
 

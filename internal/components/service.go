@@ -2,11 +2,11 @@ package components
 
 import (
 	"fmt"
-	"html/template"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"text/template"
 	"time"
 )
 
@@ -88,9 +88,9 @@ var plistTemplate = template.Must(template.New("plist").Parse(`<?xml version="1.
 </plist>
 `))
 
-// genPlist renders a LaunchAgent plist. It is pure (no I/O); html/template
-// escapes the substituted values so a path with an XML-special char cannot
-// break the document.
+// genPlist renders a LaunchAgent plist. It is pure (no I/O). text/template is
+// intentional — a plist is XML/text, not HTML, so html/template's escaping must
+// NOT be applied (it turns <?xml into &lt;?xml, breaking plutil -lint).
 func genPlist(spec plistSpec) (string, error) {
 	var b strings.Builder
 	if err := plistTemplate.Execute(&b, spec); err != nil {
