@@ -20,7 +20,7 @@ func RecentActivity(transcriptPath string, maxLines int) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("statushook: open transcript: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var lines []string
 	sc := bufio.NewScanner(f)

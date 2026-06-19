@@ -72,7 +72,7 @@ func main() {
 	if err != nil {
 		fatal("connect: %v", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	// Listen mode: no --plan or --id — subscribe to workflow.start and run one
 	// coordinator per request (the dash's "start a workflow from a prompt" path).

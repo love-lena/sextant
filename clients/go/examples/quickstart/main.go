@@ -46,7 +46,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("connect: %v", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	fmt.Printf("connected as %s (%s)\n", c.DisplayName(), c.ID())
 
 	// 2. Publish a chat message on a topic. The bus stamps the frame.

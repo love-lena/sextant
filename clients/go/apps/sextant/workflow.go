@@ -69,7 +69,7 @@ func workflowRun(args []string) {
 
 	ctx := context.Background()
 	c := cf.connect(ctx)
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	a, err := c.GetArtifact(ctx, name)
 	if err != nil {
 		fatal("read workflow %q: %v", name, err)

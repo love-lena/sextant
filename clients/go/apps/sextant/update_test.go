@@ -227,7 +227,7 @@ func TestUpdateIsADispatchedVerb(t *testing.T) {
 	// runUpdate is the unit under test for behaviour; this test guards that the
 	// not-brew path is reachable with the production injectables shape, i.e.
 	// the signature cmdUpdate calls. If the signature drifts, this won't compile.
-	var sink io.Writer = io.Discard
+	sink := io.Discard // an io.Writer; runUpdate's stdout/stderr params
 	err := runUpdate(sink, sink, exec.LookPath, func() bool { return false })
 	// With a real brew possibly present but this test binary not brew-installed,
 	// runUpdate must still return nil (it only prints guidance).

@@ -90,7 +90,7 @@ func cmdLamp(args []string) {
 
 	ctx := context.Background()
 	c := cf.connect(ctx)
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	switch verb {
 	case "", "toggle":

@@ -121,7 +121,7 @@ func TestSpatialFocus(t *testing.T) {
 	cx, cy, _, ch, _ := m.RectXYWH("clients")
 	tx, ty, _, _, _ := m.RectXYWH("topics")
 	ax, ay, _, _, _ := m.RectXYWH("artifacts")
-	if !(cy == 0 && ty == 0 && ay == 0 && cx < tx && tx < ax) {
+	if cy != 0 || ty != 0 || ay != 0 || cx >= tx || tx >= ax {
 		t.Fatalf("precondition: three side-by-side columns (clients x=%d, topics x=%d, artifacts x=%d)", cx, tx, ax)
 	}
 	if ch != 29 { // areaH = 30 - 1 hint row
@@ -175,7 +175,7 @@ func TestSpatialFocusSplitPreset(t *testing.T) {
 	_, cy, _, _, _ := m.RectXYWH("clients")
 	tx, ty, _, _, _ := m.RectXYWH("topics")
 	_, ay, _, _, _ := m.RectXYWH("artifacts")
-	if !(cy == 0 && ty == 0 && tx > 0 && ay > 0) {
+	if cy != 0 || ty != 0 || tx <= 0 || ay <= 0 {
 		t.Fatalf("precondition: split should be clients/topics top, artifacts bottom (cy=%d tx=%d ty=%d ay=%d)", cy, tx, ty, ay)
 	}
 	if m.Focused() != "clients" {
@@ -441,7 +441,9 @@ func TestToggleReflowsToFill(t *testing.T) {
 func TestResizeReflows(t *testing.T) {
 	m, panes := newCockpit(t)
 	w1 := panes["clients"].w
-	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 50})
+	// The resize re-fits the surfaces through the shared *mockSurface pointers in
+	// panes, so the new width is read back from the map, not the returned model.
+	m.Update(tea.WindowSizeMsg{Width: 160, Height: 50})
 	w2 := panes["clients"].w
 	if w2 <= w1 {
 		t.Errorf("resize did not re-fit: clients width %d not > %d", w2, w1)

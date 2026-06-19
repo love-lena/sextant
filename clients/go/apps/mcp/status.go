@@ -183,7 +183,7 @@ func writeStatus(ctx context.Context, res statushook.StatusResult) error {
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	self := c.ID()
 	name := "status." + self

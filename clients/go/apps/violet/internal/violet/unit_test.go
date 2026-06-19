@@ -149,6 +149,7 @@ func TestHomeRankingByDownstreamBlocking(t *testing.T) {
 	}
 	if agenda == nil {
 		t.Fatal("curateHome produced no agenda block")
+		return // unreachable after Fatal; makes the non-nil deref below provable
 	}
 	if len(agenda.Items) != 3 {
 		t.Fatalf("agenda items = %d, want 3", len(agenda.Items))

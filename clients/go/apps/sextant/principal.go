@@ -68,7 +68,7 @@ func principalSet(args []string) {
 	if err != nil {
 		fatal("connect: %v", err)
 	}
-	defer iss.Close()
+	defer func() { _ = iss.Close() }()
 	current, _ := iss.GetPrincipal(ctx) // best-effort, for the print; the set is what matters
 	if err := iss.SetPrincipal(ctx, ulid, *force); err != nil {
 		fatal("%v", err)
@@ -90,7 +90,7 @@ func principalGet(args []string) {
 
 	ctx := context.Background()
 	c := cf.connect(ctx)
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	principal, err := c.GetPrincipal(ctx)
 	if err != nil {
 		fatal("%v", err)

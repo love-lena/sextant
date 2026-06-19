@@ -40,7 +40,7 @@ func LoadKeyEnv(path string) (map[string]string, error) {
 		}
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	env := map[string]string{}
 	sc := bufio.NewScanner(f)

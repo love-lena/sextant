@@ -107,7 +107,7 @@ func main() {
 	if err != nil {
 		fatal("connect: %v", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	// Minting authority: mint-on-behalf uses the dispatcher's OWN client connection
 	// (ADR-0033, requires kind=dispatcher); otherwise it uses an operator/enroll
@@ -126,7 +126,7 @@ func main() {
 		if err != nil {
 			fatal("issuer connect: %v", err)
 		}
-		defer iss.Close()
+		defer func() { _ = iss.Close() }()
 		mint = iss.Register
 		logf("minting children via the operator/enroll issuer")
 	}

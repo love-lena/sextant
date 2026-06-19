@@ -575,7 +575,7 @@ func (b *Bus) opClientsHeartbeat(ctx context.Context, callerID string, data []by
 	// Echo the beat back on the caller's dedicated heartbeat subject — a transient
 	// core publish (no persistence). Best-effort: a publish error does not fail the
 	// beat (last_seen is already recorded), but it must be loud.
-	echo, err := json.Marshal(wireapi.HeartbeatEcho{Seq: in.Seq})
+	echo, err := json.Marshal(wireapi.HeartbeatEcho(in))
 	if err != nil {
 		return nil, fmt.Errorf("bus: clients.heartbeat: encode echo: %w", err)
 	}

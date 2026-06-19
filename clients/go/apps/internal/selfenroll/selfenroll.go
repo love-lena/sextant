@@ -196,7 +196,7 @@ func enroll(ctx context.Context, name, display, kind, url, store string, force, 
 	if err != nil {
 		return Result{}, fmt.Errorf("selfenroll: connect: %w", err)
 	}
-	defer iss.Close()
+	defer func() { _ = iss.Close() }()
 	issued, err := iss.Register(ctx, name, kind)
 	if err != nil {
 		return Result{}, fmt.Errorf("selfenroll: register: %w", err)

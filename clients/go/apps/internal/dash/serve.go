@@ -53,7 +53,7 @@ func runServe(ctx context.Context, opts Options, out io.Writer) error {
 		}
 		return fmt.Errorf("connect: %w", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	token, err := newToken()
 	if err != nil {
@@ -77,7 +77,7 @@ func runServe(ctx context.Context, opts Options, out io.Writer) error {
 	// Track the subjects the dash sees (msg.>) so the UI can list conversations
 	// on load, not just as new traffic arrives. Best-effort; failure is non-fatal.
 	if err := api.Watch(srvCtx); err != nil {
-		fmt.Fprintf(out, "sextant dash --serve: subject watch unavailable: %v\n", err)
+		_, _ = fmt.Fprintf(out, "sextant dash --serve: subject watch unavailable: %v\n", err)
 	}
 	srv := &http.Server{
 		Handler:           api,
@@ -88,8 +88,8 @@ func runServe(ctx context.Context, opts Options, out io.Writer) error {
 	// Build the tokenized URL once so both the announce line and the state file
 	// use the same value.
 	serveURL := fmt.Sprintf("http://%s/?token=%s", ln.Addr(), token)
-	fmt.Fprintf(out, "sextant dash --serve: API + debug surface at %s\n", serveURL)
-	fmt.Fprintf(out, "  (the URL carries the access token — keep it local; Ctrl-C to stop)\n")
+	_, _ = fmt.Fprintf(out, "sextant dash --serve: API + debug surface at %s\n", serveURL)
+	_, _ = fmt.Fprintf(out, "  (the URL carries the access token — keep it local; Ctrl-C to stop)\n")
 
 	// Write the state file when a path was given. The file lets a managed/
 	// backgrounded dash expose its URL without the operator having to capture
@@ -100,7 +100,7 @@ func runServe(ctx context.Context, opts Options, out io.Writer) error {
 		if err := writeStateFile(opts.StateFile, serveURL, token, ln.Addr()); err != nil {
 			return fmt.Errorf("write state file: %w", err)
 		}
-		defer os.Remove(opts.StateFile) // best-effort; failure leaves a stale file but doesn't mask a serve error
+		defer func() { _ = os.Remove(opts.StateFile) }() // best-effort; failure leaves a stale file but doesn't mask a serve error
 	}
 
 	serveErr := make(chan error, 1)

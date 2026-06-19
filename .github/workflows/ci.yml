@@ -23,6 +23,13 @@ jobs:
         run: bash scripts/build-dash-ui.sh
       - name: go vet
         run: go vet ./...
+      # The curated static-checks gate (.golangci.yml, ADR-0042). v2 config schema;
+      # pin the action's version to the installed v2 line. The import-discipline
+      # bright lines (importcheck, ADR-0041) run as tests in the test step below.
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.12.2
       - name: gofumpt
         run: |
           go install mvdan.cc/gofumpt@latest
