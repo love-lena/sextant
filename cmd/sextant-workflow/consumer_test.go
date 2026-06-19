@@ -58,162 +58,180 @@ func dialBusClient(t *testing.T, b *bus.Bus, id string) *sextant.Client {
 
 // TestStartConsumer_OneRunPerRequest is the integration test for the
 // workflow.start consumer: it asserts (a-d) per the file-level comment.
+//
+// Each assertion runs as its own isolated PHASE: a fresh bus, fresh clients, a
+// unique spawn subject, and a fresh consumer, all torn down before the next
+// phase begins. Phases are sequential plain closures (not nested t.Run
+// sub-tests) so the testing framework never mutates a sub-test *T while a NATS
+// delivery goroutine is live. Teardown stops every subscription before closing
+// the clients; Subscription.Stop now joins its in-flight delivery callback (see
+// pkg/sextant/messages.go), so no handler is still running at a phase boundary.
+// This is the TASK-170 fix that removes the -race quarantine.
 func TestStartConsumer_OneRunPerRequest(t *testing.T) {
-	// TASK-170 — temporarily quarantined under -race for the v0.5.3 cut.
-	// The race is TEST-ONLY: this test's cooperating subscriptions (the test-side
-	// dispatcher + ack collector) keep delivering across its t.Run subtests, and
-	// NATS does not wait for an in-flight delivery callback on Unsubscribe/Close —
-	// so a delivery goroutine can still be invoking the handler when the next
-	// subtest's testing.T bookkeeping runs, racing the closure-captured *T. It
-	// involves testing.T, so it cannot occur in the shipped consumer; the test
-	// runs and asserts fully WITHOUT -race. The proper fix (drain each
-	// subscription before teardown, or give each phase its own bus + subject)
-	// removes this skip. See TASK-170.
-	if raceDetectorEnabled {
-		t.Skip("quarantined under -race pending the cross-subtest harness fix (TASK-170) — test-only race, prod unaffected")
-	}
-	b, err := bus.Start(t.Context(), bus.Config{StoreDir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("bus.Start: %v", err)
-	}
-	t.Cleanup(b.Shutdown)
-
-	// consumer = the workflow coordinator running the startConsumer.
-	consumer := dialBusClient(t, b, "consumer")
-	// requester = the client that publishes workflow.start (e.g. violet / the dash).
-	requester := dialBusClient(t, b, "requester")
-	// dispatcher = a test-side dispatcher that cooperates with the coordinator.
-	dispatcher := dialBusClient(t, b, "dispatcher")
-
-	spawnSubj := "msg.topic.spawn"
 	// stepDelay is the deliberate pause the dispatcher inserts before completing
 	// the step. The timing test asserts the ok-ack arrives well within this
 	// window — i.e. before the run finishes.
 	const stepDelay = 1500 * time.Millisecond
 	stepTimeout := 10 * time.Second
 
-	// ctx is an independent context for all shared bus clients and goroutines.
-	// We deliberately do NOT derive it from t.Context(): Go's race detector flags
-	// a race when a NATS delivery goroutine holds a context derived from
-	// t.Context() while the testing framework writes to the *T during sub-test
-	// teardown. A context.Background()-derived context avoids that and is safe
-	// because t.Cleanup cancels it before the bus shuts down.
-	ctx, cancelCtx := context.WithCancel(context.Background())
-	t.Cleanup(cancelCtx)
-
-	// runDone tracks outstanding background dispatcher goroutines so each
-	// sub-test can drain them before it exits (prevents cross-sub-test pollution).
-	var runDone sync.WaitGroup
-
-	// --- Test-side dispatcher ---
-	// Listens on the spawn subject; for every spawn.request it publishes a
-	// spawn.ack, then waits stepDelay before publishing the step-done event.
-	// The delay is intentional: it makes the timing test meaningful — the ack
-	// must arrive before the delay elapses, proving ack-before-run.
-	_, err = dispatcher.Subscribe(ctx, spawnSubj, func(m sextant.Message) {
-		var req struct {
-			Type   string `json:"$type"`
-			Job    string `json:"job,omitempty"`
-			Prompt string `json:"prompt,omitempty"`
-		}
-		if err := json.Unmarshal(m.Frame.Record, &req); err != nil || req.Type != typeSpawnRequest {
-			return
-		}
-
-		// Publish spawn.ack immediately so the coordinator's ack-wait unblocks.
-		ack := spawnAck{
-			Type:      typeSpawnAck,
-			ID:        "agent-test-" + m.Frame.ID[:8],
-			RequestID: m.Frame.ID,
-			Status:    "ok",
-		}
-		ackBytes, _ := json.Marshal(ack)
-		if err := dispatcher.Publish(ctx, spawnSubj, json.RawMessage(ackBytes)); err != nil {
-			return
-		}
-
-		// Delay before completing the step. The workflow.start.ack must arrive
-		// before this sleep ends (the timing regression test).
-		runDone.Add(1)
-		go func() {
-			defer runDone.Done()
-			select {
-			case <-time.After(stepDelay):
-			case <-ctx.Done():
-				return
-			}
-			evBytes := WorkflowEvent{Step: "run", Status: stepDone}.marshal()
-			_ = dispatcher.Publish(ctx, eventsSubject(req.Job), evBytes)
-		}()
-	}, sextant.DeliverAll())
-	if err != nil {
-		t.Fatalf("dispatcher Subscribe: %v", err)
-	}
-
-	// Start the consumer under the same background-derived context.
-	consumerCtx, cancelConsumer := context.WithCancel(ctx)
-	t.Cleanup(cancelConsumer)
-
-	sc, sub, err := newStartConsumer(consumerCtx, consumer, spawnSubj, stepTimeout)
-	if err != nil {
-		t.Fatalf("newStartConsumer: %v", err)
-	}
-	t.Cleanup(sub.Stop)
-
-	// Collect workflow.start.ack records published back on startSubject.
 	type capturedAck struct {
 		ack       WorkflowStartAck
 		arrivedAt time.Time
 	}
-	var (
-		ackMu   sync.Mutex
-		ackList []capturedAck
-		ackCond = sync.NewCond(&ackMu)
-	)
-	_, err = requester.Subscribe(ctx, startSubject, func(m sextant.Message) {
-		var a WorkflowStartAck
-		if err := json.Unmarshal(m.Frame.Record, &a); err != nil || a.Type != typeWorkflowStartAck {
-			return
-		}
-		ackMu.Lock()
-		ackList = append(ackList, capturedAck{ack: a, arrivedAt: time.Now()})
-		ackCond.Broadcast()
-		ackMu.Unlock()
-	}, sextant.DeliverAll())
-	if err != nil {
-		t.Fatalf("requester Subscribe: %v", err)
+
+	// phaseEnv is one fully isolated test world: its own bus, clients, subjects,
+	// consumer, and ack collector.
+	type phaseEnv struct {
+		b          *bus.Bus
+		consumer   *sextant.Client
+		requester  *sextant.Client
+		dispatcher *sextant.Client
+		sc         *startConsumer
+		consumeSub sextant.Subscription
+		dispSub    sextant.Subscription
+		reqSub     sextant.Subscription
+		ctx        context.Context
+		cancel     context.CancelFunc
+		runDone    *sync.WaitGroup
+
+		ackMu   *sync.Mutex
+		ackList *[]capturedAck
+		ackCond *sync.Cond
 	}
 
-	// waitForAcks blocks until at least n acks have been collected or the
-	// deadline elapses.
-	waitForAcks := func(t *testing.T, n int, deadline time.Duration) []capturedAck {
+	// newPhase builds a fresh isolated world on a unique spawn subject. Each phase
+	// uses its own bus + subject so no frame or delivery goroutine can cross a
+	// phase boundary.
+	newPhase := func(t *testing.T, name string) *phaseEnv {
+		t.Helper()
+		b, err := bus.Start(t.Context(), bus.Config{StoreDir: t.TempDir()})
+		if err != nil {
+			t.Fatalf("%s: bus.Start: %v", name, err)
+		}
+
+		// Bus clients run on a background-derived context, not t.Context(): a NATS
+		// delivery goroutine that captured t.Context() would race the framework's
+		// writes to *T at teardown. teardown cancels this before the bus shuts down.
+		ctx, cancel := context.WithCancel(context.Background())
+
+		var (
+			ackMu   sync.Mutex
+			ackList []capturedAck
+			runDone sync.WaitGroup
+		)
+		env := &phaseEnv{
+			b:          b,
+			consumer:   dialBusClient(t, b, "consumer-"+name),
+			requester:  dialBusClient(t, b, "requester-"+name),
+			dispatcher: dialBusClient(t, b, "dispatcher-"+name),
+			ctx:        ctx,
+			cancel:     cancel,
+			runDone:    &runDone,
+			ackMu:      &ackMu,
+			ackList:    &ackList,
+		}
+		env.ackCond = sync.NewCond(env.ackMu)
+		// Unique spawn subject per phase keeps phases from ever interfering.
+		spawnSubj := "msg.topic.spawn." + name
+
+		// --- Test-side dispatcher ---
+		// For every spawn.request: publish a spawn.ack at once, then (after
+		// stepDelay) a step-done event so the coordinator's dispatch step completes.
+		env.dispSub, err = env.dispatcher.Subscribe(ctx, spawnSubj, func(m sextant.Message) {
+			var req struct {
+				Type   string `json:"$type"`
+				Job    string `json:"job,omitempty"`
+				Prompt string `json:"prompt,omitempty"`
+			}
+			if err := json.Unmarshal(m.Frame.Record, &req); err != nil || req.Type != typeSpawnRequest {
+				return
+			}
+			ack := spawnAck{
+				Type:      typeSpawnAck,
+				ID:        "agent-test-" + m.Frame.ID[:8],
+				RequestID: m.Frame.ID,
+				Status:    "ok",
+			}
+			ackBytes, _ := json.Marshal(ack)
+			if err := env.dispatcher.Publish(ctx, spawnSubj, json.RawMessage(ackBytes)); err != nil {
+				return
+			}
+			runDone.Add(1)
+			go func() {
+				defer runDone.Done()
+				select {
+				case <-time.After(stepDelay):
+				case <-ctx.Done():
+					return
+				}
+				evBytes := WorkflowEvent{Step: "run", Status: stepDone}.marshal()
+				_ = env.dispatcher.Publish(ctx, eventsSubject(req.Job), evBytes)
+			}()
+		}, sextant.DeliverAll())
+		if err != nil {
+			t.Fatalf("%s: dispatcher Subscribe: %v", name, err)
+		}
+
+		sc, consumeSub, err := newStartConsumer(ctx, env.consumer, spawnSubj, stepTimeout)
+		if err != nil {
+			t.Fatalf("%s: newStartConsumer: %v", name, err)
+		}
+		env.sc, env.consumeSub = sc, consumeSub
+
+		env.reqSub, err = env.requester.Subscribe(ctx, startSubject, func(m sextant.Message) {
+			var a WorkflowStartAck
+			if err := json.Unmarshal(m.Frame.Record, &a); err != nil || a.Type != typeWorkflowStartAck {
+				return
+			}
+			ackMu.Lock()
+			ackList = append(ackList, capturedAck{ack: a, arrivedAt: time.Now()})
+			env.ackCond.Broadcast()
+			ackMu.Unlock()
+		}, sextant.DeliverAll())
+		if err != nil {
+			t.Fatalf("%s: requester Subscribe: %v", name, err)
+		}
+		return env
+	}
+
+	// teardown winds the phase down deterministically. Stop joins each
+	// subscription's in-flight delivery callback, so after these Stops no handler
+	// is running; cancel + Close + Shutdown then release the rest.
+	teardown := func(env *phaseEnv) {
+		env.runDone.Wait()
+		env.consumeSub.Stop()
+		env.dispSub.Stop()
+		env.reqSub.Stop()
+		env.cancel()
+		_ = env.consumer.Close()
+		_ = env.requester.Close()
+		_ = env.dispatcher.Close()
+		env.b.Shutdown()
+	}
+
+	waitForAcks := func(t *testing.T, env *phaseEnv, n int, deadline time.Duration) []capturedAck {
 		t.Helper()
 		timer := time.AfterFunc(deadline, func() {
-			ackMu.Lock()
-			ackCond.Broadcast()
-			ackMu.Unlock()
+			env.ackMu.Lock()
+			env.ackCond.Broadcast()
+			env.ackMu.Unlock()
 		})
 		defer timer.Stop()
 		end := time.Now().Add(deadline)
-		ackMu.Lock()
-		for len(ackList) < n && time.Now().Before(end) {
-			ackCond.Wait()
+		env.ackMu.Lock()
+		for len(*env.ackList) < n && time.Now().Before(end) {
+			env.ackCond.Wait()
 		}
-		got := make([]capturedAck, len(ackList))
-		copy(got, ackList)
-		ackMu.Unlock()
+		got := make([]capturedAck, len(*env.ackList))
+		copy(got, *env.ackList)
+		env.ackMu.Unlock()
 		return got
 	}
 
-	resetAcks := func() {
-		ackMu.Lock()
-		ackList = nil
-		ackMu.Unlock()
-	}
-
 	// --- (a) fresh workflow.start starts exactly one run + ack status:ok ---
-	t.Run("fresh_start_gets_ok_ack", func(t *testing.T) {
-		resetAcks()
+	func() {
+		env := newPhase(t, "fresh")
+		defer teardown(env)
 
 		const wantNonce = "dash-nonce-abc123"
 		rec := WorkflowStartRequest{
@@ -223,78 +241,77 @@ func TestStartConsumer_OneRunPerRequest(t *testing.T) {
 			Nickname: "tester",
 		}
 		recBytes, _ := json.Marshal(rec)
-		out, err := requester.PublishMsg(ctx, startSubject, json.RawMessage(recBytes))
+		out, err := env.requester.PublishMsg(env.ctx, startSubject, json.RawMessage(recBytes))
 		if err != nil {
-			t.Fatalf("PublishMsg workflow.start: %v", err)
+			t.Fatalf("(a) PublishMsg workflow.start: %v", err)
 		}
 		reqID := out.ID
 
-		acks := waitForAcks(t, 1, 10*time.Second)
+		acks := waitForAcks(t, env, 1, 10*time.Second)
 		if len(acks) != 1 {
-			t.Fatalf("want 1 ack, got %d", len(acks))
+			t.Fatalf("(a) want 1 ack, got %d", len(acks))
 		}
 		a := acks[0].ack
 		if a.Status != statusOK {
-			t.Errorf("ack.status = %q, want %q (error: %s)", a.Status, statusOK, a.Error)
+			t.Errorf("(a) ack.status = %q, want %q (error: %s)", a.Status, statusOK, a.Error)
 		}
 		if a.RequestID != reqID {
-			t.Errorf("ack.requestId = %q, want %q", a.RequestID, reqID)
+			t.Errorf("(a) ack.requestId = %q, want %q", a.RequestID, reqID)
 		}
 		if a.Nonce != wantNonce {
-			t.Errorf("ack.nonce = %q, want %q (must echo request nonce verbatim)", a.Nonce, wantNonce)
+			t.Errorf("(a) ack.nonce = %q, want %q (must echo request nonce verbatim)", a.Nonce, wantNonce)
 		}
 		if a.WorkflowID == "" {
-			t.Error("ack.workflowId is empty; should carry the run id")
+			t.Error("(a) ack.workflowId is empty; should carry the run id")
 		}
-
-		// Drain background goroutines before the next sub-test.
-		runDone.Wait()
-	})
+	}()
 
 	// --- (b) duplicate frame id: fence prevents a second run ---
-	t.Run("duplicate_frame_id_ignored", func(t *testing.T) {
-		resetAcks()
+	func() {
+		env := newPhase(t, "duplicate")
+		defer teardown(env)
 
 		// Simulate DeliverAll replaying a frame by injecting the frame ID directly
 		// into the consumer's seen map, then calling handle with that same ID.
 		fakeID := "FAKEID-REPLAY-1234"
-		sc.mu.Lock()
-		sc.seen[fakeID] = true
-		sc.mu.Unlock()
+		env.sc.mu.Lock()
+		env.sc.seen[fakeID] = true
+		env.sc.mu.Unlock()
 
 		req := WorkflowStartRequest{Type: typeWorkflowStart, Prompt: "replay"}
 		recBytes, _ := json.Marshal(req)
-		sc.handle(sextant.Message{
+		env.sc.handle(sextant.Message{
 			Frame: wire.Frame{
 				ID:     fakeID,
 				Record: json.RawMessage(recBytes),
 			},
 		})
 
-		got := waitForAcks(t, 1, 300*time.Millisecond)
+		got := waitForAcks(t, env, 1, 300*time.Millisecond)
 		if len(got) != 0 {
-			t.Errorf("fence failed: got %d ack(s) for duplicate frame id, want 0", len(got))
+			t.Errorf("(b) fence failed: got %d ack(s) for duplicate frame id, want 0", len(got))
 		}
-	})
+	}()
 
 	// --- (c) empty prompt is ignored (no ack) ---
-	t.Run("empty_prompt_ignored", func(t *testing.T) {
-		resetAcks()
+	func() {
+		env := newPhase(t, "ignored")
+		defer teardown(env)
 
 		bad := json.RawMessage(`{"$type":"workflow.start","prompt":""}`)
-		if _, err := requester.PublishMsg(ctx, startSubject, bad); err != nil {
-			t.Fatalf("PublishMsg bad record: %v", err)
+		if _, err := env.requester.PublishMsg(env.ctx, startSubject, bad); err != nil {
+			t.Fatalf("(c) PublishMsg bad record: %v", err)
 		}
 		notWF := json.RawMessage(`{"$type":"chat.message","text":"hi"}`)
-		if _, err := requester.PublishMsg(ctx, startSubject, notWF); err != nil {
-			t.Fatalf("PublishMsg wrong type: %v", err)
+		if _, err := env.requester.PublishMsg(env.ctx, startSubject, notWF); err != nil {
+			t.Fatalf("(c) PublishMsg wrong type: %v", err)
 		}
 
-		got := waitForAcks(t, 1, 300*time.Millisecond)
+		got := waitForAcks(t, env, 1, 300*time.Millisecond)
 		if len(got) != 0 {
-			t.Errorf("bad record not ignored: got %d ack(s), want 0", len(got))
+			t.Errorf("(c) bad record not ignored: got %d ack(s), want 0", len(got))
 		}
-	})
+	}()
 
 	// --- (d) TIMING: ok-ack arrives BEFORE the run completes ---
 	//
@@ -302,8 +319,9 @@ func TestStartConsumer_OneRunPerRequest(t *testing.T) {
 	// the ok-ack lands in well under half that window, proving ack-before-run.
 	// This test FAILS on the old ack-after-completion code (ack arrives ~1.5s
 	// late) and PASSES on the early-ack + goroutine-run fix.
-	t.Run("ack_arrives_before_run_completes", func(t *testing.T) {
-		resetAcks()
+	func() {
+		env := newPhase(t, "timing")
+		defer teardown(env)
 
 		rec := WorkflowStartRequest{
 			Type:   typeWorkflowStart,
@@ -312,30 +330,27 @@ func TestStartConsumer_OneRunPerRequest(t *testing.T) {
 		}
 		recBytes, _ := json.Marshal(rec)
 		publishedAt := time.Now()
-		if _, err := requester.PublishMsg(ctx, startSubject, json.RawMessage(recBytes)); err != nil {
-			t.Fatalf("PublishMsg: %v", err)
+		if _, err := env.requester.PublishMsg(env.ctx, startSubject, json.RawMessage(recBytes)); err != nil {
+			t.Fatalf("(d) PublishMsg: %v", err)
 		}
 
 		// The ack should arrive well before stepDelay elapses. Give it half the
 		// step delay as a generous deadline; production expects it in < 1s.
 		ackDeadline := stepDelay / 2
-		acks := waitForAcks(t, 1, ackDeadline)
+		acks := waitForAcks(t, env, 1, ackDeadline)
 		if len(acks) != 1 {
-			t.Fatalf("ack did not arrive within %s (want early ack, not ack-after-completion); got %d ack(s)", ackDeadline, len(acks))
+			t.Fatalf("(d) ack did not arrive within %s (want early ack, not ack-after-completion); got %d ack(s)", ackDeadline, len(acks))
 		}
 		a := acks[0].ack
 		if a.Status != statusOK {
-			t.Errorf("ack.status = %q, want %q (error: %s)", a.Status, statusOK, a.Error)
+			t.Errorf("(d) ack.status = %q, want %q (error: %s)", a.Status, statusOK, a.Error)
 		}
 		elapsed := acks[0].arrivedAt.Sub(publishedAt)
 		if elapsed >= stepDelay {
-			t.Errorf("ack arrived after run completion (elapsed %s >= stepDelay %s); ack-after-run bug NOT fixed", elapsed, stepDelay)
+			t.Errorf("(d) ack arrived after run completion (elapsed %s >= stepDelay %s); ack-after-run bug NOT fixed", elapsed, stepDelay)
 		}
-		t.Logf("ack arrived %s after publish (stepDelay=%s) — ack-before-run confirmed", elapsed, stepDelay)
-
-		// Drain the background run goroutine before teardown.
-		runDone.Wait()
-	})
+		t.Logf("(d) ack arrived %s after publish (stepDelay=%s) — ack-before-run confirmed", elapsed, stepDelay)
+	}()
 }
 
 // TestStartConsumer_SubsStoppedAfterRun asserts that the helper subscriptions
