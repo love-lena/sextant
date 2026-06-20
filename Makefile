@@ -1,4 +1,4 @@
-.PHONY: test vet lint fmt book ui build
+.PHONY: test vet lint fmt book ui build generate
 
 # Generate the dash web UI bundles (.jsx -> .js via esbuild). The .js are
 # generated artifacts (gitignored, TASK-121) embedded by the Go build, so this
@@ -33,6 +33,15 @@ lint: vet
 		exit 1; \
 	fi
 	go test ./internal/importcheck/... ./bus/ ./clients/go/conventions/ ./clients/go/apps/internal/tui/...
+
+# Regenerate code generated from the lexicon (ADR-0041): the per-language record
+# types a convention library consumes. Today that is conv/goals' goal_gen.go,
+# emitted from protocol/lexicons/goal.json by clients/go/conventions/goals/internal/lexgen
+# (a //go:generate directive in goals.go). Run after editing a lexicon whose Go
+# types are generated; the output is committed and gofumpt-clean.
+generate:
+	go generate ./...
+	gofumpt -w .
 
 # Format the tree with gofumpt.
 fmt:

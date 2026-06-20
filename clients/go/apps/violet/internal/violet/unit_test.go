@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/love-lena/sextant/clients/go/conventions/goals"
 	"github.com/love-lena/sextant/protocol/wire"
 )
 
@@ -55,14 +56,21 @@ func TestGatherWorkspaceClassifies(t *testing.T) {
 		infos: []artifactInfo{
 			{Name: "the-brief", Revision: 3},
 			{Name: "goal.v0-5-0", Revision: 5},
+			{Name: "proof-of-redesign", Revision: 1},
 			{Name: "working-notes", Revision: 1},
 			{Name: "approved-thing", Revision: 2},
 		},
+		// Goal records use the canonical lexicon fields — northstar + criteria[].{text,status} —
+		// NOT the title/label/state names violet used to fall back on (the drift bug
+		// TASK-173 fixes). The "dash redesign" criterion is stored met with a proof
+		// artifact (proof-of-redesign) relating to it, so the proof-filter reads it as
+		// met; an unproved met would read as in-progress.
 		records: map[string]json.RawMessage{
-			"the-brief":      json.RawMessage(`{"title":"v0.5 demo brief","review":{"state":"review"}}`),
-			"goal.v0-5-0":    json.RawMessage(`{"title":"v0.5.0","criteria":[{"label":"violet responds fast","status":"waiting-on-you"},{"label":"dash redesign","status":"met"}]}`),
-			"working-notes":  json.RawMessage(`{"body":"scratch"}`),
-			"approved-thing": json.RawMessage(`{"title":"done","review":{"state":"approved"}}`),
+			"the-brief":         json.RawMessage(`{"title":"v0.5 demo brief","review":{"state":"review"}}`),
+			"goal.v0-5-0":       json.RawMessage(`{"northstar":"v0.5.0","criteria":[{"id":"c1","text":"violet responds fast","status":"waiting-on-you"},{"id":"c2","text":"dash redesign","status":"met"}]}`),
+			"proof-of-redesign": json.RawMessage(`{"title":"redesign PR","relates":[{"goal":"v0-5-0","crit":"c2","kind":"proof"}]}`),
+			"working-notes":     json.RawMessage(`{"body":"scratch"}`),
+			"approved-thing":    json.RawMessage(`{"title":"done","review":{"state":"approved"}}`),
 		},
 	}
 	ws, err := gatherWorkspace(context.Background(), fake)
@@ -78,9 +86,14 @@ func TestGatherWorkspaceClassifies(t *testing.T) {
 	if ws.goals[0].Criteria[0].Status != "waiting-on-you" {
 		t.Fatalf("first criterion status = %q", ws.goals[0].Criteria[0].Status)
 	}
-	// working-notes + approved-thing are not review candidates → other.
-	if ws.otherCount != 2 {
-		t.Fatalf("otherCount = %d, want 2 (working-notes + approved-thing)", ws.otherCount)
+	// proof-of-redesign + working-notes + approved-thing are not review candidates → other.
+	if ws.otherCount != 3 {
+		t.Fatalf("otherCount = %d, want 3 (proof-of-redesign + working-notes + approved-thing)", ws.otherCount)
+	}
+	// The met criterion (c2 "dash redesign") reads met because proof-of-redesign
+	// backs it; without the proof artifact the proof-filter would read it in-progress.
+	if ws.goals[0].Criteria[1].Status != "met" {
+		t.Fatalf("c2 status = %q, want met (a proof artifact relates to it)", ws.goals[0].Criteria[1].Status)
 	}
 
 	// The curated home emits an agenda block first (ranked real calls) then a pinned block.
@@ -112,7 +125,7 @@ func TestGatherWorkspaceClassifies(t *testing.T) {
 func TestRenderForCurationIncludesGoalAndQueue(t *testing.T) {
 	ws := gatheredWorkspace{
 		reviewQueue: []reviewItem{{Name: "brief-x", Revision: 2, State: "review", Title: "Brief X"}},
-		goals:       []goalDigest{{Name: "g1", Headline: "Goal one", Criteria: []criterionDigest{{Label: "c1", Status: "waiting-on-you"}}}},
+		goals:       []goalDigest{{Name: "g1", Headline: "Goal one", Criteria: []criterionDigest{{Text: "c1", Status: "waiting-on-you"}}}},
 		otherCount:  4,
 	}
 	out := ws.renderForCuration()
@@ -129,11 +142,11 @@ func TestHomeRankingByDownstreamBlocking(t *testing.T) {
 	ws := gatheredWorkspace{
 		reviewQueue: []reviewItem{
 			{Name: "item-a", State: "review"}, // no proof relations
-			{Name: "item-b", State: "review", Relates: []relateEntry{
+			{Name: "item-b", State: "review", Relates: []goals.Relate{
 				{Goal: "v1", Crit: "crit1", Kind: "proof"},
 				{Goal: "v1", Crit: "crit2", Kind: "proof"},
 			}},
-			{Name: "item-c", State: "review", Relates: []relateEntry{
+			{Name: "item-c", State: "review", Relates: []goals.Relate{
 				{Goal: "v1", Crit: "crit3", Kind: "proof"},
 			}},
 		},
@@ -178,7 +191,7 @@ func TestHomeAgendaItemHasStructuredWhy(t *testing.T) {
 				Name:  "my-brief",
 				State: "review",
 				Title: "My Brief",
-				Relates: []relateEntry{
+				Relates: []goals.Relate{
 					{Goal: "goal1", Crit: "criterion-A", Kind: "proof"},
 				},
 			},
