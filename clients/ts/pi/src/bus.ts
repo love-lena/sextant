@@ -64,6 +64,12 @@ export class BusConnection {
     return topicSubject(topic);
   }
 
+  // handoffSubject is the bus subject the managed handoff (TASK-178) announces
+  // relinquished / acquired on, so the dash + the dispatcher see ownership move.
+  handoffSubject(): string {
+    return topicSubject(this.cfg.handoffTopic);
+  }
+
   // open connects the client and wires the inbox + watch subscriptions. It is
   // IDEMPOTENT and self-serialising: a held client is closed first; a concurrent
   // open is awaited rather than racing a second dial. Safe to call on every

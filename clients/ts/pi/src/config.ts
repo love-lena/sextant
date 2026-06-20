@@ -27,6 +27,11 @@ const DEFAULT_COALESCE_WINDOW_MS = 1500;
 // the worker's own session JSONL keeps the full detail.
 const DEFAULT_PREVIEW_MAX = 600;
 
+// HANDOFF_TOPIC is where the managed handoff (TASK-178) announces relinquished /
+// acquired, so a dash + the dispatcher see ownership move. A drain REQUEST is a DM
+// to the worker's inbox; only the announcements go here.
+const DEFAULT_HANDOFF_TOPIC = "pi.handoff";
+
 // Config is the resolved extension configuration for one session.
 export interface Config {
   // credsPath is this agent's OWN scoped credential (REQUIRED). "" means the
@@ -57,6 +62,12 @@ export interface Config {
   // set SEXTANT_PI_GATE_HEADLESS=off to run a trusted unattended worker without
   // it (e.g. inside a container/VM, the real isolation boundary).
   gateDestructiveHeadless: boolean;
+  // handoffTopic is the topic the managed close-and-resume handoff (TASK-178)
+  // announces relinquished/acquired on, so the dash + the dispatcher see the
+  // ownership transfer. A drain REQUEST always arrives on the worker's inbox (a
+  // pi.handoff DM); this is only where the worker's ANNOUNCEMENTS go. Defaults to
+  // the shared "pi.handoff" topic.
+  handoffTopic: string;
 }
 
 // resolveConfig reads the environment into a Config, applying the defaults above.
@@ -75,6 +86,7 @@ export function resolveConfig(env: NodeJS.ProcessEnv): Config {
     coalesceWindowMs: nonNegInt(env["SEXTANT_PI_COALESCE_MS"], DEFAULT_COALESCE_WINDOW_MS),
     previewMax: posInt(env["SEXTANT_PI_PREVIEW_MAX"], DEFAULT_PREVIEW_MAX),
     gateDestructiveHeadless: !isOff(env["SEXTANT_PI_GATE_HEADLESS"]),
+    handoffTopic: env["SEXTANT_PI_HANDOFF_TOPIC"] || DEFAULT_HANDOFF_TOPIC,
   };
 }
 

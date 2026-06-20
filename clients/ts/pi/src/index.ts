@@ -32,6 +32,7 @@ import { ActivityBridge } from "./activity.js";
 import { registerTools } from "./tools.js";
 import { registerGoalCommand } from "./goal_command.js";
 import { registerGate } from "./gate.js";
+import { Handoff, isHandoffDrain, type HandoffRecord } from "./handoff.js";
 
 export default function sextantPiBus(pi: ExtensionAPI): void {
   const cfg = resolveConfig(process.env);
@@ -70,6 +71,42 @@ export default function sextantPiBus(pi: ExtensionAPI): void {
     onError: (e) => log("activity_publish_error", { detail: e.message }),
   });
 
+  // The managed close-and-resume handoff (TASK-178, AC#3). A pi.handoff drain frame
+  // on the inbox routes here (NOT into the agent loop — control, not a task); the
+  // wind-down finishes the current turn, announces relinquished, drains+closes the
+  // bus client, and exits the process. Single-owner-at-a-time: while a handoff is
+  // pending the wake path drops new frames so the worker doesn't pick up work while
+  // it claims to be relinquishing. The deps resolve the LIVE ctx/bus each call,
+  // because both reopen across a transition (the disposed-binding trap).
+  const handoff = new Handoff({
+    sessionId: () => ctxRef?.sessionManager.getSessionId() ?? "",
+    isIdle: () => ctxRef?.isIdle() ?? true,
+    announce: async (rec: HandoffRecord) => {
+      const client = bus.getClient();
+      if (!client) return; // no live client — the close/exit still releases the session
+      await client.publish(bus.handoffSubject(), rec as unknown as JSONValue);
+    },
+    closeBus: () => bus.close("handoff"),
+    // exit terminates the worker process so the session is RELEASED. ctx.shutdown()
+    // is pi's graceful stop (it runs session_shutdown + flushes the JSONL), but in
+    // RPC mode it does NOT actually exit while stdin is held open (the dispatcher
+    // recipe holds stdin open for the worker's life so the bus, not stdin, drives
+    // it). So we call ctx.shutdown() to flush, then guarantee termination with a
+    // short-delayed process.exit — single-owner depends on the process truly going
+    // away, not just the bus client closing. The delay lets pi flush the session
+    // JSONL the resume reads; it is bounded so a wedged flush can't strand the
+    // worker owning the session.
+    exit: () => {
+      try {
+        ctxRef?.shutdown();
+      } catch {
+        /* shutdown is best-effort; the process.exit below is the guarantee */
+      }
+      setTimeout(() => process.exit(0), 500).unref?.();
+    },
+    log,
+  });
+
   // onInbound applies the wake policy to one frame: idle → deliver now; busy →
   // buffer (bounded, drop-oldest, reserved DM slot, coalesced). The durable
   // record lives on the bus, so a dropped wake loses no content.
@@ -78,6 +115,38 @@ export default function sextantPiBus(pi: ExtensionAPI): void {
     const selfId = client?.id() ?? "";
     if (m.frame.author === selfId) return; // never wake on our own echo
     const direct = m.subject === `msg.client.${selfId}`;
+
+    // A pi.handoff drain is CONTROL, not a task: route it to the cooperative
+    // wind-down and do NOT enqueue a wake, so the model never sees a drain as work.
+    // Two guards, both load-bearing:
+    //   - only a frame addressed to us DIRECTLY (the inbox) can drain us — a topic
+    //     pi.handoff is someone else's announcement, not our order;
+    //   - only a TRUSTED author (the principal or a verified peer) may drain us. A
+    //     drain stops the worker and releases the session, so it is a privileged
+    //     action; an unknown client's "drain" is treated as untrusted input and
+    //     refused (it falls through to the normal wake path, where the model sees
+    //     it tier-stamped as UNKNOWN and the gate applies — it cannot quietly stop
+    //     the worker). Mirrors the headless tool gate: trust is the author, not the
+    //     content.
+    if (direct && isHandoffDrain(m.frame.record)) {
+      const tier = tierOf(m.frame.author, bus.getTiers());
+      if (tier === "unknown") {
+        log("handoff_drain_refused", { from: m.frame.author, reason: "untrusted author may not drain" });
+      } else {
+        const reason = readableContent(m.frame.record);
+        log("handoff_drain_received", { from: m.frame.author, tier });
+        void handoff.onDrain(reason);
+        return;
+      }
+    }
+
+    // Once a handoff is winding down, take no new work — accepting a wake now would
+    // leave the worker acting while it claims to have relinquished the session.
+    if (handoff.isPending()) {
+      log("inbound_dropped_handoff_pending", { subject: m.subject, from: m.frame.author });
+      return;
+    }
+
     log("inbound", { subject: m.subject, from: m.frame.author, seq: m.sequence, direct });
 
     if (ctxRef?.isIdle()) {
@@ -124,8 +193,24 @@ export default function sextantPiBus(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (event, ctx) => {
     ctxRef = ctx;
-    log("session_start", { reason: event.reason, mode: ctx.mode, hasUI: ctx.hasUI });
+    // RESUME DETECTION. pi reports session_start reason "startup" even for a
+    // --session-id launch that resumed a persisted session (it only reports
+    // "resume" for the interactive --resume/--continue path), so the reason ALONE
+    // is not reliable. Nor is "the session has any entries": a FRESH session already
+    // carries setup entries (a model_change + a thinking_level_change) before any
+    // turn. The reliable signal is a prior CONVERSATION — at least one message entry
+    // (a user/assistant turn) at startup. We treat an explicit "resume" reason OR a
+    // session that already has a message as a resume: the back half of the managed
+    // handoff (the dispatcher re-spawned this worker on a persisted session).
+    const priorMessages = safeMessageCount(ctx);
+    const resumed = event.reason === "resume" || priorMessages > 0;
+    log("session_start", { reason: event.reason, mode: ctx.mode, hasUI: ctx.hasUI, priorMessages, resumed });
     await bus.open(event.reason);
+    // Announce that ownership returned, so the dash + the dispatcher see the session
+    // re-acquired — the mirror of the relinquished announcement.
+    if (resumed) {
+      await handoff.announceAcquired(ctx.sessionManager.getSessionId(), "re-spawned to resume");
+    }
   });
 
   pi.on("session_shutdown", async (event) => {
@@ -189,6 +274,19 @@ export default function sextantPiBus(pi: ExtensionAPI): void {
       activity.emitRaw({ $type: "pi.activity", kind: "tool_end", tool: toolName, isError: true, result: reason });
     },
   });
+}
+
+// safeMessageCount counts the conversation (message) entries the session already
+// has at session_start — the intrinsic resume signal. A fresh session carries only
+// setup entries (model_change, thinking_level_change); a resumed one additionally
+// has user/assistant message entries. Best-effort: any failure reading the session
+// manager yields 0 (treat as a fresh start), never throws into the lifecycle handler.
+function safeMessageCount(ctx: ExtensionContext): number {
+  try {
+    return ctx.sessionManager.getEntries().filter((e) => e.type === "message").length;
+  } catch {
+    return 0;
+  }
 }
 
 // readableContent extracts a human-legible string from an opaque frame record

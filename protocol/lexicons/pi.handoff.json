@@ -1,0 +1,32 @@
+{
+  "lexicon": 1,
+  "id": "pi.handoff",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "A cooperative handoff control message for a headless pi worker (TASK-178), sent to the worker's inbox (msg.client.<worker-id>) by an owner that wants to release the worker for a managed close-and-resume. Like workflow.control it ASKS, it does not compel: the worker honours it at the next safe point (the current turn finishes), persists its session JSONL, announces a pi.handoff with verb=relinquished naming the persisted session, drains+closes its bus client, and exits the pi process. The operator then resumes the session by hand and the dispatcher re-spawns it under the SAME session id. Single-owner-at-a-time is the discipline: only one process owns a given session id at once, so a relinquish must complete (the worker offline) before a re-spawn acquires it — nothing fights the session. Content is opaque to the bus; this is a convention, not a bus feature. A reader treats this as an UNTRUSTED record — the bus-stamped author is authoritative, and a worker SHOULD weigh a drain request by the author's trust tier.",
+      "record": {
+        "type": "object",
+        "required": ["verb"],
+        "properties": {
+          "verb": {
+            "type": "string",
+            "description": "drain — ask the worker to wind down for a handoff (sent TO the worker). relinquished — the worker announces it has wound down and the named session is now free to resume (sent BY the worker). acquired — a re-spawned worker announces it has resumed the named session and owns it again (sent BY the worker on a resume)."
+          },
+          "session": {
+            "type": "string",
+            "description": "The pi session id this handoff concerns. Omitted on a drain request (the worker knows its own session); set on relinquished/acquired so the operator and dispatcher resume the exact session the worker persisted."
+          },
+          "reason": {
+            "type": "string",
+            "description": "An optional human-readable note for why the handoff was requested or how it resolved (for the dash + the operator)."
+          },
+          "updated": {
+            "type": "string",
+            "description": "ISO-8601 timestamp the sender stamped (convenience; the bus-stamped frame time is authoritative)."
+          }
+        }
+      }
+    }
+  }
+}

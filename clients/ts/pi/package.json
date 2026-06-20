@@ -25,8 +25,9 @@
     "build:deps": "npm --prefix ../sdk install && npm --prefix ../sdk run build && npm --prefix ../conventions/goals install && npm --prefix ../conventions/goals run build",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node --test dist/test/backpressure.test.js dist/test/gate.test.js dist/test/activity.test.js dist/test/goal_command.test.js",
-    "driven": "npm run build:deps && npm run build && node dist/test/driven.js"
+    "test": "npm run build && node --test dist/test/backpressure.test.js dist/test/gate.test.js dist/test/activity.test.js dist/test/goal_command.test.js dist/test/handoff.test.js",
+    "driven": "npm run build:deps && npm run build && node dist/test/driven.js",
+    "driven:handoff": "npm run build:deps && npm run build && node dist/test/driven_handoff.js"
   },
   "license": "MIT",
   "dependencies": {

@@ -93,6 +93,48 @@ layered, and none alone is sufficient:
 Trust is the author ULID, never the content — a message that *claims* to be the
 operator is untrusted content from whatever ULID sent it.
 
+## Headless under a dispatcher, with a managed handoff
+
+The primary way a pi worker runs is headless under the reference dispatcher
+([ADR-0033](0033-a-dispatcher-mints-its-own-workers.md)): a `pi` recipe
+(`clients/go/apps/dispatch/recipes/pi.sh`, a sibling of the `claude` recipe)
+launches `pi --mode rpc` with this extension, on a child identity the dispatcher
+**mints with its own authority** — never the operator's credential. The worker
+boots idle and is woken over the bus; it is a crew member that happens to be a pi
+session (TASK-178).
+
+A headless worker also needs a **managed close-and-resume handoff** — to move it
+to another box, resume it by hand, or re-spawn it fresh — without two processes
+fighting one pi session. The discipline is **single-owner-at-a-time**, coordinated
+over the bus with a `pi.handoff` convention (`protocol/lexicons/pi.handoff.json`),
+the same shape as `workflow.control`: it **asks, it does not compel**.
+
+- An owner sends `pi.handoff{verb:"drain"}` to the worker's inbox. Because it is a
+  recognised control record on the inbox, the extension routes it to the wind-down
+  and does **not** inject it as a wake — control is not a task the model sees. A
+  drain is a privileged action (it stops the worker and releases the session), so it
+  is gated by the same trust rule as the tool gate: only the **principal or a
+  verified peer** may drain; an unknown client's drain is refused and falls through
+  to the ordinary, tier-stamped wake path, where it is impotent — trust is the
+  author, never the content.
+- The worker winds down **cooperatively**: it stops taking new wakes, lets the
+  current turn finish, announces `pi.handoff{verb:"relinquished", session:<id>}`
+  on a shared topic (naming the persisted session), drains + closes its bus client
+  so presence drops to offline — the *visible* release — then calls pi's
+  `ctx.shutdown()` to exit. pi has already persisted the session as JSONL.
+- The operator resumes the JSONL by hand; the dispatcher re-spawns the recipe under
+  the **same** pi session id (a stable id derived from the child's bus id, so
+  `pi --session-id` resumes rather than restarts). On resume the extension
+  announces `pi.handoff{verb:"acquired"}`.
+
+Single-owner falls out of the sequence: the relinquish completes — the worker
+process gone, presence offline — *before* any re-spawn acquires the session, so the
+two never overlap. As with a wedged workflow coordinator, force-stopping a wedged
+worker is the OS's job via the dispatcher that launched it; the in-process
+wind-down is bounded and then yields. A resume is detected intrinsically (the
+session already has entries at `session_start`), not from pi's `session_start`
+reason, which reports `"startup"` for a `--session-id` resume.
+
 ## Consequences
 
 A pi session becomes a participant the operator can DM and watch, with the same
