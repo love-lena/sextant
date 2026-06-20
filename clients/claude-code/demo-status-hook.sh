@@ -29,7 +29,7 @@ trap 'kill "$MOCK_PID" "$BUS_PID" 2>/dev/null || true; rm -rf "$D"' EXIT
 
 mkdir -p "$BIN" "$PDATA/attest-identity" "$STORE"
 say "building sextant + sextant-mcp from $REPO"
-(cd "$REPO" && go build -o "$BIN/sextant" ./cmd/sextant && go build -o "$BIN/sextant-mcp" ./cmd/sextant-mcp)
+(cd "$REPO" && go build -o "$BIN/sextant" ./clients/go/apps/sextant && go build -o "$BIN/sextant-mcp" ./clients/go/apps/mcp)
 
 say "starting a mock Anthropic endpoint (no real API call)"
 cat > "$D/mock.py" <<'PY'
