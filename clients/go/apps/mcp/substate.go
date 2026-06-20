@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
+
+	"github.com/love-lena/sextant/clients/go/apps/internal/seqcursor"
 )
 
 // substate is the durable per-session MCP state that lets subscriptions and the
@@ -44,25 +45,12 @@ type subjectCursor struct {
 	Deliver string `json:"deliver,omitempty"`
 }
 
-// substateFile keys on the session id, sanitized for the filesystem.
+// substateFile keys on the session id, sanitized for the filesystem (shared with
+// the attest cursor via seqcursor.Path). loadSubstate only reaches it with a
+// non-empty session id (it short-circuits to in-memory otherwise), so the
+// empty-key in-memory case never fires here.
 func substateFile(dataDir, sessionID string) string {
-	name := sessionID
-	if name == "" {
-		name = "no-session"
-	}
-	return filepath.Join(dataDir, "mcp-substate", sanitizeSession(name)+".json")
-}
-
-// sanitizeSession keeps a session id to a safe flat filename.
-func sanitizeSession(s string) string {
-	return strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
-			return r
-		default:
-			return '_'
-		}
-	}, s)
+	return seqcursor.Path(dataDir, "mcp-substate", sessionID)
 }
 
 // loadSubstate reads the state for sessionID under dataDir. A missing file (first

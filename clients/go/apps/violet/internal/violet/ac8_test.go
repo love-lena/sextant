@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -508,27 +509,31 @@ func TestAC8UnifiedSurface(t *testing.T) {
 
 // TestAC8AckStoreSubjectScoping (criterion 1): the ackStore only restores state
 // for the authorised DM subject. Any other subject in a corrupt/stale file must
-// be silently dropped.
+// be silently dropped on load, so a replay can never catch up a foreign subject.
 func TestAC8AckStoreSubjectScoping(t *testing.T) {
 	ownDM := dmSubject("01VIOLET", "01OPERATOR")
 	foreignDM := dmSubject("01OTHER", "01OPERATOR")
 
-	// Manually build an ackStore that has TWO subjects in its in-memory map
-	// (simulates a corrupt file that slipped in a foreign subject).
-	a := &ackStore{
-		subject: ownDM,
-		next: map[string]uint64{
-			ownDM:     10, // legitimate entry
-			foreignDM: 99, // must be ignored
-		},
+	// Seed an on-disk file that slipped in a foreign subject alongside the
+	// legitimate one (a corrupt/tampered store). newAckStore must drop the
+	// foreign subject on load (criterion 1).
+	dir := t.TempDir()
+	seed := `{"next":{"` + ownDM + `":10,"` + foreignDM + `":99}}`
+	if err := os.WriteFile(filepath.Join(dir, "violet-ack.json"), []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
 	}
 
-	// readFrom() must only return the value for ownDM.
+	a, err := newAckStore(dir, ownDM)
+	if err != nil {
+		t.Fatalf("newAckStore: %v", err)
+	}
+
+	// readFrom() returns the own-DM watermark; the foreign subject is gone.
 	if got := a.readFrom(); got != 10 {
 		t.Errorf("readFrom() = %d, want 10 (own DM subject only)", got)
 	}
 
-	// alreadyAnswered should use ownDM's watermark (10), not foreignDM's.
+	// alreadyAnswered uses ownDM's watermark (10).
 	if a.alreadyAnswered(9) != true { // seq 9 < watermark 10 → answered
 		t.Error("alreadyAnswered(9) = false, want true (below own watermark)")
 	}
@@ -536,15 +541,19 @@ func TestAC8AckStoreSubjectScoping(t *testing.T) {
 		t.Error("alreadyAnswered(10) = true, want false (at watermark, not yet answered)")
 	}
 
-	// Advancing ownDM cursor must not touch foreignDM.
-	_ = a.advance(15)
-	if a.next[foreignDM] != 99 {
-		t.Errorf("advance changed foreignDM cursor: got %d, want 99", a.next[foreignDM])
+	// Advancing the own-DM cursor and persisting must not resurrect the foreign
+	// subject: a fresh load over the same dir holds only the own-DM watermark.
+	if err := a.advance(15); err != nil {
+		t.Fatalf("advance: %v", err)
 	}
-	if a.next[ownDM] != 15 {
-		t.Errorf("advance did not update ownDM cursor: got %d, want 15", a.next[ownDM])
+	again, err := newAckStore(dir, foreignDM) // load AS the foreign subject…
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Logf("AC8 ackStore subject scoping: own DM watermark advanced to 15; foreign DM cursor untouched")
+	if got := again.readFrom(); got != 0 {
+		t.Errorf("foreign subject survived to disk: readFrom() = %d, want 0 (dropped on first load)", got)
+	}
+	t.Logf("AC8 ackStore subject scoping: own DM watermark advanced to 15; foreign DM never persisted")
 }
 
 // TestAC8DefaultStateDirIsPersistent (gate point 1): the production default

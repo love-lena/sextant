@@ -89,18 +89,31 @@ func (c *Client) Publish(ctx context.Context, subject string, record json.RawMes
 	return err
 }
 
+// PublishResult is the bus-stamped outcome of a PublishMsg call: the bus-minted
+// frame id and the stream sequence at which the frame landed. It is the
+// SDK-owned value the public boundary returns — callers name this, never the
+// internal wire type (TASK-182).
+type PublishResult struct {
+	// ID is the bus-minted frame ULID. Unforgeable — the bus stamps it. Callers
+	// use it to suppress their own echo or to correlate an ack.
+	ID string
+	// Seq is the durable stream sequence at which the frame landed, for callers
+	// that need the stream position.
+	Seq uint64
+}
+
 // PublishMsg is Publish with the bus-stamped frame id and sequence returned.
 // Callers that need to suppress self-echo (e.g. the MCP server) use this to
 // record the published id before it can arrive back on a subscription.
-func (c *Client) PublishMsg(ctx context.Context, subject string, record json.RawMessage) (wireapi.PublishOutput, error) {
+func (c *Client) PublishMsg(ctx context.Context, subject string, record json.RawMessage) (PublishResult, error) {
 	if !strings.HasPrefix(subject, sx.MessagePrefix) {
-		return wireapi.PublishOutput{}, fmt.Errorf("sextant: publish subject %q is not in the messages space (%s*)", subject, sx.MessagePrefix)
+		return PublishResult{}, fmt.Errorf("sextant: publish subject %q is not in the messages space (%s*)", subject, sx.MessagePrefix)
 	}
 	var out wireapi.PublishOutput
 	if err := c.call(ctx, wireapi.OpMessagePublish, wireapi.PublishInput{Subject: subject, Record: record}, &out); err != nil {
-		return wireapi.PublishOutput{}, err
+		return PublishResult{}, err
 	}
-	return out, nil
+	return PublishResult{ID: out.ID, Seq: out.Seq}, nil
 }
 
 // FetchMessages pulls a batch of retained messages on subject (an exact subject
