@@ -1,10 +1,10 @@
 ---
 id: TASK-180
 title: Dash as a direct NATS-WebSocket co-equal TS client
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-19 21:11'
-updated_date: '2026-06-19 21:31'
+updated_date: '2026-06-20 02:54'
 labels:
   - feature
   - dash
