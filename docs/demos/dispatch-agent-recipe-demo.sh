@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Default capable agent recipe + Haiku auto-naming — self-validating demo.
 #
-# Proves the new slice on the REAL spawn path (cmd/sextant-dispatch + the default
-# cmd/sextant-dispatch/recipes/agent.sh harness), deterministically and token-free:
+# Proves the new slice on the REAL spawn path (clients/go/apps/dispatch + the default
+# clients/go/apps/dispatch/recipes/agent.sh harness), deterministically and token-free:
 #
 #   1. NAMING: a spawn.request with NO nickname makes the dispatcher call Haiku to
 #      pick a unique, evocative name and mint the child under it. We point the
@@ -40,8 +40,8 @@ no(){ echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
 rm -rf "$P"; mkdir -p "$S" "$P/bin"
 echo "== build binaries =="
-( cd "$ROOT" && go build -o "$SX" ./cmd/sextant && go build -o "$SXMCP" ./cmd/sextant-mcp \
-  && go build -o "$SXDISP" ./cmd/sextant-dispatch ) || { echo "build failed"; exit 2; }
+( cd "$ROOT" && go build -o "$SX" ./clients/go/apps/sextant && go build -o "$SXMCP" ./clients/go/apps/mcp \
+  && go build -o "$SXDISP" ./clients/go/apps/dispatch ) || { echo "build failed"; exit 2; }
 
 # ---- Mock Anthropic endpoint for the dispatcher's Haiku naming call -----------
 # Returns "kestrel" first, then "atlas" — so we can prove a collision re-pick:
@@ -111,7 +111,7 @@ echo "== start the dispatcher with the DEFAULT recipe + Haiku naming (mock endpo
 # --harness recipes/agent.sh: the REAL default recipe, unmodified.
 # --api-base-url: point the Haiku naming call at the mock (token-free).
 "$SXDISP" --creds "$P/disp.creds" --on-behalf --store "$S" --subject msg.topic.spawn \
-  --harness "$ROOT/cmd/sextant-dispatch/recipes/agent.sh" \
+  --harness "$ROOT/clients/go/apps/dispatch/recipes/agent.sh" \
   --api-key "k-mock" --api-base-url "http://127.0.0.1:4499" \
   --deadline 60s >"$P/disp.log" 2>&1 & DISP=$!
 sleep 1

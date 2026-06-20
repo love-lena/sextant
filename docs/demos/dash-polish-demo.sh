@@ -31,7 +31,7 @@ trap 'kill "$BUS_PID" "$DASH_PID" 2>/dev/null || true; command -v agent-browser 
 export SEXTANT_HOME="$D/home"; STORE="$D/store"; mkdir -p "$SEXTANT_HOME" "$STORE"
 BIN="$D/bin/sextant"; mkdir -p "$D/bin"
 say "building sextant from $REPO (embeds the committed, precompiled UI)"
-(cd "$REPO" && go build -o "$BIN" ./cmd/sextant)
+(cd "$REPO" && go build -o "$BIN" ./clients/go/apps/sextant)
 
 say "starting a throwaway bus"
 "$BIN" up --store "$STORE" --port 0 >"$D/bus.log" 2>&1 & BUS_PID=$!

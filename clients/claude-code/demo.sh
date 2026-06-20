@@ -31,7 +31,7 @@ say() { printf '\033[1;36m[demo]\033[0m %s\n' "$*"; }
 
 say "building sextant + sextant-mcp from $REPO"
 mkdir -p "$BIN" "$PROJ/.claude"
-(cd "$REPO" && go build -o "$BIN/sextant" ./cmd/sextant && go build -o "$BIN/sextant-mcp" ./cmd/sextant-mcp)
+(cd "$REPO" && go build -o "$BIN/sextant" ./clients/go/apps/sextant && go build -o "$BIN/sextant-mcp" ./clients/go/apps/mcp)
 
 say "starting a throwaway bus"
 "$BIN/sextant" up --store "$STORE" --port 0 >"$D/bus.log" 2>&1 &

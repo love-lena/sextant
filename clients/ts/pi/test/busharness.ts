@@ -12,6 +12,29 @@ import { fileURLToPath } from "node:url";
 
 const BUS_READY_TIMEOUT_MS = 60_000;
 
+// freeLoopbackPort grabs a free 127.0.0.1 port by binding :0 in a short child and
+// reading it back. A child keeps this synchronous (the harness is sync end to end)
+// without depending on the net module's async 'listening' event. There is an
+// unavoidable race between releasing the port and the bus rebinding it; on
+// loopback in these short-lived demos it is reliable, and the bus fails loud if
+// the port is already taken (it never silently rebinds random when an addr is
+// pinned), so a collision surfaces rather than stranding the dash.
+function freeLoopbackPort(): number {
+  const r = spawnSync(
+    process.execPath,
+    [
+      "-e",
+      "const s=require('net').createServer();s.listen(0,'127.0.0.1',()=>{process.stdout.write(String(s.address().port));s.close();});",
+    ],
+    { encoding: "utf8" },
+  );
+  const port = Number.parseInt((r.stdout ?? "").trim(), 10);
+  if (!Number.isInteger(port) || port <= 0) {
+    throw new Error(`could not allocate a free loopback port:\n${r.stdout}\n${r.stderr}`);
+  }
+  return port;
+}
+
 // repoRoot walks up to the single Go module root (go.mod + protocol/conformance).
 export function repoRoot(): string {
   const override = process.env["SEXTANT_REPO_ROOT"];
@@ -35,6 +58,9 @@ export function goAvailable(): boolean {
 
 export interface Bus {
   url: string;
+  // wsURL is the browser/dash WebSocket URL (ws://127.0.0.1:<port>), set only when
+  // startBus was called with { wsListen: true }; otherwise the empty string.
+  wsURL: string;
   store: string;
   bin: string;
   stop(): void;
@@ -72,12 +98,24 @@ function ensureBinary(store: string): string {
   return bin;
 }
 
-export function startBus(): Bus {
+export interface StartBusOptions {
+  // wsListen opens a loopback WebSocket listener on a free port so a browser dash
+  // (ADR-0044) can connect to this throwaway bus as a co-equal TS client. The
+  // resolved ws URL is returned as Bus.wsURL. Default off (the regression driven
+  // run does not need it), so existing callers are unaffected.
+  wsListen?: boolean;
+}
+
+export function startBus(opts: StartBusOptions = {}): Bus {
   const store = mkdtempSync(join(tmpdir(), "sextant-pi-spike-"));
   const bin = ensureBinary(store);
 
+  const wsURL = opts.wsListen ? `ws://127.0.0.1:${freeLoopbackPort()}` : "";
+  const upArgs = ["up", "--store", store, "--port", "0"];
+  if (wsURL) upArgs.push("--ws-listen", wsURL.replace(/^ws:\/\//, ""));
+
   let out = "";
-  const proc: ChildProcess = spawn(bin, ["up", "--store", store, "--port", "0"], {
+  const proc: ChildProcess = spawn(bin, upArgs, {
     cwd: repoRoot(),
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -159,5 +197,5 @@ export function startBus(): Bus {
     return { credsPath: credsMatch[1]!, id: idMatch[1]!, claimedPrincipal: /this seat is now the bus principal/.test(r.stdout) };
   };
 
-  return { url, store, bin, stop, mint, mintSelf, run };
+  return { url, wsURL, store, bin, stop, mint, mintSelf, run };
 }

@@ -22,7 +22,7 @@ need claude; need codex
 
 rm -rf "$P"; mkdir -p "$S"
 echo "== build binaries =="
-( cd "$ROOT" && go build -o "$SX" ./cmd/sextant && go build -o "$SXMCP" ./cmd/sextant-mcp && go build -o "$SXPOC" ./cmd/spawn-poc ) || { echo "build failed"; exit 2; }
+( cd "$ROOT" && go build -o "$SX" ./clients/go/apps/sextant && go build -o "$SXMCP" ./clients/go/apps/mcp && go build -o "$SXPOC" ./clients/go/apps/spawn-poc ) || { echo "build failed"; exit 2; }
 
 echo "== throwaway bus on :$PORT =="
 "$SX" up --store "$S" --port "$PORT" >"$P/up.log" 2>&1 & BUS=$!
@@ -64,7 +64,7 @@ codex exec "You are a sextant bus worker. Using only the sextant MCP tools, publ
 reads msg.topic.demo | grep -q "hello codex" && ok "codex exec joined + published (AC#2)" || no "codex hello not on bus"
 
 echo "== AC#3a: wake-loop supervisor MECHANISM (its own SDK client; no model tokens) =="
-# The supervisor (cmd/spawn-poc) connects as the dispatcher, watches a client's DM
+# The supervisor (clients/go/apps/spawn-poc) connects as the dispatcher, watches a client's DM
 # subject, and re-invokes --on-wake on each inbound message (from anyone but the
 # agent/itself), threading the message text through $SX_WAKE_TEXT. Here --on-wake
 # just publishes an ack via the CLI, so this proves Connect + DM-watch + re-invoke
