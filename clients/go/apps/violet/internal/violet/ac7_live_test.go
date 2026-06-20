@@ -53,15 +53,19 @@ func TestAC7_DashAndVioletRenderTheSameGoal(t *testing.T) {
 	violetClient := connect(t, ctx, b.ClientURL(), violetCreds)
 
 	// --- seed a goal on the bus (canonical lexicon shape) plus a proof artifact ---
-	// The dash WRITE path is exercised below by approving the proof, which flips the
-	// proof's referenced criterion to met (closeLoop → goals.SetCriterion). We start
-	// c1 in-progress so the approve is a real transition; c2 stays waiting-on-you so
-	// both a met and a non-met criterion render.
+	// Three criteria exercise the proof-filter end to end:
+	//   c1 — starts in-progress; the dash WRITE path flips it to met (with proof),
+	//   c2 — waiting-on-you, no proof,
+	//   c3 — stored "met" but with NO proof relation: THE DIVERGENCE CASE. The raw
+	//        record says met; the proof-filter must read it as in-progress. A render
+	//        that counts raw status (the old dash JS) would show c3 "Met" while
+	//        violet shows "in-progress" — the exact drift this ticket kills.
 	const goalID = "v0-5-0"
 	goalRecord := `{"northstar":"Ship the goals convention",` +
 		`"criteria":[` +
 		`{"id":"c1","text":"both halves consume conv/goals","status":"in-progress","owner":"sirius"},` +
-		`{"id":"c2","text":"the field-drift bug is gone","status":"waiting-on-you"}]}`
+		`{"id":"c2","text":"the field-drift bug is gone","status":"waiting-on-you"},` +
+		`{"id":"c3","text":"claimed done with no proof","status":"met"}]}`
 	if _, err := dashClient.CreateArtifact(ctx, goals.ArtifactName(goalID), wire.Lexicon(goalRecord)); err != nil {
 		t.Fatalf("create goal: %v", err)
 	}
@@ -84,10 +88,11 @@ func TestAC7_DashAndVioletRenderTheSameGoal(t *testing.T) {
 		t.Fatalf("approve proof = %d", resp.StatusCode)
 	}
 
-	// Read the goal back the way the dash UI does: GET /api/artifacts/goal.<id>. The
-	// dash JS (goals.jsx) renders northstar + criteria[].{text,status} straight off
-	// this record, so the served record IS the dash's render data.
-	dashGoal := getGoal(t, ts.URL+"/api/artifacts/"+goals.ArtifactName(goalID))
+	// Read the goal the way the dash UI actually does: GET /api/goals — the SERVED
+	// projection, with the proof-filter applied SERVER-SIDE (conv/goals). This is
+	// the real render path the JS consumes; the JS does not re-derive status. We
+	// assert on what the backend serves, not on a Go re-derivation of it.
+	dashGoal := getServedGoal(t, ts.URL+"/api/goals", goals.ArtifactName(goalID))
 
 	// --- VIOLET: its real read half over the same bus -------------------------
 	ws, err := gatherWorkspace(ctx, NewSDKAdapter(violetClient))
@@ -107,7 +112,7 @@ func TestAC7_DashAndVioletRenderTheSameGoal(t *testing.T) {
 
 	// --- the proof: dash and violet render the SAME goal ----------------------
 	// North-star: the dash serves it as `northstar`; violet's headline IS the
-	// north-star (no `title` fallback). They must match.
+	// north-star (no `title` fallback). They must match the seeded value.
 	if dashGoal.Northstar != violetGoal.Headline {
 		t.Errorf("north-star disagrees: dash %q vs violet %q", dashGoal.Northstar, violetGoal.Headline)
 	}
@@ -115,36 +120,44 @@ func TestAC7_DashAndVioletRenderTheSameGoal(t *testing.T) {
 		t.Errorf("north-star = %q, want the seeded value", dashGoal.Northstar)
 	}
 
-	// Criteria: same count, same text and same effective status per criterion. The
-	// dash serves stored statuses; violet applies the proof-filter (a met criterion
-	// reads met only with proof). c1 is met WITH the-proof backing it, so both read
-	// met; c2 reads waiting-on-you in both.
-	if len(dashGoal.Criteria) != len(violetGoal.Criteria) {
-		t.Fatalf("criteria count: dash %d vs violet %d", len(dashGoal.Criteria), len(violetGoal.Criteria))
+	// Criteria: same count, same text, and same status per criterion — compared as
+	// CONCRETE expected strings (no goals.EffectiveStatus(...)==goals.EffectiveStatus(...)
+	// circularity). The dash status is the SERVED value; violet's is its digest.
+	if len(dashGoal.Criteria) != 3 || len(violetGoal.Criteria) != 3 {
+		t.Fatalf("criteria count: dash %d, violet %d, want 3 each", len(dashGoal.Criteria), len(violetGoal.Criteria))
 	}
-	provedByDash := goals.ProvedCriteria(goalID, []json.RawMessage{json.RawMessage(proofRecord)})
-	for i, dc := range dashGoal.Criteria {
-		vc := violetGoal.Criteria[i]
-		if dc.Text != vc.Text {
-			t.Errorf("criterion %d text disagrees: dash %q vs violet %q", i, dc.Text, vc.Text)
+	wantStatus := []string{goals.StatusMet, goals.StatusWaitingOnYou, goals.StatusInProgress} // c3 met→in-progress (no proof)
+	wantText := []string{"both halves consume conv/goals", "the field-drift bug is gone", "claimed done with no proof"}
+	for i := range dashGoal.Criteria {
+		dc, vc := dashGoal.Criteria[i], violetGoal.Criteria[i]
+		if dc.Text != wantText[i] || vc.Text != wantText[i] {
+			t.Errorf("criterion %d text: dash %q, violet %q, want %q", i, dc.Text, vc.Text, wantText[i])
 		}
-		// The dash JS derives the displayed status through the same proof rule; here
-		// we apply that rule to the dash's served record to compare like with like.
-		dashEffective := goals.EffectiveStatus(dc, provedByDash)
-		if dashEffective != vc.Status {
-			t.Errorf("criterion %d status disagrees: dash %q vs violet %q", i, dashEffective, vc.Status)
+		if dc.Status != wantStatus[i] || vc.Status != wantStatus[i] {
+			t.Errorf("criterion %d status: dash served %q, violet %q, want %q", i, dc.Status, vc.Status, wantStatus[i])
 		}
 	}
-	if dashGoal.Criteria[0].Status != goals.StatusMet {
-		t.Errorf("dash served c1 status = %q, want met (the dash write path flipped it)", dashGoal.Criteria[0].Status)
+
+	// THE DIVERGENCE GUARD: c3 is stored "met" with NO proof. The dash SERVES it as
+	// the concrete string "in-progress" (not "met"), and does NOT count it in the
+	// met rollup — identical to violet. A raw-status render would fail right here.
+	if got := dashGoal.Criteria[2].Status; got != "in-progress" {
+		t.Errorf("c3 (unproved met) dash served status = %q, want \"in-progress\" (proof-filtered server-side)", got)
 	}
-	if violetGoal.Criteria[0].Status != goals.StatusMet {
-		t.Errorf("violet read c1 status = %q, want met (proved by the-proof)", violetGoal.Criteria[0].Status)
+	if got := violetGoal.Criteria[2].Status; got != "in-progress" {
+		t.Errorf("c3 (unproved met) violet status = %q, want \"in-progress\"", got)
+	}
+	if dashGoal.Rollup.Met != 1 {
+		t.Errorf("dash served rollup Met = %d, want 1 (c1 proved; c3's unproved met NOT counted)", dashGoal.Rollup.Met)
+	}
+	if dashGoal.Rollup.Total != 3 {
+		t.Errorf("dash served rollup Total = %d, want 3", dashGoal.Rollup.Total)
 	}
 
 	// Evidence for the AC#7 record: the two renders, side by side.
-	t.Logf("AC#7 dash Goals render:   northstar=%q criteria=%s", dashGoal.Northstar, criteriaLine(dashGoal.Criteria))
-	t.Logf("AC#7 violet Home render:  northstar=%q criteria=%s", violetGoal.Headline, violetCriteriaLine(violetGoal.Criteria))
+	t.Logf("AC#7 dash Goals render (served):  northstar=%q rollup=%d/%d criteria=%s",
+		dashGoal.Northstar, dashGoal.Rollup.Met, dashGoal.Rollup.Total, viewCriteriaLine(dashGoal.Criteria))
+	t.Logf("AC#7 violet Home render:          northstar=%q criteria=%s", violetGoal.Headline, violetCriteriaLine(violetGoal.Criteria))
 	t.Logf("AC#7 violet curated Home text:\n%s", ws.renderForCuration())
 }
 
@@ -175,10 +188,12 @@ func post(t *testing.T, url, body string) *http.Response {
 	return resp
 }
 
-// getGoal reads a goal artifact through the dash API and parses its record the way
-// the dash UI renders it — into the canonical Goal type. The dash serves the raw
-// record under {name, record, revision}.
-func getGoal(t *testing.T, url string) goals.Goal {
+// getServedGoal reads the dash's GOALS PROJECTION (GET /api/goals) — the real
+// render path the dash JS consumes — and returns the named goal's served view,
+// with the proof-filter ALREADY APPLIED by the backend. The test asserts on these
+// served values directly, so it catches a backend that failed to filter (rather
+// than re-deriving the filter in Go and comparing it to itself).
+func getServedGoal(t *testing.T, url, name string) goals.GoalView {
 	t.Helper()
 	req, _ := http.NewRequest(http.MethodGet, url, nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -190,20 +205,20 @@ func getGoal(t *testing.T, url string) goals.Goal {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET %s = %d", url, resp.StatusCode)
 	}
-	var got struct {
-		Record json.RawMessage `json:"record"`
+	var views []goals.GoalView
+	if err := json.NewDecoder(resp.Body).Decode(&views); err != nil {
+		t.Fatalf("decode goals projection: %v", err)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
-		t.Fatalf("decode goal: %v", err)
+	for _, v := range views {
+		if v.Name == name {
+			return v
+		}
 	}
-	g, ok := goals.ParseGoal(got.Record)
-	if !ok {
-		t.Fatalf("dash served a non-goal record: %s", got.Record)
-	}
-	return g
+	t.Fatalf("dash projection did not include %s; got %+v", name, views)
+	return goals.GoalView{}
 }
 
-func criteriaLine(cs []goals.Criterion) string {
+func viewCriteriaLine(cs []goals.CriterionView) string {
 	var b strings.Builder
 	for _, c := range cs {
 		b.WriteString("[" + c.Status + "] " + c.Text + "  ")

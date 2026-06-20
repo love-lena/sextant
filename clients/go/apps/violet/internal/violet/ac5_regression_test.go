@@ -1,146 +1,113 @@
+//go:build e2e
+
 package violet
 
 import (
-	"context"
-	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/love-lena/sextant/bus"
+	"github.com/love-lena/sextant/clients/go/apps/internal/dashapi"
 	"github.com/love-lena/sextant/clients/go/conventions/goals"
+	"github.com/love-lena/sextant/protocol/wire"
 )
 
-// TestAC5_DashWriteVioletReadAgree is the TASK-173 regression test (AC#5): the
-// dash WRITE path sets a goal criterion, and violet's READER sees the same
-// criterion's text and status — with NO field-name fallback. It is the proof that
-// the label/state field-drift bug is fixed at the root: both halves now consume
-// conv/goals' one Goal type, so they cannot disagree about a field name. Before
-// the fix, violet read criteria off `label`/`state` and the headline off `title`,
-// while the dash wrote `text`/`status`/`northstar` — the fallback masked the drift.
+// TestAC5_DashWriteVioletReadAgree is the TASK-173 regression (AC#5), driven on a
+// REAL hermetic bus through the dash's REAL write entrypoint — not an in-memory
+// double. It is the focused proof of the consolidation: the dash write path sets a
+// goal criterion, and violet's reader sees the SAME criterion's text and status,
+// with NO field-name fallback.
 //
-// The dash write path is goals.SetCriterion (the convention's single write verb,
-// which the dash's approve→met loop drives); the violet read path is
-// gatherWorkspace → digestGoal. Both run against one in-memory store, so what the
-// dash writes is exactly what violet reads.
+// "The dash write path" here is the actual review endpoint: POST
+// /api/artifacts/{name}/review {state:"approved"} on a proof artifact runs the
+// dash's closeLoop, which drives goals.SetCriterion through the goalsOps adapter
+// to flip the referenced criterion to met (CAS the goal.<id> artifact on the real
+// bus + announce it). "violet's reader" is the production gatherWorkspace over the
+// same bus. Both consume conv/goals' one Goal type, so a field-name disagreement
+// (the label/state drift bug) is structurally impossible — this test would catch a
+// regression of it.
 func TestAC5_DashWriteVioletReadAgree(t *testing.T) {
-	store := newGoalStore()
-	// A goal on the bus: a north-star plus two criteria, the canonical lexicon
-	// shape. (northstar/text/status — never title/label/state.)
-	store.put("goal.v0-5-0", `{"northstar":"Ship the goals convention","criteria":[`+
-		`{"id":"c1","text":"both halves consume conv/goals","status":"in-progress","owner":"sirius"},`+
-		`{"id":"c2","text":"the field-drift bug is gone","status":"not-started"}]}`)
+	ctx := t.Context()
 
-	// THE DASH WRITE PATH: set criterion c1 to waiting-on-you via goals.SetCriterion.
-	changed, err := goals.SetCriterion(context.Background(), store, goals.SetCriterionInput{
-		GoalID:      "v0-5-0",
-		CriterionID: "c1",
-		Status:      goals.StatusWaitingOnYou,
-		Headline:    "needs your sign-off",
-	}, "2026-06-19T00:00:00Z")
+	b, err := bus.Start(ctx, bus.Config{StoreDir: t.TempDir()})
 	if err != nil {
-		t.Fatalf("dash write (SetCriterion): %v", err)
+		t.Fatalf("bus.Start: %v", err)
 	}
-	if !changed {
-		t.Fatal("SetCriterion reported no change")
-	}
+	t.Cleanup(b.Shutdown)
 
-	// THE VIOLET READ PATH: gather the workspace and find the goal's digest.
-	ws, err := gatherWorkspace(context.Background(), readerOf(store))
+	dashCreds, _, err := b.MintClient(ctx, "dash", "human")
 	if err != nil {
-		t.Fatalf("violet read (gatherWorkspace): %v", err)
+		t.Fatalf("MintClient(dash): %v", err)
 	}
-	if len(ws.goals) != 1 {
-		t.Fatalf("violet read %d goals, want 1", len(ws.goals))
+	violetCreds, _, err := b.MintClient(ctx, "violet", "agent")
+	if err != nil {
+		t.Fatalf("MintClient(violet): %v", err)
 	}
-	g := ws.goals[0]
+	dashClient := connect(t, ctx, b.ClientURL(), dashCreds)
+	violetClient := connect(t, ctx, b.ClientURL(), violetCreds)
 
-	// The headline is the north-star (NOT a title fallback — there is no title).
-	if g.Headline != "Ship the goals convention" {
-		t.Errorf("violet headline = %q, want the north-star (no title fallback)", g.Headline)
+	// A goal with one in-progress criterion, plus a proof artifact relating to it.
+	const goalID = "g1"
+	const critText = "both halves consume conv/goals"
+	goalRecord := `{"northstar":"Ship the goals convention","criteria":[` +
+		`{"id":"c1","text":"` + critText + `","status":"in-progress","owner":"sirius"}]}`
+	if _, err := dashClient.CreateArtifact(ctx, goals.ArtifactName(goalID), wire.Lexicon(goalRecord)); err != nil {
+		t.Fatalf("create goal: %v", err)
 	}
-	if len(g.Criteria) != 2 {
-		t.Fatalf("violet read %d criteria, want 2", len(g.Criteria))
+	proofRecord := `{"$type":"document","title":"proof PR",` +
+		`"relates":[{"goal":"` + goalID + `","crit":"c1","kind":"proof"}],"review":{"state":"review"}}`
+	if _, err := dashClient.CreateArtifact(ctx, "the-proof", wire.Lexicon(proofRecord)); err != nil {
+		t.Fatalf("create proof: %v", err)
 	}
 
-	// The criterion the dash wrote: violet sees the SAME text and status. Read the
-	// canonical record back so the assertion is "what was written == what was read"
-	// on the exact lexicon fields, with no fallback in between.
-	wrote, ok := goals.ParseGoal(store.get("goal.v0-5-0"))
-	if !ok {
-		t.Fatal("stored goal is not parseable")
+	// THE DASH WRITE PATH: approve the proof → closeLoop → goals.SetCriterion flips
+	// c1 to met on the real bus.
+	dashSrv := dashapi.New(dashapi.Config{Bus: dashClient, Token: "tok"})
+	ts := httptest.NewServer(dashSrv)
+	t.Cleanup(ts.Close)
+	if resp := post(t, ts.URL+"/api/artifacts/the-proof/review", `{"state":"approved"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("approve = %d", resp.StatusCode)
 	}
-	wroteC1 := wrote.Criteria[0]
-	readC1 := g.Criteria[0]
-	if readC1.Text != wroteC1.Text {
-		t.Errorf("text disagrees: dash wrote %q, violet read %q", wroteC1.Text, readC1.Text)
+
+	// THE VIOLET READ PATH over the same bus.
+	ws, err := gatherWorkspace(ctx, NewSDKAdapter(violetClient))
+	if err != nil {
+		t.Fatalf("violet gatherWorkspace: %v", err)
 	}
-	if readC1.Status != wroteC1.Status {
-		t.Errorf("status disagrees: dash wrote %q, violet read %q", wroteC1.Status, readC1.Status)
+	var g *goalDigest
+	for i := range ws.goals {
+		if ws.goals[i].Name == goals.ArtifactName(goalID) {
+			g = &ws.goals[i]
+			break
+		}
 	}
-	if readC1.Text != "both halves consume conv/goals" || readC1.Status != goals.StatusWaitingOnYou {
-		t.Errorf("violet read c1 = {%q, %q}, want {the lexicon text, waiting-on-you}", readC1.Text, readC1.Status)
+	if g == nil || len(g.Criteria) != 1 {
+		t.Fatalf("violet did not surface the goal with 1 criterion; goals=%+v", ws.goals)
+	}
+
+	// What the dash WROTE, read straight off the goal.<id> artifact's canonical
+	// fields (no fallback) — the source of truth the violet digest must match.
+	art, err := dashClient.GetArtifact(ctx, goals.ArtifactName(goalID))
+	if err != nil {
+		t.Fatalf("get goal artifact: %v", err)
+	}
+	wrote, ok := goals.ParseGoal(wire.Lexicon(art.Record))
+	if !ok || len(wrote.Criteria) != 1 {
+		t.Fatalf("stored goal not parseable as a 1-criterion goal: %s", art.Record)
+	}
+
+	// The proof: violet's reader sees identical text+status, on the canonical lexicon
+	// fields (text/status), with no label/state fallback. The dash flipped c1 to met
+	// and a proof backs it, so violet reads met too.
+	read := g.Criteria[0]
+	if read.Text != wrote.Criteria[0].Text || read.Text != critText {
+		t.Errorf("text: violet read %q, dash wrote %q, want %q", read.Text, wrote.Criteria[0].Text, critText)
+	}
+	if wrote.Criteria[0].Status != goals.StatusMet {
+		t.Errorf("dash wrote c1 status = %q, want met", wrote.Criteria[0].Status)
+	}
+	if read.Status != goals.StatusMet {
+		t.Errorf("violet read c1 status = %q, want met (proved) — identical to the dash write", read.Status)
 	}
 }
-
-// goalStore is a tiny in-memory artifact store. It satisfies the dash's write
-// surface (goals.Ops) directly; readerOf wraps it as violet's read surface
-// (artifactReader) — two surfaces over ONE store, so a record written by the dash
-// path is read by the violet path. (One type can't satisfy both directly: both
-// name a GetArtifact method but with different return shapes.) The publish side is
-// a no-op; violet reads the artifact, not the goal.update stream.
-type goalStore struct {
-	records map[string]json.RawMessage
-	revs    map[string]uint64
-}
-
-func newGoalStore() *goalStore {
-	return &goalStore{records: map[string]json.RawMessage{}, revs: map[string]uint64{}}
-}
-
-func (s *goalStore) put(name, record string) {
-	s.records[name] = json.RawMessage(record)
-	s.revs[name] = 1
-}
-
-func (s *goalStore) get(name string) json.RawMessage { return s.records[name] }
-
-// --- goals.Ops (the dash write surface) ---
-
-func (s *goalStore) GetArtifact(_ context.Context, name string) (json.RawMessage, uint64, error) {
-	return s.records[name], s.revs[name], nil
-}
-
-func (s *goalStore) UpdateArtifact(_ context.Context, name string, record json.RawMessage, expectedRev uint64) (uint64, error) {
-	s.records[name] = record
-	s.revs[name] = expectedRev + 1
-	return s.revs[name], nil
-}
-
-func (s *goalStore) Publish(_ context.Context, _ string, _ json.RawMessage) error { return nil }
-
-// --- artifactReader (the violet read surface), via a wrapper over the same store ---
-
-// storeReader wraps a goalStore as violet's artifactReader. The wrapper exists
-// only because artifactReader's GetArtifact returns artifactValue while goals.Ops'
-// GetArtifact returns (raw, rev) — same name, different shape, so they can't both
-// hang off goalStore.
-type storeReader struct{ s *goalStore }
-
-func readerOf(s *goalStore) storeReader { return storeReader{s: s} }
-
-func (r storeReader) ListArtifacts(_ context.Context) ([]artifactInfo, error) {
-	out := make([]artifactInfo, 0, len(r.s.records))
-	for name, rev := range r.s.revs {
-		out = append(out, artifactInfo{Name: name, Revision: rev})
-	}
-	return out, nil
-}
-
-func (r storeReader) GetArtifact(_ context.Context, name string) (artifactValue, error) {
-	return artifactValue{Name: name, Record: r.s.records[name], Revision: r.s.revs[name]}, nil
-}
-
-// Compile-time proof that the store satisfies the dash write surface and the
-// wrapper satisfies the violet read surface.
-var (
-	_ goals.Ops      = (*goalStore)(nil)
-	_ artifactReader = storeReader{}
-)

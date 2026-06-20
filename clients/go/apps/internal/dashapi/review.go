@@ -3,6 +3,7 @@ package dashapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -96,6 +97,39 @@ func (s *Server) handleArtifactReview(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleGoals serves the Goals PROJECTION: the goal read-model with conv/goals'
+// proof-filter ALREADY APPLIED (each criterion's effective status, the derived
+// rollup, evidence wired in). It is the dash's goal-render seam — the JS renders
+// this pre-filtered model verbatim rather than re-deriving goal status off the
+// raw artifact directory, so the proof rule (a criterion reads met only with
+// proof) lives in ONE place, Go, and the dash and violet cannot disagree about a
+// goal. (The raw artifact view, /api/artifacts/{name}, still shows the stored
+// record; only this GOALS projection is filtered.)
+//
+// It reads the whole directory once — list, then get each — because a criterion's
+// proof lives in some OTHER artifact's relates. A single unreadable artifact is
+// skipped (the bus owns these records; one bad read must not fail the projection).
+func (s *Server) handleGoals(w http.ResponseWriter, r *http.Request) {
+	infos, err := s.bus.ListArtifacts(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	arts := make([]goals.Artifact, 0, len(infos))
+	for _, info := range infos {
+		art, err := s.bus.GetArtifact(r.Context(), info.Name)
+		if err != nil {
+			continue // skip a single unreadable artifact; never fail the projection
+		}
+		arts = append(arts, goals.Artifact{
+			Name:     info.Name,
+			Record:   json.RawMessage(art.Record),
+			Revision: art.Revision,
+		})
+	}
+	writeJSON(w, http.StatusOK, goals.Project(arts))
+}
+
 // advancedCrit reports one (goal, crit) the closed loop advanced to met — the
 // optional `advanced` field on the approve response (informative; the UI already
 // live-updates over SSE + the artifact poll).
@@ -137,27 +171,41 @@ func (s *Server) closeLoop(ctx context.Context, ref string, record json.RawMessa
 	return advanced
 }
 
-// flipToMet sets one goal criterion to met via the goals convention, retrying
-// once on a CAS conflict (the verb is single-shot; the dash owns the retry it
-// needs). It returns true only when a transition actually happened and was
-// announced — an already-met or absent criterion is an idempotent no-op (false).
-// Every error is swallowed: the caller is best-effort.
+// flipToMet sets one goal criterion to met via the goals convention. It returns
+// true when the criterion actually moved to met (so the caller reports it
+// advanced), false when nothing moved — an already-met or absent criterion is an
+// idempotent no-op. The caller is best-effort, so failures are not propagated;
+// but the RETRY is precise:
+//   - goals.ErrUpdate (the compare-and-set lost a race) is the only retryable
+//     failure — re-get and reapply ONCE, then give up. A get failure or a parse
+//     failure is not retried (it would just fail again).
+//   - goals.ErrPublish means the goal write LANDED but the announcement didn't.
+//     The criterion moved, so this counts as advanced (true) — re-running would
+//     no-op; we do not retry. The missed announcement is acceptable (the dash UI
+//     also live-refreshes off the artifact poll); the verdict write already
+//     succeeded, so this never fails the approve.
 func flipToMet(ctx context.Context, ops goalsOps, goalID, crit, ref, by string) bool {
 	const attempts = 2
+	in := goals.SetCriterionInput{
+		GoalID:      goalID,
+		CriterionID: crit,
+		Status:      goals.StatusMet,
+		Headline:    "Criterion met — " + ref + " approved",
+		Ref:         ref,
+		By:          by,
+	}
 	for i := 0; i < attempts; i++ {
-		changed, err := goals.SetCriterion(ctx, ops, goals.SetCriterionInput{
-			GoalID:      goalID,
-			CriterionID: crit,
-			Status:      goals.StatusMet,
-			Headline:    "Criterion met — " + ref + " approved",
-			Ref:         ref,
-			By:          by,
-		}, time.Now().UTC().Format(time.RFC3339))
-		if err == nil {
+		changed, err := goals.SetCriterion(ctx, ops, in, time.Now().UTC().Format(time.RFC3339))
+		switch {
+		case err == nil:
 			return changed
+		case errors.Is(err, goals.ErrPublish):
+			return true // the write landed; only the announce missed — it advanced
+		case errors.Is(err, goals.ErrUpdate) && i < attempts-1:
+			continue // a concurrent write moved the revision — re-get and reapply once
+		default:
+			return false // a get/parse failure, or the retry is exhausted — give up
 		}
-		// err is a get/update/publish failure; the only one worth a retry is a CAS
-		// conflict on the update. Re-get and reapply once, then give up.
 	}
 	return false
 }

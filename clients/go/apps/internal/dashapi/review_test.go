@@ -344,8 +344,9 @@ func TestArtifactReviewClosedLoopRetriesGoalCAS(t *testing.T) {
 
 // Test 8: the flip changes ONLY the matched criterion's status — every other
 // field of the goal record (northstar, updated, by, sibling criteria, and the
-// flipped criterion's own text) survives the round-trip. Guards setCriterionMet
-// against a future refactor silently dropping or rewriting fields.
+// flipped criterion's own text) survives the round-trip. Guards conv/goals'
+// setCriterionStatus rewrite against a future refactor silently dropping or
+// rewriting fields.
 func TestArtifactReviewClosedLoopPreservesGoalFields(t *testing.T) {
 	bus := loopBus(`[{"goal":"g1","crit":"c1","kind":"proof"}]`)
 	rec := postReview(t, newServer(bus, "tok"), "proof", `{"state":"approved"}`, "tok")
@@ -380,7 +381,10 @@ func TestArtifactReviewClosedLoopPreservesGoalFields(t *testing.T) {
 
 // Test 9: a publish failure on the goal.update is best-effort — the goal write
 // already landed, so the criterion stays met and the approve still returns 200
-// (the announcement is allowed to fail without demoting the verdict).
+// (the announcement is allowed to fail without demoting the verdict). And because
+// the criterion DID move, it is still reported in the `advanced` response — a
+// publish miss must not make the loop under-report what it advanced (the failure
+// is goals.ErrPublish, which flipToMet treats as advanced).
 func TestArtifactReviewClosedLoopPublishFailureIsBestEffort(t *testing.T) {
 	bus := loopBus(`[{"goal":"g1","crit":"c1","kind":"proof"}]`)
 	bus.publishErr = errors.New("bus unavailable")
@@ -390,5 +394,17 @@ func TestArtifactReviewClosedLoopPublishFailureIsBestEffort(t *testing.T) {
 	}
 	if got := criterionStatus(t, bus, "g1", "c1"); got != "met" {
 		t.Fatalf("c1 status = %q, want met — the goal write precedes (and is independent of) the publish", got)
+	}
+	var resp struct {
+		Advanced []struct {
+			Goal string `json:"goal"`
+			Crit string `json:"crit"`
+		} `json:"advanced"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode approve response: %v\n%s", err, rec.Body)
+	}
+	if len(resp.Advanced) != 1 || resp.Advanced[0].Goal != "g1" || resp.Advanced[0].Crit != "c1" {
+		t.Fatalf("advanced = %+v, want [{g1 c1}] — a publish miss must not drop the advanced report", resp.Advanced)
 	}
 }

@@ -32,7 +32,7 @@ lint: vet
 		echo "$$files"; \
 		exit 1; \
 	fi
-	go test ./internal/importcheck/... ./bus/ ./clients/go/conventions/ ./clients/go/apps/internal/tui/...
+	go test ./internal/importcheck/... ./bus/ ./clients/go/conventions/... ./clients/go/apps/internal/tui/...
 
 # Regenerate code generated from the lexicon (ADR-0041): the per-language record
 # types a convention library consumes. Today that is conv/goals' goal_gen.go,

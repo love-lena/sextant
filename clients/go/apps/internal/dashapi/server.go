@@ -92,6 +92,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/clients", s.gate(s.handleClients))
 	s.mux.HandleFunc("GET /api/messages", s.gate(s.handleMessages))
 	s.mux.HandleFunc("GET /api/artifacts", s.gate(s.handleArtifacts))
+	s.mux.HandleFunc("GET /api/goals", s.gate(s.handleGoals))
 	s.mux.HandleFunc("GET /api/subjects", s.gate(s.handleSubjects))
 	s.mux.HandleFunc("GET /api/artifacts/{name}", s.gate(s.handleArtifactGet))
 	s.mux.HandleFunc("POST /api/artifacts/{name}/review", s.gate(s.handleArtifactReview))

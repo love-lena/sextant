@@ -26,6 +26,7 @@ package goals
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/love-lena/sextant/protocol/sx"
@@ -99,6 +100,24 @@ type Update struct {
 	By       string `json:"by,omitempty"`
 }
 
+// Error sentinels mark WHICH step of SetCriterion failed, so a caller can react
+// precisely — notably the dash's best-effort approve loop, which retries ONLY a
+// failed compare-and-set update (a concurrent write moved the revision) and never
+// a get or a publish. Match with errors.Is.
+var (
+	// ErrGet wraps a failure reading the goal artifact before the write.
+	ErrGet = errors.New("goals: get goal")
+	// ErrUpdate wraps a failed compare-and-set of the goal artifact — the failure
+	// a read-modify-write retries (re-get, reapply). A persistent ErrUpdate is a
+	// real write failure, not a transient conflict.
+	ErrUpdate = errors.New("goals: update goal")
+	// ErrPublish wraps a failure announcing the transition on msg.topic.goals
+	// AFTER the goal write already landed. The criterion HAS moved; only the
+	// announcement failed, so a caller must NOT retry the write (it would no-op)
+	// — it may re-announce or surface the miss, never re-run the verb.
+	ErrPublish = errors.New("goals: publish goal.update")
+)
+
 // SetCriterion sets one criterion's status on a goal: it reads goal.<GoalID>,
 // rewrites that criterion's status in place (every other field preserved),
 // compare-and-sets it back, then announces the transition on msg.topic.goals.
@@ -106,10 +125,11 @@ type Update struct {
 // approve→met flip to any status.
 //
 // It is idempotent: a criterion already at the target status is a no-op — no
-// write, no announce — and changed reports false. A CAS conflict is returned to
-// the caller (a best-effort caller like the dash's approve loop retries; a
-// deliberate setter surfaces it); the verb itself does not loop, so its recorded
-// transcript is a single get→update→publish.
+// write, no announce — and changed reports false. The verb itself does not loop;
+// its recorded transcript is a single get→update→publish. A failure is wrapped
+// with the step sentinel ([ErrGet]/[ErrUpdate]/[ErrPublish]) so a best-effort
+// caller retries only the CAS update and distinguishes a write that landed but
+// failed to announce.
 //
 // The criterion must exist; setting an absent criterion is a no-op with
 // changed=false (not an error — the caller may be racing a goal edit). A record
@@ -118,7 +138,7 @@ func SetCriterion(ctx context.Context, ops Ops, in SetCriterionInput, now string
 	name := ArtifactName(in.GoalID)
 	record, rev, err := ops.GetArtifact(ctx, name)
 	if err != nil {
-		return false, fmt.Errorf("goals: get %s: %w", name, err)
+		return false, fmt.Errorf("%w %s: %w", ErrGet, name, err)
 	}
 	merged, changed, err := setCriterionStatus(record, in.CriterionID, in.Status)
 	if err != nil {
@@ -128,7 +148,7 @@ func SetCriterion(ctx context.Context, ops Ops, in SetCriterionInput, now string
 		return false, nil
 	}
 	if _, err := ops.UpdateArtifact(ctx, name, merged, rev); err != nil {
-		return false, fmt.Errorf("goals: update %s: %w", name, err)
+		return false, fmt.Errorf("%w %s: %w", ErrUpdate, name, err)
 	}
 	update, err := json.Marshal(Update{
 		Type:     "goal.update",
@@ -144,7 +164,10 @@ func SetCriterion(ctx context.Context, ops Ops, in SetCriterionInput, now string
 		return false, fmt.Errorf("goals: marshal goal.update: %w", err)
 	}
 	if err := ops.Publish(ctx, GoalsSubject, update); err != nil {
-		return false, fmt.Errorf("goals: publish goal.update: %w", err)
+		// The write landed; only the announcement failed. Report changed=true (the
+		// criterion DID move) alongside ErrPublish so the caller knows the
+		// transition stands and must not retry the write.
+		return true, fmt.Errorf("%w: %w", ErrPublish, err)
 	}
 	return true, nil
 }

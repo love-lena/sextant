@@ -39,20 +39,34 @@ func ParseRelates(record json.RawMessage) []Relate {
 	return all
 }
 
-// ProofRelations returns the proof relations among a record's relates that name
-// both a goal and a crit — the ones that can back a met criterion (and the ones
-// the dash's approve→met loop acts on). Non-proof kinds and crit-less proofs are
-// filtered out. This is the SINGLE definition of "what counts as proof",
-// replacing the two that had diverged (the dash write side filtered Goal!="" &&
-// Crit!=""; violet's read side filtered only on Kind=="proof").
-func ProofRelations(record json.RawMessage) []Relate {
+// IsProof reports whether this relation backs a specific goal criterion as proof:
+// kind=="proof" naming BOTH a goal and a crit. This is the SINGLE definition of
+// "what counts as proof", replacing the two that had diverged (the dash write side
+// filtered Goal!="" && Crit!=""; violet's read side filtered only on
+// Kind=="proof"). Every proof check — the dash's approve→met loop, the read-side
+// proof-filter, and violet's review-queue ranking — goes through here.
+func (r Relate) IsProof() bool {
+	return r.Kind == "proof" && r.Goal != "" && r.Crit != ""
+}
+
+// Proofs filters already-parsed relations to the proof ones (see [Relate.IsProof]).
+// It is for a caller that already holds []Relate (e.g. a digest carrying parsed
+// relations); a caller starting from a raw record uses [ProofRelations].
+func Proofs(rels []Relate) []Relate {
 	var proofs []Relate
-	for _, r := range ParseRelates(record) {
-		if r.Kind == "proof" && r.Goal != "" && r.Crit != "" {
+	for _, r := range rels {
+		if r.IsProof() {
 			proofs = append(proofs, r)
 		}
 	}
 	return proofs
+}
+
+// ProofRelations returns the proof relations among a record's relates — the ones
+// that can back a met criterion (and the ones the dash's approve→met loop acts
+// on). It parses the record then applies [Relate.IsProof].
+func ProofRelations(record json.RawMessage) []Relate {
+	return Proofs(ParseRelates(record))
 }
 
 // ParseGoal decodes a goal record into the generated Goal type. ok is false when

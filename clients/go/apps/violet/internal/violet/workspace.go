@@ -207,14 +207,10 @@ func (ws gatheredWorkspace) renderForCuration() string {
 
 // downstreamScore returns the number of goal criteria this item is a proof for.
 // A higher score means this item blocks more downstream work — rank it first.
+// What counts as proof is goals.Relate.IsProof — the one shared definition, so
+// the ranking can't drift from the dash's approve loop or the read-side filter.
 func downstreamScore(it reviewItem) int {
-	n := 0
-	for _, r := range it.Relates {
-		if r.Kind == "proof" {
-			n++
-		}
-	}
-	return n
+	return len(goals.Proofs(it.Relates))
 }
 
 // rankReviewQueue sorts items by blocks-most-downstream-work (descending). Items
@@ -237,12 +233,7 @@ func rankReviewQueue(items []reviewItem) []reviewItem {
 // If the item has proof relations, it names the downstream goal criteria it
 // unblocks. Otherwise it falls back to a terse needs-review line.
 func whyText(it reviewItem, ws gatheredWorkspace) string {
-	var proofs []goals.Relate
-	for _, r := range it.Relates {
-		if r.Kind == "proof" {
-			proofs = append(proofs, r)
-		}
-	}
+	proofs := goals.Proofs(it.Relates) // the one shared proof definition
 	if len(proofs) == 0 {
 		return "[[" + it.Name + "]] needs your review."
 	}
