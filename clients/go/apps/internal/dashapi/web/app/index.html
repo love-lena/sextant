@@ -14,11 +14,15 @@
 <div id="app"><div id="root"></div></div>
 
 <!-- All JS is vendored locally (no runtime CDN). The components are precompiled
-     from their .jsx sources by scripts/build-dash-ui.sh — no in-browser Babel. -->
+     from their .jsx sources by scripts/build-dash-ui.sh — no in-browser Babel.
+     sextant-bus.js is the bundled SDK browser entry + the TS conventions + nats.ws
+     (ADR-0044), assigning window.SextantBus so the SPA connects to the bus over
+     wss directly with a dash-minted credential — no Go-backend relay. -->
 <script src="vendor/react.production.min.js"></script>
 <script src="vendor/react-dom.production.min.js"></script>
 <script src="vendor/marked.min.js"></script>
 <script src="vendor/purify.min.js"></script>
+<script src="vendor/sextant-bus.js"></script>
 <script src="image-slot.js"></script>
 <script src="tweaks-panel.js"></script>
 <script src="artifact.js"></script>

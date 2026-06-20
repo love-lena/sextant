@@ -7,8 +7,11 @@
 // Co-equal means: passes the wire conformance suite for the protocol epoch
 // (EPOCH), not "looks like the Go output."
 
-// Connecting + the two roles (a collaborating Client, a mint/retire Issuer).
-export { connect, Client, ResumeDeferredError } from "./client.js";
+// Connecting + the two roles (a collaborating Client, a mint/retire Issuer). The
+// Node connect() lives in connect.ts (it reads the filesystem); Client +
+// connectCore are transport-agnostic in client.ts (the browser entry reuses them).
+export { connect } from "./connect.js";
+export { Client, connectCore, ResumeDeferredError } from "./client.js";
 export type { SubOptions, Subscription, Watch } from "./client.js";
 export { connectIssuer, Issuer } from "./issuer.js";
 

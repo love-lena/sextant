@@ -63,3 +63,8 @@ docs/demos/*.mp4
 # short SHA + UTC time; the served dash polls it for a "new version" nudge. Like
 # the *.js it's generated, not committed (it rides the all:web/app go:embed).
 /clients/go/apps/internal/dashapi/web/app/build.json
+# Generated bus bundle (ADR-0044): build-dash-ui.sh esbuild-bundles the SDK browser
+# entry + the TS conventions + nats.ws into this single IIFE the SPA loads. Generated
+# like the *.js (rides the all:web/app go:embed), never committed. bus-entry.js +
+# package.json under web/bundle ARE the committed source.
+/clients/go/apps/internal/dashapi/web/app/vendor/sextant-bus.js

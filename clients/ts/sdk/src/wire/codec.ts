@@ -405,22 +405,32 @@ function asNumber(v: JSONValue, field: string): number {
 // ---------------------------------------------------------------------------
 
 // bytesToHex lowercase-hex encodes a byte array (matching the vector `bytes`
-// form). Node's Buffer is available on the target runtime; using it keeps the
-// hex path dependency-free and fast.
+// form). Pure-JS (no Buffer): this module is imported by both the Node and the
+// browser SDK entries (ADR-0044), so the codec must not reach for a Node global —
+// the hex path round-trips byte-identically in either runtime.
 export function bytesToHex(b: Uint8Array): string {
-  return Buffer.from(b).toString("hex");
+  let out = "";
+  for (let i = 0; i < b.length; i++) {
+    out += b[i]!.toString(16).padStart(2, "0");
+  }
+  return out;
 }
 
-// hexToBytes decodes lowercase (or any-case) hex to bytes.
+// hexToBytes decodes lowercase (or any-case) hex to bytes. Pure-JS (no Buffer):
+// it validates each pair is real hex and rejects an odd length or a non-hex
+// digit, so a malformed string fails loud rather than silently truncating (the
+// failure mode Buffer.from(hex) had).
 export function hexToBytes(hex: string): Uint8Array {
   if (hex.length % 2 !== 0) {
     throw new Error("wire: hex string has an odd length");
   }
-  const buf = Buffer.from(hex, "hex");
-  // Buffer.from with "hex" stops at the first non-hex byte rather than throwing;
-  // a length mismatch means the input was not valid hex.
-  if (buf.length !== hex.length / 2) {
-    throw new Error("wire: invalid hex string");
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    const byte = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    if (Number.isNaN(byte) || !/^[0-9a-fA-F]{2}$/.test(hex.slice(i * 2, i * 2 + 2))) {
+      throw new Error("wire: invalid hex string");
+    }
+    out[i] = byte;
   }
-  return new Uint8Array(buf);
+  return out;
 }

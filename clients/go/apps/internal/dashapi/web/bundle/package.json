@@ -1,0 +1,12 @@
+{
+  "name": "@sextant/dash-bundle",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Build-only scope (ADR-0044): the dependency root scripts/build-dash-ui.sh bundles the dash browser bundle (vendor/sextant-bus.js) from. It depends on the three local TS packages the browser dash runs over its own bus Client — @sextant/sdk (browser entry), @sextant/conv-goals, @sextant/conv-review — and nats.ws (the wss transport). Not published; the bundle output is gitignored like the *.js JSX outputs.",
+  "dependencies": {
+    "@sextant/sdk": "file:../../../../../../ts/sdk",
+    "@sextant/conv-goals": "file:../../../../../../ts/conventions/goals",
+    "@sextant/conv-review": "file:../../../../../../ts/conventions/review"
+  }
+}

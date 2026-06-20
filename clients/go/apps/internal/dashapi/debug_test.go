@@ -34,10 +34,12 @@ func TestRootServesDesignedApp(t *testing.T) {
 	}
 }
 
-// TestDebugSurfaceAtDebugPath: GET /debug returns the built-in zero-design page
-// (no token needed — it carries no data; the token in its URL gates the API it
-// calls). The page must wire the live stream and read its token, or it is not a
-// working verification harness.
+// TestDebugSurfaceAtDebugPath: GET /debug still serves the built-in zero-design
+// page (no token — it carries no data). The page itself is a legacy harness for
+// the old local-API surface (the /api/* relay it called is gone, ADR-0044 — the
+// designed SPA at / is now the live surface, over the bus WebSocket); the route is
+// kept so the static-host contract is unchanged. This guards only that /debug is
+// served as HTML, not its (legacy) contents.
 func TestDebugSurfaceAtDebugPath(t *testing.T) {
 	srv := newServer(&fakeBus{id: "01ME"}, "tok")
 	req := httptest.NewRequest(http.MethodGet, "/debug", nil)
@@ -49,12 +51,6 @@ func TestDebugSurfaceAtDebugPath(t *testing.T) {
 	}
 	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
 		t.Fatalf("content-type = %q, want text/html", ct)
-	}
-	body := rec.Body.String()
-	for _, marker := range []string{"EventSource", "/api/stream", "/api/clients", "/api/publish", "token"} {
-		if !strings.Contains(body, marker) {
-			t.Fatalf("debug page missing %q", marker)
-		}
 	}
 }
 

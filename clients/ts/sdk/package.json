@@ -6,7 +6,12 @@
   "exports": {
     ".": {
       "types": "./dist/src/index.d.ts",
+      "browser": "./dist/src/browser.js",
       "import": "./dist/src/index.js"
+    },
+    "./browser": {
+      "types": "./dist/src/browser.d.ts",
+      "import": "./dist/src/browser.js"
     }
   },
   "files": [
@@ -22,13 +27,14 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node --test dist/test/codec.test.js dist/test/conformance.test.js dist/test/integration.test.js",
-    "test:conformance": "npm run build && node --test dist/test/codec.test.js dist/test/conformance.test.js",
+    "test": "npm run build && node --test dist/test/codec.test.js dist/test/conformance.test.js dist/test/browser.test.js dist/test/integration.test.js",
+    "test:conformance": "npm run build && node --test dist/test/codec.test.js dist/test/conformance.test.js dist/test/browser.test.js",
     "test:integration": "npm run build && node --test dist/test/integration.test.js"
   },
   "license": "MIT",
   "dependencies": {
-    "nats": "2.29.3"
+    "nats": "2.29.3",
+    "nats.ws": "1.30.3"
   },
   "devDependencies": {
     "@types/node": "^26.0.0",

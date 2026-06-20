@@ -32,23 +32,121 @@
     "livePulse": true
   }/*EDITMODE-END*/;
 
-  // ---- local API client (the per-launch token rides in the page URL) ----
+  // ---- the bus client (ADR-0044): the SPA is a co-equal TS client ----
+  // The page mints a short-lived scoped credential from the Go dash (the one thing
+  // a browser can't do for itself — minting stays at the bus), then connects to
+  // the bus DIRECTLY over wss with @sextant/sdk's browser entry. From here every
+  // read/write is an SDK call over the WebSocket; the only HTTP left is the
+  // one-shot POST /api/session and the token-free /build.json poll. The Go backend
+  // no longer relays or re-implements any bus primitive — the goals projection and
+  // the review read-merge-CAS run here, in the TS conventions (window.SextantBus).
   const TOKEN = new URLSearchParams(location.search).get("token") || "";
   const AUTH = { "Authorization": "Bearer " + TOKEN };
-  async function apiGet(path){
-    const r = await fetch(path, { headers: AUTH });
-    if (!r.ok) throw new Error(path + " -> " + r.status);
-    return r.json();
-  }
-  function apiPost(path, body){
-    return fetch(path, {
+
+  // BUS holds the connected Client; busReady resolves once it is up so the data
+  // effects can await it. sessionExpired flips true if the credential's TTL lapses
+  // (the bus rejects the reconnect) so the SPA can surface a "reload" prompt rather
+  // than dying silently (ADR-0044's reconnect-after-expiry note).
+  let BUS = null;
+  let sessionExpired = false;
+  const SB = window.SextantBus || {};
+  const busReady = (async () => {
+    const r = await fetch("/api/session", {
       method: "POST",
       headers: Object.assign({ "Content-Type": "application/json" }, AUTH),
-      body: JSON.stringify(body),
-    }).then(r => { if (!r.ok) throw new Error(path + " -> " + r.status); });
+    });
+    if (!r.ok) throw new Error("/api/session -> " + r.status + " (" + (await r.text().catch(()=>"")) + ")");
+    const { creds, wsURL } = await r.json();
+    BUS = await SB.browserConnect({ url: wsURL, credsText: creds });
+    return BUS;
+  })();
+  busReady.catch((e) => { console.error("sextant: bus connect failed:", e); });
+
+  // mapClient / mapArtifact / mapArtInfo adapt the SDK's camelCase shapes to the
+  // PascalCase the SPA components already read (ClientInfo.ID, ArtifactInfo.Name,
+  // Artifact.Record/.Revision) — so the component tree is unchanged; only this data
+  // layer moved off the Go relay.
+  function mapClient(c){ return { ID:c.id, DisplayName:c.displayName, Kind:c.kind, Online:c.online, IssuedAt:c.issuedAt }; }
+  function mapArtInfo(a){ return { Name:a.name, Revision:a.revision, Created:a.created, Updated:a.updated }; }
+  function mapArtifact(a){ return { Name:a.name, Record:a.record, Revision:a.revision, CreatedAt:a.created }; }
+  // mapFrame adapts an SDK Frame to the wire.Frame JSON the SPA read off /api/* — same
+  // keys (id, author, kind, record, createdAt) the views consume.
+  function mapFrame(f){ return { id:f.id, author:f.author, kind:f.kind, epoch:f.epoch, record:f.record, revision:f.revision, createdAt:f.createdAt, updatedAt:f.updatedAt }; }
+
+  // readAllArtifacts lists then gets every artifact, the directory the goals
+  // projection (and the sidebar prefetch) needs. A single unreadable artifact is
+  // skipped, mirroring the Go projection's tolerance.
+  async function readAllArtifacts(){
+    await busReady;
+    const infos = await BUS.listArtifacts();
+    const arts = await Promise.all(infos.map(i => BUS.getArtifact(i.name).then(a => ({ name:i.name, record:a.record, revision:a.revision })).catch(()=>null)));
+    return arts.filter(Boolean);
   }
-  function apiPublish(subject, record){ return apiPost("/api/publish", { subject, record }); }
-  function apiReview(name, state){ return apiPost("/api/artifacts/"+encodeURIComponent(name)+"/review", { state }); }
+
+  // apiGet keeps its name + path-dispatch shape so the SPA's call sites are
+  // unchanged, but each path now resolves over the bus Client instead of the Go
+  // relay. Unknown paths reject (a missing relay endpoint is a bug, not a silent {}).
+  async function apiGet(path){
+    await busReady;
+    const u = new URL(path, location.origin);
+    const p = u.pathname, q = u.searchParams;
+    if (p === "/api/self") return { id:BUS.id(), display_name:BUS.displayName(), principal:BUS.principal() };
+    if (p === "/api/clients") return (await BUS.listClients()).map(mapClient);
+    if (p === "/api/artifacts") return (await BUS.listArtifacts()).map(mapArtInfo);
+    if (p === "/api/goals") return SB.project(await readAllArtifacts());
+    if (p === "/api/subjects") return subjectList();
+    if (p.startsWith("/api/artifacts/")) {
+      const name = decodeURIComponent(p.slice("/api/artifacts/".length));
+      return mapArtifact(await BUS.getArtifact(name));
+    }
+    if (p === "/api/messages") {
+      const subject = q.get("subject") || "";
+      const since = Number(q.get("since") || 0);
+      const limit = Number(q.get("limit") || 100);
+      const { frames, next } = await BUS.fetchMessages(subject, since, limit);
+      return { messages: frames.map(mapFrame), next_cursor: next };
+    }
+    throw new Error("apiGet: no bus route for " + p);
+  }
+  // apiPublish issues message.publish over the bus.
+  async function apiPublish(subject, record){ await busReady; return BUS.publish(subject, record); }
+  // apiReview persists the operator's verdict via the TS review convention
+  // (read-merge-CAS + approve→met closed loop), directly over the bus — the logic
+  // the Go dashapi review.go used to run server-side (ADR-0044).
+  async function apiReview(name, state){
+    await busReady;
+    return SB.setReview(BUS, { name, state, by:BUS.id(), now:new Date().toISOString() });
+  }
+
+  // ---- subject discovery (replaces GET /api/subjects) ----
+  // The Go backend's standing msg.> tally is gone; the SPA collects subjects from
+  // its own msg.> subscription (the live stream below), kept in a module Set so the
+  // conversation list can be seeded on load.
+  const SUBJECTS = new Set();
+  function subjectList(){ return [...SUBJECTS].sort().map(s => ({ subject:s, count:0 })); }
+
+  // window.SX is the shared bus-backed data layer the OTHER SPA files (workflow.jsx,
+  // mobilize.jsx — separate IIFEs) use, so every view reads/writes over the one bus
+  // Client instead of the (now-deleted) Go relay. get(path) and publish(subject,
+  // record) mirror apiGet/apiPublish; subscribe(subject, onFrame) hands each frame's
+  // mapped wire shape to onFrame and returns a stop() (replacing the per-view
+  // EventSource). ready awaits the connection.
+  window.SX = {
+    ready: busReady,
+    get: apiGet,
+    publish: apiPublish,
+    subscribe: async (subject, onFrame, opts) => {
+      await busReady;
+      return BUS.subscribe(subject, (m) => onFrame({ subject: m.subject, frame: mapFrame(m.frame) }), opts || {});
+    },
+    // setCriterion sets one goal criterion's status via the goals convention's
+    // single write path (CAS the goal artifact + announce goal.update on
+    // msg.topic.goals), directly over the bus (ADR-0044). Returns whether it moved.
+    setCriterion: async (goalId, criterionId, status, headline) => {
+      await busReady;
+      return SB.setCriterion(BUS, { goalId, criterionId, status, headline: headline || ("set "+criterionId), by: BUS.id() }, new Date().toISOString());
+    },
+  };
 
   // The review convention (TASK-66): states + the per-artifact companion topic.
   const REVIEW_STATES = ["review","approved","changes","draft","rejected","archived"];
@@ -179,6 +277,17 @@
     const [currentBuild, setCurrentBuild] = useState(null); // {sha,builtAt} now served
     const [buildNudgeOff, setBuildNudgeOff] = useState(false); // operator dismissed THIS mismatch
 
+    // session-expired surface (ADR-0044): the dash-minted browser credential has a
+    // short TTL (the dash can't retire it, so the bus exp is the cleanup). When a
+    // long-open tab's credential lapses the bus rejects the reconnect; the subscribe
+    // onError flips the module `sessionExpired` flag. Poll it into state so the SPA
+    // shows a "session expired — reload" banner rather than dying silently.
+    const [sessionLost, setSessionLost] = useState(false);
+    useEffect(()=>{
+      const id = setInterval(()=>{ if(sessionExpired) setSessionLost(true); }, 2000);
+      return ()=>clearInterval(id);
+    },[]);
+
     const nameOf = useCallback((id)=>{ const c=clients.find(c=>c.ID===id); return c?c.DisplayName:(id||"").slice(0,8); },[clients]);
     const kindOf = useCallback((id)=>{ const c=clients.find(c=>c.ID===id); return c?c.Kind:"agent"; },[clients]);
 
@@ -253,29 +362,33 @@
       return ()=>{ cancelled=true; };
     },[artifacts]);
 
-    // live stream over msg.> → activity feed + conversation discovery.
-    // No TOKEN guard: loopback is token-free (TASK-115) so an empty token still
-    // streams; a non-loopback page always carries the token in its URL.
+    // live stream over msg.> → activity feed + conversation discovery (ADR-0044:
+    // a real bus subscription over the WebSocket, replacing the Go SSE bridge). The
+    // SPA subscribes msg.> itself and collects subjects locally (replacing the Go
+    // /api/subjects tally). deliverAll replays history so the conversation list +
+    // activity are populated on load, not only as new traffic arrives.
     useEffect(()=>{
-      const es = new EventSource("/api/stream?subject="+encodeURIComponent("msg.>")+"&token="+encodeURIComponent(TOKEN));
-      es.onmessage = (m)=>{
-        let ev; try { ev = JSON.parse(m.data); } catch(_) { return; }
-        const subj = ev.subject, f = ev.frame;
-        if(!subj || !f) return;
-        const text = frameText(f.record);
-        const at = frameTime(f) || Date.now();
-        // carry the raw record so companion-topic status-change markers survive into discussion
-        const msg = { id:f.id, author:f.author, text, ts:at, record:f.record||null };
-        setConvos(prev=>{
-          const cur = prev[subj] || { msgs:[] };
-          if(cur.msgs.some(x=>x.id===msg.id)) return prev;
-          return { ...prev, [subj]:{ ...cur, msgs:[...cur.msgs, msg].slice(-200), last:Math.max(cur.last||0, at), lastText:text } };
-        });
-        setActivity(prev=>[{ subj, author:f.author, text, ts:at }, ...prev].slice(0,40));
-      };
-      es.onerror = ()=>{};
-      return ()=>es.close();
-    },[TOKEN]);
+      let sub = null, cancelled = false;
+      busReady.then(()=>{
+        if(cancelled) return;
+        return BUS.subscribe("msg.>", (m)=>{
+          const subj = m.subject, f = mapFrame(m.frame);
+          if(!subj || !f) return;
+          SUBJECTS.add(subj);
+          const text = frameText(f.record);
+          const at = frameTime(f) || (m.busTime && m.busTime.getTime()) || Date.now();
+          // carry the raw record so companion-topic status-change markers survive into discussion
+          const msg = { id:f.id, author:f.author, text, ts:at, record:f.record||null };
+          setConvos(prev=>{
+            const cur = prev[subj] || { msgs:[] };
+            if(cur.msgs.some(x=>x.id===msg.id)) return prev;
+            return { ...prev, [subj]:{ ...cur, msgs:[...cur.msgs, msg].slice(-200), last:Math.max(cur.last||0, at), lastText:text } };
+          });
+          setActivity(prev=>[{ subj, author:f.author, text, ts:at }, ...prev].slice(0,40));
+        }, { deliverAll: true, onError: (e)=>{ if(/cannot resume|expired|exp/i.test(e.message||"")) sessionExpired = true; } });
+      }).then((s)=>{ if(cancelled && s){ s.stop(); } else { sub = s; } }).catch(()=>{});
+      return ()=>{ cancelled = true; if(sub) sub.stop().catch(()=>{}); };
+    },[]);
 
     // Seed each conversation's last-activity from history on load, so the sidebar
     // sorts most-recent-first immediately. The stream is deliver-new (no replay),
@@ -758,6 +871,13 @@
         </div>
 
         <main className="sx-stage">
+          {sessionLost && (
+            <div className="sx-buildnudge" role="alert">
+              <span className="sx-buildnudge-dot" />
+              <span className="sx-buildnudge-text">session expired — reload to reconnect</span>
+              <button className="sx-buildnudge-x" title="Reload" aria-label="Reload" onClick={()=>location.reload()}>↻</button>
+            </div>
+          )}
           {staleBuild && !buildNudgeOff && (
             <div className="sx-buildnudge" role="status">
               <span className="sx-buildnudge-dot" />

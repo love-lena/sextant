@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,25 +14,40 @@ import (
 	"time"
 
 	"github.com/love-lena/sextant/bus"
+	"github.com/love-lena/sextant/protocol/conninfo"
 )
 
-// TestRunServeServesAPI is the serve-path integration: runServe connects under a
-// real identity, binds a local listener, prints a URL carrying the per-launch
-// token, and serves the API — and shuts down cleanly when its context is
-// cancelled. It drives the whole `sextant dash --serve` glue against an embedded
-// bus (CI-safe, default gate), short of the process boundary the demo covers.
-func TestRunServeServesAPI(t *testing.T) {
-	b, err := bus.Start(t.Context(), bus.Config{StoreDir: t.TempDir()})
+// TestRunServeMintsBrowserSession is the serve-path integration (ADR-0044):
+// runServe connects under a real identity, binds a local listener, prints a URL
+// carrying the per-launch token, and serves the shrunk surface — a static SPA host
+// plus the credential-mint endpoint. POST /api/session mints a short-lived browser
+// credential and hands back the ws URL the page dials, and the server shuts down
+// cleanly on context cancel. It drives the whole `sextant dash --serve` glue
+// against an embedded bus with the WebSocket listener on (CI-safe, default gate).
+func TestRunServeMintsBrowserSession(t *testing.T) {
+	store := t.TempDir()
+	// A free loopback port for the WebSocket listener (the listener requires a
+	// positive, loopback port — fail-loud on :0, like the leaf listener). Probe one
+	// and release it; the bus binds it next.
+	wsAddr := freeLoopbackAddr(t)
+	b, err := bus.Start(t.Context(), bus.Config{StoreDir: store, WebSocketListenAddr: wsAddr})
 	if err != nil {
 		t.Fatalf("bus.Start: %v", err)
 	}
 	t.Cleanup(b.Shutdown)
 
-	creds, dashID, err := b.MintClient(t.Context(), "dash", "human")
+	creds, _, err := b.MintClient(t.Context(), "dash", "human")
 	if err != nil {
 		t.Fatalf("MintClient: %v", err)
 	}
 	credsPath := writeCreds(t, creds)
+
+	// The dash discovers the ws URL from the discovery file the bus writes; runServe
+	// reads it via resolveWSURL(opts.Store). The embedded bus.Start does not write
+	// conninfo (the CLI's cmdUp does), so write it here with the ws URL the listener
+	// carries — the test stands in for the cmdUp glue.
+	wsURL := "ws://" + wsAddr
+	writeConnInfo(t, store, b.ClientURL(), wsURL)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -41,6 +57,7 @@ func TestRunServeServesAPI(t *testing.T) {
 		done <- runServe(ctx, Options{
 			CredsPath: credsPath,
 			URL:       b.ClientURL(),
+			Store:     store,
 			Serve:     true,
 			Port:      0, // ephemeral port — no conflicts in tests
 		}, out)
@@ -48,13 +65,19 @@ func TestRunServeServesAPI(t *testing.T) {
 
 	base, token := waitForServeURL(t, out)
 
-	// /api/self over the real client returns this dash's bus identity.
-	var self struct {
-		ID string `json:"id"`
+	// POST /api/session mints a fresh browser credential and returns it + the ws URL
+	// the page dials. The minted creds are non-empty bus auth material.
+	var sess struct {
+		ID    string `json:"id"`
+		Creds string `json:"creds"`
+		WSURL string `json:"wsURL"`
 	}
-	getJSON(t, base+"/api/self", token, &self)
-	if self.ID != dashID {
-		t.Fatalf("self id = %q, want minted dash id %q", self.ID, dashID)
+	postJSON(t, base+"/api/session", token, &sess)
+	if sess.ID == "" || sess.Creds == "" {
+		t.Fatalf("session response missing minted id/creds: %+v", sess)
+	}
+	if sess.WSURL != wsURL {
+		t.Fatalf("session wsURL = %q, want the bus ws URL %q", sess.WSURL, wsURL)
 	}
 
 	// The bound listener is loopback-only.
@@ -109,21 +132,45 @@ func waitForServeURL(t *testing.T, out *syncBuffer) (base, token string) {
 	return "", ""
 }
 
-func getJSON(t *testing.T, url, token string, v any) {
+func postJSON(t *testing.T, url, token string, v any) {
 	t.Helper()
-	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	req, _ := http.NewRequest(http.MethodPost, url, nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("GET %s: %v", url, err)
+		t.Fatalf("POST %s: %v", url, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET %s: status %d", url, resp.StatusCode)
+		t.Fatalf("POST %s: status %d", url, resp.StatusCode)
 	}
 	if err := json.NewDecoder(resp.Body).Decode(v); err != nil {
 		t.Fatalf("decode %s: %v", url, err)
 	}
+}
+
+// writeConnInfo writes the discovery file the dash reads to resolve the bus + ws
+// URLs, standing in for the CLI's cmdUp glue in an embedded-bus test.
+func writeConnInfo(t *testing.T, store, url, wsURL string) {
+	t.Helper()
+	if err := conninfo.Write(connInfoPath(store), conninfo.Info{URL: url, WSURL: wsURL}); err != nil {
+		t.Fatalf("write conninfo: %v", err)
+	}
+}
+
+// freeLoopbackAddr probes a free loopback host:port and releases it, for the bus
+// WebSocket listener (which requires a positive loopback port — it fails loud on
+// :0, like the leaf listener). There is a small race before the bus rebinds it,
+// acceptable in a single-process test.
+func freeLoopbackAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("probe a free port: %v", err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+	return addr
 }
 
 // TestRunServeStateFile asserts that when StateFile is given, runServe writes a

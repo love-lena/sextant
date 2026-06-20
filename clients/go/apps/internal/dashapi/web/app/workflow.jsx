@@ -30,22 +30,17 @@
   const STATE_POLL_MS = 1000;
   const STATE_POLL_CAP_MS = 600000; // stop polling run-state after ~10min (leave last-known)
 
-  /* apiPublish + apiGet are defined inside app.jsx's closure and are not exposed on
-     window. We replicate the minimal fetch wrappers here so WorkflowView is
-     self-contained with no shared-closure coupling. */
-  const TOKEN = new URLSearchParams(location.search).get("token") || "";
-  const AUTH = { "Authorization": "Bearer " + TOKEN };
-
+  /* The data layer is window.SX (set up by app.jsx, ADR-0044): every read/write
+     goes over the one bus Client (wss), not the deleted Go relay. wfGet/wfPost keep
+     their names + path shape so the view body is unchanged — wfPost("/api/publish",
+     {subject, record}) becomes a bus publish; wfGet("/api/clients" | "/api/artifacts
+     /<name>") becomes a bus read. */
   function wfPost(path, body) {
-    return fetch(path, {
-      method: "POST",
-      headers: Object.assign({ "Content-Type": "application/json" }, AUTH),
-      body: JSON.stringify(body),
-    }).then(function(r) { if (!r.ok) throw new Error(path + " -> " + r.status); });
+    if (path === "/api/publish") return window.SX.publish(body.subject, body.record);
+    return Promise.reject(new Error("workflow: no bus route for POST " + path));
   }
   function wfGet(path) {
-    return fetch(path, { headers: AUTH })
-      .then(function(r) { if (!r.ok) throw new Error(path + " -> " + r.status); return r.json(); });
+    return window.SX.get(path);
   }
 
   // wfNonce — an opaque per-publish correlation handle (workflow-start-contract).
@@ -72,12 +67,15 @@
     const [errMsg, setErrMsg] = useState("");
 
     const mountedRef = useRef(true);
-    const esRef = useRef(null);
+    const subRef = useRef(null); // the bus subscription stop-handle (was an EventSource)
     const ackTimerRef = useRef(null);
     const pollRef = useRef(null);
 
+    function stopSub() {
+      if (subRef.current) { try { subRef.current.stop(); } catch (_) {} subRef.current = null; }
+    }
     function cleanup() {
-      if (esRef.current) { try { esRef.current.close(); } catch (_) {} esRef.current = null; }
+      stopSub();
       if (ackTimerRef.current) { clearTimeout(ackTimerRef.current); ackTimerRef.current = null; }
       if (pollRef.current) { clearTimeout(pollRef.current); pollRef.current = null; }
     }
@@ -126,27 +124,17 @@
         acked = true;
         fail("No workflow runner is listening — start one with `sextant-workflow`");
       }, ACK_TIMEOUT_MS);
-      // Open the stream BEFORE publishing so the ack (same subject) can't slip past
-      // before we're subscribed.
-      var es = new EventSource("/api/stream?subject=" + encodeURIComponent(WORKFLOW_SUBJECT) + "&token=" + encodeURIComponent(TOKEN));
-      esRef.current = es;
-      es.onopen = function () {
-        if (!mountedRef.current || acked) return;
-        var record = { "$type": "workflow.start", prompt: p, nonce: nonce };
-        var nk = nickname.trim(); if (nk) record.nickname = nk;
-        var tg = target.trim(); if (tg) record.target = tg;
-        wfPost("/api/publish", { subject: WORKFLOW_SUBJECT, record: record })
-          .then(function () { if (mountedRef.current && !acked) setPhase("waiting"); })
-          .catch(function (e) { if (acked) return; acked = true; fail("Failed to publish workflow.start: " + (e && e.message ? e.message : String(e))); });
-      };
-      es.onmessage = function (m) {
+      // Subscribe to the ack subject BEFORE publishing so the ack (same subject)
+      // can't slip past before we're subscribed (ADR-0044: a real bus subscription
+      // over wss, replacing the SSE stream). deliverAll:false — only new frames,
+      // since the ack is a fresh reply to this publish.
+      window.SX.subscribe(WORKFLOW_SUBJECT, function (ev) {
         if (acked || !mountedRef.current) return;
-        var ev; try { ev = JSON.parse(m.data); } catch (_) { return; }
         var rec = ev && ev.frame && ev.frame.record;
         if (!rec || rec["$type"] !== "workflow.start.ack" || rec.nonce !== nonce) return;
         acked = true;
         if (ackTimerRef.current) { clearTimeout(ackTimerRef.current); ackTimerRef.current = null; }
-        if (esRef.current) { try { esRef.current.close(); } catch (_) {} esRef.current = null; }
+        stopSub();
         if (rec.status === "error" || !rec.workflowId) {
           fail(rec.error ? ("Workflow runner error: " + rec.error) : "Workflow runner returned an error");
           return;
@@ -154,14 +142,22 @@
         setRun({ id: rec.workflowId, status: "running", done: 0, total: 0 });
         setPhase("running");
         pollState(rec.workflowId, Date.now() + STATE_POLL_CAP_MS);
-      };
-      // A FATAL stream error (readyState CLOSED — e.g. the stream can't open) before
-      // we've acked → fail loud now rather than wait out the deadline. A transient
-      // error (CONNECTING) auto-reconnects; the deadline still covers a dead consumer.
-      es.onerror = function () {
+      }, { deliverAll: false }).then(function (sub) {
+        // If we already acked/unmounted while subscribing, drop the late sub.
+        if (acked || !mountedRef.current) { try { sub.stop(); } catch (_) {} return; }
+        subRef.current = sub;
+        // Subscribed: publish the workflow.start now that the ack can't be missed.
+        var record = { "$type": "workflow.start", prompt: p, nonce: nonce };
+        var nk = nickname.trim(); if (nk) record.nickname = nk;
+        var tg = target.trim(); if (tg) record.target = tg;
+        wfPost("/api/publish", { subject: WORKFLOW_SUBJECT, record: record })
+          .then(function () { if (mountedRef.current && !acked) setPhase("waiting"); })
+          .catch(function (e) { if (acked) return; acked = true; fail("Failed to publish workflow.start: " + (e && e.message ? e.message : String(e))); });
+      }).catch(function (e) {
         if (acked || !mountedRef.current) return;
-        if (es.readyState === 2 /* CLOSED */) { acked = true; fail("Lost the bus stream before the workflow runner replied"); }
-      };
+        acked = true;
+        fail("Lost the bus before the workflow runner replied: " + (e && e.message ? e.message : String(e)));
+      });
     }
 
     function handleReset() { cleanup(); setPhase("idle"); setRun(null); setErrMsg(""); }

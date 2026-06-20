@@ -16,6 +16,12 @@ const DefaultFile = "bus.json"
 // Info is how a client finds the bus. The URL is not secret.
 type Info struct {
 	URL string `json:"url"`
+	// WSURL is the bus WebSocket listener URL (ws://host:port), present only when
+	// the bus was started with a WebSocket listener (ADR-0044). It is how the
+	// browser dash discovers where to dial: the dash reads it here and hands it to
+	// the page at credential-mint time. Empty/omitted means no WebSocket listener —
+	// byte-identical to before for every non-dash client, which ignores it.
+	WSURL string `json:"wsURL,omitempty"`
 }
 
 // Write writes the discovery file at path.

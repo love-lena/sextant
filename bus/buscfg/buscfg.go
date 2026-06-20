@@ -5,10 +5,11 @@
 // inherit the shell env, so neither a flag nor an env var reaches the bus across
 // a `brew services restart`; a file the bus reads on `up` is the path that does.
 //
-// Scope (v0.5.1): leaf-listen only. The file carries the same loopback host:port
-// `--leaf-listen` accepts; the leaf trust model (ADR-0038) is unchanged — this
-// is only where the listen address comes from. Default-off is preserved: an
-// absent (or empty-leaf-listen) config is byte-identical to passing nothing.
+// Scope: the listen knobs that must survive a launcher restart — leaf-listen
+// (ADR-0038), the pinned port, and websocket-listen (ADR-0044). Each carries the
+// same loopback host:port its flag accepts; this file is only where the value
+// comes from, the trust models are unchanged. Default-off is preserved: an absent
+// (or empty-valued) config is byte-identical to passing nothing.
 package buscfg
 
 import (
@@ -34,6 +35,14 @@ type Config struct {
 	// address is validated by the bus when the listener is wired (a malformed or
 	// non-loopback address fails `up` loudly there), not here.
 	LeafListen string `json:"leaf-listen,omitempty"`
+
+	// WebSocketListen, when set, is the bus WebSocket listener address (loopback
+	// host:port). Empty means OFF, byte-identical to omitting it. The browser dash
+	// reaches the bus over this listener as a co-equal TS client (ADR-0044). The
+	// address is validated by the bus when the listener is wired (a non-loopback
+	// address fails `up` loudly there), not here. Like leaf-listen, it sits behind
+	// the operator's secure transport (loopback) — native wss TLS is a follow-up.
+	WebSocketListen string `json:"websocket-listen,omitempty"`
 
 	// Port, when non-zero, pins the bus client listen port deterministically. It
 	// is the brew-services equivalent of `--port` (launchd inherits neither flag

@@ -9,7 +9,8 @@
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { connect, type Client } from "../src/client.js";
+import { connect } from "../src/connect.js";
+import { type Client } from "../src/client.js";
 import { connectIssuer } from "../src/issuer.js";
 import { topicSubject } from "../src/transport/subjects.js";
 import type { Message } from "../src/types.js";

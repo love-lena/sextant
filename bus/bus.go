@@ -65,6 +65,22 @@ type Config struct {
 	// native leaf-listener TLS is a follow-up. Mutually exclusive with leaf-remote.
 	LeafListenAddr string
 
+	// WebSocketListenAddr, when set, opens a loopback WebSocket listener on the bus
+	// so a browser dash can connect as a co-equal TS client over ws (ADR-0044). It
+	// is a loopback host:port (e.g. "127.0.0.1:7423"). Empty means no WebSocket
+	// listener — the default, no behavior change. Like the leaf listener it is
+	// loopback-only and NoTLS, sitting behind the operator's secure transport;
+	// native wss TLS is a follow-up.
+	WebSocketListenAddr string
+
+	// BrowserCredTTL bounds the lifetime of a mint-on-behalf credential issued for
+	// a kind=="browser" child (ADR-0044): the dash mints a short-lived browser
+	// credential it cannot retire, so the JWT exp is the cleanup. Zero means the
+	// default (defaultBrowserCredTTL); every non-browser mint is unaffected
+	// (perpetual, ttl=0). Overridable so the operator can widen it for a long-open
+	// tab or narrow it for a stricter posture.
+	BrowserCredTTL time.Duration
+
 	// LeafRemoteURL, when set, runs this bus in LEAF mode (ADR-0038): instead of an
 	// authoritative hub, it links to a remote hub at this nats-leaf:// URL,
 	// federates the per-client wire-API subjects to it, and keeps JetStream OFF (the
@@ -129,6 +145,13 @@ type Bus struct {
 	// defaultHeartbeatFreshness) at Start.
 	freshnessWindow time.Duration
 
+	// browserCredTTL bounds the JWT lifetime of a mint-on-behalf credential whose
+	// child kind is "browser" (ADR-0044): the dash mints a short-lived browser
+	// credential it cannot retire, so the exp is the cleanup. Resolved from
+	// Config.BrowserCredTTL (or defaultBrowserCredTTL) at Start. Every other mint
+	// is perpetual (ttl=0), unchanged.
+	browserCredTTL time.Duration
+
 	// hbAfterReadHook is a test-only seam (set via SetHeartbeatAfterReadHook):
 	// opClientsHeartbeat calls it, when non-nil, between reading the registry
 	// record and writing last_seen back, so a test can force a concurrent
@@ -146,6 +169,14 @@ type Bus struct {
 // SDK's default heartbeat interval (~15s) so an occasional missed beat does not
 // flap presence — roughly the SDK's own freshness multiple.
 const defaultHeartbeatFreshness = 45 * time.Second
+
+// defaultBrowserCredTTL is the lifetime a mint-on-behalf credential gets when the
+// child is kind=="browser" (ADR-0044): the dash mints a short-lived browser
+// credential it cannot retire, so the JWT exp is the cleanup. One hour balances
+// a long-open tab against a stale credential lingering after a tab closes;
+// overridable via Config.BrowserCredTTL. Every non-browser mint stays perpetual
+// (ttl=0), unchanged.
+const defaultBrowserCredTTL = time.Hour
 
 // stablePort resolves the listen port for a (re)start. If cfg.Port is non-zero
 // the caller asked for a specific port: it is a deterministic pin — probe it and
@@ -259,6 +290,16 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 			return nil, err
 		}
 	}
+	// Bus WebSocket listener (ADR-0044): default-off; only when --ws-listen /
+	// config websocket-listen is set. It lets a browser dash connect as a co-equal
+	// TS client over ws. Loopback-only and NoTLS — like the leaf listener it sits
+	// behind the operator's secure transport (loopback / SSH-R / Tailscale); native
+	// wss TLS is a follow-up.
+	if cfg.WebSocketListenAddr != "" {
+		if err := applyWebSocketListener(opts, cfg.WebSocketListenAddr); err != nil {
+			return nil, err
+		}
+	}
 
 	ns, err := natsserver.NewServer(opts)
 	if err != nil {
@@ -274,13 +315,17 @@ func Start(ctx context.Context, cfg Config) (*Bus, error) {
 	if freshness <= 0 {
 		freshness = defaultHeartbeatFreshness
 	}
-	b := &Bus{ns: ns, store: cfg.StoreDir, ident: ident, freshnessWindow: freshness, logf: logf}
+	browserTTL := cfg.BrowserCredTTL
+	if browserTTL <= 0 {
+		browserTTL = defaultBrowserCredTTL
+	}
+	b := &Bus{ns: ns, store: cfg.StoreDir, ident: ident, freshnessWindow: freshness, browserCredTTL: browserTTL, logf: logf}
 
 	// The bus's own operator-tier connection is in-process: it needs no TCP
 	// listener, so bootstrap runs while the client port is still closed and
 	// races nothing. The same connection carries control broadcasts (Drain) for
 	// the bus's lifetime.
-	opJWT, opSeed, _, err := ident.mintUser("sextant-operator", operatorPermissions())
+	opJWT, opSeed, _, err := ident.mintUser("sextant-operator", operatorPermissions(), 0)
 	if err != nil {
 		ns.Shutdown()
 		return nil, err
@@ -505,7 +550,14 @@ func (b *Bus) mintClient(ctx context.Context, displayName, kind, spawnedBy strin
 		// b.ident / b.backend.
 		return "", "", errors.New("bus: minting is unavailable on a leaf — mint at the hub (the leaf holds no signing key)")
 	}
-	creds, id, subject, err := b.mintIdentity(displayName)
+	// A browser child (ADR-0044) gets a bounded JWT lifetime: the dash mints it
+	// over clients.register but cannot retire it, so the exp is the cleanup. Every
+	// other kind is perpetual (ttl=0), unchanged.
+	var ttl time.Duration
+	if kind == wireapi.KindBrowser {
+		ttl = b.browserCredTTL
+	}
+	creds, id, subject, err := b.mintIdentity(displayName, ttl)
 	if err != nil {
 		return "", "", err
 	}

@@ -16,6 +16,7 @@ import (
 
 	"github.com/love-lena/sextant/clients/go/apps/internal/dashapi"
 	"github.com/love-lena/sextant/clients/go/sdk"
+	"github.com/love-lena/sextant/protocol/conninfo"
 )
 
 // Compile-time proof that the live SDK client satisfies the API's narrow Bus
@@ -68,17 +69,22 @@ func runServe(ctx context.Context, opts Options, out io.Writer) error {
 		return fmt.Errorf("listen on %s: %w", addr, err)
 	}
 
+	// The bus WebSocket URL the browser dials (ADR-0044): the bus records it in the
+	// discovery file when its WebSocket listener is on. The dash reads it and hands
+	// it to the page at credential-mint time. Empty when the bus has no WebSocket
+	// listener — the mint endpoint then fails loud with the remediation, and the
+	// announce below warns the operator up front.
+	wsURL := resolveWSURL(opts)
+	if wsURL == "" {
+		_, _ = fmt.Fprintf(out, "sextant dash --serve: the bus has no WebSocket listener — the browser dash cannot connect.\n"+
+			"  enable it: `sextant config set ws-listen 127.0.0.1:7423` then restart the bus (ADR-0044).\n")
+	}
+
 	// BaseContext makes every request context cancellable from here, so shutdown
-	// can cancel in-flight requests — crucially the long-lived SSE streams, which
-	// block on their request context and would otherwise hold the drain open.
+	// can cancel in-flight requests.
 	srvCtx, srvCancel := context.WithCancel(context.Background())
 	defer srvCancel()
-	api := dashapi.New(dashapi.Config{Bus: client, Token: token, AllowedOrigins: opts.AllowedOrigins, UIDir: opts.UIDir})
-	// Track the subjects the dash sees (msg.>) so the UI can list conversations
-	// on load, not just as new traffic arrives. Best-effort; failure is non-fatal.
-	if err := api.Watch(srvCtx); err != nil {
-		_, _ = fmt.Fprintf(out, "sextant dash --serve: subject watch unavailable: %v\n", err)
-	}
+	api := dashapi.New(dashapi.Config{Bus: client, Token: token, WSURL: wsURL, AllowedOrigins: opts.AllowedOrigins, UIDir: opts.UIDir})
 	srv := &http.Server{
 		Handler:           api,
 		BaseContext:       func(net.Listener) context.Context { return srvCtx },
@@ -166,6 +172,20 @@ func ReadStateFile(path string) (DashState, error) {
 // pick a free port.
 func serveAddr(port int) string {
 	return net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+}
+
+// resolveWSURL discovers the bus WebSocket URL the browser dials (ADR-0044) from
+// the local discovery file the bus writes when its WebSocket listener is on. Empty
+// means no listener (or it could not be read) — the dash then warns up front and
+// the mint endpoint fails loud with the remediation. The dash is a loopback
+// surface, so the locally-discovered bus.json is the authoritative source; a
+// remote-bus dash (--url) is out of scope for the browser WebSocket path.
+func resolveWSURL(opts Options) string {
+	info, err := conninfo.Read(connInfoPath(opts.Store))
+	if err != nil {
+		return ""
+	}
+	return info.WSURL
 }
 
 // newToken mints a per-launch bearer token: 32 bytes of crypto-random entropy,
