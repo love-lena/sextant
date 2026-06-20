@@ -39,6 +39,37 @@ tier, a different concept)
 The library you build a client with.
 _Avoid_: client library
 
+**Co-equal client**:
+A client implementation that is a peer of every other, in any language — none
+privileged (ADR-0041). The **bus** is one Go server, implemented once; the client
+surface (**SDK** + **conventions layer**) is co-equal across languages. A client
+is co-equal for a protocol **epoch** once it passes the **conformance suite** for
+that epoch — the same wire behaviour, not a look-alike. The Go and TypeScript
+SDKs are co-equal peers.
+_Avoid_: reference SDK, primary/secondary client, port (the TS SDK is not a port
+of the Go one — both conform to the protocol)
+
+**Conformance suite**:
+The recorded, language-neutral transcripts that **define** when a client is
+co-equal: given a record and a **convention** verb, the exact ordered primitive
+**operations** it must emit — and, at the wire level, the exact **frame** bytes.
+Every **SDK** replays the same vectors; passing them for an **epoch** is what
+makes a client co-equal. The vectors are data, not code — pure transcripts under
+`protocol/conformance`.
+_Avoid_: test suite (it is the cross-language contract, not one language's tests),
+golden files (it is shared, not per-language)
+
+**Conventions layer**:
+The patterns built *on* the primitives that are not core — a **goal**, the
+**assistant**, review-state, **`relates`**, the **workflow** contract. Each is a
+**lexicon-defined library** over the **SDK**: its record types and verb signatures
+live once in the lexicon (record types generated per language; verb logic
+hand-written — concept, not codegen), and the library issues only **operations** a
+bare client could, never reaching the **bus** internals (enforced mechanically).
+Optional and forkable; the bus stays primitive and content-opaque.
+_Avoid_: framework, engine (verb logic is a library, never a bus-interpreted
+engine), middleware
+
 **Bus**:
 What clients connect to in order to reach each other and their shared work — the
 sole access point, which implements the protocol's operations. It runs on a
