@@ -1,10 +1,10 @@
 ---
 id: TASK-175
 title: Goals convention in TypeScript (co-equality proof)
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-19 21:11'
-updated_date: '2026-06-19 21:31'
+updated_date: '2026-06-20 01:35'
 labels:
   - feature
   - conventions
