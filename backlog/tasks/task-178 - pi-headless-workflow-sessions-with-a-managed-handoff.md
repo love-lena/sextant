@@ -1,10 +1,10 @@
 ---
 id: TASK-178
 title: pi headless workflow sessions with a managed handoff
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-19 21:11'
-updated_date: '2026-06-19 21:31'
+updated_date: '2026-06-20 02:44'
 labels:
   - feature
   - pi
