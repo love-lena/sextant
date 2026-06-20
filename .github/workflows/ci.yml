@@ -44,3 +44,39 @@ jobs:
         run: go test ./... -race
       - name: e2e (M2 DoD — tests/e2e/m2-acceptance.md)
         run: go test -tags e2e -count=1 ./tests/e2e/
+
+  clients-ts:
+    name: build + test (TypeScript SDK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          cache: npm
+          cache-dependency-path: clients/ts/sdk/package-lock.json
+      # The integration suite spawns the real Go bus (cross-language round-trip,
+      # AC#6) — so Go is needed here too. The conformance/codec tests need no bus.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # The Go bus go:embeds generated dash UI bundles; regenerate them before the
+      # harness builds the `sextant` binary (mirrors the Go job).
+      - name: build dash UI
+        run: bash scripts/build-dash-ui.sh
+      - name: npm ci
+        working-directory: clients/ts/sdk
+        run: npm ci
+      # Build = typecheck + emit. A type error fails CI.
+      - name: build (tsc)
+        working-directory: clients/ts/sdk
+        run: npm run build
+      # Unit + conformance: replays protocol/conformance/vectors/wire/*.json on
+      # every push (AC#7). Needs no bus.
+      - name: conformance vectors + codec
+        working-directory: clients/ts/sdk
+        run: node --test dist/test/codec.test.js dist/test/conformance.test.js
+      # Cross-language integration on a real bus (AC#6) — required, not optional.
+      - name: cross-language round-trip (real bus)
+        working-directory: clients/ts/sdk
+        run: node --test --test-timeout 120000 dist/test/integration.test.js
