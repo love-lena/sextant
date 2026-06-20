@@ -1,0 +1,21 @@
+{
+  "name": "@sextant/pi-spike",
+  "version": "0.0.0",
+  "private": true,
+  "description": "SPIKE (TASK-176): validate pi as a first-class sextant bus client. Not the production pi-bus extension (TASK-177).",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "build:sdk": "npm --prefix ../sdk install && npm --prefix ../sdk run build",
+    "spike": "npm run build:sdk && npm run build && node dist/spike.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.79.8",
+    "@sextant/sdk": "file:../sdk"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "typescript": "^6.0.3"
+  }
+}
