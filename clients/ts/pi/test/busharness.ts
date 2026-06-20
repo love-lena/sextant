@@ -39,6 +39,11 @@ export interface Bus {
   bin: string;
   stop(): void;
   mint(name: string, kind: string): { credsPath: string; id: string };
+  // mintSelf enrolls this process as a self seat (`register --self`), which
+  // claims the bus principal when it is still unclaimed (ADR-0031). Used to make
+  // the driven harness's "operator" the actual principal, so the pi agent's
+  // trust-tiering classifies its DM as PRINCIPAL (operator-equivalent).
+  mintSelf(name: string, kind: string): { credsPath: string; id: string; claimedPrincipal: boolean };
   run(args: string[]): { stdout: string; stderr: string; code: number };
 }
 
@@ -110,7 +115,16 @@ export function startBus(): Bus {
   };
 
   const run = (args: string[]) => {
-    const r = spawnSync(bin, [...args, "--store", store], { cwd: repoRoot(), encoding: "utf8" });
+    // HERMETIC: pin SEXTANT_HOME to the throwaway store so any context the CLI
+    // writes (notably `register --self`, which writes a context + flips the
+    // active context) lands in the store, NEVER the operator's real
+    // ~/Library/Application Support/sextant. A bare CLI resolves the operator's
+    // real home otherwise — the reference_bare_sextant_cli hazard.
+    const r = spawnSync(bin, [...args, "--store", store], {
+      cwd: repoRoot(),
+      encoding: "utf8",
+      env: { ...process.env, SEXTANT_HOME: store },
+    });
     return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.status ?? -1 };
   };
 
@@ -130,5 +144,20 @@ export function startBus(): Bus {
     return { credsPath, id: m[1]! };
   };
 
-  return { url, store, bin, stop, mint, run };
+  const mintSelf = (name: string, kind: string): { credsPath: string; id: string; claimedPrincipal: boolean } => {
+    const r = run(["clients", "register", "--self", "--name", name, "--kind", kind]);
+    if (r.code !== 0) {
+      throw new Error(`mintSelf ${name} failed (code ${r.code}):\n${r.stdout}\n${r.stderr}`);
+    }
+    const idMatch = r.stdout.match(/enrolled as ([0-9A-HJKMNP-TV-Z]{26})/);
+    // The creds path can contain spaces (e.g. ~/Library/Application Support/...),
+    // so capture the rest of the line, not just up to the first space.
+    const credsMatch = r.stdout.match(/creds:\s*(.+?)\s*$/m);
+    if (!idMatch || !credsMatch) {
+      throw new Error(`could not parse the self-enrolled id/creds for ${name} from:\n${r.stdout}`);
+    }
+    return { credsPath: credsMatch[1]!, id: idMatch[1]!, claimedPrincipal: /this seat is now the bus principal/.test(r.stdout) };
+  };
+
+  return { url, store, bin, stop, mint, mintSelf, run };
 }

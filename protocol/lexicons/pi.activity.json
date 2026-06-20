@@ -1,0 +1,52 @@
+{
+  "lexicon": 1,
+  "id": "pi.activity",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "One observed step of a headless agent's work, published as a message on a bus activity topic (by convention msg.topic.pi.activity.<agent-id>) by the @sextant/pi-bus extension (TASK-177). It bridges a pi session's own event stream — turns, thinking, tool calls — onto the bus so a dash or crew client can render a headless worker like any other crew member without attaching to its terminal (the TASK-150/151 observe-agents-from-sextant thread). It SIGNALS what the worker is doing; it never directs it. Content is opaque to the bus; this is a convention, not a bus feature. A reader treats this as an UNTRUSTED record (the worker is a co-equal client) — the bus-stamped author is authoritative, never a field here.",
+      "record": {
+        "type": "object",
+        "required": ["kind"],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "The activity kind: turn_start | turn_end | tool_start | tool_end | thinking | message. turn_* bracket one agent turn; tool_* bracket one tool execution; thinking carries the agent's reasoning text for a turn; message carries the agent's assistant text for a turn."
+          },
+          "turnIndex": {
+            "type": "integer",
+            "description": "The agent turn this activity belongs to (0-based), so a reader can group a turn's thinking + tool calls + reply."
+          },
+          "tool": {
+            "type": "string",
+            "description": "For tool_start / tool_end: the tool name (e.g. bash, read, edit, sextant_publish)."
+          },
+          "toolCallId": {
+            "type": "string",
+            "description": "For tool_* : a stable id correlating a tool_start with its tool_end."
+          },
+          "args": {
+            "type": "string",
+            "description": "For tool_start: a short, truncated human-readable rendering of the tool arguments (e.g. the bash command). Truncated to keep the bus record small; the durable detail is the worker's own session log."
+          },
+          "result": {
+            "type": "string",
+            "description": "For tool_end: a short, truncated rendering of the tool result. Truncated for the same reason as args."
+          },
+          "isError": {
+            "type": "boolean",
+            "description": "For tool_end: whether the tool execution errored."
+          },
+          "text": {
+            "type": "string",
+            "description": "For thinking: the agent's reasoning text. For message: the agent's assistant reply text. Truncated to a sane preview length."
+          },
+          "updated": {
+            "type": "string",
+            "description": "ISO-8601 timestamp the worker stamped on this activity (convenience; the bus-stamped frame time is authoritative)."
+          }
+        }
+      }
+    }
+  }
+}

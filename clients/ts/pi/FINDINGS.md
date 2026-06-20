@@ -1,5 +1,13 @@
 # TASK-176 spike findings — pi as a first-class sextant bus client
 
+> **This is the design record (the rationale) for the shipped `@sextant/pi-bus`
+> package.** The TASK-176 spike validated the mechanism; TASK-177 grew it into
+> this package and subsumed the spike's exploratory code. The spike's real-bus
+> harness lives on as `test/busharness.ts`, and its AFK driver lives on as the
+> package's driven harness (`test/driven.ts`, run via `npm run driven`) — the
+> regression harness for the five adjustments below. Those five adjustments are
+> implemented in `src/` (see the package README and the ADR).
+
 **Verdict: GO for TASK-177**, with the design adjustments in the last section.
 
 This spike validated, against a **real Go bus** and a **real `pi --mode rpc`
@@ -8,16 +16,6 @@ a first-class sextant bus client. The mechanism works end to end: an inbound bus
 frame wakes an idle pi agent, the SDK client survives a session transition, a
 busy topic is absorbed without wedging, and pi's action stream is bridgeable
 onto a bus activity topic. No blocking gap was found.
-
-The deliverable is three files plus this write-up:
-- `extension.ts` — the minimal spike extension (the thing TASK-177 grows into).
-- `spike.ts` — the AFK driver: stands up the bus, mints scoped creds, launches
-  pi in RPC mode with the extension, and makes the five assertions.
-- `busharness.ts` — a trimmed copy of the SDK's real-bus harness (its `test/`
-  harness is not an exported module).
-
-Run it yourself: `cd clients/ts/pi-spike && npm install && npm run spike`
-(needs the Go toolchain on PATH and `ANTHROPIC_API_KEY`; costs a few cents).
 
 ## Environment validated
 

@@ -6,13 +6,15 @@
     "lib": ["es2023"],
     "types": ["node"],
     "strict": true,
-    "declaration": false,
+    "declaration": true,
+    "declarationMap": true,
     "sourceMap": true,
     "outDir": "dist",
     "rootDir": ".",
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true
   },
-  "include": ["extension.ts", "spike.ts", "busharness.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts"]
 }
