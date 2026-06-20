@@ -1,9 +1,10 @@
 ---
 id: TASK-184
 title: 'One-command live demo: a pi agent on the operator''s bus, end to end'
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-19 21:31'
+updated_date: '2026-06-20 04:18'
 labels:
   - feature
   - demo
