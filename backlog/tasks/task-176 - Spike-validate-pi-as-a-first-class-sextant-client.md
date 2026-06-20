@@ -1,10 +1,10 @@
 ---
 id: TASK-176
 title: 'Spike: validate pi as a first-class sextant client'
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-06-19 21:11'
-updated_date: '2026-06-20 01:35'
+updated_date: '2026-06-20 01:56'
 labels:
   - spike
   - research
@@ -37,3 +37,9 @@ Spike (AFK): validate that pi can host a first-class sextant client before commi
 <!-- SECTION:NOTES:BEGIN -->
 Cold-start context (from the PRD): pin a specific pi version/commit (github.com/earendil-works/pi, MIT); the wake primitive is sendMessage(triggerTurn:true)/sendUserMessage, started in the session_start handler; starting template is examples/extensions/file-trigger.ts; the disposed-session risk is earendil-works/pi issue 3021. Build a minimal extension + TS SDK connection and run against a real bus.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+pi spike COMPLETE — GO for 177 (PR #239 squash). Validated vs a REAL Go bus + REAL pi --mode rpc (v0.79.8) + a real model. AC#1 headless wake CONFIRMED (inbound frame -> idle pi agent wakes -> new turn, traced). AC#2 survival CONFIRMED, issue 3021 CLEARED for this extension shape + KEY FINDING: pi fires session_start TWICE per new_session in RPC -> open-client path MUST be idempotent (close-before-open). AC#3 back-pressure CHARACTERISED (bounded queue + drop-oldest; durable record on the bus; refine w/ burst-coalesce + reserved DM slot). AC#4 observability CONFIRMED (RPC stream + a pi.activity bus-topic bridge - a peer read back turn_*/tool_* -> dash renders a headless worker, TASK-150/151). AC#5 trust written up (own scoped creds by construction; bus content = untrusted prompt-injection input; layered defenses: least-priv creds + block-by-default headless tool_call gate + container/VM + trust-tier wake by frame author; pi is NOT a sandbox). Honest caveats: loopback/cheap-model only; reload/fork not individually driven; managed-handoff = 178. Spike code at clients/ts/pi-spike (extension.ts = the 177 seed).
+<!-- SECTION:FINAL_SUMMARY:END -->
