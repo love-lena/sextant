@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/love-lena/sextant/clients/go/apps/internal/seqcursor"
 )
 
 // Identity is the per-session record of WHICH bus identity the MCP server
@@ -42,7 +44,7 @@ func identityFile(dataDir, sessionID string) string {
 	if name == "" {
 		name = "no-session"
 	}
-	return filepath.Join(dataDir, "attest-identity", sanitize(name)+".json")
+	return filepath.Join(dataDir, "attest-identity", seqcursor.Sanitize(name)+".json")
 }
 
 // SaveIdentity records the server's connected identity for a session. It is

@@ -64,7 +64,10 @@ func TestCursorSecondInvocationDeliversNothing(t *testing.T) {
 // TestCursorNeverRewinds: a stale Advance can't move the cursor backward (a retry
 // or out-of-order batch never re-delivers).
 func TestCursorNeverRewinds(t *testing.T) {
-	c := &Cursor{path: filepath.Join(t.TempDir(), "c.json"), Next: map[string]uint64{}}
+	c, err := LoadCursor(t.TempDir(), sessionA)
+	if err != nil {
+		t.Fatal(err)
+	}
 	subj := "msg.client.X"
 	c.Advance(subj, 10)
 	c.Advance(subj, 4) // stale

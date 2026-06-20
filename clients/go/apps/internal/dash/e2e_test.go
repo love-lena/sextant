@@ -22,7 +22,6 @@ import (
 	"github.com/love-lena/sextant/clients/go/sdk"
 	"github.com/love-lena/sextant/protocol/conninfo"
 	"github.com/love-lena/sextant/protocol/sx"
-	"github.com/love-lena/sextant/protocol/wireapi"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"go.uber.org/goleak"
@@ -438,7 +437,13 @@ func TestDashConnectWedgedBusFailsLoud(t *testing.T) {
 		t.Fatalf("wedge connect: %v", err)
 	}
 	t.Cleanup(wedge.Close)
-	if _, err := wedge.Subscribe(wireapi.CallSubject(id, wireapi.OpClientsHello), func(*nats.Msg) {}); err != nil {
+	// The connect-handshake call subject the SDK's hello lands on, built inline
+	// rather than from protocol/wireapi: this test deliberately constructs a
+	// malformed wedged-bus harness, so it must not depend on the production wire
+	// binding (the wire atom is the SDK's alone — TASK-182). The shape is
+	// sx.api.<clientID>.clients.hello (wireapi.APIPrefix + id + "." + OpClientsHello).
+	helloSubject := "sx.api." + id + ".clients.hello"
+	if _, err := wedge.Subscribe(helloSubject, func(*nats.Msg) {}); err != nil {
 		t.Fatalf("wedge subscribe: %v", err)
 	}
 	if err := wedge.Flush(); err != nil {

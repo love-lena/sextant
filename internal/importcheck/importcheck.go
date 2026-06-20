@@ -49,6 +49,11 @@ const (
 	tuiNS = Module + "/clients/go/apps/internal/tui/"
 	// natsNS prefixes every NATS package (client, jwt, nkeys, …).
 	natsNS = "github.com/nats-io/"
+	// seqcursorPkg is the one durable per-subject sequence cursor (TASK-182). The
+	// MCP substate, the attest hook, and violet's ack watermark are its only
+	// callers; each MUST reach it rather than re-declare the atomic-temp-rename
+	// JSON cursor + sanitize filter it used to triplicate.
+	seqcursorPkg = Module + "/clients/go/apps/internal/seqcursor"
 )
 
 // modulePkg reports whether dep is a package of this module.
@@ -222,6 +227,41 @@ func AssertProtocolImportsNoClients(t *testing.T, pkgPath string) {
 	for dep := range Closure(t, pkgPath) {
 		if strings.HasPrefix(dep, clientsNS) {
 			t.Errorf("%s: a protocol package reaches a client (%s); the protocol never imports clients", pkgPath, dep)
+		}
+	}
+}
+
+// AssertUsesSeqCursor fails when a cursor site's production closure does NOT
+// reach the shared seqcursor module (TASK-182) — i.e. it still owns a private
+// atomic-temp-rename JSON cursor instead of delegating to the one module. Pass
+// each of the three site package paths; the rule bites per site. The durable
+// cursor is the module's, never a re-declaration.
+func AssertUsesSeqCursor(t *testing.T, pkgPath string) {
+	t.Helper()
+	for dep := range Closure(t, pkgPath) {
+		if dep == seqcursorPkg {
+			return
+		}
+	}
+	t.Errorf("%s: production closure does not reach %s; the durable per-subject cursor is the shared module's, not a re-declaration", pkgPath, seqcursorPkg)
+}
+
+// AssertNoWireAtom fails when any clients/ package in pkgPath's production
+// closure imports the wire atom (protocol/wireapi) directly. The SDK is the sole
+// sanctioned importer; a client app, convention, or app-internal that reaches
+// wireapi leaks the wire protocol into the application layer (TASK-182 AC#4). The
+// bus legitimately imports wireapi (it defines the wire shapes) — but the bus is
+// not a clients/ package, so it is outside this rule's subject by construction.
+func AssertNoWireAtom(t *testing.T, pkgPath string) {
+	t.Helper()
+	for dep, imports := range Closure(t, pkgPath) {
+		if !modulePkg(dep) || dep == sdkPkg || dep == wireAtom {
+			continue
+		}
+		for _, imp := range imports {
+			if imp == wireAtom {
+				t.Errorf("%s: %s imports %s directly; the wire atom is the SDK's alone", pkgPath, dep, imp)
+			}
 		}
 	}
 }
