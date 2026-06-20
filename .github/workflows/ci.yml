@@ -57,6 +57,7 @@ jobs:
           cache-dependency-path: |
             clients/ts/sdk/package-lock.json
             clients/ts/conventions/goals/package-lock.json
+            clients/ts/pi/package-lock.json
       # The integration + live scenarios spawn the real Go bus (cross-language
       # round-trip, AC#6; goals co-equality, TASK-175 AC#4) — so Go is needed here
       # too. The conformance/codec/unit tests need no bus.
@@ -109,3 +110,21 @@ jobs:
       - name: goals co-equality (real bus, conv/goals)
         working-directory: clients/ts/conventions/goals
         run: node --test --test-timeout 180000 dist/test/coequality.test.js
+
+      # --- the TS pi-bus extension (TASK-177) ---
+      # @sextant/pi-bus is the pi extension that makes a pi session a first-class
+      # bus client. It depends on @sextant/sdk AND @sextant/conv-goals via file:
+      # links (both built above). CI covers the pure-logic unit tests (the wake /
+      # back-pressure policy, the headless tool gate, the pi.activity bridge, the
+      # /set-goal arg parse); the operator-verified driven run (AC#5 — a real model
+      # on a hermetic bus, costs API credits) is run out of band via `npm run
+      # driven`, not in CI.
+      - name: npm ci (pi-bus)
+        working-directory: clients/ts/pi
+        run: npm ci
+      - name: build (pi-bus, tsc)
+        working-directory: clients/ts/pi
+        run: npm run build
+      - name: unit tests (pi-bus)
+        working-directory: clients/ts/pi
+        run: node --test dist/test/backpressure.test.js dist/test/gate.test.js dist/test/activity.test.js dist/test/goal_command.test.js
