@@ -46,7 +46,7 @@ jobs:
         run: go test -tags e2e -count=1 ./tests/e2e/
 
   clients-ts:
-    name: build + test (TypeScript SDK)
+    name: build + test (TypeScript SDK + conventions)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -54,9 +54,12 @@ jobs:
         with:
           node-version: '26'
           cache: npm
-          cache-dependency-path: clients/ts/sdk/package-lock.json
-      # The integration suite spawns the real Go bus (cross-language round-trip,
-      # AC#6) — so Go is needed here too. The conformance/codec tests need no bus.
+          cache-dependency-path: |
+            clients/ts/sdk/package-lock.json
+            clients/ts/conventions/goals/package-lock.json
+      # The integration + live scenarios spawn the real Go bus (cross-language
+      # round-trip, AC#6; goals co-equality, TASK-175 AC#4) — so Go is needed here
+      # too. The conformance/codec/unit tests need no bus.
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -64,19 +67,45 @@ jobs:
       # harness builds the `sextant` binary (mirrors the Go job).
       - name: build dash UI
         run: bash scripts/build-dash-ui.sh
-      - name: npm ci
+
+      # --- the TS SDK (TASK-174) ---
+      - name: npm ci (sdk)
         working-directory: clients/ts/sdk
         run: npm ci
-      # Build = typecheck + emit. A type error fails CI.
-      - name: build (tsc)
+      # Build = typecheck + emit. A type error fails CI. The goals convention's
+      # file: dependency on @sextant/sdk resolves to this dist/, so the SDK must be
+      # built before the goals package below.
+      - name: build (sdk, tsc)
         working-directory: clients/ts/sdk
         run: npm run build
       # Unit + conformance: replays protocol/conformance/vectors/wire/*.json on
       # every push (AC#7). Needs no bus.
-      - name: conformance vectors + codec
+      - name: conformance vectors + codec (sdk)
         working-directory: clients/ts/sdk
         run: node --test dist/test/codec.test.js dist/test/conformance.test.js
       # Cross-language integration on a real bus (AC#6) — required, not optional.
-      - name: cross-language round-trip (real bus)
+      - name: cross-language round-trip (real bus, sdk)
         working-directory: clients/ts/sdk
         run: node --test --test-timeout 120000 dist/test/integration.test.js
+
+      # --- the TS goals convention (TASK-175) ---
+      # @sextant/conv-goals depends on @sextant/sdk via a file: link to the SDK
+      # package above (already built). The drift guard re-runs lexgen and asserts
+      # the committed types match the lexicon.
+      - name: npm ci (conv/goals)
+        working-directory: clients/ts/conventions/goals
+        run: npm ci
+      - name: build (conv/goals, tsc)
+        working-directory: clients/ts/conventions/goals
+        run: npm run build
+      # Op-transcript conformance: replays the SAME protocol/conformance/vectors/
+      # goals/*.json the Go suite passes, plus the verb unit tests and the lexicon
+      # drift guard. Needs no bus (AC#2, AC#3).
+      - name: goals conformance + unit + drift (conv/goals)
+        working-directory: clients/ts/conventions/goals
+        run: node --test dist/test/goals.test.js dist/test/conformance.test.js dist/test/lexgen.test.js
+      # The live co-equality scenario on a real bus: TS + Go goals conventions
+      # write/read the same goal artifact, byte-identical (AC#4) — required.
+      - name: goals co-equality (real bus, conv/goals)
+        working-directory: clients/ts/conventions/goals
+        run: node --test --test-timeout 180000 dist/test/coequality.test.js
