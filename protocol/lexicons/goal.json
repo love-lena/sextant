@@ -53,6 +53,25 @@
           }
         }
       }
+    },
+    "verbs": {
+      "type": "object",
+      "description": "The goals convention's verb signatures — the canonical interface contract every language's conv/goals library implements over its own SDK (ADR-0041: a convention is a library over the SDK, never a bus feature). Each verb names its domain input and the ordered primitive bus operations it emits; the recorded conformance vectors under protocol/conformance/vectors/goals pin that an implementation produces exactly these operations. Verb LOGIC is hand-written per language (concept, not codegen); only the record TYPES above are generated.",
+      "setCriterion": {
+        "summary": "Set one criterion's status on a goal: read goal.<goalId> (artifact.get), rewrite that criterion's status in place (every other field preserved), compare-and-set it back (artifact.update), then announce the transition on msg.topic.goals (message.publish goal.update). Idempotent: a criterion already at the target status is a no-op — no write, no announce. status=met is invariant — a criterion only reads met with >=1 proof-kind artifact in relates; setting met without proof is the caller's assertion, the read-side proof-filter is the single arbiter.",
+        "input": {
+          "goalId": "string — the goal-id; the artifact is goal.<goalId>",
+          "criterionId": "string — the criterion id to set, unique within the goal",
+          "status": "string — one of: met | in-progress | waiting-on-you | blocked | not-started",
+          "headline": "string — short line describing the transition for the goal.update announcement",
+          "ref": "string (optional) — artifact/PR/ticket that triggered the update"
+        },
+        "operations": [
+          "artifact.get goal.<goalId>",
+          "artifact.update goal.<goalId> (the goal record with the criterion's status rewritten; expectedRev = the get's revision)",
+          "message.publish msg.topic.goals (a goal.update record: goal, crit, status, headline, ref)"
+        ]
+      }
     }
   }
 }

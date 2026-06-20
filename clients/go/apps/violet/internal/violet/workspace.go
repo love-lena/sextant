@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/love-lena/sextant/clients/go/conventions/goals"
 	"github.com/love-lena/sextant/protocol/wire"
 )
 
@@ -44,43 +45,48 @@ type gatheredWorkspace struct {
 	otherCount  int
 }
 
-// relateEntry is one entry of an artifact record's `relates` array — mirrors
-// dashapi's relate shape without creating a cross-package dependency.
-type relateEntry struct {
-	Goal string
-	Crit string
-	Kind string
-}
-
 type reviewItem struct {
 	Name     string
 	Revision uint64
 	State    string
-	Title    string        // best-effort: a human label pulled from the record if present
-	Relates  []relateEntry // proof relations parsed from the record's `relates` array
+	Title    string         // best-effort: a human label pulled from the record if present
+	Relates  []goals.Relate // relations parsed from the record's `relates` array (goals.ParseRelates)
 }
 
 type goalDigest struct {
 	Name     string
-	Headline string
+	Headline string // the goal's north-star (goals.Goal.Northstar) — never a `title` fallback
 	Criteria []criterionDigest
 }
 
 type criterionDigest struct {
-	Label  string
-	Status string // e.g. "met", "waiting-on-you", "pending"
+	Text   string // the criterion's text (goals.Criterion.Text) — never a `label` fallback
+	Status string // the effective status after the proof-filter (goals.EffectiveStatus)
 }
 
 // gatherWorkspace reads the artifact directory and assembles the live state. It
 // is a bounded, read-only sweep — list once, then get each artifact — that the
 // deep pass runs (never the answer path). Failures on a single artifact are
 // skipped (the bus owns these records; one bad read must not fail the pass).
+//
+// It reads every record once and keeps the raw records, because a goal's criteria
+// statuses are read through the proof-filter (goals.EffectiveStatus): a criterion
+// stored "met" reads as met only with a proof artifact backing it, and the proof
+// lives in some OTHER artifact's relates. So goals are digested after the whole
+// directory is in hand, with the proof set built from all records — the same
+// invariant the dash applies, from the one conv/goals definition.
 func gatherWorkspace(ctx context.Context, r artifactReader) (gatheredWorkspace, error) {
 	infos, err := r.ListArtifacts(ctx)
 	if err != nil {
 		return gatheredWorkspace{}, fmt.Errorf("violet: list artifacts: %w", err)
 	}
+	type goalRec struct {
+		name string
+		goal goals.Goal
+	}
 	var ws gatheredWorkspace
+	var goalRecs []goalRec
+	var allRecords []json.RawMessage // for the proof-filter (proof relations live across artifacts)
 	for _, info := range infos {
 		art, err := r.GetArtifact(ctx, info.Name)
 		if err != nil {
@@ -91,9 +97,11 @@ func gatherWorkspace(ctx context.Context, r artifactReader) (gatheredWorkspace, 
 			ws.otherCount++
 			continue
 		}
-		// Goal? (its record carries criteria.)
-		if g, ok := parseGoal(info.Name, rec); ok {
-			ws.goals = append(ws.goals, g)
+		allRecords = append(allRecords, art.Record)
+		// Goal? (its record carries criteria.) Defer the digest until every record
+		// is read, so the proof-filter sees the whole directory.
+		if g, ok := goals.ParseGoal(art.Record); ok {
+			goalRecs = append(goalRecs, goalRec{name: info.Name, goal: g})
 			continue
 		}
 		// Review-flagged? (a producer set review.state=review.)
@@ -103,15 +111,37 @@ func gatherWorkspace(ctx context.Context, r artifactReader) (gatheredWorkspace, 
 				Revision: art.Revision,
 				State:    state,
 				Title:    recordTitle(rec),
-				Relates:  parseRelates(rec),
+				Relates:  goals.ParseRelates(art.Record),
 			})
 			continue
 		}
 		ws.otherCount++
 	}
+	for _, gr := range goalRecs {
+		ws.goals = append(ws.goals, digestGoal(gr.name, gr.goal, allRecords))
+	}
 	sort.Slice(ws.reviewQueue, func(i, j int) bool { return ws.reviewQueue[i].Name < ws.reviewQueue[j].Name })
 	sort.Slice(ws.goals, func(i, j int) bool { return ws.goals[i].Name < ws.goals[j].Name })
 	return ws, nil
+}
+
+// digestGoal turns a parsed goal into the violet digest, reading its headline from
+// the north-star (never a `title` fallback) and each criterion's text and
+// proof-filtered status from the lexicon fields (never a `label`/`state`
+// fallback). goalID is the artifact name "goal.<id>"; the proof set is built from
+// allRecords for the goal's own id. This is the whole READ half — one shape, one
+// source — replacing parseGoal's defensive field-name guessing that masked the
+// dash↔violet drift.
+func digestGoal(goalID string, g goals.Goal, allRecords []json.RawMessage) goalDigest {
+	proved := goals.ProvedCriteria(strings.TrimPrefix(goalID, "goal."), allRecords)
+	d := goalDigest{Name: goalID, Headline: g.Northstar}
+	for _, c := range g.Criteria {
+		d.Criteria = append(d.Criteria, criterionDigest{
+			Text:   c.Text,
+			Status: goals.EffectiveStatus(c, proved),
+		})
+	}
+	return d
 }
 
 // reviewState reads the review-state convention block (dashapi/review.go): a
@@ -144,63 +174,6 @@ func recordTitle(rec map[string]json.RawMessage) string {
 	return ""
 }
 
-// parseRelates parses the `relates` array from an artifact record into relateEntry
-// values. A missing or malformed relates field yields nil (not an error — most
-// artifacts carry no relations).
-func parseRelates(rec map[string]json.RawMessage) []relateEntry {
-	raw, ok := rec["relates"]
-	if !ok {
-		return nil
-	}
-	var all []struct {
-		Goal string `json:"goal"`
-		Crit string `json:"crit"`
-		Kind string `json:"kind"`
-	}
-	if json.Unmarshal(raw, &all) != nil {
-		return nil
-	}
-	out := make([]relateEntry, 0, len(all))
-	for _, r := range all {
-		if r.Goal != "" {
-			out = append(out, relateEntry{Goal: r.Goal, Crit: r.Crit, Kind: r.Kind})
-		}
-	}
-	return out
-}
-
-// parseGoal recognises a goal record by its criteria array and digests each
-// criterion's status, so the deep pass can surface waiting-on-you criteria and
-// say where each goal stands. A record with no criteria array is not a goal.
-func parseGoal(name string, rec map[string]json.RawMessage) (goalDigest, bool) {
-	raw, ok := rec["criteria"]
-	if !ok {
-		return goalDigest{}, false
-	}
-	var crits []struct {
-		Label  string `json:"label"`
-		Text   string `json:"text"`
-		Status string `json:"status"`
-		State  string `json:"state"`
-	}
-	if json.Unmarshal(raw, &crits) != nil {
-		return goalDigest{}, false
-	}
-	g := goalDigest{Name: name, Headline: recordTitle(rec)}
-	for _, c := range crits {
-		label := c.Label
-		if label == "" {
-			label = c.Text
-		}
-		status := c.Status
-		if status == "" {
-			status = c.State
-		}
-		g.Criteria = append(g.Criteria, criterionDigest{Label: label, Status: status})
-	}
-	return g, true
-}
-
 // renderForCuration renders the gathered state into the text the home-manager
 // curates: the review queue, the goals criterion-by-criterion, and the count of
 // everything else. Deterministic ordering keeps it cache-stable turn to turn
@@ -214,7 +187,7 @@ func (ws gatheredWorkspace) renderForCuration() string {
 	for _, g := range ws.goals {
 		fmt.Fprintf(&b, "  %s — %s\n", g.Name, g.Headline)
 		for _, c := range g.Criteria {
-			fmt.Fprintf(&b, "    - [%s] %s\n", c.Status, c.Label)
+			fmt.Fprintf(&b, "    - [%s] %s\n", c.Status, c.Text)
 		}
 	}
 	b.WriteString("REVIEW QUEUE (artifacts a producer flagged review):\n")
@@ -234,14 +207,10 @@ func (ws gatheredWorkspace) renderForCuration() string {
 
 // downstreamScore returns the number of goal criteria this item is a proof for.
 // A higher score means this item blocks more downstream work — rank it first.
+// What counts as proof is goals.Relate.IsProof — the one shared definition, so
+// the ranking can't drift from the dash's approve loop or the read-side filter.
 func downstreamScore(it reviewItem) int {
-	n := 0
-	for _, r := range it.Relates {
-		if r.Kind == "proof" {
-			n++
-		}
-	}
-	return n
+	return len(goals.Proofs(it.Relates))
 }
 
 // rankReviewQueue sorts items by blocks-most-downstream-work (descending). Items
@@ -264,12 +233,7 @@ func rankReviewQueue(items []reviewItem) []reviewItem {
 // If the item has proof relations, it names the downstream goal criteria it
 // unblocks. Otherwise it falls back to a terse needs-review line.
 func whyText(it reviewItem, ws gatheredWorkspace) string {
-	var proofs []relateEntry
-	for _, r := range it.Relates {
-		if r.Kind == "proof" {
-			proofs = append(proofs, r)
-		}
-	}
+	proofs := goals.Proofs(it.Relates) // the one shared proof definition
 	if len(proofs) == 0 {
 		return "[[" + it.Name + "]] needs your review."
 	}
@@ -291,7 +255,7 @@ func whyText(it reviewItem, ws gatheredWorkspace) string {
 	return "[[" + it.Name + "]] unblocks " + itoa(len(proofs)) + " criteria across " + itoa(len(uniqueGoals(proofs))) + " goals."
 }
 
-func uniqueGoals(proofs []relateEntry) []string {
+func uniqueGoals(proofs []goals.Relate) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, p := range proofs {

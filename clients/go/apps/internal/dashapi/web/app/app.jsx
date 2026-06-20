@@ -98,10 +98,6 @@
     return rec.$type || "·";
   }
 
-  // the five criterion statuses (the goal.<id> lexicon); an unknown value is
-  // normalized to not-started so the Goals view never indexes an empty STATUS slot.
-  const GOAL_CRIT_STATES = ["met", "in-progress", "waiting-on-you", "blocked", "not-started"];
-
   function App() {
     const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
 
@@ -109,6 +105,7 @@
     const [clients, setClients] = useState([]);          // raw ClientInfo[]
     const [artifacts, setArtifacts] = useState([]);      // raw ArtifactInfo[]
     const [records, setRecords] = useState({});          // name -> Record (status + instant open)
+    const [goals, setGoals] = useState([]);              // the GOALS projection from GET /api/goals (proof-filter applied server-side, conv/goals)
     const [home, setHome] = useState(null);              // curated Home config (the 'home' artifact, TASK-71 #2)
     const [assistant, setAssistant] = useState(null);    // the 'assistant' artifact (ADR-0039): { client_id, name, accent } — absent pre-v0.5.0
     const [convos, setConvos] = useState({});            // subject -> {msgs:[{id,author,text,ts}], last, lastText}
@@ -190,6 +187,10 @@
       apiGet("/api/self").then(setSelf).catch(()=>{});
       apiGet("/api/clients").then(cs=>setClients(Array.isArray(cs)?cs:[])).catch(()=>{});
       apiGet("/api/artifacts").then(as=>setArtifacts(Array.isArray(as)?as:[])).catch(()=>{});
+      // the GOALS projection (conv/goals, served pre-filtered): the proof-filter +
+      // rollup are applied server-side, so this view never re-derives goal status
+      // in JS. See GET /api/goals (dashapi).
+      apiGet("/api/goals").then(gs=>setGoals(Array.isArray(gs)?gs:[])).catch(()=>{});
       apiGet("/api/artifacts/home").then(a=>setHome((a&&a.Record)||null)).catch(()=>{});
       // the assistant convention (ADR-0039): a latest-value `assistant` artifact
       // names the live operator-assistant. Absent pre-v0.5.0 (404) → stays null.
@@ -326,6 +327,12 @@
           if(!Array.isArray(as)) return;
           setArtifacts(prev => sig(prev)===sig(as) ? prev : as);
         }).catch(()=>{});
+        // the GOALS projection has no push either — poll it so the Goals view +
+        // Home goal summary hot-reload as criteria move (server-side proof-filtered).
+        apiGet("/api/goals").then(gs=>{
+          if(!Array.isArray(gs)) return;
+          setGoals(prev => JSON.stringify(prev)===JSON.stringify(gs) ? prev : gs);
+        }).catch(()=>{});
         apiGet("/api/subjects").then(subs=>{
           if(!Array.isArray(subs)) return;
           setConvos(prev=>{ let changed=false; const next={...prev}; for(const s of subs){ if(s&&s.subject&&!next[s.subject]){ next[s.subject]={msgs:[],last:0,lastText:""}; changed=true; } } return changed?next:prev; });
@@ -404,66 +411,21 @@
       };
     }),[clients, records]);
 
-    // derived: goals (the goal primitive, ADR-0035). Each goal is a latest-value
-    // artifact named goal.<id> whose record carries $type:"goal" + a northstar +
-    // criteria[]. Goal STATUS is derived from the criteria rollup (goals.jsx) —
-    // there is no stored goal-status field. Evidence is found by scanning ALL
-    // records for a `relates` entry pointing at this goal (+crit): kind:"proof"
-    // backs a met criterion, kind:"related" is a generic association. Everything
-    // is guarded against missing/malformed fields so a half-written goal can't
-    // crash the view.
-    const goals = useMemo(()=>{
-      // index relates entries once: goalId -> { crit:{<critId>:[{name,kind}]}, goal:[{name,kind}] }
-      const rel = {};
-      for(const a of artifacts){
-        const rec = records[a.Name];
-        const rs = rec && Array.isArray(rec.relates) ? rec.relates : null;
-        if(!rs) continue;
-        for(const e of rs){
-          if(!e || typeof e.goal!=="string" || !e.goal) continue;
-          const bucket = rel[e.goal] || (rel[e.goal]={ crit:{}, goal:[] });
-          const ref = { name:a.Name, kind:(e.kind==="proof"?"proof":"related") };
-          if(typeof e.crit==="string" && e.crit){ (bucket.crit[e.crit] || (bucket.crit[e.crit]=[])).push(ref); }
-          else bucket.goal.push(ref);
-        }
-      }
-      // a goal is the latest-value artifact goal.<id> carrying a goal record;
-      // require BOTH the goal. name and the $type so a stray $type:"goal" under
-      // another name can't surface in Goals while still showing in the Artifacts
-      // list (which excludes the goal. namespace) — no cross-view double-listing.
-      return artifacts.filter(a=>{ const r=records[a.Name]; return a.Name.startsWith("goal.") && r && r.$type==="goal"; }).map(a=>{
-        const r = records[a.Name] || {};
-        const id = a.Name.replace(/^goal\./,"");
-        const bucket = rel[id] || { crit:{}, goal:[] };
-        const criteria = (Array.isArray(r.criteria)?r.criteria:[]).map((c,i)=>{
-          const cid = (c && typeof c.id==="string" && c.id) || ("crit-"+(i+1));
-          return {
-            id: cid,
-            text: (c && typeof c.text==="string") ? c.text : "",
-            status: (c && GOAL_CRIT_STATES.indexOf(c.status)>=0) ? c.status : "not-started",
-            owner: (c && typeof c.owner==="string") ? c.owner : "",
-            evidence: bucket.crit[cid] || [],
-          };
-        });
-        return {
-          id, name:a.Name,
-          stream: (typeof r.stream==="string"?r.stream:""),
-          northstar: (typeof r.northstar==="string"?r.northstar:""),
-          updated: r.updated||"", by: r.by||"",
-          // the artifact revision — so a review-flagged goal sorts into the needs-you
-          // queue by recency ALONGSIDE review artifacts (same key artItems sorts on),
-          // not always behind them (TASK-157).
-          version: a.Revision,
-          // review-state from the goal artifact's record (same convention as any
-          // artifact — TASK-157). A goal flagged review.state="review" is awaiting
-          // the operator's sign-off; it projects into the needs-you/review queue
-          // and is signable in the Goals view. Absent/invalid ⇒ "" (neutral).
-          review: (r.review && REVIEW_STATES.indexOf(r.review.state)>=0) ? r.review.state : "",
-          criteria,
-          evidence: bucket.goal, // goal-level relates (no crit) — optional
-        };
-      });
-    },[artifacts, records]);
+    // derived: goals — the GOALS PROJECTION served by GET /api/goals (conv/goals,
+    // ADR-0035). Each criterion's status is the EFFECTIVE status with the
+    // proof-filter ALREADY APPLIED server-side (a stored "met" without a proof
+    // artifact reads in-progress); the rollup and the per-criterion evidence are
+    // computed there too. The dash does NOT re-derive goal status in JS — the
+    // proof rule lives in one place, Go (conv/goals), so the dash and violet
+    // cannot disagree about a goal. Here we only adapt the served shape to the
+    // field names the views read: `version` is the served `revision` (so a
+    // review-flagged goal sorts into the needs-you queue by recency, TASK-157).
+    const goalViews = useMemo(()=>(Array.isArray(goals)?goals:[]).map(g=>({
+      ...g,
+      version: g.revision,
+      criteria: Array.isArray(g.criteria) ? g.criteria : [],
+      evidence: Array.isArray(g.evidence) ? g.evidence : [],
+    })),[goals]);
 
     // review-state from the artifact's record (convention); absent ⇒ neutral
     // (draft) — needs-review is set explicitly by the producer. Reads only
@@ -633,7 +595,7 @@
       if (!text) return text;
       const known = new Set();
       for (const a of artifacts) { if (a && a.Name) known.add(a.Name); }
-      for (const g of goals) {
+      for (const g of goalViews) {
         if (g && g.name) known.add(g.name);
         if (g && g.id) known.add("goal." + g.id);
       }
@@ -746,14 +708,14 @@
     // sign-off (TASK-157). Kept separate so each badge reflects what that view holds
     // (a review goal lives under Goals, not in the Artifacts list).
     const reviewCount = artItems.filter(a=>a.status==="review").length;
-    const goalReviewCount = goals.filter(g=>g.review==="review").length;
+    const goalReviewCount = goalViews.filter(g=>g.review==="review").length;
     const workingCount = agents.filter(a=>a.state==="working").length;
 
     const ctx = {
       conversations:convList, activeConvo, stageMode, onOpenConvo:openConvo, onExpandConvo:expandConvo,
       messages, draft, setDraft, onSend:send, onArtifactRef:openArtifact,
       artifacts:artItems, activeArtifact, onOpenArtifact:openArtifact,
-      goals, agents, activity:homeActivity, self, onGoHome:goHome, home, onDM:startDM,
+      goals:goalViews, agents, activity:homeActivity, self, onGoHome:goHome, home, onDM:startDM,
       hidden, onHide:hideConvo, onUnhide:unhideConvo,
       onNav, onSearch:()=>setPalette(true), reviewCount, goalReviewCount, workingCount,
     };
@@ -850,7 +812,7 @@
             </div>
           ) : stageMode==="goals" ? (
             <div className="sx-canvas sx-canvas--list">
-              <div className="sx-page sx-page--doc"><GoalsView key={goalsEpoch} goals={goals} initialGoalId={goalsOpenId} onOpenArtifact={openArtifact} onSetReview={setReview} onDM={startDM} renderWiki={renderWiki} /></div>
+              <div className="sx-page sx-page--doc"><GoalsView key={goalsEpoch} goals={goalViews} initialGoalId={goalsOpenId} onOpenArtifact={openArtifact} onSetReview={setReview} onDM={startDM} renderWiki={renderWiki} /></div>
             </div>
           ) : stageMode==="agents" ? (
             <div className="sx-canvas sx-canvas--list">

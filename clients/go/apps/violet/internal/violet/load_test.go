@@ -180,7 +180,7 @@ func TestDeepRefreshFreshensContextAndWritesHome(t *testing.T) {
 	bus := newFakeBus("01VIOLET", "01OPERATOR")
 	// Seed a review-flagged brief + a goal so the gather has real state.
 	bus.artifacts["demo-brief"] = artifactValue{Name: "demo-brief", Revision: 2, Record: json.RawMessage(`{"title":"demo brief","review":{"state":"review"}}`)}
-	bus.artifacts["goal.v0-5-0"] = artifactValue{Name: "goal.v0-5-0", Revision: 4, Record: json.RawMessage(`{"title":"v0.5.0","criteria":[{"label":"violet fast","status":"waiting-on-you"}]}`)}
+	bus.artifacts["goal.v0-5-0"] = artifactValue{Name: "goal.v0-5-0", Revision: 4, Record: json.RawMessage(`{"northstar":"v0.5.0","criteria":[{"id":"c1","text":"violet fast","status":"waiting-on-you"}]}`)}
 	bus.rev = 4
 
 	v := New(bus, NewModelClient("k", srv.URL, srv.Client()), Config{OperatorID: "01OPERATOR", SafetyInterval: time.Hour, Logf: func(string, ...any) {}})
