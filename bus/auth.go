@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/love-lena/sextant/protocol/wireapi"
@@ -200,7 +201,13 @@ func (id *identity) systemJWT() (string, error) {
 // mintUser signs a user JWT in the SEXTANT account with the given name,
 // permissions, and tags, returning the JWT, the user's seed, and the user's
 // subject (its public key — the principal the bus actually authenticates).
-func (id *identity) mintUser(name string, perms jwt.Permissions, tags ...string) (userJWT, seed, subject string, err error) {
+//
+// ttl bounds the credential's lifetime (ADR-0044): when ttl > 0 the JWT carries a
+// standard `exp` claim ttl from now, which the NATS server enforces (an expired
+// credential is rejected on connect/reconnect). ttl == 0 is the perpetual case —
+// no `exp` is set, byte-identical to before — which is what every infrastructure
+// and ordinary-client mint passes; only a short-lived browser credential sets it.
+func (id *identity) mintUser(name string, perms jwt.Permissions, ttl time.Duration, tags ...string) (userJWT, seed, subject string, err error) {
 	ukp, err := nkeys.CreateUser()
 	if err != nil {
 		return "", "", "", fmt.Errorf("bus: create user key: %w", err)
@@ -210,6 +217,9 @@ func (id *identity) mintUser(name string, perms jwt.Permissions, tags ...string)
 	uc.Name = name
 	uc.IssuerAccount = pub(id.acc)
 	uc.Permissions = perms
+	if ttl > 0 {
+		uc.Expires = time.Now().Add(ttl).Unix()
+	}
 	uc.Tags.Add(tags...)
 	j, err := uc.Encode(id.acc)
 	if err != nil {
@@ -393,12 +403,16 @@ func credsFile(userJWT, seed string) (string, error) {
 // the creds text, the id, and the subject (the authenticated public key, which
 // presence joins against the live connection table). It does NOT persist the
 // registry record — MintClient does, so issuance is one atomic act.
-func (b *Bus) mintIdentity(displayName string) (creds, id, subject string, err error) {
+//
+// ttl bounds the credential's JWT lifetime (ADR-0044): 0 is perpetual (the
+// ordinary case, unchanged), a positive value sets a JWT `exp` for a short-lived
+// credential the issuer cannot retire (a browser child).
+func (b *Bus) mintIdentity(displayName string, ttl time.Duration) (creds, id, subject string, err error) {
 	if err := validateDisplayName(displayName); err != nil {
 		return "", "", "", err
 	}
 	id = ulid.Make().String()
-	j, seed, subject, err := b.ident.mintUser(id, clientPermissions(id), wireapi.EncodeDisplayNameTag(displayName))
+	j, seed, subject, err := b.ident.mintUser(id, clientPermissions(id), ttl, wireapi.EncodeDisplayNameTag(displayName))
 	if err != nil {
 		return "", "", "", err
 	}
@@ -467,7 +481,9 @@ func (b *Bus) provisionInfraCreds() error {
 		{wireapi.EnrollID, enrollCredPermissions(), EnrollCredsPath(b.store)},
 	}
 	for _, in := range infra {
-		j, seed, _, err := b.ident.mintUser(in.id, in.perms)
+		// ttl=0: the infra credentials are perpetual (re-minted fresh each boot),
+		// the unchanged behaviour — only a browser child gets a bounded TTL.
+		j, seed, _, err := b.ident.mintUser(in.id, in.perms, 0)
 		if err != nil {
 			return fmt.Errorf("bus: provision %s credential: %w", in.id, err)
 		}

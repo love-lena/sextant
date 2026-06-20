@@ -174,9 +174,15 @@ const (
 // Note that the authority to mint-on-behalf (ADR-0033) is NOT a kind: kind is
 // self-declared and weakly enforced, so the bus gates dispatching on the
 // bus-stamped ClientEntry.SpawnedBy marker instead, never on kind.
+//
+// KindBrowser marks a browser dash session the dash minted on-behalf (ADR-0044).
+// Like KindAgent it is load-bearing in one place: the bus gives a browser child a
+// bounded JWT lifetime (the dash mints it but cannot retire it, so the exp is the
+// cleanup) — the only kind that affects mint behaviour, every other kind perpetual.
 const (
-	KindClient = "client"
-	KindAgent  = "agent"
+	KindClient  = "client"
+	KindAgent   = "agent"
+	KindBrowser = "browser"
 )
 
 // DrainSubID is the reserved sub-id for the cooperative-drain delivery on a

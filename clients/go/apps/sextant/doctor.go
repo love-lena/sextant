@@ -83,9 +83,16 @@ func runDoctorFull(w io.Writer, store string, lookPath func(string) (string, err
 		if cfg.LeafListen != "" {
 			leaf = cfg.LeafListen
 		}
-		_, _ = fmt.Fprintf(w, "  config: port=%s  leaf-listen=%s\n", port, leaf)
+		ws := "off"
+		if cfg.WebSocketListen != "" {
+			ws = cfg.WebSocketListen
+		}
+		_, _ = fmt.Fprintf(w, "  config: port=%s  leaf-listen=%s  ws-listen=%s\n", port, leaf, ws)
 		if cfg.Port == 0 {
 			_, _ = fmt.Fprintf(w, "    hint: pin a port with `sextant config set port <n>` so clients survive a bus restart.\n")
+		}
+		if cfg.WebSocketListen == "" {
+			_, _ = fmt.Fprintf(w, "    hint: the browser dash needs the WebSocket listener — `sextant config set ws-listen 127.0.0.1:<port>` then restart the bus (ADR-0044).\n")
 		}
 	}
 

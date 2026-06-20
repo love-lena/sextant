@@ -9,17 +9,20 @@
 // authenticates, so what the client claims and what the bus authenticated cannot
 // diverge — and the bus-stamped frame author is unforgeable.
 
-import { readFile } from "node:fs/promises";
-import { Events, type NatsConnection, type Subscription as NatsSub, type Msg } from "nats";
+// Type-only import from `nats`: with verbatimModuleSyntax this emits NO runtime
+// require, so client.ts stays browser-safe (the browser bundle gets nats.ws via
+// the dialer, never the TCP `nats`). The Events enum is NOT imported — its runtime
+// value would drag `nats` in — so the reconnect status is compared against its
+// string literal ("reconnect"), the value Events.Reconnect carries.
+import type { NatsConnection, Subscription as NatsSub, Msg } from "nats";
 import {
-  type ConnectOptions,
+  type CoreConnectOptions,
+  type Dialer,
   BusError,
   call,
-  dialNats,
   identityFromCreds,
   isUnknownOperation,
   newULID,
-  resolveURL,
 } from "./transport/conn.js";
 import {
   OP,
@@ -92,18 +95,20 @@ interface InternalSub {
   stopped: boolean;
 }
 
-// connect dials the bus and runs the connect handshake (mirror Go Connect →
-// hello): authenticate with the client's own credential, hard-gate the protocol
-// epoch via clients.hello, pre-subscribe the inbox + drain, and start the
-// heartbeat loop. Returns a ready Client.
-export async function connect(opts: ConnectOptions): Promise<Client> {
-  if (!opts.credsPath) {
-    throw new Error("sextant: no credentials (set credsPath; issue one with `sextant clients register <name>`)");
-  }
-  const { url } = await resolveURL(opts);
-  const credsText = await readFile(opts.credsPath, "utf8");
+// connectCore is the transport-agnostic connect: given a resolved url, the
+// credential TEXT (not a path), a Dialer, and the tunables, it derives the
+// identity, dials, and runs the handshake (hello → drain → inbox → heartbeat). It
+// is the shared core both SDK entries reach — the Node entry reads the file then
+// calls it; the browser entry is handed credsText + a ws url and calls it with a
+// nats.ws dialer. No node:* here.
+export async function connectCore(
+  url: string,
+  credsText: string,
+  dial: Dialer,
+  opts: CoreConnectOptions = {},
+): Promise<Client> {
   const identity = identityFromCreds(credsText);
-  const nc = await dialNats(url, credsText, identity.id);
+  const nc = await dial(url, credsText, identity.id);
   const c = new Client(nc, identity.id, identity.displayName, opts);
   try {
     await c.hello();
@@ -153,7 +158,7 @@ export class Client {
   private hbLastEchoAt = new Date(0);
   private hbTimer: NodeJS.Timeout | null = null;
 
-  constructor(nc: NatsConnection, id: string, displayName: string, opts: ConnectOptions) {
+  constructor(nc: NatsConnection, id: string, displayName: string, opts: CoreConnectOptions) {
     this.nc = nc;
     this._id = id;
     this._displayName = displayName;
@@ -420,7 +425,11 @@ export class Client {
     void (async () => {
       for await (const status of this.nc.status()) {
         if (this.closed) return;
-        if (status.type === Events.Reconnect) {
+        // Compare the literal Events.Reconnect carries ("reconnect") rather than
+        // importing the runtime enum, which would pull the TCP `nats` into the
+        // browser bundle (the dialer supplies the connection; client.ts is
+        // transport-agnostic).
+        if (status.type === "reconnect") {
           await this.resumeAll();
         }
       }

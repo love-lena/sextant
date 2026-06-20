@@ -117,7 +117,7 @@ func (b *Bus) writeLeafArtifacts() error {
 	// every agent's traffic must still not reach operator/admin/mint subjects.
 	// Per-client scoping is enforced on each agent's OWN credential at the leaf
 	// edge; the leaf still cannot mint (no account seed).
-	linkJWT, linkSeed, _, err := b.ident.mintUser("sextant-leaf-link", leafLinkPermissions())
+	linkJWT, linkSeed, _, err := b.ident.mintUser("sextant-leaf-link", leafLinkPermissions(), 0)
 	if err != nil {
 		return fmt.Errorf("bus: leaf artifacts: mint link credential: %w", err)
 	}

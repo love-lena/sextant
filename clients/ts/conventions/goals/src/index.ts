@@ -43,5 +43,15 @@ export {
   rollup,
 } from "./read.js";
 
+// The projection: the read-model a UI renders, proof-filter applied once (the peer
+// of Go's goals.Project, ADR-0044). The browser dash consumes this directly.
+export {
+  type Artifact,
+  type Evidence,
+  type CriterionView,
+  type GoalView,
+  project,
+} from "./project.js";
+
 // Generated record types (from protocol/lexicons/goal.json — DO NOT hand-edit).
 export type { Goal, Criterion } from "./goal_gen.js";

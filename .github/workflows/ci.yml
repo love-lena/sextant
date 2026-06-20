@@ -57,6 +57,7 @@ jobs:
           cache-dependency-path: |
             clients/ts/sdk/package-lock.json
             clients/ts/conventions/goals/package-lock.json
+            clients/ts/conventions/review/package-lock.json
             clients/ts/pi/package-lock.json
       # The integration + live scenarios spawn the real Go bus (cross-language
       # round-trip, AC#6; goals co-equality, TASK-175 AC#4) — so Go is needed here
@@ -80,10 +81,12 @@ jobs:
         working-directory: clients/ts/sdk
         run: npm run build
       # Unit + conformance: replays protocol/conformance/vectors/wire/*.json on
-      # every push (AC#7). Needs no bus.
-      - name: conformance vectors + codec (sdk)
+      # every push (AC#7), plus the browser-entry equivalence tests (ADR-0044: the
+      # pure-JS hex/base64url/Web-Crypto rewrites must be byte-equivalent to the
+      # Buffer path they replaced, on the auth/wire path). Needs no bus.
+      - name: conformance vectors + codec + browser (sdk)
         working-directory: clients/ts/sdk
-        run: node --test dist/test/codec.test.js dist/test/conformance.test.js
+        run: node --test dist/test/codec.test.js dist/test/conformance.test.js dist/test/browser.test.js
       # Cross-language integration on a real bus (AC#6) — required, not optional.
       - name: cross-language round-trip (real bus, sdk)
         working-directory: clients/ts/sdk
@@ -110,6 +113,22 @@ jobs:
       - name: goals co-equality (real bus, conv/goals)
         working-directory: clients/ts/conventions/goals
         run: node --test --test-timeout 180000 dist/test/coequality.test.js
+
+      # --- the TS review convention (TASK-180, ADR-0044) ---
+      # @sextant/conv-review is the review convention (the dashapi review.go logic:
+      # read-merge-CAS + the approve→met closed loop via @sextant/conv-goals). It
+      # depends on @sextant/sdk AND @sextant/conv-goals via file: links (both built
+      # above). The browser dash runs it directly over its own bus Client. Pure-logic
+      # tests (a fake Ops) — no bus.
+      - name: npm ci (conv/review)
+        working-directory: clients/ts/conventions/review
+        run: npm ci
+      - name: build (conv/review, tsc)
+        working-directory: clients/ts/conventions/review
+        run: npm run build
+      - name: review verb tests (conv/review)
+        working-directory: clients/ts/conventions/review
+        run: node --test dist/test/review.test.js
 
       # --- the TS pi-bus extension (TASK-177) ---
       # @sextant/pi-bus is the pi extension that makes a pi session a first-class

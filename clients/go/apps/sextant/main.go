@@ -81,10 +81,14 @@ leaf-node federation (a remote box links a local bus to the hub — ADR-0038; de
   sextant up --leaf-remote nats-leaf://hub:PORT --leaf-bundle B --leaf-creds C
                                                 run as a leaf (JetStream stays at the hub)
 
+browser dash (a co-equal TS client over ws — ADR-0044; default off):
+  sextant up --ws-listen <host:port>            open a loopback WebSocket listener for the browser dash
+
 bus config (settings 'up' reads on startup — the brew-services path; flag > env > config):
   sextant config set leaf-listen <host:port>    enable the leaf listener via the config file
+  sextant config set ws-listen <host:port>      enable the bus WebSocket listener via the config file
   sextant config set port <n>                   pin a deterministic listen port (survives brew restart; 0 clears)
-  sextant config get [leaf-listen|port]         show the current config
+  sextant config get [leaf-listen|ws-listen|port]   show the current config
 
 health / observability (read-only — diagnose a bus that won't come up):
   sextant doctor    [--store DIR]               report bus reachability, port, leaf state, launchd job
@@ -144,6 +148,7 @@ environment (avoids repeating the flags):
   SEXTANT_CONTEXT default for --context (the saved context to connect as)
   SEXTANT_HOME    where contexts live (default: <user-config>/sextant)
   SEXTANT_LEAF_LISTEN  leaf-listen for 'up' when no --leaf-listen flag (overrides the config file)
+  SEXTANT_WS_LISTEN    ws-listen for 'up' when no --ws-listen flag (overrides the config file)
 
 `)
 }
@@ -154,6 +159,9 @@ func cmdUp(args []string) {
 	port := fs.Int("port", 0, "listen port (0 = random)")
 	// Leaf-node federation (ADR-0038), all default-off (no behavior change unset).
 	leafListen := fs.String("leaf-listen", "", "open a leaf listener at host:port so a remote leaf can link in (hub mode; behind a secure transport)")
+	// Bus WebSocket listener (ADR-0044), default-off: lets a browser dash connect
+	// as a co-equal TS client over ws. Loopback-only, behind a secure transport.
+	wsListen := fs.String("ws-listen", "", "open a loopback WebSocket listener at host:port so a browser dash can connect as a co-equal TS client (ADR-0044)")
 	leafRemote := fs.String("leaf-remote", "", "run as a LEAF linking to this hub's nats-leaf:// URL (JetStream stays at the hub)")
 	leafCreds := fs.String("leaf-creds", "", "leaf mode: the hub-minted link credential file (with --leaf-remote)")
 	leafBundle := fs.String("leaf-bundle", "", "leaf mode: the hub's public trust bundle file (with --leaf-remote)")
@@ -173,6 +181,10 @@ func cmdUp(args []string) {
 		fatal("%v", err)
 	}
 	*leafListen = resolveLeafListen(fs, *leafListen, os.Getenv("SEXTANT_LEAF_LISTEN"), cfg.LeafListen)
+	// WebSocket-listen precedence mirrors leaf-listen (ADR-0044): flag (when
+	// explicitly passed) > $SEXTANT_WS_LISTEN > config-file value > "" (off). The
+	// config-file value is the brew-services path the dash relies on.
+	*wsListen = resolveWebSocketListen(fs, *wsListen, os.Getenv("SEXTANT_WS_LISTEN"), cfg.WebSocketListen)
 	// Port precedence mirrors leaf-listen: an explicit --port wins; otherwise the
 	// config-file pin (the brew-services path) applies. A pinned port is
 	// deterministic — bus.Start probes it and fails loud if it is unavailable
@@ -183,12 +195,13 @@ func cmdUp(args []string) {
 	defer stop()
 
 	b, err := bus.Start(ctx, bus.Config{
-		StoreDir:       *store,
-		Port:           *port,
-		LeafListenAddr: *leafListen,
-		LeafRemoteURL:  *leafRemote,
-		LeafCreds:      *leafCreds,
-		LeafBundle:     *leafBundle,
+		StoreDir:            *store,
+		Port:                *port,
+		LeafListenAddr:      *leafListen,
+		WebSocketListenAddr: *wsListen,
+		LeafRemoteURL:       *leafRemote,
+		LeafCreds:           *leafCreds,
+		LeafBundle:          *leafBundle,
 		// Surface the bus's diagnostics (notably the loud random-port fallback) on
 		// our stderr so an operator running `up` sees a port change rather than
 		// being silently stranded. The default would also write to stderr; wiring it
@@ -202,7 +215,15 @@ func cmdUp(args []string) {
 	}
 
 	infoPath := filepath.Join(*store, conninfo.DefaultFile)
-	if err := conninfo.Write(infoPath, conninfo.Info{URL: b.ClientURL()}); err != nil {
+	// Record the WebSocket URL alongside the client URL when the listener is on
+	// (ADR-0044), so the browser dash discovers where to dial deterministically
+	// across restarts. ws:// scheme; the configured loopback host:port is what the
+	// listener bound (a pinned port survives a restart — the recommended dash path).
+	info := conninfo.Info{URL: b.ClientURL()}
+	if *wsListen != "" {
+		info.WSURL = "ws://" + *wsListen
+	}
+	if err := conninfo.Write(infoPath, info); err != nil {
 		b.Shutdown()
 		fatal("write discovery file: %v", err)
 	}
@@ -228,6 +249,11 @@ func cmdUp(args []string) {
 			"  bundle: %s\n  link:   %s\n  (link MUST ride a secure transport — SSH-R / Tailscale / WireGuard)\n"+
 			"  note: a hub restart mints a NEW link credential — re-carry leaf-link.creds to the remote box.\n",
 			*leafListen, bus.LeafBundlePath(*store), bus.LeafLinkCredsPath(*store))
+	}
+	if *wsListen != "" {
+		leafNote += fmt.Sprintf("\nWebSocket listener: ws://%s — the browser dash connects here as a co-equal TS client (ADR-0044).\n"+
+			"  loopback-only + NoTLS; behind the operator's secure transport. The dash mints each tab a short-lived scoped credential.\n",
+			*wsListen)
 	}
 
 	fmt.Printf("sextant bus up\n  url:        %s\n  discovery:  %s\n  operator:   %s\n%s\n"+
@@ -277,6 +303,33 @@ func resolveLeafListen(fs *flag.FlagSet, flagVal, envVal, cfgVal string) string 
 	flagSet := false
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "leaf-listen" {
+			flagSet = true
+		}
+	})
+	switch {
+	case flagSet:
+		return flagVal
+	case envVal != "":
+		return envVal
+	default:
+		return cfgVal
+	}
+}
+
+// resolveWebSocketListen applies the ws-listen precedence for `up` (ADR-0044),
+// the leaf-listen rule for the bus WebSocket listener:
+//
+//	--ws-listen flag  >  $SEXTANT_WS_LISTEN  >  config-file value  >  "" (off)
+//
+// The flag wins only when EXPLICITLY passed (flag.Visit) — a default-empty flag
+// must not mask the env/config sources, but an explicit --ws-listen="" (or any
+// value) is a deliberate override. The address is not validated here; the bus
+// validates it when wiring the listener (a non-loopback address fails `up`
+// loudly), and an empty result is the default-off case.
+func resolveWebSocketListen(fs *flag.FlagSet, flagVal, envVal, cfgVal string) string {
+	flagSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "ws-listen" {
 			flagSet = true
 		}
 	})

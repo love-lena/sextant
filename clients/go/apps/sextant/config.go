@@ -17,8 +17,10 @@ import (
 //
 //	sextant config set leaf-listen <addr>   write the hub leaf listener address
 //	sextant config set leaf-listen ""       clear it (back to default-off)
+//	sextant config set ws-listen <addr>     write the bus WebSocket listener address
+//	sextant config set ws-listen ""         clear it (back to default-off)
 //	sextant config set port <n>             pin the bus listen port (0 clears it)
-//	sextant config get [leaf-listen|port]   print the current config
+//	sextant config get [leaf-listen|ws-listen|port]   print the current config
 func cmdConfig(args []string) {
 	if len(args) == 0 {
 		fatal("config: expected a subcommand (set|get) — see `sextant help`")
@@ -50,7 +52,7 @@ func cmdConfigSet(args []string) {
 // bus is the single validation site (it probes the port and fails loud if taken).
 func runConfigSet(stdout io.Writer, store string, kv []string) error {
 	if len(kv) != 2 {
-		return fmt.Errorf("config set: usage: sextant config set leaf-listen <addr> | port <n>")
+		return fmt.Errorf("config set: usage: sextant config set leaf-listen <addr> | ws-listen <addr> | port <n>")
 	}
 	key, val := kv[0], kv[1]
 	path := buscfg.Path(store)
@@ -69,6 +71,16 @@ func runConfigSet(stdout io.Writer, store string, kv []string) error {
 		} else {
 			_, _ = fmt.Fprintf(stdout, "leaf-listen = %s in %s\n  restart the bus to apply: brew services restart sextant\n", val, path)
 		}
+	case "ws-listen":
+		cfg.WebSocketListen = val
+		if err := buscfg.Save(path, cfg); err != nil {
+			return err
+		}
+		if val == "" {
+			_, _ = fmt.Fprintf(stdout, "ws-listen cleared in %s (WebSocket listener OFF on next `sextant up`)\n", path)
+		} else {
+			_, _ = fmt.Fprintf(stdout, "ws-listen = %s in %s\n  restart the bus to apply: brew services restart sextant\n", val, path)
+		}
 	case "port":
 		n, perr := strconv.Atoi(val)
 		if perr != nil || n < 0 || n > 65535 {
@@ -84,7 +96,7 @@ func runConfigSet(stdout io.Writer, store string, kv []string) error {
 			_, _ = fmt.Fprintf(stdout, "port = %d in %s\n  restart the bus to apply: brew services restart sextant\n", n, path)
 		}
 	default:
-		return fmt.Errorf("config set: unknown key %q (settable: leaf-listen, port)", key)
+		return fmt.Errorf("config set: unknown key %q (settable: leaf-listen, ws-listen, port)", key)
 	}
 	return nil
 }
@@ -108,13 +120,15 @@ func runConfigGet(stdout io.Writer, store string, keys []string) error {
 	}
 	switch {
 	case len(keys) == 0:
-		_, _ = fmt.Fprintf(stdout, "config: %s\n  leaf-listen = %s\n  port        = %s\n", path, quoteEmpty(cfg.LeafListen), quotePort(cfg.Port))
+		_, _ = fmt.Fprintf(stdout, "config: %s\n  leaf-listen = %s\n  ws-listen   = %s\n  port        = %s\n", path, quoteEmpty(cfg.LeafListen), quoteEmptyWS(cfg.WebSocketListen), quotePort(cfg.Port))
 	case len(keys) == 1 && keys[0] == "leaf-listen":
 		_, _ = fmt.Fprintln(stdout, cfg.LeafListen)
+	case len(keys) == 1 && keys[0] == "ws-listen":
+		_, _ = fmt.Fprintln(stdout, cfg.WebSocketListen)
 	case len(keys) == 1 && keys[0] == "port":
 		_, _ = fmt.Fprintln(stdout, cfg.Port)
 	default:
-		return fmt.Errorf("config get: unknown key %q (known: leaf-listen, port)", keys[0])
+		return fmt.Errorf("config get: unknown key %q (known: leaf-listen, ws-listen, port)", keys[0])
 	}
 	return nil
 }
@@ -132,6 +146,14 @@ func quotePort(n int) string {
 func quoteEmpty(s string) string {
 	if s == "" {
 		return `"" (unset — leaf listener off)`
+	}
+	return s
+}
+
+// quoteEmptyWS is quoteEmpty for the ws-listen key (its own off-marker text).
+func quoteEmptyWS(s string) string {
+	if s == "" {
+		return `"" (unset — WebSocket listener off)`
 	}
 	return s
 }

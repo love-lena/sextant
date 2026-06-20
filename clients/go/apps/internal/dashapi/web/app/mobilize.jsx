@@ -23,19 +23,15 @@
   const POLL_INTERVAL_MS = 800;
   const TIMEOUT_MS = 10000;
 
-  const TOKEN = new URLSearchParams(location.search).get("token") || "";
-  const AUTH = { "Authorization": "Bearer " + TOKEN };
-
+  // The data layer is window.SX (app.jsx, ADR-0044): reads/writes go over the one
+  // bus Client (wss), not the deleted Go relay. mbGet/mbPost keep their names + path
+  // shape so the view body is unchanged.
   function mbPost(path, body) {
-    return fetch(path, {
-      method: "POST",
-      headers: Object.assign({ "Content-Type": "application/json" }, AUTH),
-      body: JSON.stringify(body),
-    }).then(function(r) { if (!r.ok) throw new Error(path + " -> " + r.status); });
+    if (path === "/api/publish") return window.SX.publish(body.subject, body.record);
+    return Promise.reject(new Error("mobilize: no bus route for POST " + path));
   }
   function mbGet(path) {
-    return fetch(path, { headers: AUTH })
-      .then(function(r) { if (!r.ok) throw new Error(path + " -> " + r.status); return r.json(); });
+    return window.SX.get(path);
   }
 
   function seedPrompt(context) {

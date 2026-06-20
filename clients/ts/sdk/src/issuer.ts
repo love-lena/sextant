@@ -10,15 +10,13 @@
 // file, and then connect()s as that minted identity — never the operator's
 // ambient creds.
 
-import { readFile } from "node:fs/promises";
 import type { NatsConnection } from "nats";
 import {
   type ConnectOptions,
   call,
-  dialNats,
   identityFromCreds,
-  resolveURL,
 } from "./transport/conn.js";
+import { dialNats, resolveURL, readCredsFile } from "./transport/node.js";
 import { OP } from "./transport/callsubjects.js";
 import { listClientsVia } from "./client.js";
 import type { JSONValue, ClientInfo, IssuedClient } from "./types.js";
@@ -34,7 +32,7 @@ export async function connectIssuer(opts: ConnectOptions): Promise<Issuer> {
     throw new Error("sextant: no issuer credentials (set credsPath)");
   }
   const { url } = await resolveURL(opts);
-  const credsText = await readFile(opts.credsPath, "utf8");
+  const credsText = await readCredsFile(opts.credsPath);
   // The issuer's id is the reserved name inside its credential (operator/enroll);
   // it is the call-subject token the bus authorizes the issuance path against.
   const identity = identityFromCreds(credsText);

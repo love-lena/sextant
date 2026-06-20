@@ -23,8 +23,8 @@
     "generate": "node tools/lexgen.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node --test dist/test/goals.test.js dist/test/conformance.test.js dist/test/lexgen.test.js dist/test/coequality.test.js",
-    "test:conformance": "npm run build && node --test dist/test/goals.test.js dist/test/conformance.test.js dist/test/lexgen.test.js",
+    "test": "npm run build && node --test dist/test/goals.test.js dist/test/project.test.js dist/test/conformance.test.js dist/test/lexgen.test.js dist/test/coequality.test.js",
+    "test:conformance": "npm run build && node --test dist/test/goals.test.js dist/test/project.test.js dist/test/conformance.test.js dist/test/lexgen.test.js",
     "test:coequality": "npm run build && node --test dist/test/coequality.test.js"
   },
   "license": "MIT",

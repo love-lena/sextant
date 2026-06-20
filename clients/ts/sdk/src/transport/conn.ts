@@ -1,21 +1,32 @@
-// The connection layer: identity from the credential, URL resolution, the Wire
-// API call envelope, and a sub-id generator. Mirrors the Go SDK's call.go +
-// the Connect URL/identity resolution in client.go.
+// The connection layer: identity from the credential, the Wire API call envelope,
+// a sub-id generator, and the connect options the two dialers share. Mirrors the
+// Go SDK's call.go + the Connect identity resolution in client.go.
+//
+// This module is BROWSER-SAFE (ADR-0044): it imports no node:* and no transport
+// package, so both the Node SDK entry (index.ts, over `nats`/TCP) and the browser
+// entry (browser.ts, over `nats.ws`/wss) share it. The Node-only sites — the TCP
+// dialer and the bus.json/.creds file reads — live in transport/node.ts, behind
+// the Dialer seam below; the browser supplies its credsText + ws URL directly.
 
-import { readFile } from "node:fs/promises";
-import { randomFillSync } from "node:crypto";
-import {
-  connect as natsConnect,
-  credsAuthenticator,
-  type NatsConnection,
-  type Msg,
-} from "nats";
+// Type-only import from `nats`: with verbatimModuleSyntax an `import type` emits
+// NO runtime require, so this module stays browser-safe (no `nats`/TCP code in the
+// browser bundle). The browser dialer's nats.ws NatsConnection is structurally the
+// same shape — Synadia's two clients share the protocol layer.
+import type { NatsConnection, Msg } from "nats";
 import { callSubject, inboxPrefix } from "./callsubjects.js";
-import { canonical, parseJSON } from "../wire/codec.js";
+import { canonical, parseJSON, hexToBytes } from "../wire/codec.js";
 import type { JSONValue } from "../types.js";
 
-// ConnectOptions configures connect() (and connectIssuer()). All optional except
-// credsPath. Mirrors Go's Options.
+// Dialer opens a NatsConnection to url, authenticating as id with credsText. The
+// two SDK entries inject their transport-specific dialer (Node: `nats`/TCP;
+// browser: `nats.ws`/wss); shared code never imports a transport directly, so the
+// browser bundle pulls in no `node:*`. Both dialers build their connection options
+// from dialConnectOptions so the only difference is the import source.
+export type Dialer = (url: string, credsText: string, id: string) => Promise<NatsConnection>;
+
+// ConnectOptions configures the Node connect() (and connectIssuer()). All optional
+// except credsPath. Mirrors Go's Options. The browser entry has its own option
+// shape (BrowserConnectOptions) since it takes credsText + a ws url, not a path.
 export interface ConnectOptions {
   credsPath: string; // path to the .creds file (required) — the client's own identity
   url?: string; // bus NATS URL; wins over connInfoPath
@@ -25,6 +36,19 @@ export interface ConnectOptions {
   heartbeatIntervalMs?: number; // default 15_000
   heartbeatFreshnessMs?: number; // default 45_000
   requestTimeoutMs?: number; // per-call request timeout; default 30_000
+  dial?: Dialer; // the transport dialer; the Node entry defaults it to dialNats
+}
+
+// CoreConnectOptions is the credential-resolved option shape the shared connect()
+// core consumes: credsText (already read — the Node entry reads the file, the
+// browser is handed it) plus the tunables. It is ConnectOptions minus the
+// Node-only path/discovery fields, which the entry has already resolved.
+export interface CoreConnectOptions {
+  skewToleranceMs?: number;
+  log?: (msg: string, ...a: unknown[]) => void;
+  heartbeatIntervalMs?: number;
+  heartbeatFreshnessMs?: number;
+  requestTimeoutMs?: number;
 }
 
 // BusError is a failure the bus itself replied with (Response.error): the
@@ -56,14 +80,36 @@ export interface Identity {
 const DISPLAY_NAME_TAG = "display_name:";
 
 // decodeDisplayNameTag returns the display name carried by tag, if it is one.
-// Mirrors wireapi.DecodeDisplayNameTag.
+// Mirrors wireapi.DecodeDisplayNameTag. Pure-JS (no Buffer) so it runs in the
+// browser entry too (ADR-0044): hexToBytes + TextDecoder. A malformed hex tag
+// yields undefined rather than throwing (the tag is informational).
 function decodeDisplayNameTag(tag: string): string | undefined {
   if (!tag.startsWith(DISPLAY_NAME_TAG)) return undefined;
   const hex = tag.slice(DISPLAY_NAME_TAG.length);
   if (hex.length % 2 !== 0) return undefined;
-  const buf = Buffer.from(hex, "hex");
-  if (buf.length !== hex.length / 2) return undefined;
-  return buf.toString("utf8");
+  let bytes: Uint8Array;
+  try {
+    bytes = hexToBytes(hex);
+  } catch {
+    return undefined;
+  }
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
+// base64urlToBytes decodes a base64url segment (the JWT payload encoding) to
+// bytes — pure-JS so it runs in the browser entry (ADR-0044): map base64url to
+// standard base64, then atob to a binary string, then to bytes. atob is present
+// in browsers and in Node ≥16. This is on the AUTH path (it reads the JWT the bus
+// will authenticate), so it is unit-pinned against a known credential to prove it
+// is byte-equivalent to the Buffer path it replaced.
+function base64urlToBytes(seg: string): Uint8Array {
+  let b64 = seg.replace(/-/g, "+").replace(/_/g, "/");
+  // base64url drops '=' padding; atob wants the length padded to a multiple of 4.
+  while (b64.length % 4 !== 0) b64 += "=";
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
 }
 
 // identityFromCreds reads the client id (the JWT `name` claim = a bus-minted
@@ -83,7 +129,7 @@ export function identityFromCreds(credsText: string): Identity {
   }
   let claims: { name?: string; nats?: { tags?: string[] } };
   try {
-    claims = JSON.parse(Buffer.from(segments[1]!, "base64url").toString("utf8"));
+    claims = JSON.parse(new TextDecoder("utf-8").decode(base64urlToBytes(segments[1]!)));
   } catch (e) {
     throw new Error(`sextant: decode JWT payload: ${(e as Error).message}`);
   }
@@ -102,58 +148,28 @@ export function identityFromCreds(credsText: string): Identity {
   return { id, displayName };
 }
 
-// resolveURL determines the bus URL: an explicit url wins, otherwise it reads
-// the bus.json discovery file. The discovery file is re-read on demand so a bus
-// that restarts on a new port is followed (the Go SDK re-resolves on every dial;
-// the nats npm client does not expose a per-dial custom dialer the same way, so
-// the SDK re-resolves on an explicit reconnect-on-failure path — see
-// resolveURLNow). Returns the URL and the discovery path used (empty when the
-// URL was pinned).
-export async function resolveURL(opts: ConnectOptions): Promise<{ url: string; connInfoPath: string }> {
-  if (opts.url) {
-    return { url: opts.url, connInfoPath: "" };
-  }
-  if (opts.connInfoPath) {
-    const url = await readBusURL(opts.connInfoPath);
-    return { url, connInfoPath: opts.connInfoPath };
-  }
-  throw new Error("sextant: no bus URL (set url or connInfoPath)");
-}
-
-// readBusURL reads the url field from a bus.json discovery file. Mirrors
-// conninfo.Read.
-export async function readBusURL(connInfoPath: string): Promise<string> {
-  const text = await readFile(connInfoPath, "utf8");
-  let info: { url?: string };
-  try {
-    info = JSON.parse(text);
-  } catch (e) {
-    throw new Error(`sextant: parse ${connInfoPath}: ${(e as Error).message}`);
-  }
-  if (!info.url) {
-    throw new Error(`sextant: ${connInfoPath} carries no url`);
-  }
-  return info.url;
-}
-
-// dialOptions builds the NATS connection options shared by Client and Issuer:
-// creds auth, the per-client custom inbox (so call replies land where the
-// credential's allow-list permits), and infinite reconnect (connection-loss is
-// not exit — the SDK reconnects). The discovery file is re-read on a failed dial
-// by reconnect (servers list is refreshed via the reconnect callback in conn).
-export async function dialNats(
-  url: string,
-  credsText: string,
-  id: string,
-): Promise<NatsConnection> {
-  return natsConnect({
+// dialConnectOptions is the connection options object the two dialers share
+// (ADR-0044): the per-client custom inbox (so call replies land where the
+// credential's allow-list permits) and infinite reconnect (connection-loss is not
+// exit — the SDK reconnects). The transport-specific bits — the authenticator
+// (each transport ships its own credsAuthenticator) and the `connect` call itself
+// — are supplied by the Node/browser dialer; this returns everything else so the
+// two dialers differ only in their import source. It is plain data (no node:*),
+// so it lives in the shared module.
+export function dialConnectOptions(url: string, id: string): {
+  servers: string[];
+  name: string;
+  inboxPrefix: string;
+  maxReconnectAttempts: number;
+  waitOnFirstConnect: boolean;
+} {
+  return {
     servers: [url],
     name: id,
-    authenticator: credsAuthenticator(new TextEncoder().encode(credsText)),
     inboxPrefix: inboxPrefix(id),
     maxReconnectAttempts: -1, // reconnect forever; connection-loss != exit
     waitOnFirstConnect: false,
-  });
+  };
 }
 
 // call invokes a Wire API operation: it sends canonical(input) as a request to
@@ -214,7 +230,7 @@ const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 export function newULID(): string {
   const time = Date.now();
   const rand = new Uint8Array(10);
-  randomFillSync(rand);
+  crypto.getRandomValues(rand); // Web Crypto: present in browsers and Node ≥15
 
   // Encode the 48-bit time into the first 10 base32 chars (the ULID spec packs
   // the 48-bit time in the high 10 characters of the 26-char string).
