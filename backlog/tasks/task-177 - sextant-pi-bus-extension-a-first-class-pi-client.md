@@ -1,10 +1,10 @@
 ---
 id: TASK-177
 title: 'sextant pi-bus extension: a first-class pi client'
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-19 21:11'
-updated_date: '2026-06-19 21:31'
+updated_date: '2026-06-20 02:00'
 labels:
   - feature
   - pi
