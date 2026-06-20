@@ -52,7 +52,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: gohelper <seed|set|read> ...")
+		return fmt.Errorf("usage: gohelper <seed|set|read>")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -64,7 +64,7 @@ func run(args []string) error {
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	ops := conf.NewSDKOps(c)
 
 	switch args[0] {
