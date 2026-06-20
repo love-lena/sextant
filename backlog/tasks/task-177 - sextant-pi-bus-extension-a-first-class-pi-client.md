@@ -1,10 +1,10 @@
 ---
 id: TASK-177
 title: 'sextant pi-bus extension: a first-class pi client'
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-06-19 21:11'
-updated_date: '2026-06-20 02:00'
+updated_date: '2026-06-20 02:42'
 labels:
   - feature
   - pi
@@ -34,3 +34,9 @@ Build sextant-pi-bus: a pi package (in-process TS extension) that makes a pi ses
 - [ ] #5 OPERATOR-VERIFIED: with a pi agent on the operator's live bus, the operator DMs it, it wakes and replies, and its tool-calls + thinking stream to the activity topic and render live in the operator's open dash - verified by the operator (or a driven PTY/browser), not a unit test
 - [ ] #6 /set-goal actually moves a goal the dash then shows (closes the loop to task-173)
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+pi-bus extension SHIPPED (PR #240 squash). @sextant/pi-bus (clients/ts/pi): a pi session is a first-class scoped bus client over the TS SDK. ORCHESTRATOR INDEPENDENTLY RAN the AC#5 driven test (real claude-haiku + hermetic bus): PASS 3/0 - idle pi agent woke on the operator's DM (tier=principal), REPLIED as its own identity; 15 pi.activity frames (turn/tool/thinking/message); /set-goal moved a criterion to met THROUGH conv/goals + announced goal.update (closes 173). 5 spike adjustments verified: idempotent close-before-open session_start, bounded drop-oldest back-pressure + reserved DM slot + coalescing, pi.activity lexicon w/ readable thinking/reply text, headless block-by-default destructive-tool gate (overridable), pi pinned 0.79.8. ADR-0043 (proposed): pi harness as a first-class bus client + untrusted-bus-content/layered-defense security model. Spike subsumed. Gate green: Go 32 ok + make lint, pi unit 24/24. Dash auto-renders the readable pi.activity topic.
+<!-- SECTION:FINAL_SUMMARY:END -->
