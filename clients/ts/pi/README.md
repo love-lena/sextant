@@ -43,6 +43,7 @@ acts on that identity, never the operator's.
 | `SEXTANT_PI_COALESCE_MS` | `1500` | burst-coalescing window (0 disables) |
 | `SEXTANT_PI_PREVIEW_MAX` | `600` | activity-bridge arg/result/text preview cap |
 | `SEXTANT_PI_GATE_HEADLESS` | `on` | the headless destructive-tool gate (`off` disables) |
+| `SEXTANT_PI_HANDOFF_TOPIC` | `pi.handoff` | topic the managed handoff announces relinquished/acquired on |
 
 ## What it does (the five spike-mandated adjustments)
 
@@ -80,6 +81,36 @@ acts on that identity, never the operator's.
 - **Skill** ([`skill/SKILL.md`](skill/SKILL.md)): teaches the agent the bus
   conventions (verb selection, record shapes, the trust tiers).
 
+## Headless under the dispatcher + the managed handoff (TASK-178)
+
+The primary way to run a pi worker is headless under the reference dispatcher
+([`clients/go/apps/dispatch`](../../go/apps/dispatch)): point `sextant-dispatch
+--harness` at the **pi recipe** ([`recipes/pi.sh`](../../go/apps/dispatch/recipes/pi.sh),
+the sibling of `agent.sh`). The dispatcher mints the worker's own scoped creds
+(mint-on-behalf, [ADR-0033](../../../docs/adr/0033-a-dispatcher-mints-its-own-workers.md))
+and the recipe launches `pi --mode rpc` with this extension; the worker boots idle
+and is woken over the bus — a crew member that happens to be a pi session.
+
+A **managed close-and-resume handoff** ([`src/handoff.ts`](src/handoff.ts),
+[`protocol/lexicons/pi.handoff.json`](../../../protocol/lexicons/pi.handoff.json))
+releases a worker without two processes fighting one session — **single-owner-at-a-
+time**, coordinated over the bus:
+
+1. An owner sends `pi.handoff{verb:"drain"}` to the worker's inbox (a principal or
+   verified peer — an unknown client's drain is refused).
+2. The worker winds down **cooperatively**: it stops taking new wakes, lets the
+   current turn finish, announces `pi.handoff{verb:"relinquished", session:<id>}`,
+   drains+closes its bus client (presence → offline — the visible release), then
+   exits. pi has persisted the session as JSONL.
+3. The operator resumes the JSONL by hand; the dispatcher re-spawns the recipe on
+   the **same** session id (`pi --session-id` resumes), and the extension announces
+   `pi.handoff{verb:"acquired"}`.
+
+The relinquish completes (worker offline) before any re-spawn acquires the session,
+so the two never overlap. The end-to-end handoff (drain → relinquish + exit → resume
+→ acquired, with a memory probe that proves the session resumed) is the
+`driven:handoff` harness below.
+
 ## Tests
 
 ```sh
@@ -89,6 +120,12 @@ npm run driven  # the operator-verified AC#5 run: a real pi + a real model on a
                 # throwaway HERMETIC bus — DMs the agent, asserts it wakes + replies,
                 # its activity streams, and /set-goal moves a dash-visible goal.
                 # Needs the Go toolchain + ANTHROPIC_API_KEY; costs a few cents.
+npm run driven:handoff  # the TASK-178 run: launches the REAL dispatcher recipe
+                # (recipes/pi.sh) as the dispatcher would, then drives the operator
+                # path end-to-end — a DMed TASK → an artifact + reply; then the
+                # managed handoff (drain → relinquish + exit → re-spawn resume →
+                # acquired) with a memory probe proving single-owner resume.
+                # Same prerequisites as `driven`.
 ```
 
 The unit tests run in CI (the `clients-ts` job); the driven run is out of band
