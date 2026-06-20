@@ -3,10 +3,10 @@ id: TASK-182
 title: >-
   Remaining deep-module consolidations: cursor store and the SDK publish-output
   leak
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-19 21:11'
-updated_date: '2026-06-19 21:31'
+updated_date: '2026-06-20 01:01'
 labels:
   - feature
   - deep-modules

@@ -1,10 +1,10 @@
 ---
 id: TASK-174
 title: 'TypeScript SDK: the primitive Wire client'
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-19 21:11'
-updated_date: '2026-06-19 21:31'
+updated_date: '2026-06-20 01:01'
 labels:
   - feature
   - sdk
