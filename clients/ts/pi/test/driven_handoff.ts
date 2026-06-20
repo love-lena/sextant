@@ -30,10 +30,15 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { connect, type Client, topicSubject, clientSubject, type Message } from "@sextant/sdk";
-import { startBus, goAvailable, type Bus } from "./busharness.js";
+import { startBus, goAvailable, repoRoot, type Bus } from "./busharness.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = process.env["SEXTANT_REPO_ROOT"] ?? join(HERE, "..", "..", "..", "..");
+// Resolve the repo root by walking up to the go.mod (the busharness resolver),
+// NOT a fixed number of "..": the built file lives at clients/ts/pi/dist/test/, so
+// a hard-coded relative count overshoots/undershoots and the recipe path comes out
+// wrong (it doubled to .../clients/clients/go/... and SKIPped). The go.mod walk is
+// correct from src/ AND dist/. SEXTANT_REPO_ROOT still overrides if set.
+const REPO_ROOT = repoRoot();
 const RECIPE = join(REPO_ROOT, "clients", "go", "apps", "dispatch", "recipes", "pi.sh");
 const EXTENSION = join(HERE, "..", "src", "index.js");
 const MODEL = process.env["SEXTANT_PI_MODEL"] ?? "claude-haiku-4-5";
