@@ -1,10 +1,10 @@
 ---
 id: TASK-180
 title: Dash as a direct NATS-WebSocket co-equal TS client
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-06-19 21:11'
-updated_date: '2026-06-20 02:54'
+updated_date: '2026-06-20 04:18'
 labels:
   - feature
   - dash
@@ -35,3 +35,9 @@ Make the dash a direct NATS-WebSocket co-equal TS client: enable the bus WebSock
 - [ ] #4 Draft the ADR revising ADR-0032/0034 + the browser-credential model; signed off on this ticket's merge
 - [ ] #5 OPERATOR-VERIFIED: the operator opens the dash in a browser, it connects over wss with a dash-minted short-lived credential, and Home/Goals/review work end-to-end (read live data, write a review verdict, set a goal) with the Go backend reduced to static-host + creds-mint and the internal/dashapi goal/review re-implementation deleted
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Dash as a direct NATS-WebSocket co-equal TS client SHIPPED (PR #242 squash; build-from-clean fix f71312e). Bus ws listener (default-off loopback NoTLS, config/CLI/doctor, bus.json wsURL); TS SDK ./browser entry (browserConnect over nats.ws, Node SDK byte-unchanged); conv-goals project() + NEW @sextant/conv-review; Go dashapi SHRUNK — review.go + /api/* relay + SSE + subject-discovery DELETED, Bus narrowed to ID()+Register(), added POST /api/session (mint-on-behalf kind=browser); SPA over wss (conventions in-browser, msg.> live sub, vendored IIFE bundle); cred-TTL (mintUser ttl param, ttl=0 perpetual byte-identical, browser=1h). ADR-0044 (proposed, revises 0032/0034). ORCHESTRATOR VERIFIED: make ui from a CLEAN worktree (the build-from-clean defect — build-dash-ui.sh now builds the 3 TS pkgs before esbuild — fixed), gate green (Go 32 ok, TS SDK 22/22 + conv-goals 19/19 + conv-review 6/6), BOTH CI green, self-validating dash-direct-ws demo 5/5 (mint + distinct creds + /api/* 404 + survivors 200), hermetic (active=lena). Worker AC#5 agent-browser drive (wss Home/Goals/review verdict+goal). PR-noted follow-ups: Go conventions/review peer, native wss TLS, browser-cred GC, /debug legacy.
+<!-- SECTION:FINAL_SUMMARY:END -->
