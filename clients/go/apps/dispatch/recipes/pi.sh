@@ -81,6 +81,20 @@ export SEXTANT_BUS_JSON="${SEXTANT_BUS_JSON:-${SEXTANT_STORE}/bus.json}"
 # worker resident instead.
 export SEXTANT_PI_DRAIN_WHEN_IDLE="${SEXTANT_PI_DRAIN_WHEN_IDLE:-1}"
 
+# WORKFLOW STEP (ADR-0011 + ADR-0045). When the workflow coordinator dispatches a
+# step it appends "WF_EVENTS=<subject> WF_STEP=<id>" to the brief. We lift those into
+# the environment so the extension emits the step-done event DETERMINISTICALLY on
+# agent_end -- not depending on the model to remember to publish it -- and strip them
+# from the brief the model sees so the task reads cleanly. Absent (a plain mobilize or
+# a revive), this is a no-op.
+INJECT_PROMPT="${SX_PROMPT:-}"
+WF_EVENTS=$(printf '%s' "$INJECT_PROMPT" | sed -n 's/.*WF_EVENTS=\([^[:space:]]*\).*/\1/p')
+if [ -n "$WF_EVENTS" ]; then
+  export SEXTANT_PI_WF_EVENTS="$WF_EVENTS"
+  export SEXTANT_PI_WF_STEP="$(printf '%s' "$INJECT_PROMPT" | sed -n 's/.*WF_STEP=\([^[:space:]]*\).*/\1/p')"
+  INJECT_PROMPT=$(printf '%s' "$INJECT_PROMPT" | sed 's/[[:space:]]*WF_EVENTS=.*//')
+fi
+
 # A light role nudge so a bus DM lands as a task and the worker replies over the bus
 # the way a crew member would. The wake injects the bus message; this system prompt
 # tells the worker it is a headless crew member and to answer on the bus.
@@ -106,8 +120,8 @@ FIFO="$(mktemp -u "${TMPDIR:-/tmp}/pi-stdin-XXXXXX")"
 mkfifo "$FIFO"
 exec 3<>"$FIFO"   # keep a writer open forever so the reader never sees EOF
 rm -f "$FIFO"     # unlinked but the open fds keep it alive
-if [ -n "${SX_PROMPT:-}" ]; then
-  node -e 'process.stdout.write(JSON.stringify({type:"prompt",message:process.env.SX_PROMPT})+"\n")' >&3
+if [ -n "$INJECT_PROMPT" ]; then
+  SX_INJECT_PROMPT="$INJECT_PROMPT" node -e 'process.stdout.write(JSON.stringify({type:"prompt",message:process.env.SX_INJECT_PROMPT})+"\n")' >&3
 fi
 
 exec "$PI_BIN" --mode rpc \

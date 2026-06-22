@@ -60,6 +60,7 @@ export default function sextantPiBus(pi: ExtensionAPI): void {
   // The bus connection (adjustment 1 + 4a). onWake is the single entry every
   // inbound frame flows through, so the back-pressure policy sees them all.
   let ctxRef: ExtensionContext | undefined; // latest context, for idle checks in the wake path
+  let wfReported = false; // workflow step-done emitted once (ADR-0011), if this worker is a step
   const bus = new BusConnection(cfg, log, (m) => onInbound(m));
 
   // The activity bridge (adjustment 3). Resolves the live client at publish time
@@ -242,6 +243,27 @@ export default function sextantPiBus(pi: ExtensionAPI): void {
   // on the next message addressed to it. Without the flag the worker stays resident.
   pi.on("agent_end", async (_event, ctx) => {
     ctxRef = ctx;
+    // Workflow step (ADR-0011): the run finished, so report the step done on the
+    // coordinator's event subject — the signal it waits on — once, and deterministically
+    // (not relying on the model to have published it). Awaited so the frame lands before
+    // a drain can close the bus client.
+    if (cfg.wfEventsSubject && !wfReported) {
+      wfReported = true;
+      const client = bus.getClient();
+      if (client) {
+        log("workflow_step_done", { subject: cfg.wfEventsSubject, step: cfg.wfStep });
+        try {
+          await client.publish(cfg.wfEventsSubject, {
+            $type: "workflow.event",
+            step: cfg.wfStep,
+            status: "done",
+            by: client.id(),
+          } as unknown as JSONValue);
+        } catch (e) {
+          log("workflow_event_error", { detail: (e as Error).message });
+        }
+      }
+    }
     if (!cfg.drainWhenIdle || handoff.isPending()) return;
     const next = queue.takeNext();
     if (next) {
