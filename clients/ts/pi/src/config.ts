@@ -68,6 +68,14 @@ export interface Config {
   // pi.handoff DM); this is only where the worker's ANNOUNCEMENTS go. Defaults to
   // the shared "pi.handoff" topic.
   handoffTopic: string;
+  // drainWhenIdle makes the worker DRAIN AND EXIT on its own once a turn finishes
+  // and there is nothing left to do (idle + empty wake queue) — the drain-and-revive
+  // model (ADR-0045): a dispatched worker does its task, reports, and exits, and the
+  // dispatcher re-spawns it (resuming its session) on the next message. It reuses the
+  // managed-handoff wind-down (relinquish → close → exit). Default OFF, so a bare
+  // interactive `pi -e` session stays resident; the dispatcher recipe (pi.sh) opts in
+  // by setting SEXTANT_PI_DRAIN_WHEN_IDLE=1.
+  drainWhenIdle: boolean;
 }
 
 // resolveConfig reads the environment into a Config, applying the defaults above.
@@ -87,6 +95,7 @@ export function resolveConfig(env: NodeJS.ProcessEnv): Config {
     previewMax: posInt(env["SEXTANT_PI_PREVIEW_MAX"], DEFAULT_PREVIEW_MAX),
     gateDestructiveHeadless: !isOff(env["SEXTANT_PI_GATE_HEADLESS"]),
     handoffTopic: env["SEXTANT_PI_HANDOFF_TOPIC"] || DEFAULT_HANDOFF_TOPIC,
+    drainWhenIdle: isOn(env["SEXTANT_PI_DRAIN_WHEN_IDLE"]),
   };
 }
 
@@ -119,4 +128,11 @@ function isOff(s: string | undefined): boolean {
   if (s === undefined) return false;
   const v = s.trim().toLowerCase();
   return v === "off" || v === "false" || v === "0" || v === "no";
+}
+
+// isOn reads a boolean-ish "turn it on" env value: on / true / 1 / yes. Unset is off.
+function isOn(s: string | undefined): boolean {
+  if (s === undefined) return false;
+  const v = s.trim().toLowerCase();
+  return v === "on" || v === "true" || v === "1" || v === "yes";
 }

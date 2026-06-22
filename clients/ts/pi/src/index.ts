@@ -233,6 +233,26 @@ export default function sextantPiBus(pi: ExtensionAPI): void {
     flushOne(ctx);
   });
 
+  // Drain-and-revive (ADR-0045). agent_end fires when the whole agentic run finishes
+  // — the right "task complete" signal (unlike turn_end, where ctx.isIdle() is still
+  // false because the turn is mid-settle). For a drain-when-idle worker: if a wake was
+  // buffered while it was busy, run that next (so no follow-up is lost); otherwise wind
+  // down and exit via the managed-handoff path (relinquish → close → process.exit). The
+  // session JSONL is persisted, so the dispatcher re-spawns this worker — resuming it —
+  // on the next message addressed to it. Without the flag the worker stays resident.
+  pi.on("agent_end", async (_event, ctx) => {
+    ctxRef = ctx;
+    if (!cfg.drainWhenIdle || handoff.isPending()) return;
+    const next = queue.takeNext();
+    if (next) {
+      log("agent_end_flush", { bufferedTopic: queue.bufferedTopic(), bufferedDirect: queue.bufferedDirect() });
+      next.p.deliver(next.coalescedCount);
+      return;
+    }
+    log("auto_drain_idle", { reason: "agent run complete; draining for revive-on-message" });
+    void handoff.onDrain("idle: task complete (drain-and-revive)");
+  });
+
   pi.on("tool_execution_start", async (event) => {
     activity.onToolStart(event);
   });

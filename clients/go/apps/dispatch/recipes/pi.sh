@@ -73,6 +73,14 @@ mkdir -p "$SESSION_DIR"
 export SEXTANT_PI_CREDS="$SEXTANT_CREDS"
 export SEXTANT_BUS_JSON="${SEXTANT_BUS_JSON:-${SEXTANT_STORE}/bus.json}"
 
+# DRAIN-AND-REVIVE (ADR-0045). A dispatcher-spawned worker is a resumable one-shot,
+# not a resident process: it does its task, reports, and EXITS once idle, and the
+# dispatcher re-spawns it (resuming this same session id) on the next message. The
+# extension's auto-drain reuses the managed-handoff wind-down. Default ON for the
+# dispatcher recipe; an operator can pin SEXTANT_PI_DRAIN_WHEN_IDLE=0 to keep a
+# worker resident instead.
+export SEXTANT_PI_DRAIN_WHEN_IDLE="${SEXTANT_PI_DRAIN_WHEN_IDLE:-1}"
+
 # A light role nudge so a bus DM lands as a task and the worker replies over the bus
 # the way a crew member would. The wake injects the bus message; this system prompt
 # tells the worker it is a headless crew member and to answer on the bus.

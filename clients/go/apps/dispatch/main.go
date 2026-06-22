@@ -47,6 +47,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -59,6 +60,7 @@ import (
 
 	"github.com/love-lena/sextant/clients/go/sdk"
 	"github.com/love-lena/sextant/protocol/conninfo"
+	"github.com/love-lena/sextant/protocol/sx"
 )
 
 func main() {
@@ -159,12 +161,22 @@ func main() {
 		ctx: ctx, c: c, mint: mint, store: *store, creds: *creds, subject: *subject,
 		kind: *kind, harness: *harness, onWake: *onWake, supervisor: *supervisor,
 		wakeTimeout: *wakeTimeout, workdir: *workdir, namer: nm,
-		seen: map[string]bool{}, done: make(chan struct{}, 1), started: make(chan struct{}, 1),
+		seen: map[string]bool{}, agents: map[string]*managedAgent{},
+		done: make(chan struct{}, 1), started: make(chan struct{}, 1),
 		maxSpawns: *maxSpawns,
+	}
+	if *onWake != "" {
+		logf("note: --on-wake is deprecated and ignored; the dispatcher revives dormant agents in-process on inbound messages (ADR-0045)")
 	}
 	logf("dispatcher up as %s (%s); watching %s for spawn.request", c.DisplayName(), short(c.ID()), *subject)
 
-	sub, err := c.Subscribe(ctx, *subject, d.handle, sextant.DeliverAll())
+	// Deliver-NEW, not DeliverAll: a dispatcher acts on spawn.requests published
+	// while it is up. Replaying the whole retained spawn log on every (re)start —
+	// the old DeliverAll behaviour — re-spawned a fresh worker for every request
+	// ever made, since the dedup set is in-memory; the registry filled with dead
+	// duplicates. Drain-and-revive (ADR-0045) keeps dormant agents revivable from
+	// the registry instead, so a restart needs no replay.
+	sub, err := c.Subscribe(ctx, *subject, d.handle)
 	if err != nil {
 		fatal("subscribe %s: %v", *subject, err)
 	}
@@ -220,12 +232,28 @@ type dispatcher struct {
 	namer       namer // picks a unique name for an un-nicknamed child (Haiku auto-naming)
 
 	mu        sync.Mutex
-	seen      map[string]bool // spawn.request frame ids already handled (dedup across DeliverAll replay)
-	children  []*os.Process   // launched harness + supervisor processes, for shutdown reaping
+	seen      map[string]bool          // spawn.request frame ids already handled (dedup within a run)
+	agents    map[string]*managedAgent // every agent this dispatcher minted, by id — for revive-on-message
+	children  []*os.Process            // launched harness processes, for shutdown reaping
+	wakeSubs  []sextant.Subscription   // standing per-agent wake subscriptions (inbox + DM topics)
 	count     int
 	maxSpawns int
 	done      chan struct{}
 	started   chan struct{} // closed-once signal that the first request was handled
+}
+
+// managedAgent is one agent the dispatcher stood up and now keeps revivable. The
+// identity (id, nick, creds) is durable; the process is not. running guards against
+// double-spawning while a worker is alive — a wake for a running agent is left to
+// the live worker (which subscribes its own inbox + DMs); a wake for a dormant one
+// re-spawns the harness, resuming its pi session (ADR-0045 drain-and-revive).
+type managedAgent struct {
+	id         string
+	nick       string
+	credsPath  string
+	job        string
+	running    bool
+	subscribed bool // wake subjects subscribed once, on first manage()
 }
 
 // handle processes one frame on the spawn subject. It acts only on spawn.request
@@ -288,8 +316,11 @@ func (d *dispatcher) handle(m sextant.Message) {
 }
 
 // spawn mints a named child identity, writes its creds, launches the harness that
-// joins the child to the bus under that identity, and (when --on-wake is set)
-// launches a per-child supervisor for the wake loop. It returns the minted id.
+// joins the child to the bus under that identity, registers it as a revivable
+// managed agent (a standing wake subscription on its inbox + DM topics), and
+// returns the minted id. The worker is a resumable one-shot (ADR-0045): it does its
+// task, reports, and exits; a later message addressed to it re-spawns it (resuming
+// its session) via the wake subscription.
 func (d *dispatcher) spawn(req SpawnRequest, nick string) (string, error) {
 	issued, err := d.mint(context.Background(), nick, d.kind)
 	if err != nil {
@@ -300,47 +331,108 @@ func (d *dispatcher) spawn(req SpawnRequest, nick string) (string, error) {
 		return issued.ID, fmt.Errorf("write child creds: %w", err)
 	}
 
-	childEnv := []string{
-		"SEXTANT_CREDS=" + credsPath,
-		"SEXTANT_STORE=" + d.store,
-		"SX_PROMPT=" + req.Prompt,
-		"SX_CHILD_ID=" + issued.ID,
-		"SX_CHILD_NICK=" + nick,
-		"SX_JOB=" + req.Job,
-	}
-	if err := d.launch("harness["+nick+"]", d.harness, childEnv); err != nil {
+	ag := &managedAgent{id: issued.ID, nick: nick, credsPath: credsPath, job: req.Job}
+	d.mu.Lock()
+	d.agents[ag.id] = ag
+	ag.running = true // claim before launch so a racing wake can't double-spawn
+	d.mu.Unlock()
+
+	if err := d.launchHarness(ag, req.Prompt); err != nil {
+		d.mu.Lock()
+		ag.running = false
+		d.mu.Unlock()
 		return issued.ID, fmt.Errorf("launch harness: %w", err)
 	}
-
-	if d.onWake != "" {
-		// The supervisor is its OWN bus client (cmd/spawn-poc): it connects as the
-		// dispatcher (--creds), watches the child's DM, and on an inbound message
-		// re-invokes --on-wake. SEXTANT_CREDS in its environment is the CHILD's, so
-		// the woken harness rejoins under the child's identity (spawn-poc's explicit
-		// --creds flag still wins for the supervisor's own connection).
-		args := []string{
-			"--creds", d.creds, "--store", d.store, "--agent", issued.ID,
-			"--on-wake", d.onWake, "--wake-timeout", d.wakeTimeout.String(),
-		}
-		if err := d.launchCmd("supervisor["+nick+"]", d.supervisor, args, childEnv); err != nil {
-			return issued.ID, fmt.Errorf("launch supervisor: %w", err)
-		}
-	}
+	d.manage(ag) // subscribe its wake subjects once, for revive-on-message
 	return issued.ID, nil
 }
 
-// launch starts command via `sh -c` with the dispatcher's environment plus
-// extraEnv, streaming its output to our stderr; it does not wait (the harness is
-// one-shot and the supervisor is long-lived). The child is bound to the
-// dispatcher's signal context, so a shutdown reaps it.
-func (d *dispatcher) launch(name, command string, extraEnv []string) error {
-	return d.launchCmd(name, "sh", []string{"-c", command}, extraEnv)
+// manage subscribes a managed agent's wake subjects ONCE: its inbox
+// (msg.client.<id>) and the two sorted-DM topic shapes (this id low or high). A
+// message there from anyone but the agent itself wakes a revive — UNLESS the agent
+// is currently running, in which case the live worker handles its own traffic.
+// Deliver-new (no replay): only messages after the subscription wake it.
+func (d *dispatcher) manage(ag *managedAgent) {
+	d.mu.Lock()
+	if ag.subscribed {
+		d.mu.Unlock()
+		return
+	}
+	ag.subscribed = true
+	d.mu.Unlock()
+
+	subjects := []string{
+		sx.ClientSubject(ag.id),        // msg.client.<id> — direct inbox ping
+		"msg.topic.dm." + ag.id + ".*", // DM where this agent sorts low
+		"msg.topic.dm.*." + ag.id,      // DM where this agent sorts high
+	}
+	for _, subj := range subjects {
+		sub, err := d.c.Subscribe(d.ctx, subj, func(m sextant.Message) { d.onAgentWake(ag, m) })
+		if err != nil {
+			logf("wake-subscribe %s for %s: %v (revive on that subject disabled)", subj, short(ag.id), err)
+			continue
+		}
+		d.mu.Lock()
+		d.wakeSubs = append(d.wakeSubs, sub)
+		d.mu.Unlock()
+	}
+	logf("managing %s (%s): revivable on inbox + DM", ag.nick, short(ag.id))
 }
 
-func (d *dispatcher) launchCmd(name, bin string, args, extraEnv []string) error {
+// onAgentWake revives a dormant managed agent when a message is addressed to it. It
+// ignores the agent's own echo and the dispatcher's, and skips a wake for an agent
+// that is already running (the live worker is subscribed to the same subjects and
+// handles it). The claim of running is atomic so two concurrent wakes spawn once.
+func (d *dispatcher) onAgentWake(ag *managedAgent, m sextant.Message) {
+	from := m.Frame.Author
+	if from == ag.id || from == d.c.ID() {
+		return
+	}
+	d.mu.Lock()
+	if ag.running {
+		d.mu.Unlock()
+		return
+	}
+	ag.running = true
+	d.mu.Unlock()
+
+	logf("wake for dormant %s (%s) from %s on %s — reviving", ag.nick, short(ag.id), short(from), m.Subject)
+	if err := d.launchHarness(ag, wakePrompt(from, m.Subject, m.Frame.Record)); err != nil {
+		d.mu.Lock()
+		ag.running = false
+		d.mu.Unlock()
+		logf("revive %s failed: %v", short(ag.id), err)
+	}
+}
+
+// launchHarness runs the configured harness for one agent with the given prompt,
+// under the child's own creds, and marks the agent dormant when the process exits.
+// The caller must have claimed ag.running first (so a racing wake spawns once).
+func (d *dispatcher) launchHarness(ag *managedAgent, prompt string) error {
+	env := []string{
+		"SEXTANT_CREDS=" + ag.credsPath,
+		"SEXTANT_STORE=" + d.store,
+		"SX_PROMPT=" + prompt,
+		"SX_CHILD_ID=" + ag.id,
+		"SX_CHILD_NICK=" + ag.nick,
+		"SX_JOB=" + ag.job,
+	}
+	return d.launch("harness["+ag.nick+"]", d.harness, env, func() {
+		d.mu.Lock()
+		ag.running = false
+		d.mu.Unlock()
+		logf("agent %s (%s) exited; dormant — revives on next message", ag.nick, short(ag.id))
+	})
+}
+
+// launch starts command via `sh -c` with the dispatcher's environment plus
+// extraEnv, streaming its output to our stderr. It does not block; onExit (if set)
+// runs when the process exits. The child is bound to the dispatcher's signal
+// context, so a shutdown reaps it.
+func (d *dispatcher) launch(name, command string, extraEnv []string, onExit func()) error {
 	// The signal context (set in main) governs the lifetime: on shutdown these
 	// processes are killed, so a stopped dispatcher leaves no orphans.
-	cmd := exec.CommandContext(d.ctx, bin, args...)
+	cmd := exec.CommandContext(d.ctx, "sh", "-c", command)
 	cmd.Env = append(os.Environ(), extraEnv...)
 	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
 	cmd.Stdin = nil
@@ -354,8 +446,34 @@ func (d *dispatcher) launchCmd(name, bin string, args, extraEnv []string) error 
 	go func() {
 		err := cmd.Wait()
 		logf("%s (pid %d) exited: %v", name, pid, err)
+		if onExit != nil {
+			onExit()
+		}
 	}()
 	return nil
+}
+
+// wakePrompt builds the brief for a revived worker from the message that woke it:
+// the sender, the subject, and the message text, plus the directive to reply to the
+// sender over the bus. The worker resumes its own pi session, so this is the new
+// turn's input, not its whole context.
+func wakePrompt(from, subject string, record json.RawMessage) string {
+	return fmt.Sprintf(
+		"A bus message just arrived from %s on %s:\n\n%s\n\nHandle it, then reply to %s over the bus with sextant_reply.",
+		from, subject, messageText(record), from,
+	)
+}
+
+// messageText extracts a human-legible string from an opaque message record: a
+// `text` field (the chat.message convention) if present, else the raw JSON.
+func messageText(record json.RawMessage) string {
+	var probe struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(record, &probe); err == nil && probe.Text != "" {
+		return probe.Text
+	}
+	return string(record)
 }
 
 func short(id string) string {
