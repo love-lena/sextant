@@ -60,6 +60,22 @@ func (c *Client) Register(ctx context.Context, displayName, kind string) (Issued
 	return IssuedClient{ID: out.ID, Creds: out.Creds}, nil
 }
 
+// MintSession asks the bus to mint a short-lived SESSION credential for THIS
+// client's OWN identity (ADR-0044): a fresh, TTL-bounded credential that
+// authenticates as the same id — the same unforgeable author, the same DM/inbox
+// space — but with the privileged issuance ops denied. The dash uses it to hand a
+// browser tab a credential that acts AS the operator, so the page's DMs, DM
+// history, and self-authorship are the operator's, without the operator's
+// perpetual key ever reaching the browser. The returned creds are secret material
+// (they ride this client's own inbox); the id is this client's own id.
+func (c *Client) MintSession(ctx context.Context) (IssuedClient, error) {
+	var out wireapi.RegisterOutput
+	if err := c.call(ctx, wireapi.OpClientsSession, struct{}{}, &out); err != nil {
+		return IssuedClient{}, err
+	}
+	return IssuedClient{ID: out.ID, Creds: out.Creds}, nil
+}
+
 // listClients is the shared implementation behind Client.ListClients and
 // Issuer.ListClients — both make the same clients.list call, differing only in
 // which connection (and thus which call subject) carries it.

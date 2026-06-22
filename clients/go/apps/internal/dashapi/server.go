@@ -33,22 +33,15 @@ import (
 	"github.com/love-lena/sextant/clients/go/sdk"
 )
 
-// browserKind is the self-declared client kind the dash mints each browser tab as
-// (ADR-0044). It is the bus-side TTL trigger: the bus bounds a kind=="browser"
-// credential's JWT (the dash mints it but cannot retire it, so the exp is the
-// cleanup). It is a plain string the dash declares — the dash is a client and must
-// not reach into the SDK's wire atom (protocol/wireapi) — kept in sync with the
-// bus's wireapi.KindBrowser by the cred-TTL conformance the bus owns.
-const browserKind = "browser"
-
-// Bus is the subset of *sextant.Client the API server needs (ADR-0044): its own
-// id (the parent of the minted browser session) and Register — mint-on-behalf, the
-// one bus act the browser cannot do for itself. *sextant.Client satisfies it;
-// tests supply a fake. Everything the old API relayed (clients/messages/artifacts/
-// publish/subscribe) is gone — the browser calls those over its own bus Client.
+// Bus is the subset of *sextant.Client the API server needs (ADR-0044): the one
+// bus act a browser cannot do for itself — MintSession mints a short-lived SESSION
+// credential for the dash's OWN identity (the operator's), the credential the page
+// connects with so it acts AS the operator (its DMs, its DM history, its
+// authorship). *sextant.Client satisfies it; tests supply a fake. Everything the
+// old API relayed (clients/messages/artifacts/publish/subscribe) is gone — the
+// browser calls those over its own bus Client.
 type Bus interface {
-	ID() string
-	Register(ctx context.Context, displayName, kind string) (sextant.IssuedClient, error)
+	MintSession(ctx context.Context) (sextant.IssuedClient, error)
 }
 
 // Config configures a Server.
@@ -230,15 +223,17 @@ type sessionResponse struct {
 	WSURL string `json:"wsURL"`
 }
 
-// handleSession mints a short-lived, scoped browser credential for one dash tab
-// (ADR-0044) — the reason a Go server still runs. It dispatches the bus's
-// clients.register over the dash's own connection (mint-on-behalf, ADR-0033): the
-// bus mints a fresh ULID, stamps SpawnedBy=dash, scopes the credential by
-// clientPermissions to the child's own call/delivery space (it cannot mint,
-// cannot retire, cannot read another client's space), and — because the child kind
-// is "browser" — bounds its JWT with a short exp (the dash cannot retire it, so the
-// exp is the cleanup). The .creds text rides this token-gated loopback response to
-// the page, which then opens its own WebSocket to the bus.
+// handleSession mints a short-lived SESSION credential for one dash tab (ADR-0044)
+// — the reason a Go server still runs. It dispatches clients.session over the
+// dash's own connection: the bus issues a fresh ephemeral keypair whose JWT name
+// is the dash's OWN id (the operator's), so the credential authenticates AS the
+// operator — its DMs, its DM history, its authorship, its presence — which a fresh
+// per-tab child id silently broke (the credential could not read the operator's
+// traffic and authored as a stranger). It stays browser-safe by the same mechanism
+// a browser child did: the bus bounds its JWT with a short exp the dash cannot
+// retire, and denies it the privileged issuance ops (it still cannot mint or
+// retire). The .creds text rides this token-gated loopback response to the page,
+// which then opens its own WebSocket to the bus.
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	if s.wsURL == "" {
 		// The bus has no WebSocket listener — the browser has nowhere to connect.
@@ -247,9 +242,9 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 			"the bus has no WebSocket listener; enable it with `sextant config set ws-listen 127.0.0.1:<port>` then restart the bus")
 		return
 	}
-	issued, err := s.bus.Register(r.Context(), "dash-browser", browserKind)
+	issued, err := s.bus.MintSession(r.Context())
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "mint browser credential: "+err.Error())
+		writeError(w, http.StatusBadGateway, "mint browser session credential: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, sessionResponse{ID: issued.ID, Creds: issued.Creds, WSURL: s.wsURL})

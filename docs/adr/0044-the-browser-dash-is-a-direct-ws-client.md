@@ -38,17 +38,34 @@ The bus exposes a loopback WebSocket listener, default-off and enabled per
 deployment (`sextant config set ws-listen 127.0.0.1:<port>`), following the
 leaf-listener precedent ([ADR-0038](0038-a-remote-box-joins-through-a-leaf-node.md)): it is
 loopback-only and carries no TLS of its own, sitting behind the operator's secure
-transport (loopback, SSH-R, Tailscale, WireGuard). The dash — a top-level registered
-client, so it may dispatch — mints each browser tab a child credential over
-`clients.register`. That credential is scoped by the per-client allow-list to the
-child's own call and delivery space: it cannot mint, cannot retire, cannot read
-another client's traffic. Custody is simple and short-lived: the credential rides
-the dash's own loopback, token-gated HTTP response to the page, and the page opens
-its WebSocket with it. Because the dash cannot retire a credential, cleanup is a
-short JWT expiry (default one hour, overridable) — the `kind:"browser"` mint is the
-one mint the bus bounds with a TTL; every other credential stays perpetual,
-unchanged. A tab whose credential lapses is rejected on reconnect and the SPA
-surfaces a reload prompt rather than dying silently.
+transport (loopback, SSH-R, Tailscale, WireGuard). The dash mints each browser tab a
+short-lived credential **for its own identity — the operator's** — over
+`clients.session`: the bus issues a fresh ephemeral keypair whose JWT name is the
+caller's own id, so the page authenticates AS the operator (the same unforgeable
+author prefix `sx.api.<operator>.>`, the same delivery/inbox space).
+
+This is the keystone correction, caught dogfooding rc.1. A first cut minted each tab
+a fresh CHILD identity (`clients.register`, `kind:"browser"`), which made the dash
+act as a throwaway per-tab id rather than as the operator: scoped to its own space
+it "cannot read another client's traffic" — and the operator's DMs are another
+client's traffic — so the operator's own DM threads rendered empty, and anything the
+page sent was authored by a stranger that changed every tab/reload. Minting the
+session credential for the operator's own id fixes the identity-relative views (DMs,
+DM history, self-authorship, presence) by construction, while the unforgeable-author
+invariant is untouched: the credential is still scoped to a single id — the caller's
+own, which it already authenticated as — so it can stamp no other author.
+
+Browser hygiene is the same TTL the child model used — the credential carries a short
+JWT expiry (default one hour, overridable; the cleanup, since the dash cannot retire
+it) — plus a deny on the privileged ops (`clients.register`, `clients.retire`,
+`principal.set`, and `clients.session` itself, so a leaked credential cannot
+self-refresh past its TTL): the page acts as the operator for ordinary work (publish,
+read, subscribe, artifacts, goals, review) but can neither mint, retire, nor re-point
+the principal. The operator's perpetual key never reaches the browser — the session
+credential is a fresh, expiring keypair, not the operator's own. Custody is simple and
+short-lived: the credential rides the dash's loopback, token-gated HTTP response to
+the page, and the page opens its WebSocket with it. A tab whose credential lapses is
+rejected on reconnect and the SPA surfaces a reload prompt rather than dying silently.
 
 The security posture is deliberately local-first for this iteration: a loopback
 `ws://` listener behind the operator's existing secure transport, the same posture

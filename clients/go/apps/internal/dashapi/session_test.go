@@ -10,12 +10,6 @@ import (
 	"github.com/love-lena/sextant/clients/go/apps/internal/dashapi"
 )
 
-// browserKind is the kind the dash mints a browser tab as (ADR-0044) — the literal
-// the bus bounds with a TTL. Asserted here rather than imported from wireapi: the
-// dash is a client and must not reach the wire atom (the TestAppsNoWireAtom bright
-// line), so the test pins the same literal the handler declares.
-const browserKind = "browser"
-
 // sessionBody decodes a POST /api/session response.
 type sessionBody struct {
 	ID    string `json:"id"`
@@ -31,10 +25,12 @@ func postSession(srv http.Handler) *httptest.ResponseRecorder {
 	return rec
 }
 
-// TestSessionMintsBrowserCredential is the core of the mint endpoint (ADR-0044):
-// it dispatches clients.register for a kind="browser" child (so the bus bounds its
-// JWT) and hands the page the minted creds + the bus WebSocket URL to dial.
-func TestSessionMintsBrowserCredential(t *testing.T) {
+// TestSessionMintsOperatorCredential is the core of the mint endpoint (ADR-0044):
+// it dispatches clients.session over the dash's own connection and hands the page
+// a credential for the dash's OWN identity (the operator's) plus the bus WebSocket
+// URL to dial. The page connects with it and so acts AS the operator — the fix for
+// the per-tab child id that broke DMs / self-authorship.
+func TestSessionMintsOperatorCredential(t *testing.T) {
 	bus := &fakeBus{id: "01DASH"}
 	srv := dashapi.New(dashapi.Config{Bus: bus, Token: "tok", WSURL: "ws://127.0.0.1:7423"})
 
@@ -49,23 +45,21 @@ func TestSessionMintsBrowserCredential(t *testing.T) {
 	if body.WSURL != "ws://127.0.0.1:7423" {
 		t.Errorf("wsURL = %q, want the bus ws URL", body.WSURL)
 	}
-	if body.ID == "" || body.Creds == "" {
-		t.Errorf("response missing minted id/creds: %+v", body)
+	if body.Creds == "" {
+		t.Errorf("response missing minted creds: %+v", body)
 	}
-
-	// The child must be minted with kind="browser" — that is what makes the bus
-	// bound its credential's TTL (the dash cannot retire it).
-	calls := bus.registerCalls()
-	if len(calls) != 1 {
-		t.Fatalf("Register called %d times, want 1", len(calls))
+	// The session credential is for the dash's OWN id — that is what makes the page
+	// act as the operator (same author, same DM/inbox space).
+	if body.ID != "01DASH" {
+		t.Errorf("session id = %q, want the dash's own id 01DASH", body.ID)
 	}
-	if calls[0].kind != browserKind {
-		t.Errorf("minted kind = %q, want %q", calls[0].kind, browserKind)
+	if bus.mintCount() != 1 {
+		t.Fatalf("MintSession called %d times, want 1", bus.mintCount())
 	}
 }
 
 // TestSessionDistinctPerTab: each POST /api/session mints a fresh credential, so
-// two tabs never share an identity.
+// two tabs never share credential material (even though both act as the operator).
 func TestSessionDistinctPerTab(t *testing.T) {
 	bus := &fakeBus{id: "01DASH"}
 	srv := dashapi.New(dashapi.Config{Bus: bus, Token: "tok", WSURL: "ws://127.0.0.1:7423"})
@@ -76,8 +70,8 @@ func TestSessionDistinctPerTab(t *testing.T) {
 	if a.Creds == b.Creds {
 		t.Errorf("two tabs got the same creds %q — each must be minted fresh", a.Creds)
 	}
-	if len(bus.registerCalls()) != 2 {
-		t.Errorf("Register called %d times, want 2 (one per tab)", len(bus.registerCalls()))
+	if bus.mintCount() != 2 {
+		t.Errorf("MintSession called %d times, want 2 (one per tab)", bus.mintCount())
 	}
 }
 
@@ -97,7 +91,7 @@ func TestSessionFailsLoudWithoutWSListener(t *testing.T) {
 
 // TestSessionMintFailureIsBadGateway: a bus that refuses the mint surfaces as 502.
 func TestSessionMintFailureIsBadGateway(t *testing.T) {
-	bus := &fakeBus{id: "01DASH", registerErr: &fakeError{"caller may not dispatch"}}
+	bus := &fakeBus{id: "01DASH", mintErr: &fakeError{"mint refused"}}
 	srv := dashapi.New(dashapi.Config{Bus: bus, Token: "tok", WSURL: "ws://127.0.0.1:7423"})
 	rec := postSession(srv)
 	if rec.Code != http.StatusBadGateway {

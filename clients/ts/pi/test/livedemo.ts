@@ -38,7 +38,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StringDecoder } from "node:string_decoder";
 import { setTimeout as delay } from "node:timers/promises";
-import { connect, type Client, topicSubject, clientSubject, type Message } from "@sextant/sdk";
+import { connect, type Client, topicSubject, clientSubject, dmSubject, type Message } from "@sextant/sdk";
 import { startBus, goAvailable, repoRoot, type Bus } from "./busharness.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -300,14 +300,15 @@ async function main(): Promise<void> {
   writeFileSync(piLog, "");
 
   // The operator subscribes to the activity topic (what the dash renders), to
-  // msg.topic.goals (the goal-transition stream the dash watches), and to its own
-  // inbox (to catch the agent's reply DM via sextant_reply).
+  // msg.topic.goals (the goal-transition stream the dash watches), and to its DM
+  // conversation with the agent (to catch the reply via sextant_reply, which lands
+  // on the canonical 2-party DM topic the dash renders, not the operator's inbox).
   const activity: Message[] = [];
   await op.subscribe(topicSubject(activityTopic), (m) => activity.push(m));
   const goalUpdates: Message[] = [];
   await op.subscribe(topicSubject("goals"), (m) => goalUpdates.push(m));
   const replies: Message[] = [];
-  await op.subscribe(clientSubject(operator.id), (m) => replies.push(m));
+  await op.subscribe(dmSubject(operator.id, piAgent.id), (m) => replies.push(m));
 
   let pi: PiRpc | undefined;
   let dash: { proc: ChildProcess; url: string } | undefined;
@@ -335,7 +336,7 @@ async function main(): Promise<void> {
       woke && replies.length > 0,
       woke && replies.length > 0
         ? `the idle pi agent WOKE on the operator's DM (no RPC prompt sent), the extension stamped author tier="${tier}", and it REPLIED over the bus as its own id ${piAgent.id}: ${JSON.stringify(replyText.slice(0, 100))}`
-        : `woke=${woke}, reply DMs on operator inbox=${replies.length} (the model may have answered without sextant_reply)`,
+        : `woke=${woke}, replies on the DM conversation=${replies.length} (the model may have answered without sextant_reply)`,
     );
 
     section("AC#2: /set-goal moves a real goal criterion the dash then renders");

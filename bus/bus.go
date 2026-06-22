@@ -582,3 +582,42 @@ func (b *Bus) mintClient(ctx context.Context, displayName, kind, spawnedBy strin
 	}
 	return creds, id, nil
 }
+
+// mintSession mints a short-lived SESSION credential for an ALREADY-registered
+// identity — the browser-dash fix (ADR-0044). Unlike mintClient (a new ULID plus
+// a durable registry record), this issues a fresh ephemeral keypair whose JWT
+// NAME is the caller's OWN id, so the credential authenticates AS that identity:
+// it authors under the same sx.api.<id> prefix and reads the same delivery / inbox
+// space. The unforgeable-author invariant holds — the credential is still scoped
+// to a single id (the caller's, which it already authenticated as), so it can
+// stamp no other author and impersonates no one.
+//
+// It creates NO new registry record and reserves NO name: the identity already
+// exists, and this is a second, expiring credential FOR it, not a new client (a
+// new record would be the "ghost client" footgun reserveName guards against). The
+// connect handshake (clients.hello) only checks the id is registered — it does not
+// pin a credential's keypair to the registry's recorded subject (the infra creds
+// are re-minted with a fresh keypair under a fixed id every boot) — so a fresh
+// keypair named for an existing id connects cleanly. It is browser-safe by the
+// same mechanism a browser child was: a bounded JWT TTL the dash cannot retire.
+func (b *Bus) mintSession(ctx context.Context, clientID string) (creds string, err error) {
+	if b.isLeaf() {
+		// A leaf holds no signing identity (ADR-0038) — minting stays at the hub.
+		return "", errors.New("bus: minting is unavailable on a leaf — mint at the hub (the leaf holds no signing key)")
+	}
+	// Carry the identity's display name so the page shows the operator's label,
+	// not a blank — read it from the existing registry record (best-effort: a
+	// missing/garbled record just yields an empty display, never a mint failure).
+	display := ""
+	if raw, _, gerr := b.backend.Get(ctx, sx.BucketClients, clientID); gerr == nil {
+		var rec wireapi.ClientEntry
+		if json.Unmarshal(raw, &rec) == nil {
+			display = rec.DisplayName
+		}
+	}
+	j, seed, _, err := b.ident.mintUser(clientID, browserSessionPermissions(clientID), b.browserCredTTL, wireapi.EncodeDisplayNameTag(display))
+	if err != nil {
+		return "", err
+	}
+	return credsFile(j, seed)
+}

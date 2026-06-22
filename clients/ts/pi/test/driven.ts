@@ -27,7 +27,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StringDecoder } from "node:string_decoder";
 import { setTimeout as delay } from "node:timers/promises";
-import { connect, type Client, topicSubject, clientSubject, type Message } from "@sextant/sdk";
+import { connect, type Client, topicSubject, clientSubject, dmSubject, type Message } from "@sextant/sdk";
 import { startBus, goAvailable, type Bus } from "./busharness.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -227,9 +227,11 @@ async function main(): Promise<void> {
   await op.subscribe(topicSubject(activityTopic), (m) => activity.push(m));
   const goalUpdates: Message[] = [];
   await op.subscribe(topicSubject("goals"), (m) => goalUpdates.push(m));
-  // The operator's own inbox — to catch the agent's reply DM (sextant_reply).
+  // The operator's DM conversation with the agent — sextant_reply replies on the
+  // canonical 2-party DM topic (sx.DMSubject), the same subject the dash renders as
+  // the thread, NOT the operator's one-way inbox.
   const replies: Message[] = [];
-  await op.subscribe(clientSubject(operator.id), (m) => replies.push(m));
+  await op.subscribe(dmSubject(operator.id, piAgent.id), (m) => replies.push(m));
 
   let pi: PiRpc | undefined;
   try {
@@ -256,10 +258,10 @@ async function main(): Promise<void> {
       record(
         "AC#1/#5",
         "PASS",
-        `idle pi agent woke on the operator's DM (no RPC prompt sent), the extension stamped the author trust tier="${tier}" (the operator is the principal), and the agent REPLIED over the bus as its own identity ${piAgent.id}. Reply DM(s) on the operator inbox: ${replies.length}; assistant text: ${JSON.stringify(replyText.slice(0, 120))}`,
+        `idle pi agent woke on the operator's DM (no RPC prompt sent), the extension stamped the author trust tier="${tier}" (the operator is the principal), and the agent REPLIED over the bus as its own identity ${piAgent.id}. Replies on the operator↔agent DM conversation: ${replies.length}; assistant text: ${JSON.stringify(replyText.slice(0, 120))}`,
       );
     } else if (woke) {
-      record("AC#1/#5", "PARTIAL", `woke + replied in-session (${JSON.stringify(replyText.slice(0, 120))}) but no reply DM landed on the operator inbox (model may have answered without sextant_reply); reply DMs=${replies.length}`);
+      record("AC#1/#5", "PARTIAL", `woke + replied in-session (${JSON.stringify(replyText.slice(0, 120))}) but no reply landed on the DM conversation (model may have answered without sextant_reply); replies=${replies.length}`);
     } else {
       record("AC#1/#5", "FAIL", "the pi agent did not wake on the operator's DM within 90s");
     }

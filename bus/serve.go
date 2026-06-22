@@ -129,6 +129,8 @@ func (b *Bus) dispatch(ctx context.Context, clientID, op string, data []byte) (j
 		return b.opClientsRegister(ctx, clientID, data)
 	case wireapi.OpClientsRetire:
 		return b.opClientsRetire(ctx, clientID, data)
+	case wireapi.OpClientsSession:
+		return b.opClientsSession(ctx, clientID)
 	case wireapi.OpClientsHello:
 		return b.opClientsHello(ctx, clientID)
 	case wireapi.OpClientsHeartbeat:
@@ -541,6 +543,22 @@ func (b *Bus) opClientsHello(ctx context.Context, callerID string) (json.RawMess
 		return nil, fmt.Errorf("bus: clients.hello: %w", err)
 	}
 	return json.Marshal(wireapi.HelloOutput{BusEpoch: epoch, ServerTime: nowRFC3339(), Principal: principal})
+}
+
+// opClientsSession mints a short-lived SESSION credential for the caller's OWN
+// identity (the ADR-0044 browser-dash fix) — the one act the browser cannot do
+// for itself, because minting stays at the bus. The caller is authenticated as
+// callerID (the call subject is sx.api.<callerID>.clients.session), so the
+// credential can only ever be for the caller's own id: the dash, connected as the
+// operator, gets a credential that acts AS the operator to hand its page, without
+// the operator's perpetual key ever reaching the browser. It is TTL-bounded and
+// denies the privileged issuance ops (browserSessionPermissions).
+func (b *Bus) opClientsSession(ctx context.Context, callerID string) (json.RawMessage, error) {
+	creds, err := b.mintSession(ctx, callerID)
+	if err != nil {
+		return nil, fmt.Errorf("bus: clients.session: %w", err)
+	}
+	return json.Marshal(wireapi.RegisterOutput{ID: callerID, Creds: creds})
 }
 
 // opClientsHeartbeat is the periodic liveness signal (TASK-126). It does two

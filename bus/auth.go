@@ -328,6 +328,33 @@ func clientPermissions(clientID string) jwt.Permissions {
 	return p
 }
 
+// browserSessionPermissions is the grant for a short-lived browser SESSION
+// credential (the ADR-0044 fix). It starts from the identity's own
+// clientPermissions — so the browser dash acts AS the operator: it authors under
+// the operator's sx.api.<id> prefix and reads the operator's delivery/inbox/
+// heartbeat space, which is exactly the identity-relative state (DMs, DM history,
+// self-authorship, presence) that a fresh per-tab child id silently broke. The
+// unforgeable-author invariant is untouched: the credential is still scoped to a
+// single id (the caller's), so it can stamp no other author.
+//
+// On top of that it DENIES the privileged ops a browser-resident credential must
+// never wield even while acting as the operator (deny-wins in NATS): minting and
+// retiring identities (clients.register / clients.retire), re-pointing the
+// principal (principal.set), and minting another session credential
+// (clients.session — so a leaked browser cred cannot refresh itself perpetually
+// and defeat the TTL cleanup). Everything an operator's dashboard actually does —
+// publish, read, subscribe, artifacts, goals, review — remains allowed.
+func browserSessionPermissions(clientID string) jwt.Permissions {
+	p := clientPermissions(clientID)
+	p.Pub.Deny = []string{
+		wireapi.CallSubject(clientID, wireapi.OpClientsRegister),
+		wireapi.CallSubject(clientID, wireapi.OpClientsRetire),
+		wireapi.CallSubject(clientID, wireapi.OpClientsSession),
+		wireapi.CallSubject(clientID, wireapi.OpPrincipalSet),
+	}
+	return p
+}
+
 // leafLinkPermissions is the leaf link's grant (ADR-0038): the federation set,
 // minus the reserved issuance identities. The remote leaf authenticates the link
 // to the hub as a SEXTANT user carrying this credential, and the link forwards the

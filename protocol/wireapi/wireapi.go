@@ -101,6 +101,17 @@ const (
 // server-side relay it started.
 const OpSubscriptionStop = "subscription.stop"
 
+// OpClientsSession mints a short-lived SESSION credential for the caller's OWN
+// identity (the ADR-0044 browser-dash fix). It is bus plumbing, not one of the
+// protocol's operations (not in methods.json, no CLI/MCP surface): the dash calls
+// it over its own connection to hand a browser tab a credential that acts AS the
+// operator — the same id, the same unforgeable author prefix, the same DM/inbox
+// space — but TTL-bounded and with the privileged issuance ops denied. The
+// credential can only ever be for the caller's own id (the call subject is
+// sx.api.<caller>.clients.session), so it grants no identity the caller did not
+// already authenticate as — strictly weaker than the caller's own credential.
+const OpClientsSession = "clients.session"
+
 // OpPrincipalGet, OpPrincipalSet, and OpPrincipalWatch are the principal-
 // designation ops (ADR-0030). They are an opinionated EXTENSION over the locked
 // core — not protocol operations: they are not in methods.json (the universal

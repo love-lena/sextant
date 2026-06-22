@@ -29,7 +29,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-import { connect, type Client, topicSubject, clientSubject, type Message } from "@sextant/sdk";
+import { connect, type Client, topicSubject, clientSubject, dmSubject, type Message } from "@sextant/sdk";
 import { startBus, goAvailable, repoRoot, type Bus } from "./busharness.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -163,10 +163,11 @@ async function main(): Promise<void> {
   console.log(`  minted worker ${child.id} + operator ${operator.id} (distinct scoped creds); operator principal=${operator.claimedPrincipal}`);
 
   const op: Client = await connect({ credsPath: operator.credsPath, url: bus.url });
-  // The operator watches: its own inbox (the worker's replies), the artifact stream
-  // (an artifact the worker creates), and the pi.handoff topic (the ownership signal).
+  // The operator watches: its DM conversation with the worker (sextant_reply lands
+  // on the canonical 2-party DM topic, not the inbox), the artifact stream (an
+  // artifact the worker creates), and the pi.handoff topic (the ownership signal).
   const replies: Message[] = [];
-  await op.subscribe(clientSubject(operator.id), (m) => replies.push(m));
+  await op.subscribe(dmSubject(operator.id, child.id), (m) => replies.push(m));
   const handoffs: Message[] = [];
   await op.subscribe(topicSubject("pi.handoff"), (m) => handoffs.push(m));
 
@@ -210,7 +211,7 @@ async function main(): Promise<void> {
     }
     const replyText = gotReply ? JSON.stringify((replies[0]!.frame.record as { text?: string }).text ?? replies[0]!.frame.record).slice(0, 160) : "(none)";
     if (artifactOk && gotReply) {
-      record("AC#4", "PASS", `the worker DID the task on its own identity: it created artifact "${artifactName}" (rev ${artifactRev}) carrying the secret word, AND replied to the operator's inbox (${replies.length} DM(s); reply: ${replyText}). The operator sees both on the bus exactly as it sees a Claude Code crew member's artifact + DM (the dash reads the same subjects).`);
+      record("AC#4", "PASS", `the worker DID the task on its own identity: it created artifact "${artifactName}" (rev ${artifactRev}) carrying the secret word, AND replied on the operator↔worker DM conversation (${replies.length} reply(ies); reply: ${replyText}). The operator sees both on the bus exactly as it sees a Claude Code crew member's artifact + DM (the dash reads the same subjects).`);
     } else {
       record("AC#4", artifactOk || gotReply ? "PARTIAL" : "FAIL", `artifact created+correct=${artifactOk} (rev ${artifactRev}); reply DM=${gotReply} (${replyText})`);
     }

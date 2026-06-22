@@ -18,7 +18,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { Client, JSONValue, Message, Subscription } from "@sextant/sdk";
-import { topicSubject } from "@sextant/sdk";
+import { topicSubject, dmSubject } from "@sextant/sdk";
 
 // ToolDeps is what the tools need from the extension: the live client, the wake
 // handler to attach to a runtime subscription, and a place to track those
@@ -84,7 +84,7 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
     name: "sextant_reply",
     label: "Bus reply",
     description:
-      "Send a direct message to a specific bus client by its id (e.g. reply to whoever just messaged you — their id is in the bus message you received). `record` is an opaque JSON object; for plain chat use {\"$type\":\"chat.message\",\"text\":\"...\"}.",
+      "Reply to a specific bus client by its id (e.g. whoever just messaged you — their id is in the bus message you received). This is a direct message on your shared 2-party DM conversation, the same thread the other side sees in their dash. `record` is an opaque JSON object; for plain chat use {\"$type\":\"chat.message\",\"text\":\"...\"}.",
     parameters: Type.Object({
       to: Type.String({ description: "The recipient client id (a 26-char ULID)." }),
       record: JSON_RECORD,
@@ -93,9 +93,14 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
       const c = requireClient(deps);
       if ("error" in c) return c.error;
       try {
-        // A DM lands on the recipient's inbox subject (msg.client.<id>).
-        await c.publish(`msg.client.${params.to}`, params.record as JSONValue);
-        return ok(`sent a direct message to ${params.to}`);
+        // A reply lands on the canonical 2-party DM topic (sx.DMSubject):
+        // msg.topic.dm.<sorted self,to>. Both ends publish to and read from this one
+        // subject, so the reply shows up in the SAME conversation the dash renders.
+        // (The recipient's inbox, msg.client.<id>, is a one-way wake drop the dash
+        // shows as a separate "inbox" row, NOT the DM thread — replying there is what
+        // made a reply vanish from the conversation.)
+        await c.publish(dmSubject(c.id(), params.to), params.record as JSONValue);
+        return ok(`replied to ${params.to} on your DM conversation`);
       } catch (e) {
         return err(`reply failed: ${(e as Error).message}`);
       }
