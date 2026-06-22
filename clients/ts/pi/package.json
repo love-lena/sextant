@@ -32,7 +32,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.79.8",
+    "@earendil-works/pi-coding-agent": "0.79.10",
     "@sextant/conv-goals": "file:../conventions/goals",
     "@sextant/sdk": "file:../sdk",
     "typebox": "1.1.38"
