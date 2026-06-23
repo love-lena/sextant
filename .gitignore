@@ -41,8 +41,10 @@ node_modules/
 # VHS renders an mp4 alongside the gif; only the gif is committed
 docs/demos/*.mp4
 
-# stray build output of `go build ./cmd/sextant` from the repo root
+# stray build output of `go build [-o <name>] ./clients/go/apps/<app>` from the
+# repo root (the apps moved out of ./cmd/ in the monorepo refactor)
 /sextant
+/sextant-*
 
 # Generated dash UI bundles (TASK-121): the *.js are transpiled from *.jsx by
 # scripts/build-dash-ui.sh at build time (make ui / go:generate / CI / release),
