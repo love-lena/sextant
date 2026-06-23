@@ -2,8 +2,11 @@ package bus_test
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
+	sextant "github.com/love-lena/sextant/clients/go/sdk"
 	"github.com/love-lena/sextant/protocol/wireapi"
 )
 
@@ -58,5 +61,25 @@ func TestSessionCredentialActsAsCaller(t *testing.T) {
 	// credential, so a leaked credential cannot mint a fresh one and outlive its TTL.
 	if _, err := sess.MintSession(ctx); err == nil {
 		t.Error("session credential minted another session; self-refresh must be denied so the TTL is the real cleanup")
+	}
+
+	// The remaining privileged issuance ops are denied on the same mechanism
+	// (browserSessionPermissions.Pub.Deny): a leaked browser credential can neither
+	// retire an identity nor re-point the principal, even while acting as the
+	// operator. These ride the issuer call path, so connect one with the session creds.
+	credsPath := filepath.Join(t.TempDir(), "session.creds")
+	if err := os.WriteFile(credsPath, []byte(issued.Creds), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	iss, err := sextant.ConnectIssuer(ctx, sextant.Options{URL: b.ClientURL(), CredsPath: credsPath})
+	if err != nil {
+		t.Fatalf("ConnectIssuer(session creds): %v", err)
+	}
+	t.Cleanup(func() { _ = iss.Close() })
+	if err := iss.Retire(ctx, opID); err == nil {
+		t.Error("session credential retired an identity; clients.retire must be denied")
+	}
+	if err := iss.SetPrincipal(ctx, opID, true); err == nil {
+		t.Error("session credential re-pointed the principal; principal.set must be denied")
 	}
 }

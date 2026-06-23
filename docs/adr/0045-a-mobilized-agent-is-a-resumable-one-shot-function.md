@@ -59,17 +59,21 @@ session, with that message as the trigger. There is nothing to register per arti
 and nothing for the agent to keep running between messages.
 
 The **dispatcher is the universal invoker**. Besides watching its spawn subject, it
-holds one standing subscription that wakes any agent it minted on inbound to that
-agent's wake drop (its `msg.client.<id>` inbox), re-running the `pi --rpc` harness
-under the agent's own credential and resuming its session. On restart it re-derives
-the set it is responsible for from the registry (the agents whose `SpawnedBy` is this
-dispatcher), so revivability survives a dispatcher bounce without any per-agent state —
-and it dispatches a `spawn.request` it has already handled at most once, so a restart
-no longer replays the retained spawn history into a fresh fleet. A wake that arrives
-while a run is in flight is coalesced — single owner per session id, as
+holds standing subscriptions that wake any agent it minted on inbound to that agent's
+wake drops — its `msg.client.<id>` inbox and its two 2-party DM topics
+(`msg.topic.dm.<sorted ids>`), since a follow-up reply lands on the DM conversation,
+not the inbox — re-running the `pi --rpc` harness under the agent's own credential and
+resuming its session. The set of revivable agents it holds is in-process for this
+first cut, so a dispatcher bounce orphans agents minted before it; re-deriving the set
+from the registry (the agents whose `SpawnedBy` is this dispatcher) on restart is a
+named follow-up below. Because the spawn subscription is deliver-new, a restart does
+not replay the retained spawn history into a fresh fleet. A wake that arrives while a
+run is in flight is coalesced — single owner per session id, as
 [ADR-0043](0043-the-pi-harness-is-a-first-class-bus-client.md)'s handoff already
 requires — so a burst of messages does not fan out into overlapping runs against one
-JSONL. This is the wake-loop of [ADR-0033](0033-a-dispatcher-mints-its-own-workers.md)
+JSONL; the one window this cut does not yet close is a wake that races the wind-down
+itself (after a run decides to drain, before the dispatcher marks the agent dormant) —
+also a named follow-up. This is the wake-loop of [ADR-0033](0033-a-dispatcher-mints-its-own-workers.md)
 folded into the one infrastructure process that already exists, instead of a process
 per agent; the recursion fence is untouched, because a revival simply re-runs the
 harness and a spawned worker still cannot mint.
@@ -87,9 +91,10 @@ swappable-harness seam of [ADR-0033](0033-a-dispatcher-mints-its-own-workers.md)
 what makes the swap a one-line deployment change rather than a rewrite. `pi.sh` stops
 holding the worker's stdin open for the life of the process; a run completes its turn,
 reports, and exits, and the dispatcher — not a held-open FIFO — is what brings it back.
-The dispatcher gains the standing wake subscription, the registry-derived revival set,
-and durable dedup of handled requests; `--on-wake` and the standalone `spawn-poc`
-supervisor are retired in its favour. The headless pi worker learns the workflow
+The dispatcher gains the standing wake subscriptions and an in-process revival set,
+and dedups handled requests within its run (deliver-new is what keeps a restart from
+replaying the spawn log); `--on-wake` and the standalone `spawn-poc` supervisor are
+retired in its favour. The headless pi worker learns the workflow
 report: when its brief carries `WF_EVENTS`/`WF_STEP`, it emits the step-done event the
 coordinator waits on. The dash's mobilize and workflow views stop treating "a new
 client appeared" as success and key their success and liveness on the agent's report
@@ -102,8 +107,12 @@ their absence is precisely why a pi-harnessed spawn would have failed silently t
 
 Idle cost is zero — no agent process exists between messages. Liveness is *identity in
 the registry plus last report*, consistent with [ADR-0011](0011-workflows.md)'s
-"liveness is presence-plus-staleness, not a heartbeat." Rate-limiting revivals,
-garbage-collecting dormant agent identities and their session JSONL, and a worker
+"liveness is presence-plus-staleness, not a heartbeat." Re-deriving the revival set
+from the registry on restart so it survives a dispatcher bounce, closing the
+wind-down wake race (a message that arrives after a run decides to drain but before
+the dispatcher marks the agent dormant is currently dropped — deliver-new, no replay),
+rate-limiting revivals, garbage-collecting dormant agent identities and their session
+JSONL, and a worker
 self-exiting on an idle timeout rather than at end-of-turn are named follow-ups, not
 load-bearing for the first cut.
 
