@@ -1,0 +1,43 @@
+{
+  "name": "@sextant/sdk",
+  "version": "0.1.0",
+  "description": "The TypeScript Wire client for Sextant — a co-equal SDK peer to the Go SDK (ADR-0041), anchored on protocol epoch 1.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "browser": "./dist/src/browser.js",
+      "import": "./dist/src/index.js"
+    },
+    "./browser": {
+      "types": "./dist/src/browser.d.ts",
+      "import": "./dist/src/browser.js"
+    }
+  },
+  "files": [
+    "dist/src",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "sextant": {
+    "epoch": 1
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test dist/test/codec.test.js dist/test/conformance.test.js dist/test/browser.test.js dist/test/integration.test.js",
+    "test:conformance": "npm run build && node --test dist/test/codec.test.js dist/test/conformance.test.js dist/test/browser.test.js",
+    "test:integration": "npm run build && node --test dist/test/integration.test.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "nats": "2.29.3",
+    "nats.ws": "1.30.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "typescript": "^6.0.3"
+  }
+}

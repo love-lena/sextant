@@ -1,10 +1,10 @@
 ---
 id: TASK-173
 title: 'Goals convention as a lexicon-defined library, with conformance vectors'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-19 21:11'
-updated_date: '2026-06-19 21:31'
+updated_date: '2026-06-20 01:00'
 labels:
   - feature
   - conventions
@@ -35,3 +35,9 @@ Establish the convention pattern end-to-end on goals: define the goal record + v
 - [ ] #6 the lexicon->Go type generation is built + documented (net-new: lexicons are read at runtime today) - a fresh agent knows where it lives and when it runs
 - [ ] #7 after the swap, sextant dash --serve Goals and violet's curated Home render the same live goal identically
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Goals convention as a lexicon-defined library SHIPPED (PR #235 squash). Codegen (lexgen->goal_gen.go, //go:generate+make generate); conv/goals is the SINGLE home (generated types + SetCriterion + derived Rollup + proof-filter EffectiveStatus + Project read-model). label/state/title field-drift bug FIXED (violet fallbacks deleted, headline=northstar). dashapi WRITE + violet READ + dash RENDER (server-side GET /api/goals via goals.Project) all consume conv/goals -> proof rule in ONE place, dash & violet cannot diverge. Conformance vector replays via the 183 seam. Adversarial review caught 3 confirmed defects (dash render diverged on unproved-met + circular AC#7 test; AC#5 on a fake store; importcheck false-green) - all fixed + independently re-verified (importcheck bite: injected bus import -> guard FAILS as designed, reverted clean). Gate green (golangci 0, make test -race 31 ok, e2e ok). New exported surfaces recorded: goals.Ops, goals step sentinels (ErrGet/ErrUpdate/ErrPublish).
+<!-- SECTION:FINAL_SUMMARY:END -->

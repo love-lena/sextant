@@ -1,0 +1,36 @@
+# Curated static-checks gate (ADR-0042, realises TASK-17 via TASK-181).
+#
+# Principle: curated = high-value, low-friction, ZERO //nolint debt. A rule that
+# fights a legitimate Go idiom with no clean exclusion is a SKILL convention
+# (judgment), not a gate (linter). default: none — this is an allowlist, not the
+# kitchen-sink set. gofumpt formatting is its own Makefile/CI step, not run here.
+version: "2"
+
+# Lint the e2e-tagged suite too (tests/e2e/, the M2 DoD): a build tag is invisible
+# to anything that doesn't pass it, so the tagged files would rot silently outside
+# the gate. The e2e tag is the repo's one tag.
+run:
+  build-tags:
+    - e2e
+
+linters:
+  default: none
+  enable:
+    - govet # Printf-wrapper checks, copylocks, and the standard vet suite.
+    - errcheck # Unchecked errors (and, via settings, unchecked type assertions).
+    - errorlint # Correct %w usage + errors.Is/As instead of == / type switches.
+    - ineffassign # Ineffective assignments.
+    - staticcheck # Broad correctness suite.
+  settings:
+    errcheck:
+      # Unchecked type assertions are the comma-ok requirement's backstop.
+      check-type-assertions: true
+  exclusions:
+    generated: lax
+    rules:
+      # Tests drive subprocesses synchronously and the harness owns their
+      # lifetime, so errcheck is relaxed on _test.go; import-discipline,
+      # errorlint, and staticcheck stay on tests.
+      - path: _test\.go
+        linters:
+          - errcheck

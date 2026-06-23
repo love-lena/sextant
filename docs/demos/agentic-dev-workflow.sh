@@ -261,13 +261,13 @@ if [ "$MODE" = demo ]; then
   rm -rf "$P"; mkdir -p "$S"
   echo "== build binaries =="
   # The dash JS bundles are generated, not committed (TASK-121), and embedded by the Go build
-  # (go:embed in internal/dashapi). Generate them first or `go build ./cmd/sextant` fails on a
+  # (go:embed in internal/dashapi). Generate them first or `go build ./clients/go/apps/sextant` fails on a
   # fresh checkout. Best-effort: if esbuild/npx is unavailable, fall through and let go build
   # report the missing embed.
   if [ -x "$ROOT/scripts/build-dash-ui.sh" ]; then
     ( cd "$ROOT" && bash scripts/build-dash-ui.sh ) >"$P/dash-ui.log" 2>&1 || echo "  (dash UI build emitted warnings; see $P/dash-ui.log)"
   fi
-  ( cd "$ROOT" && go build -o "$SX" ./cmd/sextant && go build -o "$SXPOC" ./cmd/spawn-poc ) || { echo "build failed"; exit 2; }
+  ( cd "$ROOT" && go build -o "$SX" ./clients/go/apps/sextant && go build -o "$SXPOC" ./clients/go/apps/spawn-poc ) || { echo "build failed"; exit 2; }
 
   echo "== throwaway bus on :$PORT =="
   "$SX" up --store "$S" --port "$PORT" >"$P/up.log" 2>&1 & BUS=$!
@@ -455,7 +455,7 @@ if [ "$MODE" = run ]; then
   [ -n "$SX" ] || { echo "sextant not on PATH"; exit 2; }
   command -v claude >/dev/null || { echo "claude not on PATH"; exit 2; }
   command -v codex  >/dev/null || { echo "codex not on PATH"; exit 2; }
-  if [ -z "$SXPOC" ]; then ( cd "$ROOT" && go build -o /tmp/spawn-poc ./cmd/spawn-poc ) && SXPOC=/tmp/spawn-poc; fi
+  if [ -z "$SXPOC" ]; then ( cd "$ROOT" && go build -o /tmp/spawn-poc ./clients/go/apps/spawn-poc ) && SXPOC=/tmp/spawn-poc; fi
 
   WF_ID="${WF_ID:-wf$(date +%s 2>/dev/null || echo run)}"
   WT="$ROOT/.claude/worktrees/$WF_ID"

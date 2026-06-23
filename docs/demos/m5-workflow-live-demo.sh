@@ -27,8 +27,8 @@ need claude
 
 rm -rf "$P"; mkdir -p "$S"
 echo "== build binaries =="
-( cd "$ROOT" && go build -o "$SX" ./cmd/sextant && go build -o "$SXMCP" ./cmd/sextant-mcp \
-  && go build -o "$SXDISP" ./cmd/sextant-dispatch && go build -o "$SXWF" ./cmd/sextant-workflow ) || { echo "build failed"; exit 2; }
+( cd "$ROOT" && go build -o "$SX" ./clients/go/apps/sextant && go build -o "$SXMCP" ./clients/go/apps/mcp \
+  && go build -o "$SXDISP" ./clients/go/apps/dispatch && go build -o "$SXWF" ./clients/go/apps/workflow ) || { echo "build failed"; exit 2; }
 
 echo "== throwaway bus on :$PORT =="
 "$SX" up --store "$S" --port "$PORT" >"$P/up.log" 2>&1 & BUS=$!

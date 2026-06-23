@@ -18,11 +18,19 @@ jobs:
         with:
           node-version: '20'
       # The dash UI bundles are generated, not committed (TASK-121); regenerate
-      # them before any Go compile so the go:embed in internal/dashapi resolves.
+      # them before any Go compile so the go:embed in clients/go/apps/internal/dashapi resolves.
       - name: build dash UI
         run: bash scripts/build-dash-ui.sh
       - name: go vet
         run: go vet ./...
+      # The curated static-checks gate (.golangci.yml, ADR-0042). v2 config schema;
+      # pin the action's version to the installed v2 line. The import-discipline
+      # bright lines (importcheck, ADR-0041) run as tests in the test step below.
+      - name: golangci-lint
+        # golangci-lint v2 needs golangci-lint-action v7+ (v6 rejects v2.x).
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.12.2
       - name: gofumpt
         run: |
           go install mvdan.cc/gofumpt@latest
@@ -36,3 +44,106 @@ jobs:
         run: go test ./... -race
       - name: e2e (M2 DoD — tests/e2e/m2-acceptance.md)
         run: go test -tags e2e -count=1 ./tests/e2e/
+
+  clients-ts:
+    name: build + test (TypeScript SDK + conventions)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          cache: npm
+          cache-dependency-path: |
+            clients/ts/sdk/package-lock.json
+            clients/ts/conventions/goals/package-lock.json
+            clients/ts/conventions/review/package-lock.json
+            clients/ts/pi/package-lock.json
+      # The integration + live scenarios spawn the real Go bus (cross-language
+      # round-trip, AC#6; goals co-equality, TASK-175 AC#4) — so Go is needed here
+      # too. The conformance/codec/unit tests need no bus.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # The Go bus go:embeds generated dash UI bundles; regenerate them before the
+      # harness builds the `sextant` binary (mirrors the Go job).
+      - name: build dash UI
+        run: bash scripts/build-dash-ui.sh
+
+      # --- the TS SDK (TASK-174) ---
+      - name: npm ci (sdk)
+        working-directory: clients/ts/sdk
+        run: npm ci
+      # Build = typecheck + emit. A type error fails CI. The goals convention's
+      # file: dependency on @sextant/sdk resolves to this dist/, so the SDK must be
+      # built before the goals package below.
+      - name: build (sdk, tsc)
+        working-directory: clients/ts/sdk
+        run: npm run build
+      # Unit + conformance: replays protocol/conformance/vectors/wire/*.json on
+      # every push (AC#7), plus the browser-entry equivalence tests (ADR-0044: the
+      # pure-JS hex/base64url/Web-Crypto rewrites must be byte-equivalent to the
+      # Buffer path they replaced, on the auth/wire path). Needs no bus.
+      - name: conformance vectors + codec + browser (sdk)
+        working-directory: clients/ts/sdk
+        run: node --test dist/test/codec.test.js dist/test/conformance.test.js dist/test/browser.test.js
+      # Cross-language integration on a real bus (AC#6) — required, not optional.
+      - name: cross-language round-trip (real bus, sdk)
+        working-directory: clients/ts/sdk
+        run: node --test --test-timeout 120000 dist/test/integration.test.js
+
+      # --- the TS goals convention (TASK-175) ---
+      # @sextant/conv-goals depends on @sextant/sdk via a file: link to the SDK
+      # package above (already built). The drift guard re-runs lexgen and asserts
+      # the committed types match the lexicon.
+      - name: npm ci (conv/goals)
+        working-directory: clients/ts/conventions/goals
+        run: npm ci
+      - name: build (conv/goals, tsc)
+        working-directory: clients/ts/conventions/goals
+        run: npm run build
+      # Op-transcript conformance: replays the SAME protocol/conformance/vectors/
+      # goals/*.json the Go suite passes, plus the verb unit tests and the lexicon
+      # drift guard. Needs no bus (AC#2, AC#3).
+      - name: goals conformance + unit + drift (conv/goals)
+        working-directory: clients/ts/conventions/goals
+        run: node --test dist/test/goals.test.js dist/test/conformance.test.js dist/test/lexgen.test.js
+      # The live co-equality scenario on a real bus: TS + Go goals conventions
+      # write/read the same goal artifact, byte-identical (AC#4) — required.
+      - name: goals co-equality (real bus, conv/goals)
+        working-directory: clients/ts/conventions/goals
+        run: node --test --test-timeout 180000 dist/test/coequality.test.js
+
+      # --- the TS review convention (TASK-180, ADR-0044) ---
+      # @sextant/conv-review is the review convention (the dashapi review.go logic:
+      # read-merge-CAS + the approve→met closed loop via @sextant/conv-goals). It
+      # depends on @sextant/sdk AND @sextant/conv-goals via file: links (both built
+      # above). The browser dash runs it directly over its own bus Client. Pure-logic
+      # tests (a fake Ops) — no bus.
+      - name: npm ci (conv/review)
+        working-directory: clients/ts/conventions/review
+        run: npm ci
+      - name: build (conv/review, tsc)
+        working-directory: clients/ts/conventions/review
+        run: npm run build
+      - name: review verb tests (conv/review)
+        working-directory: clients/ts/conventions/review
+        run: node --test dist/test/review.test.js
+
+      # --- the TS pi-bus extension (TASK-177) ---
+      # @sextant/pi-bus is the pi extension that makes a pi session a first-class
+      # bus client. It depends on @sextant/sdk AND @sextant/conv-goals via file:
+      # links (both built above). CI covers the pure-logic unit tests (the wake /
+      # back-pressure policy, the headless tool gate, the pi.activity bridge, the
+      # /set-goal arg parse); the operator-verified driven run (AC#5 — a real model
+      # on a hermetic bus, costs API credits) is run out of band via `npm run
+      # driven`, not in CI.
+      - name: npm ci (pi-bus)
+        working-directory: clients/ts/pi
+        run: npm ci
+      - name: build (pi-bus, tsc)
+        working-directory: clients/ts/pi
+        run: npm run build
+      - name: unit tests (pi-bus)
+        working-directory: clients/ts/pi
+        run: node --test dist/test/backpressure.test.js dist/test/gate.test.js dist/test/activity.test.js dist/test/goal_command.test.js

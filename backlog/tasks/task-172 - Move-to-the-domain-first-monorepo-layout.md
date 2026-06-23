@@ -1,10 +1,10 @@
 ---
 id: TASK-172
 title: Move to the domain-first monorepo layout
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-19 21:11'
-updated_date: '2026-06-19 21:42'
+updated_date: '2026-06-19 22:51'
 labels:
   - feature
   - layout
@@ -35,3 +35,9 @@ Mechanical move to the domain-first layout (supersedes the lost feat-layout-no-p
 <!-- SECTION:NOTES:BEGIN -->
 Blanket: pkg/... and internal/dashapi path citations throughout the ADRs and older tickets are stale after this move (no top-level pkg/; nested internal/; cmd/ -> clients/go/apps). Treat literal old paths as historical, not targets.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Domain-first tree shipped (PR #232, squash 69a8ca3 into m6): protocol/ + bus/ + clients/go/{sdk,conventions,apps}, no top-level pkg/. Mechanical move - 338 renames + import-path edits; importcheck extended with bus-never-clients + convention-never-bus edges, guarded against vacuity (TestNewEdgesBite). Independently verified in a clean worktree: make ui/lint/test(-race 28 ok)+e2e all green. Deviations: attest->apps/mcp/attest (public, e2e imports it), violet->apps/violet/internal/violet.
+<!-- SECTION:FINAL_SUMMARY:END -->

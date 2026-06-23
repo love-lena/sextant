@@ -14,10 +14,10 @@ cd "$(dirname "$0")/.."
 
 tag="${1:?usage: scripts/release.sh <tag>}"
 platforms=(darwin/arm64 darwin/amd64 linux/amd64 linux/arm64)
-ldflags="-s -w -X github.com/love-lena/sextant/internal/version.Version=${tag}"
+ldflags="-s -w -X github.com/love-lena/sextant/clients/go/apps/internal/version.Version=${tag}"
 
 # Generate the dash UI bundles (.jsx -> .js, TASK-121). They're generated, not
-# committed, so the go:embed in internal/dashapi needs them present before we
+# committed, so the go:embed in clients/go/apps/internal/dashapi needs them present before we
 # cross-compile below. Platform-independent JS, so build once up front.
 bash scripts/build-dash-ui.sh
 
@@ -27,9 +27,20 @@ for p in "${platforms[@]}"; do
   name="sextant_${tag}_${os}_${arch}"
   out="dist/${name}"
   mkdir -p "${out}/bin"
+  # binary name -> source dir (the dirs were renamed in the domain-first move:
+  # cmd/sextant-dash -> clients/go/apps/dash, etc.; the shipped binary names are
+  # unchanged so existing installs and the plugin .mcp.json keep working).
+  declare -A src=(
+    [sextant]=sextant
+    [sextant-dash]=dash
+    [sextant-mcp]=mcp
+    [sextant-dispatch]=dispatch
+    [sextant-violet]=violet
+    [sextant-workflow]=workflow
+  )
   for cmd in sextant sextant-dash sextant-mcp sextant-dispatch sextant-violet sextant-workflow; do
     CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
-      go build -trimpath -ldflags "$ldflags" -o "${out}/bin/${cmd}" "./cmd/${cmd}"
+      go build -trimpath -ldflags "$ldflags" -o "${out}/bin/${cmd}" "./clients/go/apps/${src[$cmd]}"
   done
   mkdir -p "${out}/clients"
   cp -R clients/claude-code "${out}/clients/claude-code"

@@ -14,6 +14,7 @@ package e2e
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"os"
 	"os/exec"
@@ -219,7 +220,7 @@ func (h *harness) childEnv(extra map[string]string) []string {
 func buildBinary(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "sextant")
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/sextant")
+	cmd := exec.Command("go", "build", "-o", bin, "./clients/go/apps/sextant")
 	cmd.Dir = "../.." // repo root, relative to tests/e2e
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build sextant: %v\n%s", err, out)
@@ -276,7 +277,8 @@ func (h *harness) run(env map[string]string, args ...string) (string, int) {
 	if err == nil {
 		return buf.String(), 0
 	}
-	if ee, ok := err.(*exec.ExitError); ok {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
 		return buf.String(), ee.ExitCode()
 	}
 	h.t.Fatalf("run %v: %v", args, err)
@@ -304,10 +306,6 @@ func (h *harness) waitPresence(t *testing.T, creds, id string, online bool) {
 	var last string
 	for time.Now().Before(deadline) {
 		last = h.listClients(t, creds)
-		if lineFor(last, id) == "" && !online {
-			// not present yet is not what we want for offline; keep waiting only if
-			// the record should exist (it always does here)
-		}
 		if presenceOf(last, id) == want {
 			return
 		}

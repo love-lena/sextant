@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # M5.2 reference dispatcher — self-validating demo (TASK-25).
 #
-# Proves the dispatcher graduates the M5.1 spike (cmd/spawn-poc) into stand-up-
+# Proves the dispatcher graduates the M5.1 spike (clients/go/apps/spawn-poc) into stand-up-
 # on-demand: it subscribes to spawn.request, mints a NAMED child identity, launches
 # the child onto the bus, supervises it (the wake loop), and acks — and a spawned
 # child can itself drive the dispatcher (recursion).
@@ -25,12 +25,12 @@ no(){ echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
 rm -rf "$P"; mkdir -p "$S"
 echo "== build binaries =="
-( cd "$ROOT" && go build -o "$SX" ./cmd/sextant && go build -o "$SXPOC" ./cmd/spawn-poc && go build -o "$SXDISP" ./cmd/sextant-dispatch ) || { echo "build failed"; exit 2; }
+( cd "$ROOT" && go build -o "$SX" ./clients/go/apps/sextant && go build -o "$SXPOC" ./clients/go/apps/spawn-poc && go build -o "$SXDISP" ./clients/go/apps/dispatch ) || { echo "build failed"; exit 2; }
 
 echo "== AC#1: spawn lexicon + records (go test) =="
-( cd "$ROOT" && go test ./cmd/sextant-dispatch/ >/dev/null 2>&1 ) \
+( cd "$ROOT" && go test ./clients/go/apps/dispatch/ >/dev/null 2>&1 ) \
   && ok "spawn.request/spawn.ack records + lexicon files parse + round-trip (AC#1)" \
-  || no "cmd/sextant-dispatch unit tests failed"
+  || no "clients/go/apps/dispatch unit tests failed"
 
 echo "== throwaway bus on :$PORT =="
 "$SX" up --store "$S" --port "$PORT" >"$P/up.log" 2>&1 & BUS=$!

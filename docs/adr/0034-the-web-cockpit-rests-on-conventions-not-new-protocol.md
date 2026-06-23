@@ -5,7 +5,7 @@ date: 2026-06-12
 
 # The web cockpit rests on conventions, not new protocol
 
-> **Revised by [ADR-0041](0041-clients-are-co-equal-across-languages.md)** — the thesis (conventions over the protocol, no new protocol) holds, but the mechanism changes: review/home become lexicon-defined convention *libraries* (the task-173 pattern) consumed by the dash via the TS conventions over a direct WS client (task-180), not the Go-backend `/api/*` read-merge-CAS paths below.
+> **Revised by [ADR-0044](0044-the-browser-dash-is-a-direct-ws-client.md)** (under [ADR-0041](0041-clients-are-co-equal-across-languages.md)) — the thesis (conventions over the protocol, no new protocol) holds, but the mechanism changes: goals/review become lexicon-defined convention *libraries* (the task-173 pattern) the browser runs itself over a direct WS Client (task-180), not the Go-backend `/api/*` read-merge-CAS paths below. ADR-0044 is the current design.
 
 [ADR-0032](0032-the-web-dash-is-a-face-on-a-local-api.md) settled where the
 browser meets the bus: `sextant dash --serve` runs the dash's one bus identity

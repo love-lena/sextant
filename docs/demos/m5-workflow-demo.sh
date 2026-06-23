@@ -3,7 +3,7 @@
 #
 # The end-to-end M5 composition: the workflow coordinator (M5.4) drives a
 # declarative workflow whose steps DISPATCH agents through the M5.2 dispatcher
-# (cmd/sextant-dispatch), checkpointing state to an Artifact (CAS), emitting an
+# (clients/go/apps/dispatch), checkpointing state to an Artifact (CAS), emitting an
 # event stream, resuming idempotently, and honouring cooperative control.
 #
 # Runs on a THROWAWAY bus and is TOKEN-FREE: the dispatched agent is a stub (the
@@ -24,13 +24,13 @@ no(){ echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
 rm -rf "$P"; mkdir -p "$S"
 echo "== build binaries =="
-( cd "$ROOT" && go build -o "$SX" ./cmd/sextant && go build -o "$SXPOC" ./cmd/spawn-poc \
-  && go build -o "$SXDISP" ./cmd/sextant-dispatch && go build -o "$SXWF" ./cmd/sextant-workflow ) || { echo "build failed"; exit 2; }
+( cd "$ROOT" && go build -o "$SX" ./clients/go/apps/sextant && go build -o "$SXPOC" ./clients/go/apps/spawn-poc \
+  && go build -o "$SXDISP" ./clients/go/apps/dispatch && go build -o "$SXWF" ./clients/go/apps/workflow ) || { echo "build failed"; exit 2; }
 
 echo "== AC#1/#3: workflow records + lexicons (go test) =="
-( cd "$ROOT" && go test ./cmd/sextant-workflow/ >/dev/null 2>&1 ) \
+( cd "$ROOT" && go test ./clients/go/apps/workflow/ >/dev/null 2>&1 ) \
   && ok "sextant.workflow/v1 + event/control records + lexicons parse + nextPending resume logic (AC#1/#3)" \
-  || no "cmd/sextant-workflow unit tests failed"
+  || no "clients/go/apps/workflow unit tests failed"
 
 echo "== throwaway bus on :$PORT =="
 "$SX" up --store "$S" --port "$PORT" >"$P/up.log" 2>&1 & BUS=$!

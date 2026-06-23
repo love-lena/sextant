@@ -29,7 +29,7 @@ trap 'kill "$BUS_PID" 2>/dev/null || true; rm -rf "$D"' EXIT
 
 mkdir -p "$BIN" "$STORE" "$PDATA"
 say "building sextant + sextant-mcp from $REPO"
-(cd "$REPO" && go build -o "$BIN/sextant" ./cmd/sextant && go build -o "$BIN/sextant-mcp" ./cmd/sextant-mcp)
+(cd "$REPO" && go build -o "$BIN/sextant" ./clients/go/apps/sextant && go build -o "$BIN/sextant-mcp" ./clients/go/apps/mcp)
 
 say "starting a throwaway bus"
 "$BIN/sextant" up --store "$STORE" --port 0 >"$D/bus.log" 2>&1 & BUS_PID=$!

@@ -1,10 +1,10 @@
 ---
 id: TASK-174
 title: 'TypeScript SDK: the primitive Wire client'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-19 21:11'
-updated_date: '2026-06-19 21:31'
+updated_date: '2026-06-20 01:33'
 labels:
   - feature
   - sdk
@@ -34,3 +34,9 @@ Build the TypeScript SDK (clients/ts/sdk) - the primitive Wire client: connect w
 - [ ] #6 cross-language round-trip proven on a real bus: a TS client publishes a message a Go client reads, and vice versa (not mocked)
 - [ ] #7 a CI job builds and tests clients/ts and replays the conformance vectors on every push
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+TypeScript SDK - the first co-equal non-Go client - SHIPPED (PR #237 squash, +2952 net-new). clients/ts/sdk: node26/npm/tsc6, deps=nats only (minimal supply-chain for a creds-holding client), node:test. Own frame codec reproducing FORMAT.md canonicalization (bigint>2^53 exact, HTML-off, array-order, 5 core keys); passes the SHARED wire vectors (protocol/conformance/vectors/wire, read not copied) BOTH directions. Own scoped creds via Client/Issuer -> DISTINCT registry identity (AC#5, real bus, never the operator). Cross-language round-trip PROVEN on a real bus (harness go-builds the actual sextant binary + spawns sextant up --port 0): TS->Go + Go->TS message round-trips + bidirectional artifact reads. New CI job 'build + test (TypeScript SDK)' sets up Go+node, runs codec+conformance+the cross-lang integration (REQUIRED, not skipped) every push. Verified: npm test 18/0 green locally + BOTH CI jobs green (TS 47s, Go 3m29s). Co-equality genuinely proven.
+<!-- SECTION:FINAL_SUMMARY:END -->

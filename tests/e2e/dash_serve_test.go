@@ -3,35 +3,35 @@
 package e2e
 
 import (
-	"bufio"
-	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
 	"testing"
-	"time"
 )
 
-// TestDashServeAPI is the D1 acceptance (TASK-68, ADR-0032) driven through the
-// built binary: `sextant dash --serve` exposes a local HTTP API on 127.0.0.1
-// behind a per-launch token, with the Go process the single bus client. It
-// proves the token gate, JSON parity with the CLI read commands, the publish
-// command path, and the SSE live stream — the same checks the self-validating
-// demo runs, here enforced in CI.
-func TestDashServeAPI(t *testing.T) {
+// TestDashServeMintsBrowserSession is the AC#3/AC#5 acceptance for the direct-WS
+// dash (ADR-0044) driven through the built binary: with the bus WebSocket listener
+// on, `sextant dash --serve` is reduced to a static-SPA host plus a credential-mint
+// endpoint. POST /api/session mints a short-lived, scoped browser credential and
+// hands back the ws URL the page dials; the old /api/* relay (self/clients/messages/
+// publish/stream/goals/artifacts) is gone (404). The browser-side flow over the
+// WebSocket is proven separately by the SDK integration suite + the headless
+// agent-browser drive; this enforces the Go-side contract in CI.
+func TestDashServeMintsBrowserSession(t *testing.T) {
 	h := newHarness(t)
+
+	// Enable the bus WebSocket listener via the config file (the brew-services path
+	// the dash relies on) before the bus comes up, on a free loopback port. The dash
+	// reads the resulting ws URL from the discovery file.
+	wsAddr := freeLoopback(t)
+	if _, code := h.run(nil, "config", "set", "--store", h.store, "ws-listen", wsAddr); code != 0 {
+		t.Fatalf("config set ws-listen exited %d", code)
+	}
 	h.startBus()
 
-	// A second registered client so the directory has more than just the dash,
-	// making the clients-parity check meaningful.
-	if _, code := h.run(nil, "clients", "register", "peer", "--kind", "worker", "--store", h.store); code != 0 {
-		t.Fatalf("register peer exited %d", code)
-	}
-
-	// `dash --serve`: zero-config first run self-enrolls the human seat, claims
-	// the still-unclaimed principal (ADR-0031), and serves the local API.
 	dash := h.startBg(nil, "dash", "--serve", "--store", h.store, "--port", "0")
 	urlLine := dash.waitStdout(t, "token=")
 	m := regexp.MustCompile(`(http://127\.0\.0\.1:\d+)/\?token=(\S+)`).FindStringSubmatch(urlLine)
@@ -40,117 +40,66 @@ func TestDashServeAPI(t *testing.T) {
 	}
 	base, token := m[1], m[2]
 
-	// --- loopback is token-free (ADR-0032 exception, TASK-115) ---------------
-	// The dash listens on 127.0.0.1, so this e2e is a loopback peer: a GET without
-	// a token now succeeds. The token still gates non-loopback peers (not testable
-	// from here — the listener is loopback-bound). The token-bearing path is still
-	// exercised by the apiGet/apiPost calls below.
-	if code := getStatus(t, base+"/api/self"); code != http.StatusOK {
-		t.Fatalf("GET /api/self from loopback without token = %d, want 200 (token-free loopback)", code)
+	// --- POST /api/session: mint a browser credential ------------------------
+	// Loopback is token-free (ADR-0032 exception, TASK-115); the dash listens on
+	// 127.0.0.1, so this e2e is a loopback peer. The token still gates non-loopback
+	// peers (not testable here — the listener is loopback-bound); the token-bearing
+	// path is exercised below.
+	var sess struct {
+		ID    string `json:"id"`
+		Creds string `json:"creds"`
+		WSURL string `json:"wsURL"`
+	}
+	apiPostInto(t, base+"/api/session", token, &sess)
+	if sess.ID == "" {
+		t.Fatal("/api/session returned an empty minted id")
+	}
+	if !strings.Contains(sess.Creds, "NATS USER JWT") {
+		t.Fatalf("/api/session creds is not a NATS credential: %q", sess.Creds)
+	}
+	if sess.WSURL != "ws://"+wsAddr {
+		t.Fatalf("/api/session wsURL = %q, want ws://%s", sess.WSURL, wsAddr)
 	}
 
-	// --- self: the dash claimed the principal on first run -------------------
-	var self struct {
-		ID        string `json:"id"`
-		Principal string `json:"principal"`
+	// Each tab mints a FRESH credential for the operator's OWN identity (ADR-0044):
+	// a new keypair per tab (distinct creds), but the SAME id — the operator's, never
+	// a per-tab child identity (the rc.1 bug that fix corrected).
+	var sess2 struct {
+		ID    string `json:"id"`
+		Creds string `json:"creds"`
 	}
-	apiGet(t, base+"/api/self", token, &self)
-	if self.ID == "" {
-		t.Fatal("/api/self returned empty id")
+	apiPostInto(t, base+"/api/session", token, &sess2)
+	if sess2.Creds == sess.Creds {
+		t.Fatalf("two /api/session calls returned the same creds — each tab must be minted a fresh keypair")
 	}
-	if self.Principal != self.ID {
-		t.Fatalf("principal = %q, want the dash's own id %q (claimed on first run)", self.Principal, self.ID)
-	}
-
-	// --- publish (command) then read parity: API vs CLI ----------------------
-	apiPost(t, base+"/api/publish", token, `{"subject":"msg.topic.e2e","record":{"$type":"chat.message","text":"hello-api"}}`)
-
-	var msgs struct {
-		Messages []struct {
-			Record json.RawMessage `json:"record"`
-		} `json:"messages"`
-	}
-	apiGet(t, base+"/api/messages?subject=msg.topic.e2e", token, &msgs)
-	if !containsText(msgs.Messages, "hello-api") {
-		t.Fatalf("/api/messages missing the published message: %+v", msgs)
-	}
-	// The CLI, reading the same bus as the same (active) identity, sees it too.
-	cliRead, code := h.run(nil, "read", "msg.topic.e2e", "--store", h.store, "--json")
-	if code != 0 || !strings.Contains(cliRead, "hello-api") {
-		t.Fatalf("CLI read parity failed (code %d): %s", code, cliRead)
+	if sess2.ID != sess.ID {
+		t.Fatalf("/api/session ids differ (%q vs %q) — every tab must be the operator's own identity, not a per-tab child", sess.ID, sess2.ID)
 	}
 
-	// --- clients parity: API vs CLI ------------------------------------------
-	var apiClients []struct {
-		DisplayName string `json:"DisplayName"`
-	}
-	apiGet(t, base+"/api/clients", token, &apiClients)
-	apiNames := map[string]bool{}
-	for _, c := range apiClients {
-		apiNames[c.DisplayName] = true
-	}
-	if !apiNames["peer"] || len(apiNames) < 2 {
-		t.Fatalf("/api/clients = %v, want at least the dash + peer", apiNames)
-	}
-	cliList, code := h.run(nil, "clients", "list", "--store", h.store, "--json")
-	if code != 0 {
-		t.Fatalf("clients list exited %d", code)
-	}
-	var cliClients []struct {
-		DisplayName string `json:"DisplayName"`
-	}
-	if err := json.Unmarshal([]byte(cliList), &cliClients); err != nil {
-		t.Fatalf("decode cli clients: %v\n%s", err, cliList)
-	}
-	if len(cliClients) != len(apiClients) {
-		t.Fatalf("client count: api %d vs cli %d", len(apiClients), len(cliClients))
-	}
-
-	// --- SSE live stream: publish, assert it arrives -------------------------
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/stream?subject=msg.topic.live&token="+token, nil)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("open stream: %v", err)
-	}
-	defer resp.Body.Close()
-	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
-		t.Fatalf("stream content-type = %q", ct)
-	}
-	// A reader started before the publish so the live frame can't be missed.
-	got := make(chan string, 1)
-	go func() {
-		sc := bufio.NewScanner(resp.Body)
-		for sc.Scan() {
-			if ln := sc.Text(); strings.HasPrefix(ln, "data: ") {
-				got <- ln
-				return
-			}
+	// --- the Go relay is gone: the old /api/* endpoints 404 (ADR-0044) -------
+	for _, p := range []string{"/api/self", "/api/clients", "/api/goals", "/api/artifacts", "/api/subjects", "/api/messages?subject=msg.topic.x"} {
+		if code := getStatus(t, base+p); code != http.StatusNotFound {
+			t.Fatalf("GET %s = %d, want 404 (the relay is deleted)", p, code)
 		}
-	}()
-	time.Sleep(300 * time.Millisecond) // let the subscription register
-	apiPost(t, base+"/api/publish", token, `{"subject":"msg.topic.live","record":{"$type":"chat.message","text":"live-frame"}}`)
-	select {
-	case ln := <-got:
-		if !strings.Contains(ln, "live-frame") {
-			t.Fatalf("stream data did not carry the published frame: %q", ln)
+	}
+
+	// --- the survivors still serve ------------------------------------------
+	for _, p := range []string{"/", "/debug"} {
+		if code := getStatus(t, base+p); code != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200 (static SPA host)", p, code)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("published frame never arrived on the SSE stream")
 	}
 }
 
-func containsText(msgs []struct {
-	Record json.RawMessage `json:"record"`
-}, want string,
-) bool {
-	for _, m := range msgs {
-		if strings.Contains(string(m.Record), want) {
-			return true
-		}
+func freeLoopback(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("probe a free port: %v", err)
 	}
-	return false
+	addr := ln.Addr().String()
+	_ = ln.Close()
+	return addr
 }
 
 func getStatus(t *testing.T, url string) int {
@@ -163,29 +112,11 @@ func getStatus(t *testing.T, url string) int {
 	return resp.StatusCode
 }
 
-func apiGet(t *testing.T, url, token string, v any) {
+// apiPostInto POSTs (no body) to a token-gated endpoint and decodes the JSON reply.
+func apiPostInto(t *testing.T, url, token string, v any) {
 	t.Helper()
-	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	req, _ := http.NewRequest(http.MethodPost, url, nil)
 	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("GET %s: %v", url, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("GET %s = %d: %s", url, resp.StatusCode, body)
-	}
-	if err := json.NewDecoder(resp.Body).Decode(v); err != nil {
-		t.Fatalf("decode %s: %v", url, err)
-	}
-}
-
-func apiPost(t *testing.T, url, token, body string) {
-	t.Helper()
-	req, _ := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("POST %s: %v", url, err)
@@ -194,5 +125,8 @@ func apiPost(t *testing.T, url, token, body string) {
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("POST %s = %d: %s", url, resp.StatusCode, b)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(v); err != nil {
+		t.Fatalf("decode %s: %v", url, err)
 	}
 }

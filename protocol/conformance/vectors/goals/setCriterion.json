@@ -1,0 +1,55 @@
+{
+  "epoch": 1,
+  "convention": "goals",
+  "verb": "setCriterion",
+  "description": "goals: set a criterion to waiting-on-you — artifact.get, artifact.update (CAS the goal with the criterion's status rewritten), then message.publish a goal.update on msg.topic.goals.",
+  "input": {
+    "goalId": "v0-5-0",
+    "criterionId": "c1",
+    "status": "waiting-on-you",
+    "headline": "needs your sign-off",
+    "ref": "the-brief",
+    "by": "01CREW"
+  },
+  "operations": [
+    {
+      "op": "artifact.get",
+      "name": "goal.v0-5-0"
+    },
+    {
+      "op": "artifact.update",
+      "name": "goal.v0-5-0",
+      "payload": {
+        "criteria": [
+          {
+            "id": "c1",
+            "owner": "sirius",
+            "status": "waiting-on-you",
+            "text": "the criterion under test"
+          },
+          {
+            "id": "other",
+            "status": "in-progress",
+            "text": "a sibling criterion"
+          }
+        ],
+        "northstar": "Ship the goals convention"
+      },
+      "expectedRev": 4
+    },
+    {
+      "op": "message.publish",
+      "subject": "msg.topic.goals",
+      "payload": {
+        "$type": "goal.update",
+        "goal": "v0-5-0",
+        "crit": "c1",
+        "status": "waiting-on-you",
+        "headline": "needs your sign-off",
+        "ref": "the-brief",
+        "updated": "2026-06-19T00:00:00Z",
+        "by": "01CREW"
+      }
+    }
+  ]
+}

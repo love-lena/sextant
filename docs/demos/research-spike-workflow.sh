@@ -169,7 +169,7 @@ if [ "$MODE" = demo ]; then
 
   rm -rf "$P"; mkdir -p "$S"
   echo "== build binary =="
-  ( cd "$ROOT" && go build -o "$SX" ./cmd/sextant ) || { echo "build failed"; exit 2; }
+  ( cd "$ROOT" && go build -o "$SX" ./clients/go/apps/sextant ) || { echo "build failed"; exit 2; }
 
   echo "== throwaway bus on :$PORT =="
   "$SX" up --store "$S" --port "$PORT" >"$P/up.log" 2>&1 & BUS=$!
