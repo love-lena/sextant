@@ -61,14 +61,19 @@ func TestDashServeMintsBrowserSession(t *testing.T) {
 		t.Fatalf("/api/session wsURL = %q, want ws://%s", sess.WSURL, wsAddr)
 	}
 
-	// Each tab mints a DISTINCT credential (no shared identity across tabs).
+	// Each tab mints a FRESH credential for the operator's OWN identity (ADR-0044):
+	// a new keypair per tab (distinct creds), but the SAME id — the operator's, never
+	// a per-tab child identity (the rc.1 bug that fix corrected).
 	var sess2 struct {
 		ID    string `json:"id"`
 		Creds string `json:"creds"`
 	}
 	apiPostInto(t, base+"/api/session", token, &sess2)
-	if sess2.ID == sess.ID || sess2.Creds == sess.Creds {
-		t.Fatalf("two /api/session calls returned the same credential — each tab must be minted fresh")
+	if sess2.Creds == sess.Creds {
+		t.Fatalf("two /api/session calls returned the same creds — each tab must be minted a fresh keypair")
+	}
+	if sess2.ID != sess.ID {
+		t.Fatalf("/api/session ids differ (%q vs %q) — every tab must be the operator's own identity, not a per-tab child", sess.ID, sess2.ID)
 	}
 
 	// --- the Go relay is gone: the old /api/* endpoints 404 (ADR-0044) -------
