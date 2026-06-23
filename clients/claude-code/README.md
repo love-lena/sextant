@@ -108,8 +108,8 @@ long-lived processes, because none of them reload in place.
    Restart the session (exit and relaunch `claude
    --dangerously-load-development-channels plugin:sextant@sextant`) so it spawns
    the new MCP server and loads the updated skills and trust hook.
-5. **The web dash.** `sextant dash --serve` is long-lived too: stop it (Ctrl-C)
-   and rerun it to serve the new UI over the new binary.
+5. **The web dash.** The `sextant-dash` binary is long-lived too: stop it
+   (Ctrl-C) and rerun it to serve the new UI over the new binary.
 
 ## Layout
 

@@ -1,27 +1,27 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
-	"os/signal"
+	"os/exec"
 	"path/filepath"
-	"syscall"
+	"runtime"
 
 	"github.com/love-lena/sextant/clients/go/apps/internal/clictx"
-	"github.com/love-lena/sextant/clients/go/apps/internal/dash"
+	"github.com/love-lena/sextant/clients/go/apps/internal/dashserve"
 )
 
-// cmdDash is the `sextant dash` alias: a thin subcommand that delegates to the
-// shared dash.Run, so the alias and the standalone cmd/sextant-dash binary share
-// one implementation (cleaner and more robust than exec-on-PATH; ADR-0023, 7.5).
-// It parses the same flags as the binary (the connection flags plus the dash's
-// own) and resolves the identity the same way every operation command does.
+// cmdDash is the `sextant dash` alias. The browser dash is THE dash now
+// (ADR-0046), so this verb RESOLVES and OPENS the running web dash rather than
+// serving it: serving is the sextant-dash binary's job (run as a managed
+// component), and the terminal UI is reached via the separate sextant-tui binary.
 //
-// It also dispatches the `url` subcommand (`sextant dash url`), which reads the
-// managed-dash state file and prints the URL — no bus connection required.
+// `sextant dash` (no subcommand) reads the managed-dash state file
+// ($SEXTANT_HOME/dash.json), prints the URL, and best-effort opens it in the
+// browser. `sextant dash url` prints the URL only. Both fail loud when the web
+// dash is not running.
 func cmdDash(args []string) {
 	if len(args) > 0 && args[0] == "url" {
 		cmdDashURL(args[1:])
@@ -29,37 +29,53 @@ func cmdDash(args []string) {
 	}
 
 	fs := flag.NewFlagSet("dash", flag.ExitOnError)
-	flags := dash.AddFlags(fs)
 	_ = fs.Parse(args)
 
-	opts, err := flags.Resolve()
-	if err != nil {
-		fatal("%v", err)
-	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	if err := dash.Run(ctx, opts); err != nil {
-		fatal("%v", err)
+	state := readDashState()
+	// Always print the URL (the source of truth); the browser open is a
+	// convenience on top, so an opener failure never hides the URL.
+	fmt.Println(state.URL)
+	if err := openInBrowser(state.URL); err != nil {
+		fmt.Fprintf(os.Stderr, "sextant dash: could not open a browser (%v) — open the URL above yourself\n", err)
 	}
 }
 
 // cmdDashURL implements `sextant dash url`: reads the managed-dash state file
-// ($SEXTANT_HOME/dash.json) and prints the URL. If the file is absent it exits
-// with a clear error — the dash is not running as a managed service.
+// ($SEXTANT_HOME/dash.json) and prints the URL.
 func cmdDashURL(args []string) {
 	fs := flag.NewFlagSet("dash url", flag.ExitOnError)
 	_ = fs.Parse(args)
+	fmt.Println(readDashState().URL)
+}
 
+// readDashState reads the managed web dash's state file
+// ($SEXTANT_HOME/dash.json). It fails loud when the file is absent — the web
+// dash is not running — with the command to start it.
+func readDashState() dashserve.DashState {
 	stateFile := filepath.Join(clictx.Root(), "dash.json")
-	state, err := dash.ReadStateFile(stateFile)
+	state, err := dashserve.ReadStateFile(stateFile)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			fatal("the dash is not running as a managed service — no state file at %s\n"+
-				"  (start it with `sextant dash --serve --state-file %s`)", stateFile, stateFile)
+			fatal("the web dash is not running — start it with `sextant components start dash`")
 		}
 		fatal("read state file %s: %v", stateFile, err)
 	}
-	fmt.Println(state.URL)
+	return state
+}
+
+// openInBrowser opens url with the platform's default opener (`open` on darwin,
+// `xdg-open` on linux). It returns an error when no opener is available so the
+// caller can fall back to printing the URL; on supported platforms it does not
+// wait for the browser to exit.
+func openInBrowser(url string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "linux":
+		cmd = exec.Command("xdg-open", url)
+	default:
+		return fmt.Errorf("no browser opener for %s", runtime.GOOS)
+	}
+	return cmd.Start()
 }

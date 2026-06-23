@@ -1,4 +1,4 @@
-package dash
+package dashserve
 
 import (
 	"bytes"
@@ -17,14 +17,14 @@ import (
 	"github.com/love-lena/sextant/protocol/conninfo"
 )
 
-// TestRunServeMintsBrowserSession is the serve-path integration (ADR-0044):
-// runServe connects under a real identity, binds a local listener, prints a URL
-// carrying the per-launch token, and serves the shrunk surface — a static SPA host
-// plus the credential-mint endpoint. POST /api/session mints a short-lived browser
+// TestRunMintsBrowserSession is the serve-path integration (ADR-0044): Run
+// connects under a real identity, binds a local listener, prints a URL carrying
+// the per-launch token, and serves the shrunk surface — a static SPA host plus
+// the credential-mint endpoint. POST /api/session mints a short-lived browser
 // credential and hands back the ws URL the page dials, and the server shuts down
-// cleanly on context cancel. It drives the whole `sextant dash --serve` glue
-// against an embedded bus with the WebSocket listener on (CI-safe, default gate).
-func TestRunServeMintsBrowserSession(t *testing.T) {
+// cleanly on context cancel. It drives the whole web-dash serve glue against an
+// embedded bus with the WebSocket listener on (CI-safe, default gate).
+func TestRunMintsBrowserSession(t *testing.T) {
 	store := t.TempDir()
 	// A free loopback port for the WebSocket listener (the listener requires a
 	// positive, loopback port — fail-loud on :0, like the leaf listener). Probe one
@@ -42,7 +42,7 @@ func TestRunServeMintsBrowserSession(t *testing.T) {
 	}
 	credsPath := writeCreds(t, creds)
 
-	// The dash discovers the ws URL from the discovery file the bus writes; runServe
+	// The dash discovers the ws URL from the discovery file the bus writes; Run
 	// reads it via resolveWSURL(opts.Store). The embedded bus.Start does not write
 	// conninfo (the CLI's cmdUp does), so write it here with the ws URL the listener
 	// carries — the test stands in for the cmdUp glue.
@@ -54,11 +54,10 @@ func TestRunServeMintsBrowserSession(t *testing.T) {
 	out := &syncBuffer{}
 	done := make(chan error, 1)
 	go func() {
-		done <- runServe(ctx, Options{
+		done <- Run(ctx, Options{
 			CredsPath: credsPath,
 			URL:       b.ClientURL(),
 			Store:     store,
-			Serve:     true,
 			Port:      0, // ephemeral port — no conflicts in tests
 		}, out)
 	}()
@@ -90,16 +89,17 @@ func TestRunServeMintsBrowserSession(t *testing.T) {
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("runServe returned error: %v", err)
+			t.Fatalf("Run returned error: %v", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("runServe did not return within 5s of context cancel")
+		t.Fatal("Run did not return within 5s of context cancel")
 	}
 }
 
-// TestServeAddrIsLoopback: the --serve API is local-only (ADR-0032). Only the
-// port is configurable; the host is always 127.0.0.1, so a routable bind (e.g.
-// 0.0.0.0) can never be expressed — the foot-gun isn't reachable by design.
+// TestServeAddrIsLoopback: the web dash server is local-only (ADR-0032). Only
+// the port is configurable; the host is always 127.0.0.1, so a routable bind
+// (e.g. 0.0.0.0) can never be expressed — the foot-gun isn't reachable by
+// design.
 func TestServeAddrIsLoopback(t *testing.T) {
 	cases := []struct {
 		port int
@@ -116,8 +116,8 @@ func TestServeAddrIsLoopback(t *testing.T) {
 	}
 }
 
-// waitForServeURL polls out until runServe has printed its URL line, returning
-// the base (scheme://host:port) and the token query value.
+// waitForServeURL polls out until Run has printed its URL line, returning the
+// base (scheme://host:port) and the token query value.
 func waitForServeURL(t *testing.T, out *syncBuffer) (base, token string) {
 	t.Helper()
 	re := regexp.MustCompile(`(http://[^/\s]+)/\?token=(\S+)`)
@@ -128,7 +128,7 @@ func waitForServeURL(t *testing.T, out *syncBuffer) (base, token string) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("runServe never printed a URL line; output:\n%s", out.String())
+	t.Fatalf("Run never printed a URL line; output:\n%s", out.String())
 	return "", ""
 }
 
@@ -173,10 +173,20 @@ func freeLoopbackAddr(t *testing.T) string {
 	return addr
 }
 
-// TestRunServeStateFile asserts that when StateFile is given, runServe writes a
-// valid JSON state file (correct url, token, port; 0600 permissions) on start
-// and removes it on clean shutdown.
-func TestRunServeStateFile(t *testing.T) {
+// writeCreds writes a credentials blob to a temp file and returns its path.
+func writeCreds(t *testing.T, creds string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "client.creds")
+	if err := os.WriteFile(path, []byte(creds), 0o600); err != nil {
+		t.Fatalf("write creds: %v", err)
+	}
+	return path
+}
+
+// TestRunStateFile asserts that when StateFile is given, Run writes a valid JSON
+// state file (correct url, token, port; 0600 permissions) on start and removes
+// it on clean shutdown.
+func TestRunStateFile(t *testing.T) {
 	b, err := bus.Start(t.Context(), bus.Config{StoreDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("bus.Start: %v", err)
@@ -195,10 +205,9 @@ func TestRunServeStateFile(t *testing.T) {
 	out := &syncBuffer{}
 	done := make(chan error, 1)
 	go func() {
-		done <- runServe(ctx, Options{
+		done <- Run(ctx, Options{
 			CredsPath: credsPath,
 			URL:       b.ClientURL(),
-			Serve:     true,
 			Port:      0,
 			StateFile: stateFile,
 		}, out)
@@ -242,10 +251,10 @@ func TestRunServeStateFile(t *testing.T) {
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("runServe returned error: %v", err)
+			t.Fatalf("Run returned error: %v", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("runServe did not return within 5s of context cancel")
+		t.Fatal("Run did not return within 5s of context cancel")
 	}
 	if _, err := os.Stat(stateFile); !os.IsNotExist(err) {
 		t.Fatalf("state file still exists after shutdown (err=%v)", err)
@@ -266,7 +275,7 @@ func TestReadStateFileAbsent(t *testing.T) {
 }
 
 // TestReadStateFileFixture: ReadStateFile parses a hand-written fixture so the
-// URL command works against any conformant file, not just the one runServe wrote.
+// URL command works against any conformant file, not just the one Run wrote.
 func TestReadStateFileFixture(t *testing.T) {
 	fixture := `{"url":"http://127.0.0.1:8765/?token=abc123","token":"abc123","port":8765}`
 	path := filepath.Join(t.TempDir(), "dash.json")
@@ -288,8 +297,8 @@ func TestReadStateFileFixture(t *testing.T) {
 	}
 }
 
-// syncBuffer is a goroutine-safe bytes.Buffer: runServe writes its announce line
-// from its own goroutine while the test polls it.
+// syncBuffer is a goroutine-safe bytes.Buffer: Run writes its announce line from
+// its own goroutine while the test polls it.
 type syncBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer

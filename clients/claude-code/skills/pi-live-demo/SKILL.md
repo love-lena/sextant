@@ -57,7 +57,7 @@ operator plainly. Each step is one of:
   dash Goals view reads.
 - **AC#3 activity streams** — the agent's turns + tool-calls (+ thinking) stream to
   `msg.topic.pi.activity.<id>`, which the dash's conversation viewer renders live.
-- **AC#4 dash serving** — `sextant dash --serve` is live; the script prints the URL.
+- **AC#4 dash serving** — the `sextant-dash` web dash is live; the script prints the URL.
 
 ### After it passes — the operator watches it live
 
