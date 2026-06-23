@@ -24,3 +24,7 @@
 - [Artifacts](sdk-go/artifacts.md)
 - [Clients & identity](sdk-go/clients.md)
 - [API reference](sdk-go/reference.md)
+
+# Operating
+
+- [Dev dash: side-by-side testing](operating/dev-dash.md)
