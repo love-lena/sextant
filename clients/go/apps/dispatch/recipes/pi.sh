@@ -62,11 +62,21 @@ PI_BIN="${SX_PI_BIN:-pi}"
 # and bracket-alphanumeric; a ULID and the "pi-" prefix satisfy that.
 SESSION_ID="${SX_PI_RESUME_SESSION:-pi-${CHILD_ID}}"
 
-# A STABLE per-store session dir so the JSONL outlives one process (the resume
-# depends on it). Keyed only by the store, not the process, so the dispatcher and a
-# by-hand resume look in the same place.
-SESSION_DIR="${SX_PI_SESSION_DIR:-${SEXTANT_STORE}/pi-sessions}"
+# A STABLE session dir so the JSONL outlives one process (resume depends on it). A
+# SIBLING of the bus store, never INSIDE it: the store is NATS JetStream's data dir,
+# and a worker's session log is not bus stream data — a store reset must not wipe
+# session history, and the two concerns should not share a directory. Keyed to the
+# deployment (not the process), so the dispatcher and a by-hand resume look in the same
+# place. Override with SX_PI_SESSION_DIR.
+SESSION_DIR="${SX_PI_SESSION_DIR:-$(dirname "$SEXTANT_STORE")/pi-sessions}"
 mkdir -p "$SESSION_DIR"
+
+# Resume by explicit FILE PATH when a session for this child already exists, so a
+# revive is INDEPENDENT OF THE LAUNCH CWD. pi scopes --session-id by project (the
+# launch directory); a path is unambiguous, so the dispatcher resumes the right JSONL
+# even if it restarts from a different directory. On the first spawn there is no file
+# yet (pi creates <timestamp>_<id>.jsonl in SESSION_DIR), so we fall back to id + dir.
+EXISTING_SESSION=$(ls -t "$SESSION_DIR"/*_"$SESSION_ID".jsonl 2>/dev/null | head -1)
 
 # The extension acts on the CHILD's creds (identity isolation). SEXTANT_PI_CREDS is
 # the one required value; the bus is discovered from the store's bus.json.
@@ -124,8 +134,16 @@ if [ -n "$INJECT_PROMPT" ]; then
   SX_INJECT_PROMPT="$INJECT_PROMPT" node -e 'process.stdout.write(JSON.stringify({type:"prompt",message:process.env.SX_INJECT_PROMPT})+"\n")' >&3
 fi
 
+# Resume an existing session by PATH (cwd-independent); else create by id + dir. Built
+# with `set --` so a session path containing spaces (e.g. ".../Application Support/...")
+# stays a single argument.
+if [ -n "$EXISTING_SESSION" ]; then
+  set -- --session "$EXISTING_SESSION"
+else
+  set -- --session-id "$SESSION_ID" --session-dir "$SESSION_DIR"
+fi
 exec "$PI_BIN" --mode rpc \
   --provider anthropic --model "$MODEL" \
-  --session-id "$SESSION_ID" --session-dir "$SESSION_DIR" \
+  "$@" \
   -ne -e "$SEXTANT_PI_EXTENSION" \
   --append-system-prompt "$SYS_PROMPT" <&3
