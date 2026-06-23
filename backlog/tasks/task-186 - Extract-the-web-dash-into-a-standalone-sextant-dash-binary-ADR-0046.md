@@ -31,7 +31,7 @@ Today the web dash server is not its own binary: it rides inside sextant-dash (c
 - [ ] #2 The former cockpit binary is renamed sextant-tui and reframed as a first-class CLI/TUI feature (NOT deprecated, NOT retired); --serve and the entire HTTP/serve path are stripped out of it (it no longer serves); internal/dash retains only the terminal-UI code; the dash-layoutgallery/surfacegallery/widgetgallery preview binaries still build
 - [ ] #3 pkg/tui/widget is untouched (other TUIs depend on it)
 - [ ] #4 make build and make install build + install BOTH binaries locally (sextant-dash + sextant-tui); release/brew packaging is out of scope here (see feat-dash-release-packaging)
-- [ ] #5 ADR-0046 written (status: proposed) recording the dash split (sextant-dash = web dash server owning serve+mint; sextant-tui = terminal UI with serve removed), refining ADR-0044 + extending ADR-0040; CONTEXT.md + mdbook updated to name sextant-dash (web, THE dash) vs sextant-tui (terminal UI); docgen clean
+- [ ] #5 ADR-0046 is ALREADY accepted + merged (PR #247) — do NOT re-author it; this ticket IMPLEMENTS its decision and updates CONTEXT.md + mdbook to name sextant-dash (web, THE dash) vs sextant-tui (terminal UI); docgen clean
 - [ ] #6 sextant dash CLI subcommand and sextant dash url resolve to the web dash; the terminal UI is reached via sextant-tui
 <!-- AC:END -->
 
@@ -44,5 +44,5 @@ Today the web dash server is not its own binary: it rides inside sextant-dash (c
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Discovered in: design session 2026-06-23. ADR-0046 ratified in-session (design agreed); build is AFK once the ADR draft is signed off. Refines ADR-0044 (browser dash is a direct ws client); extends ADR-0040 (agent runtimes run as OS-managed components). TUI fate decided 2026-06-23: keep as a non-deprecated terminal feature, strip --serve (recorded in [[decision-retire-dash-tui]]). Related: [[feat-dash-stateless-mint-on-demand]], [[feat-dash-managed-component]], [[feat-dash-release-packaging]], [[feat-dash-side-by-side-dev]].
+Discovered in: design session 2026-06-23. ADR-0046 was accepted + merged in PR #247 (this work), so the build is unblocked AFK and the implementer does NOT write the ADR. Refines ADR-0044 (browser dash is a direct ws client); extends ADR-0040 (agent runtimes run as OS-managed components). TUI fate decided 2026-06-23: keep as a non-deprecated terminal feature, strip --serve (recorded in [[decision-retire-dash-tui]]). Related: [[feat-dash-stateless-mint-on-demand]], [[feat-dash-managed-component]], [[feat-dash-release-packaging]], [[feat-dash-side-by-side-dev]].
 <!-- SECTION:NOTES:END -->
