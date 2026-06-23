@@ -22,7 +22,7 @@ var debugPage []byte
 // named explicitly below so a build that skipped `make ui` fails to COMPILE
 // (a loud "no matching files found" error) rather than silently embedding a
 // stale or missing UI. The trailing all:web/app pulls in the static assets
-// (index.html, styles.css, favicon.svg, image-slot.js, vendor/).
+// (index.html, styles.css, favicon.png, image-slot.js, vendor/).
 //
 //go:generate bash ../../scripts/build-dash-ui.sh
 //go:embed web/app/app.js web/app/artifact.js web/app/artifacts.js web/app/conversations.js web/app/goals.js web/app/home.js web/app/mobilize.js web/app/review.js web/app/sidebar.js web/app/tweaks-panel.js web/app/workflow.js
