@@ -15,11 +15,10 @@
 // spawn.request, which the dispatcher (still subscribed) honours like any other —
 // so a spawn tree can grow itself.
 //
-// NAMING: a spawn.request with no nickname is auto-named before minting — the
-// dispatcher asks a cheap Haiku model (--api-key) for a unique, evocative handle,
-// verified against the live clients directory, and mints the child under it. It is
-// best-effort and NEVER blocks the spawn: no key, a model error, or repeated
-// collisions all fall back to the safe agent-<id> default (see naming.go).
+// NAMING: a run is identified by a ULID, not an invented persona. An explicit
+// nickname on the request (e.g. a workflow run's own name) is honoured; with none,
+// the child is minted under the run's own id — the spawn.request frame ULID. There
+// is no auto-naming: a name describes the run, never a cute agent identity.
 //
 // THE RECIPE IS A SWAPPABLE SEAM: --harness is a plain `sh -c CMD` with env vars,
 // and the default reference recipe (cmd/sextant-dispatch/recipes/agent.sh) launches
@@ -79,8 +78,6 @@ func main() {
 	workdir := fs.String("workdir", "", "directory for per-child creds files (default: a fresh temp dir)")
 	maxSpawns := fs.Int("max", 0, "exit after dispatching this many spawns (0 = run until signalled)")
 	deadline := fs.Duration("deadline", 0, "fail loud if no spawn.request arrives within this duration (0 = wait indefinitely)")
-	apiKey := fs.String("api-key", os.Getenv("ANTHROPIC_API_KEY"), "Anthropic API key for Haiku auto-naming of un-nicknamed children (or $ANTHROPIC_API_KEY); empty disables naming (children fall back to agent-<id>)")
-	apiBaseURL := fs.String("api-base-url", "", "Anthropic API base URL for the naming call (default: the public API; a mock URL for tests)")
 	_ = fs.Parse(os.Args[1:])
 
 	if *creds == "" || *harness == "" || (*issuerCreds == "" && !*onBehalf) {
@@ -133,34 +130,10 @@ func main() {
 		logf("minting children via the operator/enroll issuer")
 	}
 
-	// The namer picks a unique, evocative name for an un-nicknamed child before
-	// minting (Haiku auto-naming). It composes a model picker — nil when no API
-	// key is set, so naming degrades to the safe default — with the dispatcher's
-	// own ListClients for the uniqueness check. Naming NEVER blocks a spawn.
-	nm := namer{
-		pick: newHaikuPicker(*apiKey, *apiBaseURL, nil),
-		list: func(ctx context.Context) ([]string, error) {
-			infos, err := c.ListClients(ctx)
-			if err != nil {
-				return nil, err
-			}
-			names := make([]string, 0, len(infos))
-			for _, i := range infos {
-				if i.DisplayName != "" {
-					names = append(names, i.DisplayName)
-				}
-			}
-			return names, nil
-		},
-	}
-	if *apiKey == "" {
-		logf("Haiku auto-naming disabled (no --api-key / $ANTHROPIC_API_KEY); un-nicknamed children use the agent-<id> fallback")
-	}
-
 	d := &dispatcher{
 		ctx: ctx, c: c, mint: mint, store: *store, creds: *creds, subject: *subject,
 		kind: *kind, harness: *harness, onWake: *onWake, supervisor: *supervisor,
-		wakeTimeout: *wakeTimeout, workdir: *workdir, namer: nm,
+		wakeTimeout: *wakeTimeout, workdir: *workdir,
 		seen: map[string]bool{}, agents: map[string]*managedAgent{},
 		done: make(chan struct{}, 1), started: make(chan struct{}, 1),
 		maxSpawns: *maxSpawns,
@@ -229,7 +202,6 @@ type dispatcher struct {
 	supervisor  string
 	wakeTimeout time.Duration
 	workdir     string
-	namer       namer // picks a unique name for an un-nicknamed child (Haiku auto-naming)
 
 	mu        sync.Mutex
 	seen      map[string]bool          // spawn.request frame ids already handled (dedup within a run)
@@ -278,13 +250,12 @@ func (d *dispatcher) handle(m sextant.Message) {
 	}
 
 	parent := m.Frame.Author // the trusted lineage parent
+	// A run is identified by a ULID, not an invented persona. An explicit nickname on
+	// the request (e.g. a workflow run's own name) is honoured; absent, the run's own
+	// id (the spawn.request frame ULID) is the name — no auto-naming.
 	nick := req.Nickname
 	if nick == "" {
-		// No nickname on the request: pick a unique, evocative one via Haiku
-		// before minting (auto-naming). Bounded + best-effort — pickName falls
-		// back to agent-<id> on any failure, so a spawn is never blocked on it.
-		fallback := "agent-" + short(reqID)
-		nick = d.namer.pickName(d.ctx, req.Prompt, req.Job, fallback)
+		nick = reqID
 	}
 	logf("spawn.request %s from %s: nick=%q job=%q", short(reqID), short(parent), nick, req.Job)
 
