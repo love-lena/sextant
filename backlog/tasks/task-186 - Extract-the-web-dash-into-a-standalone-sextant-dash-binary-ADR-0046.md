@@ -27,12 +27,12 @@ Today the web dash server is not its own binary: it rides inside sextant-dash (c
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 New standalone binary (thin main.go in the violet/workflow mold) named sextant-dash owns the web serve path (serve + mint), backed by internal/dashapi (embedded web/app + favicon unchanged); --serve, runServe, serve.go and the dashapi HTTP serving live ONLY here
-- [ ] #2 The former cockpit binary is renamed sextant-tui and reframed as a first-class CLI/TUI feature (NOT deprecated, NOT retired); --serve and the entire HTTP/serve path are stripped out of it (it no longer serves); internal/dash retains only the terminal-UI code; the dash-layoutgallery/surfacegallery/widgetgallery preview binaries still build
+- [ ] #1 New standalone binary named sextant-dash, a thin main.go in the violet/workflow mold, lives at clients/go/apps/dash (the dir scripts/release.sh + scripts/gen-formula.sh ALREADY map to sextant-dash, so the binary keeps its source dir); it owns the web serve path (serve + mint), backed by internal/dashapi (embedded web/app + favicon unchanged); --serve, runServe, serve.go and the dashapi HTTP serving live ONLY here
+- [ ] #2 The former cockpit binary is renamed sextant-tui — its thin main.go moves to a new package clients/go/apps/tui — and reframed as a first-class CLI/TUI feature (NOT deprecated, NOT retired); --serve and the entire HTTP/serve path are stripped out of it (it no longer serves); internal/dash retains only the terminal-UI code (no dashapi import); the dash-layoutgallery/surfacegallery/widgetgallery preview binaries still build
 - [ ] #3 pkg/tui/widget is untouched (other TUIs depend on it)
-- [ ] #4 make build and make install build + install BOTH binaries locally (sextant-dash + sextant-tui); release/brew packaging is out of scope here (see feat-dash-release-packaging)
-- [ ] #5 ADR-0046 is ALREADY accepted + merged (PR #247) — do NOT re-author it; this ticket IMPLEMENTS its decision and updates CONTEXT.md + mdbook to name sextant-dash (web, THE dash) vs sextant-tui (terminal UI); docgen clean
-- [ ] #6 sextant dash CLI subcommand and sextant dash url resolve to the web dash; the terminal UI is reached via sextant-tui
+- [ ] #4 Both binaries build + run from a clean tree: `go build -o /tmp/sextant-dash ./clients/go/apps/dash` and `go build -o /tmp/sextant-tui ./clients/go/apps/tui` succeed and each launches; `make build` still builds bin/sextant; `go test ./clients/go/apps/internal/dash/... ./clients/go/apps/internal/dashapi/...` stays green. NOTE: there is no `make install` target — local install is out of scope, and release/brew packaging (the release.sh binary map + gen-formula.sh, which need the new sextant-tui entry + the dash-dir confirmation) is split to feat-dash-release-packaging
+- [ ] #5 ADR-0046 is ALREADY accepted + merged (PR #247) — do NOT re-author it; this ticket IMPLEMENTS its decision and updates CONTEXT.md + mdbook + the `sextant`/`sextant-tui` --help/usage text + README (which still shows `sextant dash --serve`) to name sextant-dash (web, THE dash) vs sextant-tui (terminal UI); docgen clean
+- [ ] #6 The `sextant dash` alias (cmdDash) and `sextant dash url` RESOLVE/OPEN the running web dash URL — they no longer SERVE (cmdDash's --serve/dash.Run-serve path is removed; serving is only the sextant-dash binary per AC#1); the terminal UI is reached via sextant-tui, not via `sextant dash`
 <!-- AC:END -->
 
 ## Implementation Plan

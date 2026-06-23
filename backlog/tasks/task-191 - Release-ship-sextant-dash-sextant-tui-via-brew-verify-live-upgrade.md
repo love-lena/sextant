@@ -29,11 +29,11 @@ The dash epic is not OPERABLE until the new binaries reach the live setup. A new
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 release.yml builds + packages both sextant-dash and sextant-tui into the release artifact(s)
-- [ ] #2 The Homebrew formula installs both binaries
-- [ ] #3 A live brew upgrade lands the new binaries; sextant up brings up the managed dash component on the upgraded binary; the dash serves and the sx.hb violation is gone
+- [ ] #1 scripts/release.sh + .github/workflows/release.yml build + package both sextant-dash and sextant-tui into the release artifact(s) — the release.sh binary map gains the sextant-tui entry and keeps sextant-dash mapped to clients/go/apps/dash
+- [ ] #2 The Homebrew formula (scripts/gen-formula.sh output) installs both binaries
+- [ ] #3 A live brew upgrade lands the new binaries; `sextant components start dash` (NOT `sextant up`, which only starts the bus) brings up the managed dash component on the upgraded binary; the dash serves and the sx.hb violation is gone
 - [ ] #4 Release tag pushed with Lena's sign-off (trusted-path)
-- [ ] #5 Cut-over cleanup: any manually-launched 'sextant dash --serve' dev/ad-hoc processes are stopped so the managed dash component is the SINGLE dash serving on the live setup (no stray servers holding loopback ports)
+- [ ] #5 Cut-over cleanup: any manually-launched dev/ad-hoc dash servers (the `sextant-dash` binary, or a legacy `sextant dash --serve` from before the split — e.g. the dev servers left on :8765/:57869) are stopped so the managed dash component is the SINGLE dash serving on the live setup (no stray servers holding loopback ports)
 <!-- AC:END -->
 
 

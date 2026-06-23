@@ -29,10 +29,10 @@ The web dash server is one tiny step from stateless. Audit (design session 2026-
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The web dash holds NO standing bus connection; verify via clients list (or bus connection count) that with the server up and no browser tab open, no dash client is connected
-- [ ] #2 POST /api/session connects, mints via clients.session, and closes the connection within the request; opening the dash in a browser still yields a working session credential and a live browser-direct connection
-- [ ] #3 The sx.hb permissions violation no longer appears on dash startup (the standing subscription is gone); if any sx.hb sub remains it is scoped out of the mint connection
-- [ ] #4 Mint latency on loopback is acceptable for a tab-open (one extra connect); if session creds are short-TTL and tabs re-mint, document/measure the connect cadence and add a brief post-mint connection cache only if it proves chatty
+- [ ] #1 The web dash holds NO standing bus connection at rest: the Server struct carries no persistent bus client/connection field, and a dashapi test asserts that constructing + starting the server opens zero bus connections (the fake Bus records connect calls; count is 0 until a request arrives). The process-lifetime sextant.Connect/defer-Close in serve.go is gone
+- [ ] #2 POST /api/session connects, mints via clients.session, and closes the connection WITHIN the request (a test asserts exactly one connect+close per /api/session call, with the connection closed before the handler returns); opening the dash in a browser still yields a working session credential and a live browser-direct connection
+- [ ] #3 With the server up and no browser tab open, no `sx.hb` permissions violation is logged on startup (the standing subscription that caused TASK-185 is gone because there is no standing connection); grep the dash's stderr/log for the violation string and assert absent
+- [ ] #4 NO connection cache and NO standing/pooled connection — each mint is a fresh connect→clients.session→close (per ADR-0046). Mint latency is one loopback connect per tab-open; this is accepted, not optimized. Do NOT add speculative caching
 <!-- AC:END -->
 
 ## Implementation Plan
