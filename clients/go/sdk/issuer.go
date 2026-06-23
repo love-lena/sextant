@@ -92,6 +92,23 @@ func (i *Issuer) Register(ctx context.Context, displayName, kind string) (Issued
 	return IssuedClient{ID: out.ID, Creds: out.Creds}, nil
 }
 
+// MintOperatorSession asks the bus to mint a short-lived SESSION credential under
+// the PRINCIPAL's id (the operator's seat) on this issuer's behalf — the delegated
+// mint the managed dash component uses (ADR-0047). Unlike Client.MintSession (which
+// mints for the caller's OWN id), this mints for the operator's, so a HEADLESS dash
+// running under its own dash.creds can still hand a browser tab a credential that
+// acts AS the operator. The returned id is the OPERATOR's, not the dash's. The bus
+// gates the call fail-closed on the dash component's bus-stamped capability; a
+// caller without it is refused. The minted creds are issuance-denied and
+// TTL-bounded (browserSessionPermissions), never the operator's perpetual key.
+func (i *Issuer) MintOperatorSession(ctx context.Context) (IssuedClient, error) {
+	var out wireapi.RegisterOutput
+	if err := i.call(ctx, wireapi.OpClientsSessionOperator, struct{}{}, &out); err != nil {
+		return IssuedClient{}, err
+	}
+	return IssuedClient{ID: out.ID, Creds: out.Creds}, nil
+}
+
 // Retire decommissions an identity for good (operator-only, enforced by the bus):
 // it leaves the directory and any live connection is dropped. Distinct from a
 // disconnect, which only goes offline.

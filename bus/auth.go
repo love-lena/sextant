@@ -350,9 +350,58 @@ func browserSessionPermissions(clientID string) jwt.Permissions {
 		wireapi.CallSubject(clientID, wireapi.OpClientsRegister),
 		wireapi.CallSubject(clientID, wireapi.OpClientsRetire),
 		wireapi.CallSubject(clientID, wireapi.OpClientsSession),
+		// Defense-in-depth (ADR-0047): a browser session is itself the OUTPUT of the
+		// delegated mint, so it must not be able to mint a FRESH operator session via
+		// the new verb either — otherwise a leaked browser cred could refresh itself
+		// past its TTL through clients.session-operator the way clients.session is
+		// already denied. (The handler also gates on the capability, which a browser
+		// session never carries; this is the second, credential-layer fence.)
+		wireapi.CallSubject(clientID, wireapi.OpClientsSessionOperator),
 		wireapi.CallSubject(clientID, wireapi.OpPrincipalSet),
 	}
 	return p
+}
+
+// dashComponentPermissions is the OS-managed dash component's grant (ADR-0047): a
+// single capability and nothing more. The headless dash is a trusted LOCAL
+// credential broker, not a collaborating client — its only bus act is to mint the
+// operator's browser session on demand — so its allow-list is the narrowest in the
+// system:
+//
+//   - Pub: ONLY the delegated mint (sx.api.<dashID>.clients.session-operator).
+//     NOT messages, artifacts, clients.session, register, retire, principal, hello
+//     — none of the ordinary client surface. The publish allow is necessary but
+//     not sufficient: the handler still gates on the bus-stamped capability, so
+//     even this single grant cannot be used by any other identity.
+//   - Sub: ONLY its own call-reply inbox (_INBOX.<dashID>.>), to receive the mint's
+//     reply. NO sx.deliver (it subscribes to nothing) and — deliberately — NO sx.hb
+//     heartbeat-echo space: the dash does not heartbeat, which is exactly what
+//     clears the spurious sx.hb perms warning (TASK-185). It holds no operator or
+//     issuer authority and reads no delivery stream.
+func dashComponentPermissions(dashID string) jwt.Permissions {
+	// Same single-subject-token guard as clientPermissions: the id is woven into
+	// the allow-list subjects, so a `.`/`*`/`>` would misparse or over-broaden.
+	if strings.ContainsAny(dashID, ".*> \t\r\n") || dashID == "" {
+		panic(fmt.Sprintf("bus: dash id %q is not a single subject token (allow-list scoping is unsafe)", dashID))
+	}
+	var p jwt.Permissions
+	p.Pub.Allow = []string{wireapi.CallSubject(dashID, wireapi.OpClientsSessionOperator)}
+	p.Sub.Allow = []string{wireapi.InboxPrefix(dashID) + ".>"}
+	return p
+}
+
+// mintPermissions picks a freshly-minted client's permission set from its kind.
+// The dash component (KindDash, ADR-0047) gets the narrow broker grant; every
+// other kind gets the ordinary per-client allow-list. Kind is self-declared, so
+// this is safe only because the dash branch strictly NARROWS the surface — the
+// privileged half (the delegated-mint capability it unlocks) is gated again at the
+// handler on the bus-stamped ClientEntry, and the dash kind is honored at issuance
+// only for a held-identity mint (opClientsRegister).
+func mintPermissions(kind, id string) jwt.Permissions {
+	if kind == wireapi.KindDash {
+		return dashComponentPermissions(id)
+	}
+	return clientPermissions(id)
 }
 
 // leafLinkPermissions is the leaf link's grant (ADR-0038): the federation set,
@@ -434,12 +483,19 @@ func credsFile(userJWT, seed string) (string, error) {
 // ttl bounds the credential's JWT lifetime (ADR-0044): 0 is perpetual (the
 // ordinary case, unchanged), a positive value sets a JWT `exp` for a short-lived
 // credential the issuer cannot retire (a browser child).
-func (b *Bus) mintIdentity(displayName string, ttl time.Duration) (creds, id, subject string, err error) {
+//
+// kind selects the credential's permission set: the OS-managed dash component
+// (KindDash, ADR-0047) gets dashComponentPermissions — a single delegated-mint
+// capability and nothing more — while every other kind gets the ordinary
+// per-client allow-list (clientPermissions). Kind is otherwise self-declared and
+// weakly enforced; this narrowing is safe because the dash kind only ever REDUCES
+// the surface, and the capability it unlocks is gated again at the handler.
+func (b *Bus) mintIdentity(displayName, kind string, ttl time.Duration) (creds, id, subject string, err error) {
 	if err := validateDisplayName(displayName); err != nil {
 		return "", "", "", err
 	}
 	id = ulid.Make().String()
-	j, seed, subject, err := b.ident.mintUser(id, clientPermissions(id), ttl, wireapi.EncodeDisplayNameTag(displayName))
+	j, seed, subject, err := b.ident.mintUser(id, mintPermissions(kind, id), ttl, wireapi.EncodeDisplayNameTag(displayName))
 	if err != nil {
 		return "", "", "", err
 	}
