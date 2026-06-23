@@ -13,7 +13,7 @@ sextant-dash --port 0 --ui <worktree>/clients/go/apps/internal/dashapi/web/app
 with the managed dash (default `:8765`). The binary prints its URL on start:
 
 ```
-sextant-dash listening on http://127.0.0.1:<N>?token=...
+sextant-dash: serving the web dash at http://127.0.0.1:<N>/?token=...
 ```
 
 ## `sextant-dash`, not `sextant dash`
