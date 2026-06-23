@@ -276,6 +276,24 @@ _Avoid_: kill (reserve that for forcing a process from the outside)
   `review`-state **artifacts**, goal criteria, and question-**messages** in the
   pool — it curates the *view*, never an owner's state (a convention, ADR-0039).
 
+## Dev-dash loop
+
+Run a dev `sextant-dash` on a free port alongside the managed dash — no swap,
+no taking prod down:
+
+```sh
+sextant-dash --port 0 --ui <worktree>/clients/go/apps/internal/dashapi/web/app
+```
+
+Key points:
+- Use the **`sextant-dash` binary** directly. `sextant dash` no longer serves
+  after the binary split (ADR-0046).
+- `--port 0` picks a free port; the managed prod dash stays on `:8765`.
+- `--ui <dir>` serves the SPA from disk — **no Go rebuild** needed for
+  UI-only changes. For Go-side changes, rebuild the binary.
+- Two servers coexist because `sextant-dash` holds no standing bus connection
+  (connects to mint, then closes) and each browser tab is a co-equal client.
+
 ## Flagged ambiguities
 
 - "presence" once named the registry itself — resolved: the thing is the
