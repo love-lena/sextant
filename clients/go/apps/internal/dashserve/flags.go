@@ -22,10 +22,11 @@ type Flags struct {
 	context *string
 	name    *string
 
-	port        *int
-	allowOrigin *string
-	ui          *string
-	stateFile   *string
+	port            *int
+	allowOrigin     *string
+	ui              *string
+	stateFile       *string
+	operatorSession *bool
 }
 
 // AddFlags registers the web dash's flags on fs, defaulting from the
@@ -38,10 +39,11 @@ func AddFlags(fs *flag.FlagSet) *Flags {
 		context: fs.String("context", os.Getenv("SEXTANT_CONTEXT"), "saved context to connect as (default: the active one; see `sextant context`)"),
 		name:    fs.String("name", "", "display name a first-run self-enrollment registers under (default: $USER)"),
 
-		port:        fs.Int("port", defaultServePort, "port for the web dash on 127.0.0.1 (0 picks a free port); the server is loopback-only"),
-		allowOrigin: fs.String("allow-origin", "", "comma-separated extra browser origins the server accepts (localhost is always allowed)"),
-		ui:          fs.String("ui", "", "serve a custom frontend directory instead of the built-in embedded SPA (dev hook)"),
-		stateFile:   fs.String("state-file", "", "path to write a JSON state file {url,token,port} on start and remove on clean shutdown (default: $SEXTANT_HOME/dash.json when managed by components)"),
+		port:            fs.Int("port", defaultServePort, "port for the web dash on 127.0.0.1 (0 picks a free port); the server is loopback-only"),
+		allowOrigin:     fs.String("allow-origin", "", "comma-separated extra browser origins the server accepts (localhost is always allowed)"),
+		ui:              fs.String("ui", "", "serve a custom frontend directory instead of the built-in embedded SPA (dev hook)"),
+		stateFile:       fs.String("state-file", "", "path to write a JSON state file {url,token,port} on start and remove on clean shutdown (default: $SEXTANT_HOME/dash.json when managed by components)"),
+		operatorSession: fs.Bool("operator-session", false, "mint the OPERATOR's browser session via the delegated path (ADR-0047) instead of this client's own — set by the managed component so a headless dash's page still acts as the operator"),
 	}
 }
 
@@ -73,14 +75,15 @@ func (f *Flags) Resolve() (Options, error) {
 		}
 	}
 	return Options{
-		CredsPath:      creds,
-		URL:            url,
-		Store:          *f.store,
-		Name:           *f.name,
-		Port:           *f.port,
-		AllowedOrigins: splitOrigins(*f.allowOrigin),
-		UIDir:          *f.ui,
-		StateFile:      *f.stateFile,
+		CredsPath:       creds,
+		URL:             url,
+		Store:           *f.store,
+		Name:            *f.name,
+		Port:            *f.port,
+		AllowedOrigins:  splitOrigins(*f.allowOrigin),
+		UIDir:           *f.ui,
+		StateFile:       *f.stateFile,
+		OperatorSession: *f.operatorSession,
 	}, nil
 }
 

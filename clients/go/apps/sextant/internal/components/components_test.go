@@ -3,8 +3,11 @@ package components
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/love-lena/sextant/protocol/wireapi"
 )
 
 // TestRecipeDriftGuard keeps the embedded dispatcher recipe byte-for-byte equal
@@ -47,6 +50,51 @@ func TestSelect(t *testing.T) {
 	}
 	if sel, err := Select("", false, false); err != nil || len(sel) != len(Registry) {
 		t.Fatalf("status no-name should report all; sel=%d err=%v", len(sel), err)
+	}
+}
+
+// TestDashRegistryEntry pins AC#1/AC#3 of the managed-dash slice: the dash is a
+// registered component (sextant-dash, kind=dash) whose Args carry --creds/--store,
+// the managed $SEXTANT_HOME/dash.json state file, and --operator-session (so the
+// page mints the OPERATOR's session, ADR-0047), with NO --port (the dash defaults
+// to the stable 8765, AC#4). kind=dash is what makes the bus grant
+// dashComponentPermissions + the delegated-mint capability. It also carries a
+// HealthCheck (AC#2) and needs neither claude nor a key.
+func TestDashRegistryEntry(t *testing.T) {
+	c, ok := Find("dash")
+	if !ok {
+		t.Fatal("dash is not registered as a managed component")
+	}
+	if c.Binary != "sextant-dash" {
+		t.Errorf("dash Binary = %q, want sextant-dash", c.Binary)
+	}
+	if c.Kind != wireapi.KindDash {
+		t.Errorf("dash Kind = %q, want %q (so the bus mints dashComponentPermissions + the capability)", c.Kind, wireapi.KindDash)
+	}
+	if c.NeedsClaude || c.NeedsKey || c.NeedsRecipe {
+		t.Errorf("dash needs none of claude/key/recipe; got claude=%v key=%v recipe=%v", c.NeedsClaude, c.NeedsKey, c.NeedsRecipe)
+	}
+	if c.HealthCheck == nil {
+		t.Error("dash must carry a HealthCheck (AC#2: an HTTP-200 readiness probe, not just launchd running)")
+	}
+
+	args := c.Args("/c/dash.creds", "/s/store", "")
+	wantPairs := map[string]string{
+		"--creds":      "/c/dash.creds",
+		"--store":      "/s/store",
+		"--state-file": DashStateFile(),
+	}
+	for flag, want := range wantPairs {
+		i := slices.Index(args, flag)
+		if i < 0 || i+1 >= len(args) || args[i+1] != want {
+			t.Errorf("dash Args missing %s %q; got %v", flag, want, args)
+		}
+	}
+	if !slices.Contains(args, "--operator-session") {
+		t.Errorf("dash Args must carry --operator-session (ADR-0047 delegated mint); got %v", args)
+	}
+	if slices.Contains(args, "--port") {
+		t.Errorf("dash Args must NOT pass --port (the stable 8765 default, AC#4); got %v", args)
 	}
 }
 
