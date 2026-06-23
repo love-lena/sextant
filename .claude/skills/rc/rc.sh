@@ -14,6 +14,8 @@ RC_ROOT="${RC_ROOT:-$HOME/.sextant-rc}"
 RC_BIN="$RC_ROOT/bin"
 MANIFEST="$RC_ROOT/restore.tsv"          # TSV: <name>\t<stock-target|absent>, one per rc binary
 EPHEMERAL="$RC_ROOT/ephemeral.tsv"        # TSV: <pid>\t<port>\t<url>\t<ref>, one per running dev dash
+BUSPID="$RC_ROOT/bus.pid"                 # present = the live bus is the rc (holds the rc bus pid)
+STORE="${SEXTANT_STORE:-$HOME/Library/Application Support/sextant/jetstream}"
 BREW_BIN="$(dirname "$(command -v sextant)")"
 
 mkdir -p "$RC_ROOT"
@@ -121,11 +123,47 @@ cmd_rollback() {
   echo "ROLLED BACK to stock."
 }
 
+# busswap: put the LIVE bus on the rc. The brew bus service runs the opt-path
+# binary, which the bin-symlink swap does NOT touch — so a bus-side change (a new
+# wire verb, say) needs the bus itself on the rc. This stops the stock brew service
+# and runs the rc `sextant up` against the SAME store, so JetStream state persists
+# and clients reconnect+rediscover (a normal bus restart; safe while the wire epoch
+# is unchanged). The rc bus is a TRACKED FOREGROUND process, not launchd-KeepAlive
+# — testing only; busrestore returns the managed stock bus. WARN before calling:
+# this briefly drops every bus client.
+cmd_busswap() {
+  [ -x "$RC_BIN/sextant" ] || { echo "no rc sextant — run: rc.sh build <worktree>"; exit 1; }
+  if [ -f "$BUSPID" ] && kill -0 "$(cat "$BUSPID")" 2>/dev/null; then echo "bus already on the rc (pid $(cat "$BUSPID"))"; return 0; fi
+  echo "stopping the stock brew bus (briefly drops all bus clients)…"
+  brew services stop sextant >/dev/null 2>&1 || launchctl bootout "gui/$(id -u)/homebrew.mxcl.sextant" 2>/dev/null || true
+  sleep 1
+  echo "starting the rc bus on the same store ($STORE)…"
+  "$RC_BIN/sextant" up --store "$STORE" >"$RC_ROOT/bus.log" 2>&1 &
+  local pid=$!; echo "$pid" > "$BUSPID"
+  local _; for _ in $(seq 1 20); do
+    kill -0 "$pid" 2>/dev/null || { echo "rc bus exited on start — log:"; tail -8 "$RC_ROOT/bus.log"; rm -f "$BUSPID"; exit 1; }
+    sextant clients list --store "$STORE" >/dev/null 2>&1 && break
+    sleep 0.5
+  done
+  echo "rc bus up (pid $pid, tracked foreground — not KeepAlive). Restore the stock bus with: rc.sh busrestore"
+}
+
+cmd_busrestore() {
+  [ -f "$BUSPID" ] || { echo "bus not swapped (stock brew bus)"; return 0; }
+  local pid; pid=$(cat "$BUSPID")
+  kill "$pid" 2>/dev/null && echo "stopped rc bus pid $pid" || echo "rc bus pid $pid already gone"
+  rm -f "$BUSPID"; sleep 1
+  echo "restarting the stock brew bus service…"
+  brew services start sextant >/dev/null 2>&1 || launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/homebrew.mxcl.sextant.plist 2>/dev/null || true
+  echo "stock bus restored."
+}
+
 cmd_status() {
   echo "brew bin     : $BREW_BIN"
   echo "sextant link : $(readlink "$BREW_BIN/sextant" 2>/dev/null || echo '(not a symlink)')"
   echo "sextant ver  : $(sextant version 2>/dev/null | head -1 || echo '?')"
   if [ -f "$MANIFEST" ]; then echo "STATE        : SWAPPED to rc ($(wc -l < "$MANIFEST" | tr -d ' ') binaries; rollback available)"; else echo "STATE        : stock"; fi
+  if [ -f "$BUSPID" ] && kill -0 "$(cat "$BUSPID")" 2>/dev/null; then echo "bus          : RC (pid $(cat "$BUSPID"), tracked process — busrestore to return the stock brew bus)"; else echo "bus          : stock (brew service)"; fi
   if [ -f "$EPHEMERAL" ]; then
     echo "dev dashes   :"
     local pid port url ref
@@ -138,11 +176,13 @@ cmd_status() {
 }
 
 case "${1:-}" in
-  build)    cmd_build "$2" ;;
-  dash)     cmd_dash "$2" "${3:-}" ;;
-  stop)     cmd_stop "${2:-}" ;;
-  swap)     cmd_swap ;;
-  rollback) cmd_rollback ;;
-  status)   cmd_status ;;
-  *) echo "usage: rc.sh {build <wt>|dash <wt> [ref]|stop [port]|swap|rollback|status}"; exit 2 ;;
+  build)       cmd_build "$2" ;;
+  dash)        cmd_dash "$2" "${3:-}" ;;
+  stop)        cmd_stop "${2:-}" ;;
+  swap)        cmd_swap ;;
+  rollback)    cmd_rollback ;;
+  busswap)     cmd_busswap ;;
+  busrestore)  cmd_busrestore ;;
+  status)      cmd_status ;;
+  *) echo "usage: rc.sh {build <wt>|dash <wt> [ref]|stop [port]|swap|busswap|busrestore|rollback|status}"; exit 2 ;;
 esac

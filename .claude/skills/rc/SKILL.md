@@ -69,33 +69,59 @@ targets before the first swap and `/rc rollback` restores them byte-for-byte.
    sound: `cd <WT> && go vet ./... && go test ./bus/... ./clients/go/apps/internal/dash/... ./clients/go/apps/internal/dashapi/... ./clients/go/apps/internal/dashserve/... ./clients/go/apps/sextant/...`.
    If it's red, STOP and report — do not swap a broken rc onto the live machine.
    (Override only on explicit `--skip-verify`.)
-4. **Warn, then swap.** Tell the operator plainly what's about to change: which
-   binaries get repointed, that their version string will change, and that any
-   RUNNING component restart is a brief live interruption (warn-before-killing-a-
-   preview). On their go: `rc.sh swap`.
-5. **Re-point running components at the rc.** A swapped binary only takes effect for
+4. **Warn, then swap the binaries.** Tell the operator plainly what's about to
+   change: which binaries get repointed and that their version string will change
+   (warn-before-killing-a-preview). On their go: `rc.sh swap`.
+5. **Does the ref change the BUS?** The brew bus service runs the opt-path binary,
+   which the bin-symlink swap does NOT touch — so a bus-side change (a new wire verb,
+   an auth change, a protocol tweak) is NOT live until the bus itself is on the rc.
+   If the ref touches `bus/` or `protocol/` (or you're unsure and the feature needs
+   it — e.g. the managed dash's ADR-0047 delegated mint needs the `clients.session-operator`
+   verb the bus serves), WARN that this briefly drops every bus client, then
+   `rc.sh busswap`. It stops the stock brew bus and runs the rc bus on the same store
+   (state persists; clients reconnect). Skip this for a CLI/dash-only change.
+   Sanity-check the wire epoch is unchanged (`protocol/wire/frame.go` `Epoch`) before
+   a bus swap — a bumped epoch means running stock clients can't reconnect.
+6. **Re-point running components at the rc.** A swapped binary only takes effect for
    a component when it restarts. For each component currently `loaded + RUNNING`
-   (check `sextant components status`), `sextant components restart <name>` so it
-   re-execs the rc binary. Narrate each restart.
-6. If the ref adds the managed **dash** component (it does, from the managed-
-   component epic) and the operator wants to exercise it, `sextant components start
-   dash` — but note this is a NEW component stock didn't have, so `/rc rollback`
-   must stop it again (step below). Default to leaving it to an explicit ask.
-7. Confirm: `sextant version` shows the rc build (sha), `/rc status` shows SWAPPED.
+   (`sextant components status`), `sextant components restart <name>` so it re-execs
+   the rc binary. Narrate each restart (brief live interruption).
+7. **Managed dash (opt-in).** If the ref adds the managed **dash** component and the
+   operator wants it: it must be minted AGAINST the rc bus to carry its ADR-0047
+   capability, so if you swapped the bus, first remove any stale stock-minted creds
+   (`rm -f "$SEXTANT_HOME/components/dash.creds"`; `sextant context delete component-dash`)
+   so `sextant components start dash` re-mints fresh. This is a NEW component stock
+   didn't have, so `/rc rollback` must fully remove it (below). Default to an explicit ask.
+8. Confirm: `sextant version` shows the rc build, `/rc status` shows SWAPPED (and
+   `bus: RC` if you swapped the bus).
 
 ## `/rc rollback`
 
-1. `rc.sh rollback` — restores every recorded stock symlink target and removes any
-   rc-only binary (e.g. `sextant-tui`) that stock didn't have.
-2. Restart the components you restarted in install step 5 so they re-exec the stock
-   binary again; STOP any component that was rc-only (the dash component, if you
-   started it and stock had none — `sextant components stop dash`).
-3. Confirm: `sextant version` is back to the stock release, `/rc status` shows stock.
+Restore stock in the REVERSE order of install — and crucially, tear down rc-only
+components and the rc bus while the rc binary is STILL live (the stock binary won't
+know the `dash` component or how to stop the rc bus):
+
+1. **Stop + remove rc-only components FIRST** (while the rc `sextant` is still the
+   swapped binary): for the dash component (rc-only — stock had none),
+   `sextant components stop dash`, then remove its artifacts so a later install
+   re-mints clean: `rm -f ~/Library/LaunchAgents/dev.sextant.dash.plist`,
+   `rm -f "$SEXTANT_HOME/components/dash.creds"`, `sextant context delete component-dash`.
+   Restart any STILL-RUNNING stock-era component (violet/workflow) after the binary
+   restore in step 4 so it re-execs stock.
+2. **`rc.sh busrestore`** — if the bus was swapped, stop the rc bus and bring the
+   stock brew bus back (clients reconnect).
+3. `rc.sh stop` — stop any ephemeral dev dashes.
+4. **`rc.sh rollback`** — restore every recorded stock symlink target and remove any
+   rc-only binary (e.g. `sextant-tui`). Then restart the components from step 1 so
+   they re-exec stock.
+5. Confirm: `sextant version` is back to the stock release; `/rc status` shows stock
+   + `bus: stock`.
 
 ## `/rc status`
 
 `rc.sh status` — the live `sextant` symlink + version, whether the install is
-SWAPPED (and rollback is available), and any ephemeral dev dashes running.
+SWAPPED (and rollback is available), whether the bus is the rc or the stock brew
+service, and any ephemeral dev dashes running.
 
 ## Safety invariants
 
@@ -105,7 +131,12 @@ SWAPPED (and rollback is available), and any ephemeral dev dashes running.
 - **No production push, ever.** This skill never pushes a tag or the formula. If the
   operator wants to actually ship the rc, that's the release flow with their sign-off.
 - **Warn before any live interruption.** Restarting a running component (or the dash)
-  briefly drops it; say so before doing it.
+  briefly drops it; say so before doing it. A bus swap (`busswap`) drops EVERY client
+  at once — warn loudest before that one.
+- **The rc bus is a tracked process, not KeepAlive.** While the bus is swapped it runs
+  as a foreground process this skill tracks (it won't respawn if it crashes) — it is a
+  test fixture, not the managed stock service. `busrestore` returns the KeepAlive brew
+  bus. Don't leave a setup bus-swapped after a review session.
 - **Verify before you swap.** A red build/test gate stops a live swap unless the
   operator explicitly overrides.
 - **Pinned rc dir.** Everything lives under `~/.sextant-rc/` (bin + restore manifest
