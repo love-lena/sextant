@@ -16,7 +16,7 @@ a managed daemon:
 
 ```bash
 brew tap love-lena/sextant https://github.com/love-lena/sextant
-brew install sextant            # sextant, sextant-mcp, sextant-dash
+brew install sextant            # sextant, sextant-mcp, sextant-dash (web), sextant-tui (terminal)
 brew services start sextant     # the bus, now + on login (or `sextant up` to run it in the foreground)
 ```
 
@@ -26,8 +26,9 @@ Register an identity, then talk to the bus:
 sextant clients register --self --name "$USER"   # mints creds, saves + activates a context
 sextant publish msg.topic.hello '{"$type":"chat.message","text":"hello, bus"}'
 sextant read msg.topic.hello
-sextant dash                                      # the cockpit: clients, topics, artifacts
-sextant dash --serve                              # …or a local web API + debug surface (prints a 127.0.0.1 URL)
+sextant-dash                                      # the web dash: serves the SPA on a 127.0.0.1 URL (THE dash)
+sextant dash                                      # …open the running web dash in a browser (prints its URL)
+sextant-tui                                       # the terminal UI: clients, topics, artifacts in a cockpit
 ```
 
 Commands find the bus through a discovery file in the per-user store, so no URLs
@@ -40,7 +41,7 @@ or flags are needed once the service is running. To upgrade later, see
 Build from a clone, or grab the prebuilt binaries from a release tarball:
 
 ```bash
-go install ./cmd/sextant ./cmd/sextant-dash ./cmd/sextant-mcp        # from a clone
+go install ./clients/go/apps/{sextant,dash,tui,mcp}                  # from a clone (dash=web, tui=terminal)
 # — or —
 gh release download -R love-lena/sextant -p "*darwin_arm64*" -O - | tar -xz
 install sextant_*/bin/* ~/.local/bin/                                 # anywhere on PATH
@@ -85,7 +86,7 @@ claude plugin marketplace update sextant && claude plugin update sextant@sextant
 
 Then restart any active Claude Code sessions (each spawned its `sextant-mcp` at
 startup and keeps using that process, so a session picks up the new server and
-skills only on restart) and re-run `sextant dash --serve` if it was up.
+skills only on restart) and restart `sextant-dash` if it was up.
 `sextant version` confirms the new build.
 [`clients/claude-code/`](clients/claude-code/README.md#updating-to-a-new-version)
 has the per-step detail.

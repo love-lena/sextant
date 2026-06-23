@@ -1,16 +1,17 @@
-// Package dash is the dash's composition root (ADR-0023/0024): it assembles the
-// three master-detail browsers — clients, topics, artifacts — through the layout
-// engine into the cockpit, holds the one bus identity, and runs the program. It
-// is the only layer that may import everything below it — the TUI library
-// (theme, surface, layout, busfeed), the public SDK (pkg/sextant), and the
+// Package dash is the terminal UI's composition root (ADR-0023/0024): it
+// assembles the three master-detail browsers — clients, topics, artifacts —
+// through the layout engine into the cockpit, holds the one bus identity, and
+// runs the program. It is the only layer that may import everything below it —
+// the TUI library (theme, surface, layout, busfeed), the public SDK, and the
 // client-context resolution — because it is where the domain surfaces, the
 // identity, and the layout meet.
 //
-// Both faces of the dash share this one Run: the standalone binary
-// (cmd/sextant-dash) and the `sextant dash` alias each resolve creds/URL and
-// call dash.Run, so there is one implementation, not a binary plus a fragile
-// exec-on-PATH. The dash is just another client over the SDK — forkable, no
-// special privilege (ADR-0014, ADR-0008).
+// This is the engine room of the sextant-tui binary (clients/go/apps/tui). The
+// browser dash is THE dash now (ADR-0046); the terminal UI is a first-class peer
+// feature, not a lesser dashboard, and it carries no serve/HTTP code — the web
+// serve path lives only in dashserve (sextant-dash). The terminal UI is just
+// another client over the SDK — forkable, no special privilege (ADR-0014,
+// ADR-0008).
 package dash
 
 import (
@@ -92,28 +93,6 @@ type Options struct {
 	// ConfigPath is where the layout config is loaded from and persisted to. Empty
 	// disables persistence (a fresh DefaultConfig each run).
 	ConfigPath string
-
-	// Serve runs the dash as a local HTTP API + web debug surface
-	// (`--serve`, ADR-0032) instead of the terminal UI: the same one bus
-	// identity, exposed on 127.0.0.1 for a browser, with the Go process the
-	// sole bus client.
-	Serve bool
-	// Port is the loopback port the API binds when Serve is set (default 8765; 0
-	// picks a free port). The host is always 127.0.0.1 — the API is local-only,
-	// so only the port is configurable.
-	Port int
-	// AllowedOrigins are extra browser origins the API accepts beyond localhost
-	// (always allowed), for a separate dev server hosting the UI (D2).
-	AllowedOrigins []string
-	// UIDir, when set, serves a custom frontend directory instead of the
-	// built-in zero-design debug surface (the D2 hook).
-	UIDir string
-
-	// StateFile, when set, is the path where runServe writes a JSON state file
-	// on start (url, token, port) and removes it on clean shutdown. The default
-	// path when called via the components layer is $SEXTANT_HOME/dash.json;
-	// this field carries whatever the caller (flag or registry) resolved.
-	StateFile string
 }
 
 // launchTimeout bounds each launch I/O step — the whole first-run
@@ -130,9 +109,6 @@ const launchTimeout = 10 * time.Second
 // cancel it (or quit the dash) to wind down. On return the config has been
 // persisted and the client closed.
 func Run(ctx context.Context, opts Options) error {
-	if opts.Serve {
-		return runServe(ctx, opts, os.Stdout)
-	}
 	if err := ensureIdentity(ctx, &opts, os.Stderr); err != nil {
 		return err
 	}

@@ -115,10 +115,11 @@ operations (creds from --creds, $SEXTANT_CREDS, or the active context):
   sextant subscribe <subject> [--all] [--json]
   sextant artifact  create|update|get|list|delete|watch [<name>] [<record-json>] [--rev N] [--json]
 
-the dash (a cockpit of three master-detail browsers over the same SDK — ADR-0024):
-  sextant dash      [--theme light|dark|auto] [--config F] [--name N]
-                    (alias for the sextant-dash binary; same connection flags;
-                    first run with no identity self-enrolls against a local bus)
+the dash (the web dash is THE dash — ADR-0046; served by the sextant-dash binary):
+  sextant dash                                  open the running web dash in a browser (prints its URL)
+  sextant dash url                              print the running web dash's URL only
+  sextant-tui       [--theme light|dark|auto]   the terminal UI: a cockpit of three master-detail
+                                                browsers over the same SDK (a peer feature — ADR-0024)
 
 ambient warmth (a small lamp artifact — first run places one; toggles thereafter):
   sextant lamp      [show]                      toggle the lamp on/off (show just prints state)

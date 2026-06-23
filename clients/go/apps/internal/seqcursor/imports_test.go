@@ -44,6 +44,7 @@ func TestAppsNoWireAtom(t *testing.T) {
 		importcheck.Module + "/clients/go/apps/violet/internal/violet",
 		importcheck.Module + "/clients/go/apps/internal/dash",
 		importcheck.Module + "/clients/go/apps/internal/dashapi",
+		importcheck.Module + "/clients/go/apps/internal/dashserve",
 	} {
 		t.Run(p, func(t *testing.T) { importcheck.AssertNoWireAtom(t, p) })
 	}
