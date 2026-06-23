@@ -33,6 +33,7 @@ import (
 	"sort"
 
 	"github.com/love-lena/sextant/clients/go/apps/internal/clictx"
+	"github.com/love-lena/sextant/protocol/wireapi"
 )
 
 // Component is one managed runtime: the service name, the real binary it
@@ -63,11 +64,22 @@ type Component struct {
 	// NeedsRecipe is true when the component needs the embedded dispatcher recipe
 	// materialized on disk (the dispatcher's --harness).
 	NeedsRecipe bool
+	// HealthCheck, when set, is an extra readiness probe `components start` runs
+	// AFTER launchd reports the job running — for a component whose "up" means more
+	// than a live process. The dash sets it to GET its own URL and require HTTP 200
+	// (AC#2: a loaded-but-not-serving listener must not report healthy). It is
+	// bounded by the caller; returning an error fails the start loudly. nil for a
+	// component whose launchd-running signal is sufficient.
+	HealthCheck func() error
 }
 
 // Registry is the set of managed runtimes: the dispatcher, the workflow
-// coordinator, and violet (the operator's assistant). The dash is deliberately
-// NOT here — it is the operator's foreground surface, not a keep-alive runtime.
+// coordinator, violet (the operator's assistant), and the web dash. The dash
+// joins the Registry now that it is a standalone, stateless-at-rest binary
+// (ADR-0046, ADR-0047): a connect-to-mint-then-close server is no longer "a
+// connected client", so the ADR-0040 exclusion lifts and the operator never types
+// --serve again. It is started ONLY by `sextant components start dash`, never by
+// `sextant up` (which starts the bus alone).
 var Registry = []Component{
 	{
 		Name:        "dispatcher",
@@ -109,6 +121,29 @@ var Registry = []Component{
 			// secret rides in these args.
 			return []string{"--creds", creds, "--store", store, "--designate"}
 		},
+	},
+	{
+		Name:   "dash",
+		Binary: "sextant-dash",
+		Kind:   wireapi.KindDash,
+		Args: func(creds, store, recipe string) []string {
+			// The managed dash runs headless under its OWN dash.creds (kind=dash →
+			// dashComponentPermissions + the delegated-mint capability), so it sets
+			// --operator-session: the page it serves mints the OPERATOR's session via
+			// clients.session-operator (ADR-0047) and acts AS the operator. No --port:
+			// the dash defaults to 8765, a stable URL across restarts (AC#4). The
+			// state-file is the managed $SEXTANT_HOME/dash.json that `sextant dash url`
+			// reads.
+			return []string{
+				"--creds", creds, "--store", store,
+				"--state-file", DashStateFile(),
+				"--operator-session",
+			}
+		},
+		// The dash is "up" only when its HTTP listener actually serves, not merely
+		// when launchd reports the process running — so start GETs the URL from the
+		// state file and requires HTTP 200 (AC#2).
+		HealthCheck: dashHealthy,
 	},
 }
 
@@ -170,3 +205,10 @@ func RecipePath() string { return filepath.Join(componentsDir(), "agent.sh") }
 
 // LogPath is a component's combined stdout+stderr log.
 func LogPath(name string) string { return filepath.Join(clictx.Root(), "logs", name+".log") }
+
+// DashStateFile is the managed web dash's on-disk state record
+// ($SEXTANT_HOME/dash.json): the dash component writes it on start and removes it
+// on clean shutdown, and `sextant dash url` reads it for the bookmarkable URL. It
+// sits directly under the client-config root — the SAME path the dash CLI resolves
+// — so the component and the URL command agree without either hard-coding a string.
+func DashStateFile() string { return filepath.Join(clictx.Root(), "dash.json") }

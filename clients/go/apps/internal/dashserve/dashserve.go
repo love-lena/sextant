@@ -81,6 +81,14 @@ type Options struct {
 	// path when managed by the components layer is $SEXTANT_HOME/dash.json; this
 	// field carries whatever the caller (flag or registry) resolved.
 	StateFile string
+	// OperatorSession selects the DELEGATED minter (ADR-0047): the managed dash
+	// component runs under its own dash.creds (not connected as the operator), so
+	// it cannot use clients.session (which would mint a dash-id session and
+	// re-break the ADR-0044 routing). With this set Run mints the OPERATOR's
+	// session via clients.session-operator instead, so the page still acts AS the
+	// operator. Unset (the dev/foreground default) keeps the clients.session
+	// self-mint UNCHANGED — only the components registry sets it.
+	OperatorSession bool
 }
 
 // Run resolves the dash's identity, then serves the dash as a local HTTP API +
@@ -129,8 +137,10 @@ func Run(ctx context.Context, opts Options, out io.Writer) error {
 	defer srvCancel()
 	// The minter holds the resolved connection inputs, not a connection: it
 	// connects, mints, and closes within each POST /api/session (ADR-0046), so the
-	// Server carries no persistent bus client.
-	minter := newMinter(opts.CredsPath, opts.URL, connInfoPath(opts.Store))
+	// Server carries no persistent bus client. The managed component (--operator-
+	// session) mints the OPERATOR's session via the delegated path (ADR-0047); the
+	// dev/foreground default mints for self via clients.session, unchanged.
+	minter := selectMinter(opts)
 	api := dashapi.New(dashapi.Config{Bus: minter, Token: token, WSURL: wsURL, AllowedOrigins: opts.AllowedOrigins, UIDir: opts.UIDir})
 	srv := &http.Server{
 		Handler:           api,
@@ -176,6 +186,21 @@ func Run(ctx context.Context, opts Options, out io.Writer) error {
 	case err := <-serveErr:
 		return err
 	}
+}
+
+// selectMinter builds the dashapi.Bus Run serves through, choosing by
+// Options.OperatorSession (ADR-0047). The managed component (--operator-session)
+// gets the delegatedMinter — it runs under its own dash.creds and mints the
+// OPERATOR's session via clients.session-operator, so the page acts AS the
+// operator. The dev/foreground default gets the connectMinter (clients.session for
+// self), built through the newMinter package-var seam the lifetime tests
+// instrument — so the unchanged self-mint path stays observable end to end.
+func selectMinter(opts Options) dashapi.Bus {
+	connInfo := connInfoPath(opts.Store)
+	if opts.OperatorSession {
+		return newDelegatedMinter(opts.CredsPath, opts.URL, connInfo)
+	}
+	return newMinter(opts.CredsPath, opts.URL, connInfo)
 }
 
 // ensureIdentity gives Run an identity to connect as. With CredsPath already
