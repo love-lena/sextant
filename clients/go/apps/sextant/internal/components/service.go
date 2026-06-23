@@ -1,12 +1,14 @@
 package components
 
 import (
+	"bytes"
+	"encoding/xml"
 	"fmt"
-	"html/template"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"text/template"
 	"time"
 )
 
@@ -61,15 +63,22 @@ type plistSpec struct {
 	Env     map[string]string
 }
 
-var plistTemplate = template.Must(template.New("plist").Parse(`<?xml version="1.0" encoding="UTF-8"?>
+// plistTemplate renders the LaunchAgent plist. It MUST be a text/template, not
+// html/template: html/template is context-aware for HTML and mangles the XML
+// processing instruction `<?xml ... ?>` into `&lt;?xml ... ?>`, producing a
+// document launchd rejects (`launchctl bootstrap` fails with EIO). A plist is
+// XML, not HTML, so the structural markup is emitted verbatim and only the
+// SUBSTITUTED values are XML-escaped, through the `x` func — so a path or env
+// value with an XML-special char still cannot break the document.
+var plistTemplate = template.Must(template.New("plist").Funcs(template.FuncMap{"x": xmlEscape}).Parse(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>{{.Label}}</string>
+	<string>{{.Label | x}}</string>
 	<key>ProgramArguments</key>
 	<array>
-{{range .Program}}		<string>{{.}}</string>
+{{range .Program}}		<string>{{. | x}}</string>
 {{end}}	</array>
 	<key>KeepAlive</key>
 	<true/>
@@ -77,19 +86,30 @@ var plistTemplate = template.Must(template.New("plist").Parse(`<?xml version="1.
 	<true/>
 {{if .Env}}	<key>EnvironmentVariables</key>
 	<dict>
-{{range $k, $v := .Env}}		<key>{{$k}}</key>
-		<string>{{$v}}</string>
+{{range $k, $v := .Env}}		<key>{{$k | x}}</key>
+		<string>{{$v | x}}</string>
 {{end}}	</dict>
 {{end}}	<key>StandardOutPath</key>
-	<string>{{.LogPath}}</string>
+	<string>{{.LogPath | x}}</string>
 	<key>StandardErrorPath</key>
-	<string>{{.LogPath}}</string>
+	<string>{{.LogPath | x}}</string>
 </dict>
 </plist>
 `))
 
-// genPlist renders a LaunchAgent plist. It is pure (no I/O); html/template
-// escapes the substituted values so a path with an XML-special char cannot
+// xmlEscape XML-escapes a substituted plist value (text/template does no escaping
+// of its own — see plistTemplate). It routes through encoding/xml so an XML-
+// special char in a path or env value is encoded rather than breaking the document.
+func xmlEscape(v any) (string, error) {
+	var b bytes.Buffer
+	if err := xml.EscapeText(&b, []byte(fmt.Sprint(v))); err != nil {
+		return "", err
+	}
+	return b.String(), nil
+}
+
+// genPlist renders a LaunchAgent plist. It is pure (no I/O); the substituted
+// values are XML-escaped (the `x` func) so a path with an XML-special char cannot
 // break the document.
 func genPlist(spec plistSpec) (string, error) {
 	var b strings.Builder

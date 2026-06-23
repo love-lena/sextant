@@ -1,12 +1,48 @@
 package components
 
 import (
+	"encoding/xml"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"testing"
 	"time"
 )
+
+// TestGenPlistIsWellFormedXML guards the regression where the plist was rendered
+// with html/template, which escaped the `<?xml ?>` processing instruction to
+// `&lt;?xml ?>` — invalid XML that launchd rejects with EIO on bootstrap, so
+// `sextant components start` silently produced a plist no component could load.
+// A strings.Contains test misses it (the inner elements are fine); only parsing
+// the whole document as XML catches it. It also feeds an XML-special char through
+// a substituted value to prove escaping keeps the document well-formed.
+func TestGenPlistIsWellFormedXML(t *testing.T) {
+	out, err := genPlist(plistSpec{
+		Label:   Label("dash"),
+		Program: []string{"/opt/homebrew/bin/sextant", "components", "exec", "dash"},
+		LogPath: "/home/u & co/logs/dash.log", // an `&` must be escaped, not break the doc
+		Env:     map[string]string{"PATH": "/x:/bin", "SEXTANT_MCP_BIN": "/opt/homebrew/bin/sextant-mcp"},
+	})
+	if err != nil {
+		t.Fatalf("genPlist: %v", err)
+	}
+	if !strings.HasPrefix(out, "<?xml") {
+		t.Fatalf("plist must begin with a literal <?xml declaration, got:\n%.40q", out)
+	}
+	// Parse the entire document: a malformed plist (the &lt; regression, or an
+	// unescaped value) fails here.
+	dec := xml.NewDecoder(strings.NewReader(out))
+	for {
+		_, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("plist is not well-formed XML: %v\n---\n%s", err, out)
+		}
+	}
+}
 
 // fakeLaunchctl is the injected Runner for tests: it records invocations and
 // returns scripted output/errors per verb, so a test drives bootstrap /
