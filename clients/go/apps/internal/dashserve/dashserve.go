@@ -33,9 +33,9 @@ import (
 )
 
 // Compile-time proof that the live SDK client satisfies the API's narrow Bus
-// dependency: the server is fed the real *sextant.Client in production and a
-// fake in the dashapi tests.
-var _ dashapi.Bus = (*sextant.Client)(nil)
+// dependency: the connect-per-request minter wraps it (its connectOnce returns a
+// *sextant.Client), and the dashapi tests feed a fake.
+var _ sessionClient = (*sextant.Client)(nil)
 
 // defaultServePort is the loopback port the API binds when --port is not given:
 // a fixed local port so the URL is predictable across launches.
@@ -83,37 +83,21 @@ type Options struct {
 	StateFile string
 }
 
-// Run connects under the resolved identity, mints the browser session, and
-// serves the dash as a local HTTP API + embedded SPA (ADR-0044). It resolves
-// the identity the same way the terminal UI does (ensureIdentity → Connect;
-// zero-config first run included), then serves the API on a loopback listener
-// behind a per-launch token, with the Go process the single bus client. It
-// prints the browser URL (carrying the token) to out, and serves until ctx is
-// cancelled — then drains the HTTP server and closes the bus client. announce
-// output goes to out (stdout in production; a buffer in tests).
-//
-// Connection lifetime is process-lifetime for now (the lift-and-shift slice,
-// ADR-0046): connect-to-mint-then-close is a later ticket.
+// Run resolves the dash's identity, then serves the dash as a local HTTP API +
+// embedded SPA (ADR-0044) holding NO standing bus connection (ADR-0046,
+// TASK-187). It resolves the identity the same way the terminal UI does
+// (ensureIdentity; zero-config first run included), but unlike the lift-and-shift
+// slice it does NOT connect at startup: the only bus act left, minting a browser
+// session credential, is done connect-per-request by the minter behind
+// dashapi.Bus, so the dash has zero bus presence with no tab open. It serves the
+// API on a loopback listener behind a per-launch token, prints the browser URL
+// (carrying the token) to out, and serves until ctx is cancelled — then drains
+// the HTTP server. announce output goes to out (stdout in production; a buffer in
+// tests).
 func Run(ctx context.Context, opts Options, out io.Writer) error {
 	if err := ensureIdentity(ctx, &opts, out); err != nil {
 		return err
 	}
-
-	cctx, cancelConnect := context.WithTimeout(ctx, launchTimeout)
-	defer cancelConnect()
-	client, err := sextant.Connect(cctx, sextant.Options{
-		CredsPath:    opts.CredsPath,
-		URL:          opts.URL,
-		ConnInfoPath: connInfoPath(opts.Store),
-		Logf:         func(string, ...any) {},
-	})
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			return fmt.Errorf("bus connected but did not answer within %s — is it healthy? try `sextant up`: %w", launchTimeout, err)
-		}
-		return fmt.Errorf("connect: %w", err)
-	}
-	defer func() { _ = client.Close() }()
 
 	token, err := newToken()
 	if err != nil {
@@ -143,7 +127,11 @@ func Run(ctx context.Context, opts Options, out io.Writer) error {
 	// can cancel in-flight requests.
 	srvCtx, srvCancel := context.WithCancel(context.Background())
 	defer srvCancel()
-	api := dashapi.New(dashapi.Config{Bus: client, Token: token, WSURL: wsURL, AllowedOrigins: opts.AllowedOrigins, UIDir: opts.UIDir})
+	// The minter holds the resolved connection inputs, not a connection: it
+	// connects, mints, and closes within each POST /api/session (ADR-0046), so the
+	// Server carries no persistent bus client.
+	minter := newMinter(opts.CredsPath, opts.URL, connInfoPath(opts.Store))
+	api := dashapi.New(dashapi.Config{Bus: minter, Token: token, WSURL: wsURL, AllowedOrigins: opts.AllowedOrigins, UIDir: opts.UIDir})
 	srv := &http.Server{
 		Handler:           api,
 		BaseContext:       func(net.Listener) context.Context { return srvCtx },
