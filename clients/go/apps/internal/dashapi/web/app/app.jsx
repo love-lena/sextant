@@ -234,6 +234,10 @@
     if(subject.startsWith("msg.client.")) return subject.slice(11);
     return subject;
   }
+  // shortId trims a long ULID-ish id to head…tail (the established run-chip form,
+  // goals.jsx / review-author.jsx). No-personas (TASK-194): a non-operator actor
+  // shows its short id, never a person name.
+  function shortId(id){ id=id||""; return id.length>12 ? (id.slice(0,6)+"…"+id.slice(-4)) : id; }
   function frameText(rec){
     if(!rec) return "·";
     if(typeof rec.text==="string") return rec.text;
@@ -510,8 +514,26 @@
       return ()=>clearInterval(id);
     },[]);
 
-    const nameOf = useCallback((id)=>{ const c=clients.find(c=>c.ID===id); return c?c.DisplayName:(id||"").slice(0,8); },[clients]);
+    // No-personas (TASK-194): a non-operator actor is NEVER a person name + avatar.
+    // It is identified by its ULID + what the work does (its function). nameOf is
+    // the one seam every byline/conversation/DM label flows through, so the rule
+    // lives here once:
+    //   - a human/client kind  → its real DisplayName (operators are people)
+    //   - an agent/run/workflow → ULID(short) + " · " + function, where the
+    //     function is the agent's live status headline (what it's doing) and falls
+    //     back to its run state, then the bare short id. A person's DisplayName on
+    //     an agent record is deliberately IGNORED — the work, not the persona.
     const kindOf = useCallback((id)=>{ const c=clients.find(c=>c.ID===id); return c?c.Kind:"agent"; },[clients]);
+    const nameOf = useCallback((id)=>{
+      const c=clients.find(c=>c.ID===id);
+      const k=c?c.Kind:"agent";
+      if(k==="client"||k==="human") return c ? c.DisplayName : ((id||"").slice(0,8));
+      // agent/run/workflow → ULID + function (never the persona DisplayName).
+      const sr=records["status."+id];
+      const fn=(sr&&(sr.headline||sr.state))||"";
+      const sid=shortId(id);
+      return fn ? (sid+" · "+fn) : sid;
+    },[clients, records]);
 
     // initial directory loads
     useEffect(()=>{
@@ -742,8 +764,14 @@
       const st = sr && sr.state;
       const known = STATUS_STATES.indexOf(st)>=0;
       const headline = (sr && sr.headline) || "";
+      // No-personas (TASK-194): an agent's label is its ULID(short) + function, not
+      // its DisplayName. The function is the live status headline → run state →
+      // bare short id. `name` carries this label so every surface that still reads
+      // a.name (DM strip, link candidates, counts) shows work, never a persona.
+      const sid=shortId(c.ID);
+      const fn=headline || (known?st:"") ;
       return {
-        id:c.ID, name:c.DisplayName,
+        id:c.ID, name: fn ? (sid+" · "+fn) : sid,
         state: !c.Online ? "offline" : (known ? st : "idle"),
         headline,
         meta: headline || ((c.Kind||"agent")+(c.Online?" · online":" · offline")),
@@ -824,21 +852,23 @@
       }));
     },[convos, activeConvo, nameOf, kindOf, self.id]);
 
-    // derived: violet, the operator's assistant (ADR-0039). The `assistant`
-    // artifact names the live assistant by its bus client_id; absent (pre-v0.5.0)
-    // or malformed ⇒ null, and the FAB falls back to its "not live yet" state.
-    const violet = (assistant && typeof assistant.client_id==="string" && assistant.client_id)
-      ? { id:assistant.client_id, name:(typeof assistant.name==="string" && assistant.name ? assistant.name : "violet"), accent:(typeof assistant.accent==="string"?assistant.accent:"") }
+    // derived: the live bus-backed Assistant (ADR-0039). The `assistant` artifact
+    // points at the helper's bus client_id; absent or malformed ⇒ null, and the FAB
+    // falls back to its local "answers from your workspace" mode. No-personas
+    // (TASK-194): the helper is the de-named "Assistant" — the artifact's `name`
+    // field is deliberately IGNORED here, only id + accent (a colour) flow through.
+    const assistantClient = (assistant && typeof assistant.client_id==="string" && assistant.client_id)
+      ? { id:assistant.client_id, accent:(typeof assistant.accent==="string"?assistant.accent:"") }
       : null;
-    // violet is "live" when a matching online bus client is present — drives the
-    // header dot. Absent client / offline ⇒ no dot (the convention is just an
-    // artifact; the agent need not be connected).
-    const violetOnline = !!(violet && clients.some(c=>c.ID===violet.id && c.Online));
+    // "live" when a matching online bus client is present — drives the header dot.
+    // Absent client / offline ⇒ no dot (the convention is just an artifact; the
+    // helper need not be connected).
+    const assistantOnline = !!(assistantClient && clients.some(c=>c.ID===assistantClient.id && c.Online));
 
     // the violet DM subject (the same canonical 2-party topic startDM derives) and
     // the discovered+backfilled message thread, shaped exactly like `messages` so
     // the FAB can feed window.MessageList. Both null/empty when violet is absent.
-    const asstSubject = (violet && self.id) ? dmSubject(self.id, violet.id) : "";
+    const asstSubject = (assistantClient && self.id) ? dmSubject(self.id, assistantClient.id) : "";
     const assistantMessages = useMemo(()=>{
       const c = asstSubject ? convos[asstSubject] : null; if(!c) return [];
       return c.msgs.map((m,i)=>({
@@ -929,11 +959,11 @@
     // BOTH asstPrompt (shown as the carried query) and asstDraft (the live composer
     // value) so the operator can edit + send.
     function askAssistant(query){ setPalette(false); const q=query||""; setAsstPrompt(q); setAsstDraft(q); setAsstOpen(true); }
-    // send the FAB composer to violet's DM (the canonical 2-party topic), then
-    // clear the FAB draft. No-op until violet + self are both known.
+    // send the FAB composer to the Assistant's DM (the canonical 2-party topic),
+    // then clear the FAB draft. No-op until the helper + self are both known.
     function sendToAssistant(text){
-      const body=(text||"").trim(); if(!body || !violet || !self.id) return;
-      apiPublish(dmSubject(self.id, violet.id),{ "$type":"chat.message", text:body }).then(()=>{ setAsstDraft(""); setAsstPrompt(""); }).catch(()=>{});
+      const body=(text||"").trim(); if(!body || !assistantClient || !self.id) return;
+      apiPublish(dmSubject(self.id, assistantClient.id),{ "$type":"chat.message", text:body }).then(()=>{ setAsstDraft(""); setAsstPrompt(""); }).catch(()=>{});
     }
     // LOCAL answering (TASK-203): append the operator's line, compute a local
     // answer from the dash's loaded data (snapshot overlay included so the helper
@@ -981,7 +1011,7 @@
     }
     // STAGE_LABEL: the human label for a back-to-origin target. Falls back to a
     // title-cased mode for any surface not in the table.
-    const STAGE_LABEL = { home:"Home", goals:"Goals", workengine:"Work engine", artifacts:"Artifacts", bus:"Bus", agents:"Agents", workflow:"Workflow", conversation:"Conversations", compose:"Composer", criteria:"Criteria", brief:"Inbox", consequence:"Review", link:"Link work" };
+    const STAGE_LABEL = { home:"Home", goals:"Goals", workengine:"Work engine", artifacts:"Artifacts", bus:"Bus", workflow:"Workflow", conversation:"Conversations", compose:"Composer", criteria:"Criteria", brief:"Inbox", consequence:"Review", link:"Link work" };
     function originLabel(){ return (origin && STAGE_LABEL[origin.mode]) || "Back"; }
     // goBack: return to the exact originating surface (S1.7). A goal deep-link
     // carries its goalId back so Goals re-opens that detail.
@@ -1174,16 +1204,12 @@
         sub:(a.updated?("updated "+a.updated+" ago"):"")+(a.status?(" · "+a.status):""),
         kw:(a.name+" "+a.status).toLowerCase(), go:()=>openArtifact(a.name) }));
       // SURFACES — the workspace nav hubs as jump targets (same as clicking nav).
-      [["Home","home"],["Goals","goals"],["Work engine","workengine"],["Artifacts","artifacts"],["Bus","bus"],["Agents","agents"],["Workflow","workflow"]]
+      // No-personas (TASK-194): the Agents roster was retired, so there is no
+      // "Agents" surface row and no per-agent ("agent:<id>") palette rows — a run is
+      // reached via its goal/run topic or its conversation, never a named-crew jump.
+      [["Home","home"],["Goals","goals"],["Work engine","workengine"],["Artifacts","artifacts"],["Bus","bus"],["Workflow","workflow"]]
         .forEach(([label,key])=>items.push({ key:"nav:"+key, type:"Surface", label,
           sub:"workspace", kw:("go to surface "+label+" "+key).toLowerCase(), go:()=>onNav(key) }));
-      // Agent rows keep a distinct "agent:<id>" key (a DM subject can also surface
-      // as a Channel row, so reusing "conv:<subject>" would collide). startDM
-      // records recency under the conversation; we ALSO touch the agent key here
-      // so the Agent row itself accumulates recency and ranks up over time.
-      agentsShown.forEach(a=>items.push({ key:"agent:"+a.id, type:"Agent", label:a.name, sub:a.meta,
-        kw:(a.name+" "+(a.headline||"")+" "+a.state).toLowerCase(),
-        go:()=>{ if(a.id){ touchRecent("agent:"+a.id); startDM(a.id); } else onNav("agents"); } }));
       convList.forEach(c=>items.push({ key:"conv:"+c.key, type:"Channel",
         label:(c.type==="topic"?"# ":"@ ")+c.name, sub:c.snippet||"conversation",
         kw:(c.name+" "+(c.snippet||"")).toLowerCase(), go:()=>expandConvo(c.key) }));
@@ -1239,8 +1265,6 @@
                 <span className="sx-crumb-topic">Work engine</span>
               ) : stageMode==="bus" ? (
                 <span className="sx-crumb-topic">Bus</span>
-              ) : stageMode==="agents" ? (
-                <span className="sx-crumb-topic">Agents</span>
               ) : stageMode==="workflow" ? (
                 <span className="sx-crumb-topic">Workflow</span>
               ) : stageMode==="compose" ? (
@@ -1340,10 +1364,6 @@
               <div className="sx-page sx-page--doc">
                 <BusInspector />
               </div>
-            </div>
-          ) : stageMode==="agents" ? (
-            <div className="sx-canvas sx-canvas--list">
-              <div className="sx-page sx-page--doc"><AgentsView agents={agentsShown} onDM={startDM} /></div>
             </div>
           ) : stageMode==="workflow" ? (
             <div className="sx-canvas sx-canvas--list">
@@ -1455,15 +1475,15 @@
         )}
 
         <AssistantFab open={asstOpen} prompt={asstPrompt}
-          assistant={violet} online={violetOnline}
-          messages={violet ? assistantMessages : asstLocalMsgs} self={self}
+          assistant={assistantClient} online={assistantOnline}
+          messages={assistantClient ? assistantMessages : asstLocalMsgs} self={self}
           draft={asstDraft} setDraft={setAsstDraft}
-          onSend={violet ? sendToAssistant : sendLocalAssistant}
-          onArtifactRef={violet ? openArtifact : onAssistantRef}
+          onSend={assistantClient ? sendToAssistant : sendLocalAssistant}
+          onArtifactRef={assistantClient ? openArtifact : onAssistantRef}
           artifactNames={(window.SxAssistant ? window.SxAssistant.knownLinks({ goals:goalsShown, artifacts:artsShown }) : artifacts.map(a=>a.Name))}
           onOpen={()=>{ setAsstPrompt(""); setAsstDraft(""); setAsstOpen(true); }}
           onClose={()=>{ setAsstOpen(false); setAsstPrompt(""); }} />
-        {palette && <CmdK index={searchIndex()} recents={recents} assistantLive={!!violet} onClose={()=>setPalette(false)} onAsk={askAssistant} />}
+        {palette && <CmdK index={searchIndex()} recents={recents} assistantLive={!!assistantClient} onClose={()=>setPalette(false)} onAsk={askAssistant} />}
 
         <TweaksPanel title="Tweaks">
           <TweakSection label="Accent" />

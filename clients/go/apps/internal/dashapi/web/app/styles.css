@@ -92,6 +92,9 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 
 .sx-av{border-radius:50%;color:#fff;display:grid;place-items:center;font-family:var(--font-ui);font-weight:600;flex:0 0 auto;letter-spacing:-.02em;text-shadow:0 1px 1px rgba(0,0,0,.2);}
 .sx-av.is-agent{border-radius:8px;}
+/* no-personas (TASK-194): an agent/run/workflow avatar is a NEUTRAL function chip
+   — no name-hashed colour, no initials. Just a calm ⬡ glyph on a muted ground. */
+.sx-av.is-run{background:rgba(120,124,132,.14);color:var(--fx-ink3,#787c84);text-shadow:none;font-weight:500;}
 
 .sx-verified{color:var(--c-approved);font-size:12px;font-weight:500;}
 .sx-verified.sm{font-size:11px;}

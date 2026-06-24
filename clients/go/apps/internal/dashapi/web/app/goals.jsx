@@ -343,7 +343,7 @@
           <div className="dxg-topic-thread">
             {thread.map((m) => (
               <div className={"dxg-topic-msg" + (m.self ? " is-self" : "")} key={m.id}>
-                <span className="dxg-topic-author">{m.self ? "you" : (m.author || "agent")}</span>
+                <span className="dxg-topic-author">{m.self ? "you" : (shortId(m.author) || "run")}</span>
                 <span className="dxg-topic-text">{m.text}</span>
                 <span className="dxg-topic-time">{m.time || ""}</span>
               </div>))}

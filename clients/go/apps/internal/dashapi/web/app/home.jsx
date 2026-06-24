@@ -13,15 +13,15 @@
 (function () {
   const { useState } = React;
 
-  /* ---------- small helpers (avatar) ---------- */
-  const PALETTE = ["#6a55e0", "#e0a23a", "#d2674a", "#3a93d2", "#54ad6e", "#c060a8", "#2bb6a6"];
-  function hueOf(name) { let h = 0; for (const c of name || "") h = (h * 31 + c.charCodeAt(0)) >>> 0; return PALETTE[h % PALETTE.length]; }
-  function initials(name) {
-    const parts = (name || "").replace(/[-@#]/g, " ").split(/[\s_]+/).filter(Boolean);
-    return ((parts[0] ? parts[0][0] : "?") + (parts[1] ? parts[1][0] : "")).toUpperCase();
-  }
+  /* ---------- small helpers (avatar) ----------
+     No-personas (TASK-194): an artifact's author is a run/agent, surfaced by ULID +
+     function in the byline text, not a persona avatar. Av here is only ever called
+     with square (the author chip), so it renders the NEUTRAL function glyph (the
+     same ⬡ chip the shared sidebar Avatar uses for kind="agent") — no name-hashed
+     colour, no initials. */
   function Av({ name, size = 22, square }) {
-    return <span className={"sx-av" + (square ? " is-agent" : "")} style={{ width: size, height: size, background: hueOf(name), fontSize: size * 0.42 }}>{initials(name)}</span>;
+    if (square) return <span className="sx-av is-agent is-run" style={{ width: size, height: size, fontSize: size * 0.5 }} aria-hidden="true">⬡</span>;
+    return <span className="sx-av" style={{ width: size, height: size, fontSize: size * 0.42 }}>{(name || "?")[0]}</span>;
   }
 
   /* the postmark seal in the hero — reuses the sidebar's brand glyph */
@@ -356,7 +356,10 @@
     const artPending = arts.filter((a) => a.status === "review");
     const goalPending = goalArr.filter((g) => g.review === "review").map((g) => ({
       name: g.northstar || g.name, isGoal: true, goalId: g.id, status: "review",
-      version: g.version || 0, author: { name: g.by || "", kind: "agent" }, updated: g.updated || "",
+      // No-personas (TASK-194): a goal's author is not a persona byline — g.by may
+      // be a person's display name, so it is deliberately dropped (empty author →
+      // the hero shows generic copy + no avatar, never a name).
+      version: g.version || 0, author: { name: "", kind: "agent" }, updated: g.updated || "",
     }));
     // S3.3 — rank by urgency (change/re-review first, then decision), then by
     // recency within a rank, so the hero is genuinely rank 1.
