@@ -7,15 +7,31 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 )
 
+// buildDashBinary builds the standalone sextant-dash binary (ADR-0046: the web
+// dash is its own binary; `sextant dash` no longer serves). The e2e drives the
+// real binary, like buildBinary does for sextant.
+func buildDashBinary(t *testing.T) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "sextant-dash")
+	cmd := exec.Command("go", "build", "-o", bin, "./clients/go/apps/dash")
+	cmd.Dir = "../.." // repo root, relative to tests/e2e
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build sextant-dash: %v\n%s", err, out)
+	}
+	return bin
+}
+
 // TestDashServeMintsBrowserSession is the AC#3/AC#5 acceptance for the direct-WS
 // dash (ADR-0044) driven through the built binary: with the bus WebSocket listener
-// on, `sextant dash --serve` is reduced to a static-SPA host plus a credential-mint
-// endpoint. POST /api/session mints a short-lived, scoped browser credential and
+// on, the standalone `sextant-dash` (ADR-0046) is a static-SPA host plus a
+// credential-mint endpoint. POST /api/session mints a short-lived, scoped browser credential and
 // hands back the ws URL the page dials; the old /api/* relay (self/clients/messages/
 // publish/stream/goals/artifacts) is gone (404). The browser-side flow over the
 // WebSocket is proven separately by the SDK integration suite + the headless
@@ -32,7 +48,8 @@ func TestDashServeMintsBrowserSession(t *testing.T) {
 	}
 	h.startBus()
 
-	dash := h.startBg(nil, "dash", "--serve", "--store", h.store, "--port", "0")
+	dashBin := buildDashBinary(t)
+	dash := h.startBgBin(dashBin, nil, "--store", h.store, "--port", "0")
 	urlLine := dash.waitStdout(t, "token=")
 	m := regexp.MustCompile(`(http://127\.0\.0\.1:\d+)/\?token=(\S+)`).FindStringSubmatch(urlLine)
 	if m == nil {

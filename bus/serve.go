@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -131,6 +132,8 @@ func (b *Bus) dispatch(ctx context.Context, clientID, op string, data []byte) (j
 		return b.opClientsRetire(ctx, clientID, data)
 	case wireapi.OpClientsSession:
 		return b.opClientsSession(ctx, clientID)
+	case wireapi.OpClientsSessionOperator:
+		return b.opClientsSessionOperator(ctx, clientID)
 	case wireapi.OpClientsHello:
 		return b.opClientsHello(ctx, clientID)
 	case wireapi.OpClientsHeartbeat:
@@ -446,6 +449,15 @@ func (b *Bus) opClientsRegister(ctx context.Context, callerID string, data []byt
 	if err := json.Unmarshal(data, &in); err != nil {
 		return nil, fmt.Errorf("bus: clients.register: bad input: %w", err)
 	}
+	// The dash kind unlocks a capability (CapMintOperatorSession, ADR-0047), so it
+	// must never be mintable on behalf of an arbitrary caller — otherwise a
+	// compromised client could manufacture a capability-bearing identity for itself.
+	// Honor it ONLY for a held-identity (operator) mint, the path
+	// components.ensureIdentity uses. A non-operator caller requesting kind=dash is
+	// rejected before any mint, no capability escalation.
+	if in.Kind == wireapi.KindDash && callerID != wireapi.OperatorID {
+		return nil, fmt.Errorf("bus: clients.register: kind %q is operator-mint-only (it grants the %q capability, ADR-0047); caller %q may not request it", wireapi.KindDash, wireapi.CapMintOperatorSession, callerID)
+	}
 	var spawnedBy string
 	switch callerID {
 	case wireapi.OperatorID, wireapi.EnrollID:
@@ -559,6 +571,63 @@ func (b *Bus) opClientsSession(ctx context.Context, callerID string) (json.RawMe
 		return nil, fmt.Errorf("bus: clients.session: %w", err)
 	}
 	return json.Marshal(wireapi.RegisterOutput{ID: callerID, Creds: creds})
+}
+
+// opClientsSessionOperator is the DELEGATED mint (ADR-0047, TASK-188): the one
+// path by which a HEADLESS dash component mints a session under the OPERATOR's id
+// rather than its own. It is the security capstone of the managed-dash slice — it
+// crosses toward the no-impersonation bright line — so it is gated FAIL-CLOSED on a
+// bus-stamped capability, never on the weakly-enforced kind and never on the
+// caller's allow-list.
+//
+// Why the gate must live HERE, not in the credential's allow-list: every client's
+// creds carry an sx.api.<id>.> pub-allow (clientPermissions), so ANY client could
+// publish to its own clients.session-operator subject and reach this handler. The
+// publish is therefore NOT the gate. The gate is: read the caller's durable
+// ClientEntry and admit the mint ONLY when it carries CapMintOperatorSession (the
+// capability the bus stamps onto the dash component alone, at a held-identity
+// mint). A missing, unreadable, or capability-less record DENIES — a compromised or
+// ordinary client gets nothing.
+//
+// On success it mints under the PRINCIPAL's id (the operator's seat) via the same
+// mintSession clients.session uses — so the output is exactly browserSessionPermissions:
+// it acts AS the operator, issuance-denied and TTL-bounded, never the operator's
+// perpetual key.
+func (b *Bus) opClientsSessionOperator(ctx context.Context, callerID string) (json.RawMessage, error) {
+	operatorID, err := b.readPrincipal(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("bus: clients.session-operator: %w", err)
+	}
+	if operatorID == "" {
+		return nil, errors.New("bus: clients.session-operator: no principal designated — nothing to mint a session under")
+	}
+	if !b.callerHasCapability(ctx, callerID, wireapi.CapMintOperatorSession) {
+		return nil, fmt.Errorf("bus: clients.session-operator: caller %q lacks the %q capability (delegated operator-session mint is dash-component-only, ADR-0047)", callerID, wireapi.CapMintOperatorSession)
+	}
+	creds, err := b.mintSession(ctx, operatorID)
+	if err != nil {
+		return nil, fmt.Errorf("bus: clients.session-operator: %w", err)
+	}
+	return json.Marshal(wireapi.RegisterOutput{ID: operatorID, Creds: creds})
+}
+
+// callerHasCapability reports whether callerID's durable ClientEntry carries the
+// named bus-stamped capability (ADR-0047). It is the fail-closed gate behind the
+// delegated mint: it rests on a field the BUS sets at issuance (Capabilities),
+// never on anything the caller asserts, exactly like callerMayDispatch rests on
+// SpawnedBy. A missing record, an unreadable/garbled record, or a record without
+// the capability all return false — there is no path where an unconfirmed caller is
+// treated as capable.
+func (b *Bus) callerHasCapability(ctx context.Context, callerID, capability string) bool {
+	val, _, err := b.backend.Get(ctx, sx.BucketClients, callerID)
+	if err != nil {
+		return false
+	}
+	var e wireapi.ClientEntry
+	if err := json.Unmarshal(val, &e); err != nil {
+		return false
+	}
+	return slices.Contains(e.Capabilities, capability)
 }
 
 // opClientsHeartbeat is the periodic liveness signal (TASK-126). It does two

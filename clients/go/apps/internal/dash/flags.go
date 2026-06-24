@@ -5,17 +5,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/love-lena/sextant/clients/go/apps/internal/clictx"
 )
 
-// Flags are the dash's command-line flags: the bus-connection flags (mirroring
-// the operator CLI's connFlags shape — --creds/--store/--url/--context with the
-// $SEXTANT_* defaults, ADR-0021) plus the dash-specific flags (--theme,
-// --config, --name). Both faces of the dash — cmd/sextant-dash and the
-// `sextant dash` alias — register and resolve these the same way so they
-// behave identically.
+// Flags are the terminal UI's command-line flags: the bus-connection flags
+// (mirroring the operator CLI's connFlags shape — --creds/--store/--url/
+// --context with the $SEXTANT_* defaults, ADR-0021) plus the terminal-UI flags
+// (--theme, --config, --name). The sextant-tui binary registers and resolves
+// these. The web serve path is a separate binary (sextant-dash) with its own
+// flags (dashserve), per ADR-0046.
 type Flags struct {
 	// fs is the flag set the flags were registered on, kept so Resolve can ask
 	// which flags were EXPLICITLY passed (fs.Visit) — the theme flag's behaviour
@@ -31,16 +30,10 @@ type Flags struct {
 	theme  *string
 	config *string
 	name   *string
-
-	serve       *bool
-	port        *int
-	allowOrigin *string
-	ui          *string
-	stateFile   *string
 }
 
-// AddFlags registers the dash flags on fs, defaulting from the environment the
-// same way the operator CLI does. Call fs.Parse, then Resolve.
+// AddFlags registers the terminal-UI flags on fs, defaulting from the
+// environment the same way the operator CLI does. Call fs.Parse, then Resolve.
 func AddFlags(fs *flag.FlagSet) *Flags {
 	return &Flags{
 		fs:      fs,
@@ -52,12 +45,6 @@ func AddFlags(fs *flag.FlagSet) *Flags {
 		theme:  fs.String("theme", "auto", "cockpit theme: light, dark, or auto (re-detect the terminal background each launch); an explicit value is persisted, otherwise the saved choice applies"),
 		config: fs.String("config", defaultConfigPath(), "layout config file (preset, hidden panes, theme); persisted on quit"),
 		name:   fs.String("name", "", "display name a first-run self-enrollment registers under (default: $USER)"),
-
-		serve:       fs.Bool("serve", false, "run a local HTTP API + web debug surface (127.0.0.1) instead of the terminal UI"),
-		port:        fs.Int("port", defaultServePort, "port for the --serve API on 127.0.0.1 (0 picks a free port); the API is loopback-only"),
-		allowOrigin: fs.String("allow-origin", "", "comma-separated extra browser origins the --serve API accepts (localhost is always allowed)"),
-		ui:          fs.String("ui", "", "serve a custom frontend directory with --serve instead of the built-in debug surface"),
-		stateFile:   fs.String("state-file", "", "path to write a JSON state file {url,token,port} on start and remove on clean shutdown (default: $SEXTANT_HOME/dash.json when managed by components)"),
 	}
 }
 
@@ -101,33 +88,13 @@ func (f *Flags) Resolve() (Options, error) {
 		}
 	}
 	return Options{
-		CredsPath:      creds,
-		URL:            url,
-		Store:          *f.store,
-		Name:           *f.name,
-		Theme:          th,
-		ConfigPath:     *f.config,
-		Serve:          *f.serve,
-		Port:           *f.port,
-		AllowedOrigins: splitOrigins(*f.allowOrigin),
-		UIDir:          *f.ui,
-		StateFile:      *f.stateFile,
+		CredsPath:  creds,
+		URL:        url,
+		Store:      *f.store,
+		Name:       *f.name,
+		Theme:      th,
+		ConfigPath: *f.config,
 	}, nil
-}
-
-// splitOrigins parses the comma-separated --allow-origin value into a trimmed,
-// non-empty list (empty input yields nil).
-func splitOrigins(s string) []string {
-	if s == "" {
-		return nil
-	}
-	var origins []string
-	for _, o := range strings.Split(s, ",") {
-		if o = strings.TrimSpace(o); o != "" {
-			origins = append(origins, o)
-		}
-	}
-	return origins
 }
 
 // explicitlySet reports whether the named flag was passed on the command line

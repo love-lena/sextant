@@ -557,7 +557,7 @@ func (b *Bus) mintClient(ctx context.Context, displayName, kind, spawnedBy strin
 	if kind == wireapi.KindBrowser {
 		ttl = b.browserCredTTL
 	}
-	creds, id, subject, err := b.mintIdentity(displayName, ttl)
+	creds, id, subject, err := b.mintIdentity(displayName, kind, ttl)
 	if err != nil {
 		return "", "", err
 	}
@@ -565,14 +565,24 @@ func (b *Bus) mintClient(ctx context.Context, displayName, kind, spawnedBy strin
 	if err != nil {
 		return "", "", fmt.Errorf("bus: issue: %w", err)
 	}
+	// The OS-managed dash component (KindDash, ADR-0047) is the one identity stamped
+	// with the delegated-mint capability — a bus-set, forge-proof field (like
+	// SpawnedBy) the handler reads to gate clients.session-operator. Its credential's
+	// dashComponentPermissions is the matching grant; this records the capability the
+	// gate checks against. Every other kind carries no capabilities (nil → omitted).
+	var capabilities []string
+	if kind == wireapi.KindDash {
+		capabilities = []string{wireapi.CapMintOperatorSession}
+	}
 	rec, err := json.Marshal(wireapi.ClientEntry{
-		ID:          id,
-		Subject:     subject,
-		DisplayName: displayName,
-		Kind:        kind,
-		Epoch:       epoch,
-		IssuedAt:    nowRFC3339(),
-		SpawnedBy:   spawnedBy,
+		ID:           id,
+		Subject:      subject,
+		DisplayName:  displayName,
+		Kind:         kind,
+		Epoch:        epoch,
+		IssuedAt:     nowRFC3339(),
+		SpawnedBy:    spawnedBy,
+		Capabilities: capabilities,
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("bus: issue: encode record: %w", err)

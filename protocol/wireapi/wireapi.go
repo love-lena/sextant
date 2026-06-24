@@ -112,6 +112,26 @@ const OpSubscriptionStop = "subscription.stop"
 // already authenticate as — strictly weaker than the caller's own credential.
 const OpClientsSession = "clients.session"
 
+// OpClientsSessionOperator mints a short-lived SESSION credential under the
+// PRINCIPAL's id (the operator's seat) on behalf of a delegated minter — the
+// managed dash component (ADR-0047). It is the delegated-mint sibling of
+// clients.session: where clients.session mints for the caller's own id, this
+// mints for the operator's, so a HEADLESS dash (running under its own dash.creds,
+// not connected as the operator) can still hand a browser tab a credential that
+// acts AS the operator — preserving the ADR-0044 routing once the foreground dash
+// is gone. It is bus plumbing (not in methods.json, no CLI/MCP surface).
+//
+// Crossing toward the no-impersonation bright line, it is gated fail-closed at the
+// HANDLER on a bus-stamped capability (CapMintOperatorSession on the caller's
+// ClientEntry), NOT on the weakly-enforced kind and NOT on the caller's allow-list
+// (every client's creds carry an sx.api.<id>.> pub-allow, so any client COULD
+// publish to this verb under its own prefix — the publish is not the gate, the
+// handler is). Only the dash component identity, minted with that capability under
+// dashComponentPermissions, may use it; ANY other caller is denied. The minted
+// output is exactly browserSessionPermissions(operator) — issuance-denied,
+// TTL-bounded — never the operator's perpetual key.
+const OpClientsSessionOperator = "clients.session-operator"
+
 // OpPrincipalGet, OpPrincipalSet, and OpPrincipalWatch are the principal-
 // designation ops (ADR-0030). They are an opinionated EXTENSION over the locked
 // core — not protocol operations: they are not in methods.json (the universal
@@ -190,11 +210,30 @@ const (
 // Like KindAgent it is load-bearing in one place: the bus gives a browser child a
 // bounded JWT lifetime (the dash mints it but cannot retire it, so the exp is the
 // cleanup) — the only kind that affects mint behaviour, every other kind perpetual.
+//
+// KindDash marks the OS-managed web-dash component (ADR-0046, ADR-0047). Like
+// KindAgent/KindBrowser it is load-bearing in the reference bus: a dash mint is
+// the one kind given dashComponentPermissions (a single delegated-mint capability,
+// nothing more) instead of the default client allow-list, AND its durable record
+// is stamped with the CapMintOperatorSession capability. Kind is self-declared, so
+// this kind→capability grant is honored ONLY for a held-identity (operator) mint —
+// a mint-on-behalf caller requesting kind=dash is refused (no capability
+// escalation, serve.go).
 const (
 	KindClient  = "client"
 	KindAgent   = "agent"
 	KindBrowser = "browser"
+	KindDash    = "dash"
 )
+
+// CapMintOperatorSession is the bus-stamped capability that authorizes the
+// delegated mint (OpClientsSessionOperator, ADR-0047). It is recorded on a
+// ClientEntry.Capabilities at issuance — by the bus, never by the caller — so the
+// gate rests on a forge-proof field, like SpawnedBy. The bus grants it to exactly
+// one identity: the dash component (KindDash, held-identity mint). The handler
+// reads the caller's ClientEntry and allows the delegated mint only when this
+// capability is present, fail-closed.
+const CapMintOperatorSession = "mint-operator-session"
 
 // DrainSubID is the reserved sub-id for the cooperative-drain delivery on a
 // client's push space (sx.deliver.<id>.drain). It is not a real relay, so a
@@ -370,6 +409,13 @@ type ClientEntry struct {
 	// fences a spawned worker out of dispatching its own children — so the no-mint
 	// guardrail rests on a bus-set field, never on the weakly-enforced kind.
 	SpawnedBy string `json:"spawned_by,omitempty"`
+	// Capabilities are bus-stamped grants beyond the default client surface
+	// (ADR-0047). Like SpawnedBy the bus sets them at issuance, never the caller,
+	// so a capability gate rests on a forge-proof field. The only one today is
+	// CapMintOperatorSession, stamped on the dash component (KindDash) — the
+	// handler reads it to authorize the delegated operator-session mint,
+	// fail-closed (a missing or unreadable record denies).
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 // Presence values for ClientEntry.Presence.

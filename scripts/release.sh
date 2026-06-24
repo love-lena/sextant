@@ -7,7 +7,7 @@
 #   scripts/release.sh v0.1.0
 #
 # Output: dist/sextant_<tag>_<os>_<arch>.tar.gz, each containing
-#   bin/{sextant,sextant-dash,sextant-mcp,sextant-dispatch,sextant-violet,sextant-workflow}
+#   bin/{sextant,sextant-dash,sextant-tui,sextant-mcp,sextant-dispatch,sextant-violet,sextant-workflow}
 #   clients/claude-code/   (the plugin: manifest, marketplace, skill, .mcp.json)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -33,12 +33,13 @@ for p in "${platforms[@]}"; do
   declare -A src=(
     [sextant]=sextant
     [sextant-dash]=dash
+    [sextant-tui]=tui
     [sextant-mcp]=mcp
     [sextant-dispatch]=dispatch
     [sextant-violet]=violet
     [sextant-workflow]=workflow
   )
-  for cmd in sextant sextant-dash sextant-mcp sextant-dispatch sextant-violet sextant-workflow; do
+  for cmd in sextant sextant-dash sextant-tui sextant-mcp sextant-dispatch sextant-violet sextant-workflow; do
     CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
       go build -trimpath -ldflags "$ldflags" -o "${out}/bin/${cmd}" "./clients/go/apps/${src[$cmd]}"
   done

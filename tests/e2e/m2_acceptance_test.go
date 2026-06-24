@@ -422,8 +422,14 @@ type bgProc struct {
 }
 
 func (h *harness) startBg(env map[string]string, args ...string) *bgProc {
+	return h.startBgBin(h.bin, env, args...)
+}
+
+// startBgBin is startBg for an arbitrary binary (e.g. the standalone sextant-dash,
+// which serves the web dash now that `sextant dash` no longer does — ADR-0046).
+func (h *harness) startBgBin(bin string, env map[string]string, args ...string) *bgProc {
 	h.t.Helper()
-	cmd := exec.Command(h.bin, args...)
+	cmd := exec.Command(bin, args...)
 	cmd.Env = h.childEnv(env)
 	out, errb := &bgBuffer{}, &bgBuffer{}
 	cmd.Stdout = out

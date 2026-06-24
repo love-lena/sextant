@@ -189,7 +189,20 @@ func startComponent(c components.Component, mgr *components.Manager, store strin
 			return err
 		}
 	}
-	return mgr.Install(os.Stdout, os.Stderr, c.Name, env)
+	if err := mgr.Install(os.Stdout, os.Stderr, c.Name, env); err != nil {
+		return err
+	}
+	// An extra readiness probe for a component whose "up" is more than a live
+	// process (the dash: a serving HTTP listener, AC#2). launchd reporting running
+	// is necessary but not sufficient, so a HealthCheck failure fails the start
+	// loudly — a dash that launched but never served must not report healthy.
+	if c.HealthCheck != nil {
+		if err := c.HealthCheck(); err != nil {
+			return err
+		}
+		fmt.Printf("  %s: serving (health check passed)\n", c.Name)
+	}
+	return nil
 }
 
 // ensureIdentity ensures the component has its own bus creds at
