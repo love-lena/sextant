@@ -1,10 +1,10 @@
 ---
 id: TASK-191
 title: 'Release: ship sextant-dash + sextant-tui via brew; verify live upgrade'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-23 19:58'
-updated_date: '2026-06-23 20:24'
+updated_date: '2026-06-24 01:01'
 labels:
   - feature
   - dash
@@ -36,8 +36,6 @@ The dash epic is not OPERABLE until the new binaries reach the live setup. A new
 - [ ] #5 Cut-over cleanup: any manually-launched dev/ad-hoc dash servers (the `sextant-dash` binary, or a legacy `sextant dash --serve` from before the split — e.g. the dev servers left on :8765/:57869) are stopped so the managed dash component is the SINGLE dash serving on the live setup (no stray servers holding loopback ports)
 <!-- AC:END -->
 
-
-
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
@@ -47,5 +45,5 @@ After feat-dash-managed-component merges: extend release.yml binary set + Homebr
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Discovered in: design session 2026-06-23 (split out of feat-dash-standalone-binary so a release sign-off does not block the AFK build work). Honors the live-sextant-via-release discipline (ship via brew, tags need sign-off). Related: [[feat-dash-standalone-binary]], [[feat-dash-managed-component]].
+Shipped in v0.7.0 (released + verified live 2026-06-23): release.sh + gen-formula.sh + Formula install sextant-tui alongside sextant-dash; brew upgrade landed both; managed dash came up on the released binary and mints the operator session. Tag pushed by Lena; formula PR #253 merged.
 <!-- SECTION:NOTES:END -->
