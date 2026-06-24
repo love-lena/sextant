@@ -531,7 +531,7 @@ type startConsumer struct {
 	stepTimeout  time.Duration
 
 	mu   sync.Mutex
-	seen map[string]bool // request frame ids already handled (dedup across DeliverAll replay)
+	seen map[string]bool // request frame ids already handled (dedup a redelivery on reconnect)
 }
 
 // newStartConsumer builds and subscribes a startConsumer on startSubject.
@@ -541,7 +541,14 @@ func newStartConsumer(ctx context.Context, c *sextant.Client, spawnSubject strin
 		ctx: ctx, c: c, spawnSubject: spawnSubject, stepTimeout: stepTimeout,
 		seen: map[string]bool{},
 	}
-	sub, err := c.Subscribe(ctx, startSubject, sc.handle, sextant.DeliverAll())
+	// New-only delivery (NOT DeliverAll): a workflow.start is a LIVE command, not a
+	// durable queue to replay. DeliverAll re-delivered every historical start on each
+	// (re)start — including stale ones whose step can never complete (e.g. no
+	// dispatcher, so no spawn.ack) — so a restarted listen-mode coordinator re-ran
+	// them, timed out, drained, and was respawned into a crash-loop (TASK-192). A
+	// start published while the coordinator is briefly down is intentionally missed
+	// (the requester re-issues); the seen fence still dedups a redelivery on reconnect.
+	sub, err := c.Subscribe(ctx, startSubject, sc.handle)
 	if err != nil {
 		return nil, nil, fmt.Errorf("subscribe %s: %w", startSubject, err)
 	}
