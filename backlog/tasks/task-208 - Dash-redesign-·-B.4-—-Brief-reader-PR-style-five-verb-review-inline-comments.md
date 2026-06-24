@@ -6,12 +6,13 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-24 01:08'
+updated_date: '2026-06-24 18:17'
 labels:
   - dash-redesign
   - ready-for-agent
   - lane-review
 dependencies:
-  - TASK-192
+  - TASK-220
 references:
   - >-
     https://claude.ai/design/p/a879e5e0-7130-4a48-bc63-c65cfc9502ad?file=Sextant%20-%20UX%20Acceptance%20Criteria.html
@@ -34,4 +35,5 @@ A document brief reviewed like a pull request; the decision is earned at the end
 - [ ] #5 S12.5 rail footer review action: a comment input + verbs Approve, Request revisions, Request answers, Reject, Ignore; a type-specific prompt frames the decision
 - [ ] #6 S12.6 submitting any verdict closes into the review-done consequence (§15 / B.5); rail collapsible to a spine (sextant.rail.collapsed.v1)
 - [ ] #7 S12.7 an Activity section logs the brief's events (pushed/approved/changes) tagged by kind, source ULID, time
+- [ ] #8 Persistence/proof: submitting a verdict publishes a durable review/decision message (verb + comment) on the brief's topic; after reload the brief shows its resolved/closed state, re-read from JetStream — not local state
 <!-- AC:END -->

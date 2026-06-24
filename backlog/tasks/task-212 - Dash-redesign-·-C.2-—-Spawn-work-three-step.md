@@ -4,6 +4,7 @@ title: Dash redesign · C.2 — Spawn work (three-step)
 status: To Do
 assignee: []
 created_date: '2026-06-24 01:08'
+updated_date: '2026-06-24 18:17'
 labels:
   - dash-redesign
   - ready-for-agent
@@ -32,4 +33,5 @@ Instantiating a run: the workflow defines the how, spawning gives it a concrete 
 - [ ] #4 S7.4 a live summary previews what will spawn (Spawns {workflow} on '{task}' -> {goal} - toward {criterion}) plus the new run ULID and whether it runs to completion or pauses at a checkpoint
 - [ ] #5 S7.5 Spawn & watch is disabled until a task objective is entered; spawning creates the run, navigates to its run view, and the run begins walking its steps
 - [ ] #6 Per ADR-0048: the run is sextant.workflow.run/v1 (ULID, ad-hoc => template:null); the goal binding is written as relates:[{goal,crit,kind:"toward"}] on the run, not a bespoke field
+- [ ] #7 Persistence/proof: spawning publishes a sextant.workflow.run/v1 artifact (ULID, template-or-null, relates:[{goal,crit,kind:toward}]) to the bus; after a reload the run appears in Active runs and the run view, re-derived from the bus — not local state
 <!-- AC:END -->

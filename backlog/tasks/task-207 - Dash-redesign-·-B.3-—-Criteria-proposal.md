@@ -4,6 +4,7 @@ title: Dash redesign · B.3 — Criteria proposal
 status: To Do
 assignee: []
 created_date: '2026-06-24 01:08'
+updated_date: '2026-06-24 18:17'
 labels:
   - dash-redesign
   - ready-for-agent
@@ -28,4 +29,5 @@ After a charter is written, a workflow proposes acceptance criteria the operator
 - [ ] #1 S17.1 shows the north star + proposed criteria derived from the charter's how-we'll-know-it's-done section
 - [ ] #2 S17.2 each proposal can be accepted (toggle), edited inline, or dropped; operator can add their own
 - [ ] #3 S17.3 footer count of proposed; Accept all -> goal live creates the goal with accepted criteria and opens it; only then can workflows attach
+- [ ] #4 Persistence/proof: Accept all -> goal live creates a durable goal artifact (with the accepted criteria) on the bus; after reload the goal appears in the portfolio re-read from the bus — not local state
 <!-- AC:END -->

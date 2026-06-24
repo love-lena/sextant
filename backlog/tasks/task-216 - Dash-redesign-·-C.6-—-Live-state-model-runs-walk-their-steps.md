@@ -22,14 +22,16 @@ ordinal: 206000
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
 The behavior that makes it real: runs genuinely walk steps, checkpoints raise briefs, clearing a brief resumes the run. Honors ADR-0048 stop conditions (terminal stopping brief; checkpoint pauses). Parent: EPIC C (task-200). Covers AC §21.
+
+OWNERSHIP: this ticket is the SOLE owner of run/criterion state transitions. Consuming a verdict to resume a run, advancing a criterion to met (via relates:toward, per ADR-0035 + ADR-0048), and moving the goal rollup all live here (+ the coordinator). The review-consequence screen (TASK-209) only displays the result of these transitions; it must not perform them. The brief reader (TASK-208) emits the verdict this model consumes.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [ ] #1 S21.2 a spawned run walks its steps automatically on a timer: work steps complete, append activity, advance
 - [ ] #2 S21.3 at an operator-checkpoint step it pauses, sets itself waiting-on-you, raises a brief (document or quick-decision per step form — note: quick-decision form cut, document only), brief appears in Home + the goal's criterion
-- [ ] #3 S21.4 clearing the checkpoint (Approve/Answers) resumes the run past the checkpoint to in-progress until the next checkpoint or terminal step
-- [ ] #4 S21.5 the terminal step writes the stopping brief, sets the run met, advances its criterion (via relates:toward) to met, adds the run to finished-while-you-were-away
+- [ ] #3 S21.4 consuming the verdict emitted by the brief reader (TASK-208), this model resumes the run past the checkpoint to in-progress until the next checkpoint or terminal step — this model owns the resume; TASK-209 only displays it
+- [ ] #4 S21.5 the terminal step writes the stopping brief, sets the run met, and advances its fed criterion to met via relates:toward (per ADR-0035 + ADR-0048) and moves the goal rollup — this model is the sole writer of that transition — and adds the run to finished-while-you-were-away
 - [ ] #5 S21.6 spawning toward a not-started/blocked criterion moves it to in-progress and (for template runs) records the run in the template's run history
 - [ ] #6 S21.7 all surfaces re-render reactively on store mutation (mode switch, create goal, spawn run, step tick); no manual refresh
 <!-- AC:END -->

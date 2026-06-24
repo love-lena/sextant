@@ -4,6 +4,7 @@ title: Dash redesign · C.5 — Run view (no takeover)
 status: To Do
 assignee: []
 created_date: '2026-06-24 01:08'
+updated_date: '2026-06-24 18:17'
 labels:
   - dash-redesign
   - ready-for-agent
@@ -30,4 +31,5 @@ Watching one live run; watching != being needed. Post-pivot CUT: §11 take-the-k
 - [ ] #3 S10.3 Run timeline: chronological activity log, each entry with status glyph, text, source ULID, time; a ...working... pending line while in-progress
 - [ ] #4 S10.4 Draft artifacts: artifacts the run produced (name, kind, version, status chip); rows open the brief when one exists
 - [ ] #5 S10.5 Run topic: a posting composer to steer the run without taking over; posts append to a visible thread attributed to you
+- [ ] #6 Persistence/proof: a run-topic post publishes a durable message; after reload it appears in the run thread re-read from the bus — not local state
 <!-- AC:END -->

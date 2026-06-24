@@ -11,7 +11,7 @@ labels:
   - ready-for-agent
   - lane-foundation
 dependencies:
-  - TASK-192
+  - TASK-220
 priority: medium
 ordinal: 184000
 ---

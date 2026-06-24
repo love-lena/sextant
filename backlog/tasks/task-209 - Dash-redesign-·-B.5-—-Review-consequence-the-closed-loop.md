@@ -21,13 +21,16 @@ ordinal: 199000
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
 Every verdict produces a clear, honest consequence screen so the operator sees the loop close. Parent: EPIC B (task-199). Covers AC §15.
+
+OWNERSHIP: this is the display layer only. It renders the honest consequence of a verdict and the exact-transition line, and routes the verdict (verb + comment) emitted by the brief reader (TASK-208). The actual state mutation — criterion → met, goal-rollup move, run resume — is owned by the live-state model (TASK-216) + the coordinator. This screen reflects what 216 did; it must never perform the mutation itself.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 S15.1 Approve/Answers on a spawned-run checkpoint: the run continues, resumes remaining steps, ends by writing the stopping brief; returns only at another checkpoint
-- [ ] #2 S15.2 Approve/Answers on a criterion-linked brief: the criterion advances to met, the goal rollup moves, the run resumes; a monospace line states the exact transition
-- [ ] #3 S15.3 Request revisions: run revises and returns to the inbox as a new version; nothing marked met
-- [ ] #4 S15.4 Reject: run drops the direction, criterion does not advance. Ignore: set aside, criterion unchanged
-- [ ] #5 S15.5 when a criterion advanced, offer See-the-goal alongside Back-to-origin; consequence copy must match the verdict and whether a run resumes
+- [ ] #1 S15.1 on Approve/Answers at a spawned-run checkpoint, the screen states the run continues — resumes remaining steps, ends at the stopping brief, returns only at another checkpoint (the resume is performed by TASK-216, not here)
+- [ ] #2 S15.2 on Approve/Answers for a criterion-linked brief, the screen shows the exact transition in a monospace line (e.g. "criterion · waiting-on-you → met") and that the goal rollup moved + the run resumed — reflecting the mutation TASK-216 performed; this screen does not write it
+- [ ] #3 S15.3 Request revisions: the screen states the run revises and returns to the inbox as a new version; nothing is marked met
+- [ ] #4 S15.4 Reject: screen states the run drops the direction, criterion unchanged. Ignore: set aside, criterion unchanged
+- [ ] #5 S15.5 when a criterion advanced, offer See-the-goal alongside Back-to-origin; the consequence copy must accurately match the verdict and whether a run resumes
+- [ ] #6 the verdict the operator submits is emitted once (by TASK-208) and the resulting transition is read back from the bus/live-state; the screen holds no authoritative copy of run or criterion state
 <!-- AC:END -->

@@ -4,12 +4,14 @@ title: Dash redesign · C.1 — Work engine list (Workflows + Active runs)
 status: To Do
 assignee: []
 created_date: '2026-06-24 01:08'
+updated_date: '2026-06-24 18:17'
 labels:
   - dash-redesign
   - ready-for-agent
   - lane-work-engine
 dependencies:
-  - TASK-192
+  - TASK-193
+  - TASK-220
 references:
   - >-
     https://claude.ai/design/p/a879e5e0-7130-4a48-bc63-c65cfc9502ad?file=Sextant%20-%20UX%20Acceptance%20Criteria.html

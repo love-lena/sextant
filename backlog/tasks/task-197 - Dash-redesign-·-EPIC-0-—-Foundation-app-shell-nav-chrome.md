@@ -19,7 +19,7 @@ ordinal: 187000
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-The shell every other lane renders inside. Adopt the design's shell, nav, command palette, floating assistant, status system, and cross-cutting conventions EXACTLY (post-pivot: no personas, no takeover, no quick-decision, [[wikilinks]] in place of reference chips). Build in stages per surface: filler page -> functionality -> full feature. Children: TASK-192 (shell+nav+filler), TASK-194 (no-personas sweep), plus the palette / assistant / status-system slices below.
+The shell every other lane renders inside. Adopt the design's shell, nav, command palette, floating assistant, status system, and cross-cutting conventions EXACTLY (post-pivot: no personas, no takeover, no quick-decision, [[wikilinks]] in place of reference chips). Build in stages per surface: filler page -> functionality -> full feature. Children: TASK-220 (shell+nav+filler), TASK-194 (no-personas sweep), plus the palette / assistant / status-system slices below.
 
 Carries AC sections 0, 1, 2, 20, 22. Per-criterion claims live on the child slices; this epic is the lane's AC home and tracking parent.
 <!-- SECTION:DESCRIPTION:END -->

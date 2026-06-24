@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-24 00:33'
-updated_date: '2026-06-24 01:09'
+updated_date: '2026-06-24 18:17'
 labels:
   - ready-for-agent
   - lane-work-engine
@@ -31,3 +31,14 @@ Implement the approved ADR-0048 contract (PR #249) as a convention over Messages
 - [ ] #4 Active runs listable by $type + live status; a template's run history = runs naming it; ad-hoc run = template:null.
 - [ ] #5 No migration path; sextant.workflow/v1 superseded. Conforms to ADR-0048 + CONTEXT (Run/Workflow/relates toward).
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+GATE: this task IS the code for ADR-0048 — do not start until PR #249 (the ADR + CONTEXT.md language) is merged to main; verify conformance against that canon.
+
+Compact record shapes:
+- sextant.workflow.run/v1 = { id:ULID, status:(not-started|in-progress|waiting|blocked|done), owner:ULID, template:<name>|null, steps:[...], stop:["<prompt>",...], relates:[{goal,crit,kind:(toward|proof|related)}] }
+- sextant.workflow.template/v1 = { name, triggers:[...], steps:[...], stop:["<added prompt>",...] }  // generic; carries NO goal/criterion
+stop = additive/disjunctive plain prompt strings; baseline done+blocked on every run; a template adds non-terminal ones (e.g. plan-review); outcome carried in status. A criterion projects its toward-runs from the artifact side; never written on the criterion side.
+<!-- SECTION:NOTES:END -->

@@ -4,6 +4,7 @@ title: Dash redesign · D.2 — Goal detail
 status: To Do
 assignee: []
 created_date: '2026-06-24 01:08'
+updated_date: '2026-06-24 18:17'
 labels:
   - dash-redesign
   - ready-for-agent
@@ -31,4 +32,5 @@ The goal as a working-backwards document with live criteria and attached work. P
 - [ ] #4 S5.4 per-criterion inline actions: blocked offers +link a workstream (§14 / B.6); waiting/not-started offer +spawn work (§7); an in-progress/blocked run chip offers watch
 - [ ] #5 S5.5 Add criterion: +Add criterion reveals an inline input; Enter adds a not-started criterion (persists for the session, visible to Spawn work), Esc cancels
 - [ ] #6 S5.6 Goal topic: a posting composer to post a message to the goal's topic; posts append to a visible thread attributed to you - just now
+- [ ] #7 Persistence/proof: a goal-topic post publishes a durable message and Add criterion updates the goal artifact; after reload both the thread post and the new criterion are re-derived from the bus
 <!-- AC:END -->

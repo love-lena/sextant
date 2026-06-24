@@ -4,12 +4,13 @@ title: Dash redesign · B.6 — Link a workstream to a criterion
 status: To Do
 assignee: []
 created_date: '2026-06-24 01:08'
+updated_date: '2026-06-24 18:17'
 labels:
   - dash-redesign
   - ready-for-agent
   - lane-review
 dependencies:
-  - TASK-192
+  - TASK-220
 references:
   - >-
     https://claude.ai/design/p/a879e5e0-7130-4a48-bc63-c65cfc9502ad?file=Sextant%20-%20UX%20Acceptance%20Criteria.html
@@ -27,4 +28,5 @@ Attaching existing work to a goal criterion (many-to-many). Parent: EPIC B (task
 <!-- AC:BEGIN -->
 - [ ] #1 S14.1 two-column flow: target criterion left, candidate existing runs/workflows right; linking is many-to-many (one workstream can feed several criteria)
 - [ ] #2 S14.2 candidate rows toggle +link <-> ✓linked on click; a build-a-workflow-for-this affordance opens the builder
+- [ ] #3 Persistence/proof: linking writes the relation durably on the artifact side (relates); after reload the criterion shows its linked workstream(s) re-derived from the bus
 <!-- AC:END -->

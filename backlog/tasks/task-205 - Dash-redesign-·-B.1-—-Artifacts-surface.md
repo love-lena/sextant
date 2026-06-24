@@ -9,7 +9,7 @@ labels:
   - ready-for-agent
   - lane-review
 dependencies:
-  - TASK-192
+  - TASK-220
 references:
   - >-
     https://claude.ai/design/p/a879e5e0-7130-4a48-bc63-c65cfc9502ad?file=Sextant%20-%20UX%20Acceptance%20Criteria.html

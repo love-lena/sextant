@@ -9,7 +9,7 @@ labels:
   - ready-for-agent
   - lane-bus
 dependencies:
-  - TASK-192
+  - TASK-220
 priority: medium
 ordinal: 185000
 ---
