@@ -150,12 +150,27 @@ bus one — the bus-side concept is the *topic*.
 _Avoid_: using "channel" for anything bus-side
 
 **Workflow**:
-A multi-step collaboration, driven by a coordinator client.
+A reusable, generic multi-step process — a `WORKFLOW.md` template of trigger and
+steps (ADR-0048), driven by a coordinator client. Carries no goal or criterion of
+its own; the binding is made when a **run** is spawned. One workflow, many runs.
 _Avoid_: pipeline, job, DAG (shapes a workflow may take, not the thing itself);
-using "workflow" loosely for any scenario — that is a *use case*, not a Workflow
+using "workflow" loosely for any scenario — that is a *use case*, not a Workflow;
+conflating a workflow (the reusable template) with a **run** (one instance)
+
+**Run**:
+One live instance of work (ADR-0048) — a ULID with steps, the criteria it works
+**toward**, and its **stop conditions** — held as the `sextant.workflow.run/v1`
+state artifact. It comes from a **workflow** template or is **ad-hoc** (a one-off
+mobilize, `template: null`); either way it is what the operator watches.
+Discoverable as a typed artifact with a live status; identified by ULID + what it
+does, never a persona. Its stop conditions are an additive, disjunctive set of
+prompts — meet any one, at least one required — so a run never halts without
+posting the brief that justifies it.
+_Avoid_: job, task, session; conflating a run (one instance) with the **workflow**
+(the reusable template)
 
 **Coordinator**:
-The client that drives a workflow's steps and records its progress.
+The client that drives a **run**'s steps and records its progress.
 _Avoid_: orchestrator, manager, controller
 
 **Dispatcher**:
@@ -183,8 +198,9 @@ _Avoid_: acceptance test, requirement, subtask
 **`relates` (artifact convention)**:
 An optional field a **record** may carry to associate an **artifact** with a
 **goal** or **criterion**: `relates: [{goal, crit?, kind}]`, where `kind` is
-`proof` (evidence backing a met criterion) or `related` (default; a generic
-association). A criterion's proof/related sets are **projected** from these
+`proof` (evidence backing a met criterion), `related` (default; a generic
+association), or `toward` (a **run** working toward a criterion; ADR-0048). A
+criterion's proof/related/toward sets are **projected** from these
 declarations — read from the artifact side, never written onto the criterion.
 Content-opaque to the core; a convention, not a schema change.
 _Avoid_: link, dependency, parent/child
@@ -251,13 +267,14 @@ _Avoid_: kill (reserve that for forcing a process from the outside)
 - A **bus** carries many **clients'** **messages** and holds their **artifacts**.
 - A **client** publishes and subscribes to **messages**, and reads and writes
   **artifacts**.
-- A **workflow** is run by a **coordinator**; a **dispatcher** spawns new
-  **clients**. Both coordinator and dispatcher are just clients.
+- A **run** is one instance of a **workflow** (or ad-hoc), driven by a
+  **coordinator**; a **dispatcher** spawns new **clients**. Both coordinator and
+  dispatcher are just clients.
 - A **goal** holds its **criteria**; its status is derived from their rollup. An
-  **artifact** declares (via `relates`) which goal/criterion it backs as **proof**
-  or is generically **related** to; a **workflow** is one in-flight "how" toward a
-  criterion. Movement is signalled on the `goal.update` stream — it reports, it
-  never directs a **client**.
+  **artifact** declares (via `relates`) which goal/criterion it backs as **proof**,
+  is generically **related** to, or works **toward**; a **run** is one in-flight
+  "how" toward a criterion. Movement is signalled on the `goal.update` stream — it
+  reports, it never directs a **client**.
 - The **clients registry** lists every issued client; **presence** is its liveness
   view — who is alive right now, derived at read time from the bus's live
   connection table OR a fresh client **heartbeat** (`last_seen`), so a client
