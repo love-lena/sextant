@@ -2,6 +2,7 @@ package components
 
 import (
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -35,7 +36,7 @@ func TestGenPlistIsWellFormedXML(t *testing.T) {
 	dec := xml.NewDecoder(strings.NewReader(out))
 	for {
 		_, err := dec.Token()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
