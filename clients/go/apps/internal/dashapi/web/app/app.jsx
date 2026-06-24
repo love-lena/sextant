@@ -196,8 +196,66 @@
     return rec.$type || "·";
   }
 
+  // ---- data-mode (TASK-204, S1.9/S21.1) ----
+  // The dash reads LIVE data off the bus. The data-mode toggle lets a reviewer
+  // see the surfaces populated without a seeded bus: "snapshot" overlays a small
+  // synthetic demo dataset onto any view the live bus leaves EMPTY (so real data
+  // always wins — the snapshot only fills gaps); "blank" shows the workspace as-is
+  // (empty when the bus is empty — the genuine first-run state). The choice
+  // persists under the design's stable key sextant.synth.datamode.v1.
+  const DATAMODE_KEY = "sextant.synth.datamode.v1";
+  function loadDataMode() { try { const v = localStorage.getItem(DATAMODE_KEY); return v === "blank" ? "blank" : "snapshot"; } catch (_) { return "snapshot"; } }
+  function saveDataMode(m) { try { localStorage.setItem(DATAMODE_KEY, m); } catch (_) {} }
+  window.SxDataMode = { get: loadDataMode, set: saveDataMode, KEY: DATAMODE_KEY };
+
+  // SNAPSHOT — the seeded demo dataset, in the SAME shapes the derived views read
+  // (goalViews / artItems / agents). Every status word is a canonical SxStatus key
+  // so the seeded surfaces exercise the status system end to end. Names are chosen
+  // so the assistant's [[wikilinks]] resolve against them.
+  const SNAPSHOT = {
+    goals: [
+      { id: "ship-dash-redesign", name: "Ship the dash redesign", revision: 4, review: "review",
+        northstar: "The operator-facing dash is the calm, legible cockpit the design promises — live on Lena's bus.",
+        criteria: [
+          { id: "c1", text: "Command palette jumps to any goal, run or artifact", status: "met", evidence: [{ name: "UX Acceptance Criteria", kind: "proof" }] },
+          { id: "c2", text: "Floating assistant answers \"what's waiting on me?\"", status: "in-progress", evidence: [] },
+          { id: "c3", text: "One canonical status colour + glyph everywhere", status: "met", evidence: [] },
+          { id: "c4", text: "Lena signs off the redesign branch", status: "waiting-on-you", evidence: [] },
+        ] },
+      { id: "leaf-nodes", name: "Distributed leaf nodes", revision: 2, review: "",
+        northstar: "Agents on a remote box collaborate over the same bus as if local.",
+        criteria: [
+          { id: "c1", text: "Leaf tunnel survives a bus restart", status: "met", evidence: [] },
+          { id: "c2", text: "Owner-only artifacts replicate to leaves", status: "in-progress", evidence: [] },
+          { id: "c3", text: "Heartbeat liveness across the link", status: "blocked", evidence: [] },
+        ] },
+      { id: "onboard-helm", name: "Onboard the helm assistant", revision: 1, review: "",
+        northstar: "A first-mate assistant curates the operator's attention without managing it.",
+        criteria: [
+          { id: "c1", text: "Helm 1:1 carries headlines only", status: "not-started", evidence: [] },
+          { id: "c2", text: "Curation defends the inbox", status: "not-started", evidence: [] },
+        ] },
+    ],
+    artifacts: [
+      { name: "UX Acceptance Criteria", version: 7, status: "review", topic: "", type: "markdown", id: "UX Acceptance Criteria", author: { name: "", kind: "agent" }, updated: "2h" },
+      { name: "ADR-0046 web-dash-managed-component", version: 3, status: "approved", topic: "", type: "markdown", id: "ADR-0046 web-dash-managed-component", author: { name: "", kind: "agent" }, updated: "1d" },
+      { name: "Foundation lane brief", version: 2, status: "changes", topic: "", type: "markdown", id: "Foundation lane brief", author: { name: "", kind: "agent" }, updated: "4h" },
+      { name: "Run record contract (ADR-0048)", version: 1, status: "draft", topic: "", type: "markdown", id: "Run record contract (ADR-0048)", author: { name: "", kind: "agent" }, updated: "6h" },
+    ],
+    agents: [
+      { id: "01J-foundation", name: "foundation-builder", state: "working", headline: "Wiring the command palette index", meta: "Wiring the command palette index" },
+      { id: "01J-leaf", name: "leaf-runner", state: "waiting-for-human", headline: "Needs your sign-off on the heartbeat ADR", meta: "Needs your sign-off on the heartbeat ADR" },
+      { id: "01J-helm", name: "helm-curator", state: "idle", headline: "", meta: "agent · online" },
+    ],
+  };
+
   function App() {
     const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+    // data-mode lives in App state so the Tweaks toggle re-renders the views; it
+    // mirrors localStorage (the canonical persisted key) on every change.
+    const [dataMode, setDataMode] = useState(loadDataMode);
+    useEffect(() => { saveDataMode(dataMode); }, [dataMode]);
+    const snapshotOn = dataMode === "snapshot";
 
     const [self, setSelf] = useState({ id:"", display_name:"", principal:"" });
     const [clients, setClients] = useState([]);          // raw ClientInfo[]
@@ -242,6 +300,11 @@
     // a dedicated composer buffer for the FAB's violet DM, so it never collides
     // with the main stage `draft` (the operator can be mid-typing in a thread).
     const [asstDraft, setAsstDraft] = useState("");
+    // the LOCAL assistant thread (TASK-203): when no live bus assistant is present,
+    // the FAB is a de-named "always here" helper that answers from the dash's own
+    // loaded data (window.SxAssistant) — each user line gets a local reply with
+    // [[wikilinks]] woven in. Distinct from the violet DM thread above.
+    const [asstLocalMsgs, setAsstLocalMsgs] = useState([]);
     const [draft, setDraft] = useState("");
     const [hidden, setHidden] = useState(()=>{ try{ return new Set(JSON.parse(localStorage.getItem("sx-hidden-convos")||"[]")); }catch(_){ return new Set(); } });
 
@@ -707,6 +770,35 @@
       const body=(text||"").trim(); if(!body || !violet || !self.id) return;
       apiPublish(dmSubject(self.id, violet.id),{ "$type":"chat.message", text:body }).then(()=>{ setAsstDraft(""); setAsstPrompt(""); }).catch(()=>{});
     }
+    // LOCAL answering (TASK-203): append the operator's line, compute a local
+    // answer from the dash's loaded data (snapshot overlay included so the helper
+    // is useful on a fresh bus), and append it. The answer text carries [[wikilinks]]
+    // that the FAB's MessageList renders as clickable nav (resolved against the
+    // assistant's known-link allow-list). No bus round-trip, no model — a helper.
+    function sendLocalAssistant(text){
+      const body=(text||"").trim(); if(!body) return;
+      const data = { goals: goalsShown, artifacts: artsShown, agents: agentsShown };
+      const ans = (window.SxAssistant ? window.SxAssistant.answer(body, data) : { text: "" });
+      const now = relMs(Date.now());
+      setAsstLocalMsgs(prev=>[
+        ...prev,
+        { id:"u"+Date.now(), kind:"msg", author:"you", role:"human", self:true, time:now, text:body },
+        { id:"a"+Date.now(), kind:"msg", author:"Assistant", role:"agent", self:false, time:now, text:ans.text },
+      ]);
+      setAsstDraft(""); setAsstPrompt("");
+    }
+    // Resolve a [[wikilink]] clicked inside an ASSISTANT answer: a surface label
+    // navigates the nav; a goal name / goal.<id> opens that goal; anything else is
+    // an artifact open. Mirrors renderWiki's routing for the HTML-rendered path.
+    const SURFACE_NAV = { "Home":"home", "Goals":"goals", "Work engine":"workengine", "Artifacts":"artifacts", "Bus":"bus" };
+    function onAssistantRef(name){
+      if(!name) return;
+      if(SURFACE_NAV[name]){ onNav(SURFACE_NAV[name]); return; }
+      if(name.indexOf("goal.")===0){ onNav("goals", name.slice(5)); return; }
+      const g = (goalsShown||[]).find(x=>x.name===name);
+      if(g){ onNav("goals", g.id); return; }
+      openArtifact(name);
+    }
     // Workspace nav (flow2 chrome): Home / Artifacts / Goals / Agents swap the
     // white stage.
     // onNav(key[, arg]): swap the stage. For "goals", an optional arg is a goal id
@@ -860,38 +952,71 @@
     // review-pending artifacts; the Goals badge counts goals awaiting the operator's
     // sign-off (TASK-157). Kept separate so each badge reflects what that view holds
     // (a review goal lives under Goals, not in the Artifacts list).
-    const reviewCount = artItems.filter(a=>a.status==="review").length;
-    const goalReviewCount = goalViews.filter(g=>g.review==="review").length;
-    const workingCount = agents.filter(a=>a.state==="working").length;
+    // data-mode overlay (TASK-204): in snapshot mode, fill any view the LIVE bus
+    // leaves empty with the seeded demo data — real data always wins, the snapshot
+    // only ever fills a gap. In blank mode the live (possibly empty) arrays pass
+    // through untouched, so a blank-slate workspace reads as genuinely empty.
+    const goalsShown = useMemo(()=>(snapshotOn && goalViews.length===0) ? SNAPSHOT.goals : goalViews, [snapshotOn, goalViews]);
+    const artsShown  = useMemo(()=>(snapshotOn && artItems.length===0)  ? SNAPSHOT.artifacts : artItems, [snapshotOn, artItems]);
+    const agentsShown = useMemo(()=>(snapshotOn && agents.length===0)   ? SNAPSHOT.agents : agents, [snapshotOn, agents]);
+
+    const reviewCount = artsShown.filter(a=>a.status==="review").length;
+    const goalReviewCount = goalsShown.filter(g=>g.review==="review").length;
+    const workingCount = agentsShown.filter(a=>a.state==="working").length;
 
     const ctx = {
       conversations:convList, activeConvo, stageMode, onOpenConvo:openConvo, onExpandConvo:expandConvo,
       messages, draft, setDraft, onSend:send, onArtifactRef:openArtifact,
-      artifacts:artItems, activeArtifact, onOpenArtifact:openArtifact,
-      goals:goalViews, agents, activity:homeActivity, self, onGoHome:goHome, home, onDM:startDM,
+      artifacts:artsShown, activeArtifact, onOpenArtifact:openArtifact,
+      goals:goalsShown, agents:agentsShown, activity:homeActivity, self, onGoHome:goHome, home, onDM:startDM,
       hidden, onHide:hideConvo, onUnhide:unhideConvo,
       onNav, onSearch:()=>setPalette(true), reviewCount, goalReviewCount, workingCount,
     };
 
-    // ⌘K search index — only what's already loaded (artifacts, agents, conversation
-    // subjects). Selecting a result opens it via the existing handlers; the
-    // artifact `go` uses openArtifact (which fetches by name), so it resolves even
-    // for a name not in the cached list.
+    // ⌘K search index — type-tagged rows (TASK-202 S2.2): Actions · Goals ·
+    // Workflows · Runs · Artifacts · Surfaces (+ Agents / Channels). Built over
+    // what's already loaded (with the data-mode snapshot overlay), so selecting a
+    // result opens it via the existing handlers; the artifact `go` uses
+    // openArtifact (which fetches by name) so it resolves even for an uncached name.
     const searchIndex = ()=>{
       const items=[];
-      // "Go to" — the four Workspace nav hubs as jump targets (same as clicking
-      // the sidebar nav). Listed first so a name-clash still surfaces the hub.
-      [["Home","home"],["Goals","goals"],["Work engine","workengine"],["Artifacts","artifacts"],["Bus","bus"],["Agents","agents"],["Workflow","workflow"]]
-        .forEach(([label,key])=>items.push({ key:"nav:"+key, type:"Go to", label,
-          sub:"workspace", kw:("go to "+label+" "+key).toLowerCase(), go:()=>onNav(key) }));
-      artItems.forEach(a=>items.push({ key:"art:"+a.name, type:"Artifact", label:a.name,
+      // ACTIONS — start something. "New doc/workflow/goal" land you on the surface
+      // where that thing is created (the dash has no inline-create primitive yet).
+      items.push({ key:"act:new-doc", type:"Action", label:"New doc", sub:"open Artifacts", kw:"new doc document artifact create action", go:()=>onNav("artifacts") });
+      items.push({ key:"act:new-workflow", type:"Action", label:"New workflow", sub:"open the Work engine", kw:"new workflow run dispatch action", go:()=>onNav("workengine") });
+      items.push({ key:"act:new-goal", type:"Action", label:"New goal", sub:"open Goals", kw:"new goal objective north star criteria action", go:()=>onNav("goals") });
+      // GOALS — every goal as a jump target (deep-links into its detail).
+      goalsShown.forEach(g=>items.push({ key:"goal:"+g.id, type:"Goal", label:g.name,
+        sub:(g.northstar||"goal"), kw:(g.name+" "+(g.northstar||"")+" goal").toLowerCase(),
+        go:()=>onNav("goals", g.id) }));
+      // WORKFLOWS + RUNS — derived from the loaded artifact records. A workflow.<id>
+      // record is a workflow; its run-state (status/done/total) makes it a Run row.
+      // Absent backing data (no such records) → these simply contribute nothing.
+      Object.keys(records).forEach(name=>{
+        if(name.startsWith("workflow.")){
+          const rec=records[name]||{}; const id=name.slice("workflow.".length);
+          items.push({ key:"wf:"+name, type:"Workflow", label:(rec.title||id),
+            sub:"workflow", kw:(name+" "+(rec.title||"")+" workflow").toLowerCase(),
+            go:()=>onNav("workengine") });
+          const st=rec.status||rec.state; const total=rec.total, done=rec.done;
+          if(st || total!=null) items.push({ key:"run:"+name, type:"Run", label:(rec.title||id),
+            sub:(st?st:"run")+(total!=null?(" · "+(done||0)+"/"+total):""),
+            kw:(name+" "+(st||"")+" run").toLowerCase(), go:()=>onNav("workengine") });
+        }
+      });
+      // ARTIFACTS
+      artsShown.forEach(a=>items.push({ key:"art:"+a.name, type:"Artifact", label:a.name,
         sub:(a.updated?("updated "+a.updated+" ago"):"")+(a.status?(" · "+a.status):""),
         kw:(a.name+" "+a.status).toLowerCase(), go:()=>openArtifact(a.name) }));
+      // SURFACES — the workspace nav hubs as jump targets (same as clicking nav).
+      [["Home","home"],["Goals","goals"],["Work engine","workengine"],["Artifacts","artifacts"],["Bus","bus"],["Agents","agents"],["Workflow","workflow"]]
+        .forEach(([label,key])=>items.push({ key:"nav:"+key, type:"Surface", label,
+          sub:"workspace", kw:("go to surface "+label+" "+key).toLowerCase(), go:()=>onNav(key) }));
       // Agent rows keep a distinct "agent:<id>" key (a DM subject can also surface
       // as a Channel row, so reusing "conv:<subject>" would collide). startDM
       // records recency under the conversation; we ALSO touch the agent key here
       // so the Agent row itself accumulates recency and ranks up over time.
-      agents.forEach(a=>items.push({ key:"agent:"+a.id, type:"Agent", label:a.name, sub:a.meta,
+      agentsShown.forEach(a=>items.push({ key:"agent:"+a.id, type:"Agent", label:a.name, sub:a.meta,
         kw:(a.name+" "+(a.headline||"")+" "+a.state).toLowerCase(),
         go:()=>{ if(a.id){ touchRecent("agent:"+a.id); startDM(a.id); } else onNav("agents"); } }));
       convList.forEach(c=>items.push({ key:"conv:"+c.key, type:"Channel",
@@ -981,11 +1106,11 @@
             </div>
           ) : stageMode==="artifacts" ? (
             <div className="sx-canvas sx-canvas--list">
-              <div className="sx-page sx-page--doc"><ArtifactsView artifacts={artItems} activeArtifact={activeArtifact} onOpenArtifact={openArtifact} onDM={startDM} /></div>
+              <div className="sx-page sx-page--doc"><ArtifactsView artifacts={artsShown} activeArtifact={activeArtifact} onOpenArtifact={openArtifact} onDM={startDM} /></div>
             </div>
           ) : stageMode==="goals" ? (
             <div className="sx-canvas sx-canvas--list">
-              <div className="sx-page sx-page--doc"><GoalsView key={goalsEpoch} goals={goalViews} initialGoalId={goalsOpenId} onOpenArtifact={openArtifact} onSetReview={setReview} onDM={startDM} renderWiki={renderWiki} /></div>
+              <div className="sx-page sx-page--doc"><GoalsView key={goalsEpoch} goals={goalsShown} initialGoalId={goalsOpenId} onOpenArtifact={openArtifact} onSetReview={setReview} onDM={startDM} renderWiki={renderWiki} /></div>
             </div>
           ) : stageMode==="workengine" ? (
             <div className="sx-canvas sx-canvas--list">
@@ -1021,7 +1146,7 @@
             </div>
           ) : stageMode==="agents" ? (
             <div className="sx-canvas sx-canvas--list">
-              <div className="sx-page sx-page--doc"><AgentsView agents={agents} onDM={startDM} /></div>
+              <div className="sx-page sx-page--doc"><AgentsView agents={agentsShown} onDM={startDM} /></div>
             </div>
           ) : stageMode==="workflow" ? (
             <div className="sx-canvas sx-canvas--list">
@@ -1134,10 +1259,11 @@
 
         <AssistantFab open={asstOpen} prompt={asstPrompt}
           assistant={violet} online={violetOnline}
-          messages={assistantMessages} self={self}
+          messages={violet ? assistantMessages : asstLocalMsgs} self={self}
           draft={asstDraft} setDraft={setAsstDraft}
-          onSend={sendToAssistant} onArtifactRef={openArtifact}
-          artifactNames={artifacts.map(a=>a.Name)}
+          onSend={violet ? sendToAssistant : sendLocalAssistant}
+          onArtifactRef={violet ? openArtifact : onAssistantRef}
+          artifactNames={(window.SxAssistant ? window.SxAssistant.knownLinks({ goals:goalsShown, artifacts:artsShown }) : artifacts.map(a=>a.Name))}
           onOpen={()=>{ setAsstPrompt(""); setAsstDraft(""); setAsstOpen(true); }}
           onClose={()=>{ setAsstOpen(false); setAsstPrompt(""); }} />
         {palette && <CmdK index={searchIndex()} recents={recents} assistantLive={!!violet} onClose={()=>setPalette(false)} onAsk={askAssistant} />}
@@ -1152,6 +1278,22 @@
           <TweakRadio label="Navigation" value={t.sideNav} options={["sections","tabs"]} onChange={v=>setTweak("sideNav",v)} />
           <TweakSection label="Motion" />
           <TweakToggle label="Live pulse" value={t.livePulse} onChange={v=>setTweak("livePulse",v)} />
+          {/* Data mode (TASK-204, S1.9/S21.1): Snapshot overlays seeded demo data on
+              any view the live bus leaves empty; Blank slate shows the workspace
+              as-is. Persisted under sextant.synth.datamode.v1. */}
+          <TweakSection label="Data" />
+          <TweakRadio label="State" value={dataMode}
+            options={[{value:"snapshot",label:"Snapshot"},{value:"blank",label:"Blank slate"}]}
+            onChange={v=>setDataMode(v)} />
+          {dataMode==="blank" && (
+            <TweakButton label="Reset to empty" secondary onClick={()=>{
+              // clear the locally-held demo/session state so a blank slate is truly
+              // empty (the live bus data is read-only here and isn't touched).
+              setAsstLocalMsgs([]); setActivity([]);
+              try{ localStorage.removeItem(RECENTS_KEY); }catch(_){}
+              setRecents({});
+            }} />
+          )}
         </TweaksPanel>
       </div>
     );

@@ -12,18 +12,19 @@
   const { useState } = React;
   const { Avatar, MobilizeButton } = window;
 
-  // STATUS — keyed on the goal lexicon (ADR-0035): met / in-progress /
-  // waiting-on-you / blocked / not-started. Tone classes are the live status
-  // chips (--met/--prog/--wait/--blk/--todo). The design's keys
-  // (met/progress/waiting/blocked/todo) map onto these.
-  const STATUS = {
-    "met":            { label: "Met",            glyph: "✓", tone: "t-met" },
-    "in-progress":    { label: "In progress",    glyph: "◐", tone: "t-progress" },
-    "waiting-on-you": { label: "Waiting on you",  glyph: "●", tone: "t-waiting" },
-    "blocked":        { label: "Blocked",        glyph: "⊘", tone: "t-blocked" },
-    "not-started":    { label: "Not started",    glyph: "○", tone: "t-todo" },
-  };
-  function stat(s) { return STATUS[s] || STATUS["not-started"]; }
+  // stat(s) — the goal lexicon (ADR-0035): met / in-progress / waiting-on-you /
+  // blocked / not-started. The glyph + label come from the ONE canonical status
+  // helper (window.SxStatus, TASK-204) so this view can't drift from the rest of
+  // the dash; the `tone` class is the local CSS chip tint (--met/--prog/…).
+  const TONE = { "met": "t-met", "in-progress": "t-progress", "waiting-on-you": "t-waiting", "blocked": "t-blocked", "not-started": "t-todo" };
+  function stat(s) {
+    const m = (window.SxStatus ? window.SxStatus.meta(s) : { glyph: "○", label: "Not started" });
+    // canonicalise to the lexicon key for the tone lookup
+    const key = (window.SxStatus && TONE[s]) ? s
+      : (m.label === "Met" ? "met" : m.label === "In progress" ? "in-progress"
+        : m.label === "Waiting on you" ? "waiting-on-you" : m.label === "Blocked" ? "blocked" : "not-started");
+    return { label: m.label, glyph: m.glyph, tone: TONE[key] || "t-todo" };
+  }
 
   // roll(g): the criteria rollup → verdict + tone. Goal status is derived, never
   // stored. No northstar OR no criteria ⇒ undefined; flagged review.state="review"

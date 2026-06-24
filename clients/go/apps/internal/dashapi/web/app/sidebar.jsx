@@ -208,6 +208,9 @@
                   <span className="fx-row-meta">{task}</span>
                 </span>
                 <span className="fx-row-right">
+                  {/* canonical status glyph (TASK-204, window.SxStatus) — the agent
+                      state folds onto one of the five statuses via the helper's aliases. */}
+                  {window.StatusGlyph && <window.StatusGlyph status={a.state} title={s.label} />}
                   <span className={"fx-pulse" + (s.live ? " is-live" : "")} style={{ background: s.c }} />
                   <span className="fx-crit-status" style={{ color: s.c }}>{s.label}</span>
                 </span>
@@ -252,7 +255,7 @@
     }, [open, live, messages && messages.length]);
 
     if (!open) return (
-      <button className="fx-asst-btn" title={live ? ("Ask " + name) : "Assistant (not live yet)"} onClick={doOpen}>
+      <button className="fx-asst-btn" title={live ? ("Ask " + name) : "Assistant · always here"} onClick={doOpen}>
         <span className="fx-asst-spark" style={accent ? { color: accent } : undefined}>✦</span>
       </button>);
 
@@ -284,28 +287,30 @@
         </div>);
     }
 
-    // ABSENT → the calm "not live yet" stub. The carried ⌘K query is shown but
-    // never answered (there's no assistant to answer it); the composer is disabled.
+    // ABSENT (no live bus assistant) → the DE-NAMED local helper (TASK-203).
+    // "Assistant · always here": a chat panel that answers from the dash's own
+    // loaded data (goals/artifacts/agents) — never a person, never an agent on the
+    // bus. Each answer may embed [[wikilinks]] that navigate on click (resolved via
+    // onArtifactRef + artifactNames). The composer is LIVE (zero-arg onSend forwards
+    // the current draft) — it computes a local answer, it doesn't publish.
+    const localMsgs = messages || [];
     return (
-      <div className="fx-asst-panel" role="dialog" aria-label="Assistant">
+      <div className="fx-asst-panel is-live sx-conv-light" role="dialog" aria-label="Assistant">
         <div className="fx-asst-head">
           <span className="fx-asst-mark">✦</span>
-          <div><div className="fx-asst-title">Assistant</div><div className="fx-asst-sub">not live yet</div></div>
+          <div>
+            <div className="fx-asst-title">Assistant</div>
+            <div className="fx-asst-sub">always here</div>
+          </div>
           <button className="fx-asst-close" onClick={doClose} aria-label="Close">×</button>
         </div>
-        {prompt
-          ? <div className="fx-asst-msg you"><span className="fx-asst-bub">{prompt}</span></div>
-          : null}
-        <div className="fx-asst-stub">
-          <p className="fx-asst-stub-lead">violet isn't live yet.</p>
-          <p className="fx-asst-stub-body">{prompt
-            ? "Your question is parked here — violet will be able to answer once it's live."
-            : "Once violet is live, this is where you ask it about your goals, artifacts, and the bus."}</p>
+        <div className="fx-asst-thread" ref={bodyRef}>
+          {localMsgs.length === 0 && (
+            <p className="fx-asst-empty">Ask me about your goals, what's waiting on you, or where a workstream stands — I read your workspace. Try “what's waiting on me?”</p>
+          )}
+          <window.MessageList messages={localMsgs} onArtifactRef={onArtifactRef} artifactNames={artifactNames} />
         </div>
-        <div className="fx-asst-composer">
-          <span className="fx-asst-field">{prompt || "Ask a quick question…"} (disabled)</span>
-          <button className="fx-asst-send" disabled>↑</button>
-        </div>
+        <window.Composer draft={draft || ""} setDraft={setDraft} onSend={() => onSend && onSend(draft)} placeholder="Ask a quick question…" />
       </div>);
   }
 
@@ -389,8 +394,8 @@
     // absent the question is parked in the FAB's "not live yet" panel.
     const askRow = (onAsk && ql && matches.length === 0)
       ? (assistantLive
-          ? { key: "ask", type: "Ask", label: "Ask violet: “" + q.trim() + "”", sub: "opens a DM with violet", go: () => onAsk(q.trim()) }
-          : { key: "ask", type: "Ask", label: "Ask the assistant: “" + q.trim() + "”", sub: "not live yet — your question gets parked", go: () => onAsk(q.trim()) })
+          ? { key: "ask", type: "Ask", label: "Ask " + (assistantLive === true ? "the assistant" : assistantLive) + ": “" + q.trim() + "”", sub: "opens a DM", go: () => onAsk(q.trim()) }
+          : { key: "ask", type: "Ask", label: "Ask the assistant: “" + q.trim() + "”", sub: "answers from your workspace", go: () => onAsk(q.trim()) })
       : null;
     const results = askRow ? [askRow] : matches;
     useEffect(() => { setSel(0); }, [q]);
@@ -401,7 +406,7 @@
       else if (e.key === "Enter") { e.preventDefault(); pick(results[sel]); }
       else if (e.key === "Escape") { e.preventDefault(); onClose(); }
     };
-    const TYPEC = { "Go to": "#5b6ef0", Artifact: "#c0573b", Agent: "#3f8f59", Channel: "#8a8e97", Ask: "#5b6ef0" };
+    const TYPEC = { "Go to": "#5b6ef0", Surface: "#5b6ef0", Action: "#7c6df0", Goal: "#3a82c4", Workflow: "#b9842a", Run: "#b9842a", Artifact: "#c0573b", Agent: "#3f8f59", Channel: "#8a8e97", Ask: "#5b6ef0" };
     return (
       <div className="fx-cmdk-scrim" onClick={onClose}>
         <div className="fx-cmdk" onClick={(e) => e.stopPropagation()}>

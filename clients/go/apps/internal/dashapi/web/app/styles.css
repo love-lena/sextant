@@ -669,6 +669,16 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 .t-blocked{color:var(--blk);background:rgba(185,132,42,.14);}
 .t-todo{color:var(--todo);background:rgba(120,124,132,.10);}
 
+/* ---- canonical status system (TASK-204, window.SxStatus) ----
+   One colour + one glyph per status, rendered by StatusGlyph / StatusDot /
+   StatusChip. The colour comes inline from the helper (the single source of
+   truth); these rules are layout-only so the colour can't drift. */
+.sx-stg{display:inline-flex;align-items:center;justify-content:center;line-height:1;font-size:12px;font-weight:600;}
+.sx-std{display:inline-block;border-radius:50%;flex:0 0 auto;}
+.sx-stchip{display:inline-flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:9.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;padding:3px 9px;border-radius:20px;white-space:nowrap;border:1px solid transparent;flex:0 0 auto;}
+.sx-stchip.is-big{font-size:11px;padding:5px 12px;}
+.sx-stchip-g{font-size:11px;line-height:1;}
+
 /* ---- list-rows (Artifacts + Agents rosters) ---- */
 .fx-list{display:flex;flex-direction:column;}
 .fx-row{display:flex;align-items:center;gap:13px;width:100%;text-align:left;background:none;border:none;border-top:1px solid var(--fx-line);padding:14px 6px;cursor:pointer;color:var(--ink);}
