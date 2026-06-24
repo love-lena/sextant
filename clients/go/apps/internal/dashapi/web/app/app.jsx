@@ -146,6 +146,30 @@
       await busReady;
       return SB.setCriterion(BUS, { goalId, criterionId, status, headline: headline || ("set "+criterionId), by: BUS.id() }, new Date().toISOString());
     },
+    // addCriterion appends a not-started criterion to goal.<goalId> via the same
+    // read-merge-CAS shape setCriterion uses (no convention verb for add, so we
+    // edit the record directly): read the goal, push {id,text,status:"not-started"},
+    // CAS at the read revision, then announce a goal.update on msg.topic.goals so
+    // followers (the home/goals projection) re-derive. Returns the new criterion id.
+    addCriterion: async (goalId, text) => {
+      await busReady;
+      const name = "goal." + goalId;
+      const art = await BUS.getArtifact(name);
+      const rec = (art && art.record) || {};
+      const crits = Array.isArray(rec.criteria) ? rec.criteria.slice() : [];
+      const cid = "c-" + Math.random().toString(36).slice(2, 8);
+      crits.push({ id: cid, text: String(text || "").trim(), status: "not-started" });
+      const merged = Object.assign({}, rec, { criteria: crits, updated: new Date().toISOString(), by: BUS.id() });
+      await BUS.updateArtifact(name, merged, art.revision);
+      try { await BUS.publish("msg.topic.goals", { "$type": "goal.update", goal: goalId, headline: "added a criterion", by: BUS.id() }); } catch (e) {}
+      return cid;
+    },
+    // postToGoalTopic publishes a plain operator message to a goal's companion
+    // topic (msg.topic.goals.<id>), the durable thread the goal detail renders.
+    postToGoalTopic: async (goalId, text) => {
+      await busReady;
+      return BUS.publish("msg.topic.goals." + goalId, { "$type": "note", text: String(text || ""), by: BUS.id() });
+    },
   };
 
   // The review convention (TASK-66): states + the per-artifact companion topic.
@@ -985,7 +1009,7 @@
             </div>
           ) : stageMode==="goals" ? (
             <div className="sx-canvas sx-canvas--list">
-              <div className="sx-page sx-page--doc"><GoalsView key={goalsEpoch} goals={goalViews} initialGoalId={goalsOpenId} onOpenArtifact={openArtifact} onSetReview={setReview} onDM={startDM} renderWiki={renderWiki} /></div>
+              <div className="sx-page sx-page--doc"><GoalsView key={goalsEpoch} goals={goalViews} initialGoalId={goalsOpenId} self={self} onOpenArtifact={openArtifact} onSetReview={setReview} onDM={startDM} renderWiki={renderWiki} /></div>
             </div>
           ) : stageMode==="workengine" ? (
             <div className="sx-canvas sx-canvas--list">

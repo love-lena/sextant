@@ -1,21 +1,25 @@
-/* goals.jsx — Sextant Goals (v0.5, Track 2). The converged goal model: a goal is
-   a north-star sentence + acceptance criteria (claims that can be true), shown in
-   two layers. L1 Portfolio (decide where to spend time) → L2 Goal detail (criteria
-   + evidence). Read-only for v1: status is kept current on the bus by the agents
-   doing the work; there is no write path here yet.
+/* goals.jsx — Sextant Goals (dash redesign · EPIC D, TASK-217/218). A goal is a
+   north-star sentence + acceptance criteria (claims that can be true), shown in
+   two layers. L1 Portfolio (decide where to spend time) → L2 Goal detail (the
+   working-backwards document: criteria + the work toward each).
 
    Wired to the real goal primitive (goal.<id> latest-value artifacts, ADR-0035).
-   app.jsx derives the `goals` array off /api/artifacts records and passes it in.
-   Goal status is DERIVED from the criteria rollup — there is no stored goal-status
-   field. Uses dxg- classes (ported into styles.css). Exports GoalsView to window. */
+   app.jsx derives the `goals` array off the GET /api/goals projection (conv/goals,
+   proof-filter already applied) and passes it in. Goal status is DERIVED from the
+   criteria rollup — there is no stored goal-status field. Uses dxg- classes
+   (ported into styles.css) plus the GOAL_CSS block below for the redesign bits.
+
+   No first-class run/brief primitive exists yet, so a "run" is derived honestly:
+   an in-progress criterion with an owner is a run working toward that criterion
+   (the owner is its ULID + function). Watch opens a DM with that owner; spawn uses
+   the shared MobilizeButton. Where nothing backs a piece, we degrade to the
+   design's empty/dashed states. Exports GoalsView to window. */
 (function () {
-  const { useState } = React;
+  const { useState, useEffect, useRef } = React;
   const { Avatar, MobilizeButton } = window;
 
   // STATUS — keyed on the goal lexicon (ADR-0035): met / in-progress /
-  // waiting-on-you / blocked / not-started. Tone classes are the live status
-  // chips (--met/--prog/--wait/--blk/--todo). The design's keys
-  // (met/progress/waiting/blocked/todo) map onto these.
+  // waiting-on-you / blocked / not-started.
   const STATUS = {
     "met":            { label: "Met",            glyph: "✓", tone: "t-met" },
     "in-progress":    { label: "In progress",    glyph: "◐", tone: "t-progress" },
@@ -26,19 +30,16 @@
   function stat(s) { return STATUS[s] || STATUS["not-started"]; }
 
   // roll(g): the criteria rollup → verdict + tone. Goal status is derived, never
-  // stored. No northstar OR no criteria ⇒ undefined; flagged review.state="review"
-  // ⇒ awaiting your sign-off; any waiting-on-you ⇒ waiting; all met ⇒ Done; any
-  // blocked ⇒ Blocked; else on track.
-  // sign-off (TASK-157) and waiting-on-you are checked BEFORE blocked deliberately:
-  // this is the operator's front door, so a goal with something for *them* (a
-  // pending sign-off, or a waiting criterion) leads with that call to action;
-  // blocked (the agents' to clear) surfaces only when nothing waits on the operator.
-  // home.jsx's goalRoll() mirrors this order exactly — keep the two in lockstep.
+  // stored. Order (sign-off, waiting BEFORE blocked) mirrors home.jsx's goalRoll()
+  // exactly — keep the two in lockstep: this is the operator's front door, so a
+  // call FOR them leads; blocked (the agents' to clear) surfaces only when nothing
+  // waits on the operator.
   function roll(g) {
     const crits = (g && g.criteria) || [];
     const met = crits.filter((c) => c.status === "met").length;
     const waiting = crits.filter((c) => c.status === "waiting-on-you").length;
     const blocked = crits.some((c) => c.status === "blocked");
+    const inprog = crits.filter((c) => c.status === "in-progress").length;
     const total = crits.length;
     const undef = !g || !g.northstar || total === 0;
     const signoff = !!g && g.review === "review";
@@ -49,46 +50,26 @@
     else if (met === total) { verdict = "Done"; tone = "t-met"; }
     else if (blocked) { verdict = "Blocked"; tone = "t-blocked"; }
     else { verdict = "On track — nothing needs you"; tone = "t-met"; }
-    return { met, waiting, total, undef, verdict, tone };
+    return { met, waiting, blocked, inprog, total, undef, signoff, verdict, tone };
   }
 
-  // a goal needs the operator when it's undefined, has any waiting-on-you, has any
-  // blocked criterion, OR is flagged review.state="review" awaiting their sign-off
-  // (TASK-157) — the same split the Portfolio groups on.
+  // a goal needs the operator when undefined, has any waiting-on-you, any blocked
+  // criterion, OR is flagged review.state="review" awaiting their sign-off (TASK-157).
   function needsYou(g) {
     const r = roll(g);
-    return r.undef || r.waiting > 0 || g.review === "review" || (g.criteria || []).some((c) => c.status === "blocked");
+    return r.undef || r.waiting > 0 || g.review === "review" || r.blocked;
   }
 
-  /* ---------- L1 · Portfolio ---------- */
-  function Card({ g, onOpen, onDM, renderWiki }) {
+  // S4.2 bucketing — three attention buckets:
+  //   needs   = a waiting/blocked criterion, undefined, or awaiting sign-off;
+  //   started = no work running AND nothing met (not yet underway);
+  //   moving  = settled (all met) or genuinely in flight (an in-progress criterion).
+  // A goal lands in exactly one bucket; needsYou wins, then "not started", else moving.
+  function bucketOf(g) {
+    if (needsYou(g)) return "needs";
     const r = roll(g);
-    const crits = g.criteria || [];
-    const rw = renderWiki || ((t) => t);
-    return (
-      <div className="dxg-card" role="button" tabIndex={0}
-        onClick={() => onOpen && onOpen(g.id)}
-        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen && onOpen(g.id); } }}>
-        <div className="dxg-card-top">
-          <span className="dxg-card-name">{g.name}</span>
-          {g.stream && <span className="dxg-card-stream">{g.stream}</span>}
-          <span className={"dxg-verdict " + r.tone}>{r.verdict}</span>
-          {MobilizeButton && (
-            <MobilizeButton
-              context={{ type: "goal", northstar: g.northstar, id: g.id }}
-              onDM={onDM}
-            />
-          )}
-        </div>
-        <div className={"dxg-northstar" + (r.undef ? " is-undef" : "")}>{g.northstar ? rw(g.northstar) : "No north star yet — what does success look like?"}</div>
-        <div className="dxg-rollup">
-          <div className="dxg-segs">
-            {crits.map((c, i) => <span className="dxg-seg" key={i} style={{ background: "var(--" + segVar(c.status) + ")" }} />)}
-            {r.undef && crits.length === 0 && <span className="dxg-seg is-empty" />}
-          </div>
-          <span className="dxg-rollup-txt">{r.total === 0 ? "0 criteria defined" : r.met + " of " + r.total + " met"}</span>
-        </div>
-      </div>);
+    if (r.inprog === 0 && r.met === 0) return "started"; // nothing running, nothing met
+    return "moving";
   }
 
   // status → the CSS custom-property name for the segment fill colour.
@@ -100,66 +81,276 @@
       : "todo";
   }
 
-  function Portfolio({ goals, onOpen, onDM, renderWiki }) {
-    const needs = goals.filter(needsYou);
-    const moving = goals.filter((g) => !needsYou(g));
+  // runsOf(g): the runs working toward this goal, derived from in-progress criteria
+  // with an owner. Each is { owner, crit } — the owner is the run's identity (ULID +
+  // function), the crit the outcome it's working toward.
+  function runsOf(g) {
+    return (g.criteria || [])
+      .filter((c) => c.status === "in-progress" && c.owner)
+      .map((c) => ({ owner: c.owner, crit: c }));
+  }
+
+  /* ---------- escape-hatch tag (S4.4) ----------
+     A goal whose stream reads like an escape hatch (off-track / manual / paused)
+     gets a small caution tag. The stream label is opaque to the bus, so this is a
+     light convention, not a stored flag. */
+  function escapeHatch(g) {
+    const s = (g.stream || "").toLowerCase();
+    return /escape|manual|paused|off-track|stuck/.test(s);
+  }
+
+  /* ---------- run chip (S4.5 / S5.4) ---------- */
+  function RunChip({ run, onWatch }) {
+    const label = run.owner;
+    return (
+      <button type="button" className="dxg-runchip" title={"Run " + label + " — watch"}
+        onClick={(e) => { e.stopPropagation(); onWatch && onWatch(run.owner); }}>
+        <span className="dxg-runpulse" />
+        <span className="dxg-runlabel">{shortId(label)}</span>
+        <span className="dxg-runwatch">watch</span>
+      </button>);
+  }
+  // shortId trims a long ULID-ish id to head…tail for a chip.
+  function shortId(id) {
+    if (!id) return "run";
+    if (id.length <= 14) return id;
+    return id.slice(0, 6) + "…" + id.slice(-4);
+  }
+
+  /* ---------- L1 · Portfolio card (S4.4–S4.7) ---------- */
+  function Card({ g, onOpen, onDM, onSpawn, renderWiki }) {
+    const r = roll(g);
+    const crits = g.criteria || [];
+    const rw = renderWiki || ((t) => t);
+    const bucket = bucketOf(g);
+    const runs = runsOf(g);
+    const open = () => onOpen && onOpen(g.id);
+    return (
+      <div className="dxg-card" role="button" tabIndex={0}
+        onClick={open}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } }}>
+        <div className="dxg-card-top">
+          <span className="dxg-card-name">{g.name}</span>
+          {g.stream && <span className="dxg-card-stream">{g.stream}</span>}
+          {escapeHatch(g) && <span className="dxg-card-escape" title="Escape hatch — off the automatic path">⤴ escape</span>}
+          <span className={"dxg-verdict " + r.tone}>{r.verdict}</span>
+        </div>
+        <div className={"dxg-northstar" + (r.undef ? " is-undef" : "")}>{g.northstar ? rw(g.northstar) : "No north star yet — what does success look like?"}</div>
+        <div className="dxg-rollup">
+          <div className="dxg-segs">
+            {crits.map((c, i) => <span className="dxg-seg" key={i} title={(c.text || c.id) + " — " + stat(c.status).label} style={{ background: "var(--" + segVar(c.status) + ")" }} />)}
+            {r.undef && crits.length === 0 && <span className="dxg-seg is-empty" />}
+          </div>
+          <span className="dxg-rollup-txt">{r.total === 0 ? "0 criteria defined" : r.met + " of " + r.total + " met"}</span>
+        </div>
+
+        {/* S4.5 — Moving cards list their active run chips (open the run, no nav into the goal) */}
+        {bucket === "moving" && runs.length > 0 && (
+          <div className="dxg-card-runs">
+            {runs.map((run, i) => <RunChip run={run} onWatch={onDM} key={i} />)}
+          </div>
+        )}
+
+        {/* S4.6 — Not-started cards show a dashed +spawn-work chip */}
+        {bucket === "started" && (
+          <div className="dxg-card-runs">
+            <button type="button" className="dxg-spawnchip"
+              onClick={(e) => { e.stopPropagation(); onSpawn && onSpawn(g); }}>
+              <span className="dxg-spawnchip-plus">+</span> No work running yet — spawn work
+            </button>
+          </div>
+        )}
+      </div>);
+  }
+
+  /* ---------- inline New-goal creator (S4.3) ----------
+     A one-line north-star input. "Write the charter" hands the north star to the
+     Composer (onCompose) — which, where wired, opens the §16 composer pre-seeded.
+     Where no composer is wired we fall back to the MobilizeButton path so the
+     affordance still does something live. */
+  function NewGoal({ onCompose }) {
+    const [open, setOpen] = useState(false);
+    const [ns, setNs] = useState("");
+    const inputRef = useRef(null);
+    useEffect(() => { if (open && inputRef.current) inputRef.current.focus(); }, [open]);
+    if (!open) {
+      return (
+        <button className="dxg-newgoal-cue" onClick={() => setOpen(true)}>
+          <span className="dxg-newgoal-plus">+</span> New goal — name a north star
+        </button>);
+    }
+    const go = () => { if (ns.trim()) { onCompose && onCompose(ns.trim()); setNs(""); setOpen(false); } };
+    return (
+      <div className="dxg-newgoal">
+        <span className="dxg-newgoal-ic">◎</span>
+        <input ref={inputRef} className="dxg-newgoal-in" value={ns}
+          placeholder="What does success look like, in one line?"
+          onChange={(e) => setNs(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); go(); } if (e.key === "Escape") { setNs(""); setOpen(false); } }} />
+        <button className="dxg-newgoal-go" disabled={!ns.trim()} onClick={go}>Write the charter →</button>
+      </div>);
+  }
+
+  /* ---------- L1 · Portfolio (S4.1–S4.2) ---------- */
+  const BUCKETS = [
+    { key: "needs",   label: "Needs you" },
+    { key: "started", label: "Not started" },
+    { key: "moving",  label: "Moving on its own" },
+  ];
+  function Portfolio({ goals, onOpen, onDM, onSpawn, onCompose, renderWiki, reduced }) {
+    const by = { needs: [], started: [], moving: [] };
+    for (const g of goals) by[bucketOf(g)].push(g);
+    const needCount = by.needs.length;
     return (
       <div className="dxg-scroll"><div className="dxg-col">
         <header className="dxg-phead">
           <h1 className="dxg-h1">Goals</h1>
-          <span className="dxg-psub">{needs.length} of {goals.length} need something from you · working backwards from each deliverable</span>
+          <span className="dxg-psub">{needCount} of {goals.length} {needCount === 1 ? "needs" : "need"} something from you · working backwards from each deliverable</span>
         </header>
 
-        {needs.length > 0 && (
-          <React.Fragment>
-            <div className="dxg-group-lbl">Needs your attention</div>
-            <div className="dxg-cards">{needs.map((g) => <Card g={g} onOpen={onOpen} onDM={onDM} renderWiki={renderWiki} key={g.id} />)}</div>
-          </React.Fragment>
-        )}
-        {moving.length > 0 && (
-          <React.Fragment>
-            <div className="dxg-group-lbl">Moving on its own</div>
-            <div className="dxg-cards">{moving.map((g) => <Card g={g} onOpen={onOpen} onDM={onDM} renderWiki={renderWiki} key={g.id} />)}</div>
-          </React.Fragment>
-        )}
+        <NewGoal onCompose={onCompose} />
+
+        {BUCKETS.map((b) => {
+          const list = by[b.key];
+          if (list.length === 0) return null; // S4.1 — omit empty buckets
+          return (
+            <React.Fragment key={b.key}>
+              <div className="dxg-group-lbl">{b.label} <span className="dxg-group-n">{list.length}</span></div>
+              <div className="dxg-cards">
+                {list.map((g, i) => (
+                  <div className={reduced ? "" : "fx-in"} style={reduced ? undefined : { animationDelay: (0.04 + i * 0.03) + "s" }} key={g.id}>
+                    <Card g={g} onOpen={onOpen} onDM={onDM} onSpawn={onSpawn} renderWiki={renderWiki} />
+                  </div>))}
+              </div>
+            </React.Fragment>);
+        })}
       </div></div>);
   }
 
-  /* ---------- L2 · Goal detail ---------- */
-  function Criterion({ c, onOpenArtifact, renderWiki }) {
+  /* ---------- L2 · Goal detail criterion row (S5.2–S5.4) ----------
+     status → routing line + the inline actions a criterion offers:
+       waiting     → "→ its brief"        + +spawn work
+       in-progress → "→ watch the run"    + watch (the run chip)
+       blocked     → "→ see the blocker"  + +link a workstream
+       not-started → "no work yet"        + +spawn work
+       met         → settled */
+  function routeFor(status) {
+    switch (status) {
+      case "waiting-on-you": return "→ open its brief";
+      case "in-progress":    return "→ watch the run";
+      case "blocked":        return "→ see the blocker";
+      case "not-started":    return "no work yet";
+      case "met":            return "settled";
+      default:               return "";
+    }
+  }
+  function Criterion({ g, c, onOpenArtifact, onDM, onSpawn, onLink, renderWiki }) {
     const s = stat(c.status);
     const evidence = c.evidence || [];
     const rw = renderWiki || ((t) => t);
+    const runOwner = c.status === "in-progress" && c.owner ? c.owner : null;
     return (
       <div className="dxg-crit">
         <span className={"dxg-crit-icon " + s.tone}>{s.glyph}</span>
         <div className="dxg-crit-main">
           <div className="dxg-crit-text">{c.text ? rw(c.text) : c.text}</div>
           <div className="dxg-crit-evi">
+            {/* the run(s) working toward this criterion — ULID chips (S5.2) */}
+            {runOwner && <RunChip run={{ owner: runOwner, crit: c }} onWatch={onDM} />}
             {evidence.length
               ? evidence.map((e, i) => (
                   <button className="dxg-chip" key={i} type="button"
                     onClick={() => onOpenArtifact && onOpenArtifact(e.name)}
                     title={(e.kind === "proof" ? "proof · " : "related · ") + e.name}>{e.name}</button>))
-              : <span className="dxg-noevi">— no work yet</span>}
+              : !runOwner && <span className="dxg-noevi">— no work yet</span>}
+
+            {/* per-criterion inline actions (S5.4) */}
+            <span className="dxg-crit-acts">
+              {c.status === "blocked" && (
+                <button className="dxg-critact" type="button" onClick={() => onLink && onLink(g, c)}>+ link a workstream</button>)}
+              {(c.status === "waiting-on-you" || c.status === "not-started") && (
+                <button className="dxg-critact" type="button" onClick={() => onSpawn && onSpawn(g, c)}>+ spawn work</button>)}
+            </span>
           </div>
         </div>
         <div className="dxg-crit-right">
+          <span className={"dxg-crit-route " + s.tone}>{routeFor(c.status)}</span>
           <span className={"dxg-crit-status " + s.tone}>{s.label}</span>
-          {c.owner && <span className="dxg-crit-owner"><Avatar name={c.owner} kind="agent" size={20} /></span>}
+          {c.owner && !runOwner && <span className="dxg-crit-owner"><Avatar name={c.owner} kind="agent" size={20} /></span>}
         </div>
       </div>);
   }
 
-  /* ---------- sign-off (TASK-157) ----------
-     A goal flagged review.state="review" is awaiting the operator's sign-off. This
-     bar — shown atop the goal detail — carries the verdict, using the SAME review
-     primitive as any artifact (onSetReview → POST /api/artifacts/goal.<id>/review):
-       review   → "your turn": Approve / Request changes;
-       changes  → "the agent's turn": a calm note, no buttons;
-       approved → settled: a Reopen affordance.
-     Approving clears review.state, which drops the goal from the needs-you / review
-     queue (the app re-derives goals off the refreshed record). */
+  /* ---------- Add criterion inline (S5.5) ---------- */
+  function AddCriterion({ onAdd }) {
+    const [open, setOpen] = useState(false);
+    const [text, setText] = useState("");
+    const [busy, setBusy] = useState(false);
+    const inputRef = useRef(null);
+    useEffect(() => { if (open && inputRef.current) inputRef.current.focus(); }, [open]);
+    if (!open) {
+      return <button className="dxg-addcrit-cue" onClick={() => setOpen(true)}><span className="dxg-addcrit-plus">+</span> Add criterion</button>;
+    }
+    const submit = async () => {
+      const t = text.trim();
+      if (!t || busy) return;
+      setBusy(true);
+      try { await onAdd(t); setText(""); setOpen(false); }
+      finally { setBusy(false); }
+    };
+    return (
+      <div className="dxg-addcrit">
+        <span className="dxg-crit-icon t-todo">○</span>
+        <input ref={inputRef} className="dxg-addcrit-in" value={text} disabled={busy}
+          placeholder="A checkable outcome — Enter to add, Esc to cancel"
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } if (e.key === "Escape") { setText(""); setOpen(false); } }} />
+        <button className="dxg-addcrit-go" disabled={!text.trim() || busy} onClick={submit}>{busy ? "Adding…" : "Add"}</button>
+      </div>);
+  }
+
+  /* ---------- Goal topic composer + thread (S5.6) ----------
+     A posting composer for the goal's companion topic (msg.topic.goals.<id>). Posts
+     are durable bus messages; the thread is re-read from the bus (so a reload
+     re-derives it). Each post is attributed to you — just now / its relative age. */
+  function GoalTopic({ goalId, self, onPost, loadThread }) {
+    const [text, setText] = useState("");
+    const [thread, setThread] = useState([]);
+    const [busy, setBusy] = useState(false);
+    const reload = () => { if (loadThread) loadThread(goalId).then((m) => setThread(Array.isArray(m) ? m : [])).catch(() => {}); };
+    useEffect(() => { reload(); /* eslint-disable-next-line */ }, [goalId]);
+    const post = async () => {
+      const t = text.trim();
+      if (!t || busy) return;
+      setBusy(true);
+      // optimistic append — attributed to you, just now (re-derived from the bus on reload)
+      setThread((prev) => prev.concat([{ id: "local-" + Date.now(), self: true, text: t, time: "just now" }]));
+      setText("");
+      try { await onPost(goalId, t); } finally { setBusy(false); setTimeout(reload, 400); }
+    };
+    return (
+      <div className="dxg-topic">
+        <div className="dxg-topic-h">Goal topic</div>
+        {thread.length > 0 && (
+          <div className="dxg-topic-thread">
+            {thread.map((m) => (
+              <div className={"dxg-topic-msg" + (m.self ? " is-self" : "")} key={m.id}>
+                <span className="dxg-topic-author">{m.self ? "you" : (m.author || "agent")}</span>
+                <span className="dxg-topic-text">{m.text}</span>
+                <span className="dxg-topic-time">{m.time || ""}</span>
+              </div>))}
+          </div>)}
+        <div className="dxg-topic-compose">
+          <textarea className="dxg-topic-in" rows={2} value={text} disabled={busy}
+            placeholder="Post to this goal's topic — agents working it are listening…"
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); post(); } }} />
+          <button className="dxg-topic-post" disabled={!text.trim() || busy} onClick={post}>{busy ? "Posting…" : "Post"}</button>
+        </div>
+      </div>);
+  }
+
+  /* ---------- sign-off (TASK-157) — unchanged ---------- */
   function SignOff({ g, onSetReview }) {
     const name = "goal." + g.id;
     const st = g.review;
@@ -179,10 +370,6 @@
           <span className="dxg-signoff-txt">You requested changes — it's back with the agent now.</span>
         </div>);
     }
-    // "review" — awaiting the operator's sign-off. The feedback field (TASK-154)
-    // carries the WHAT to the agent on the goal's companion topic: REQUIRED to request
-    // changes (a bare "changes" with no note is useless — Lena's catch), optional to
-    // approve. The full goal discussion thread is the rest of TASK-154.
     const canChanges = !!note.trim();
     return (
       <div className="dxg-signoff is-review">
@@ -197,7 +384,8 @@
       </div>);
   }
 
-  function Detail({ g, onBack, onOpenArtifact, onSetReview, renderWiki }) {
+  /* ---------- L2 · Goal detail (S5.1) ---------- */
+  function Detail({ g, self, onBack, onOpenArtifact, onSetReview, onDM, onSpawnGoal, onSpawnCrit, onLinkCrit, onAddCriterion, onPostTopic, loadThread, renderWiki }) {
     const r = roll(g);
     const crits = g.criteria || [];
     const rw = renderWiki || ((t) => t);
@@ -207,7 +395,9 @@
         <div className="dxg-topbar">
           <button className="dxg-back" onClick={onBack}>← Goals</button>
           {g.stream && <span className="dxg-topbar-stream">{g.stream}</span>}
+          {escapeHatch(g) && <span className="dxg-card-escape" title="Escape hatch">⤴ escape</span>}
           {!r.undef && <span className="dxg-topbar-roll">{r.met} of {r.total} met</span>}
+          <button className="dxg-topbar-spawn" onClick={() => onSpawnGoal && onSpawnGoal(g)}>+ Spawn work</button>
         </div>
         <div className="dxg-scroll">
           <div className="dxg-doc">
@@ -226,23 +416,27 @@
 
             <div className="dxg-crits">
               {crits.length
-                ? crits.map((c, i) => <Criterion c={c} onOpenArtifact={onOpenArtifact} renderWiki={renderWiki} key={c.id || i} />)
+                ? crits.map((c, i) => <Criterion g={g} c={c} onOpenArtifact={onOpenArtifact} onDM={onDM} onSpawn={onSpawnCrit} onLink={onLinkCrit} renderWiki={renderWiki} key={c.id || i} />)
                 : <div className="dxg-noevi" style={{ padding: "14px 0" }}>No criteria yet — this goal hasn't been broken down into checkable outcomes.</div>}
+              <AddCriterion onAdd={(t) => onAddCriterion(g.id, t)} />
             </div>
 
-            <div className="dxg-maintained">Criteria are the contract every small decision below is judged against. Status is kept current on the bus by the agents doing the work.</div>
+            <GoalTopic goalId={g.id} self={self} onPost={onPostTopic} loadThread={loadThread} />
+
+            <div className="dxg-maintained">Criteria are the contract every small decision is judged against. Status is kept current on the bus by the agents doing the work.</div>
           </div>
         </div>
       </div>);
   }
 
   /* ---------- empty state ---------- */
-  function Empty() {
+  function Empty({ onCompose }) {
     return (
       <div className="dxg-scroll"><div className="dxg-col">
         <header className="dxg-phead">
           <h1 className="dxg-h1">Goals</h1>
         </header>
+        <NewGoal onCompose={onCompose} />
         <div className="fx-stub">
           <span className="fx-stub-ic">◎</span>
           <div>
@@ -254,20 +448,139 @@
   }
 
   /* ---------- the view ---------- */
-  // GoalsView holds the L1↔L2 selection. openGoal=null shows the Portfolio; an id
-  // shows that goal's Detail. initialGoalId (TASK-157) deep-links straight to a
-  // goal's detail — set when opened from the needs-you queue (GoalsView remounts on
-  // each Goals nav, so the prop seeds the initial selection). onOpenArtifact opens an
-  // evidence artifact in the review stage; onSetReview persists a goal sign-off
-  // verdict (the same review primitive the rest of the dash uses).
-  function GoalsView({ goals, initialGoalId, onOpenArtifact, onSetReview, onDM, renderWiki }) {
+  // GoalsView holds the L1↔L2 selection plus the live mobilize popover (spawn).
+  // initialGoalId deep-links straight to a goal's detail (set when opened from the
+  // needs-you queue). onOpenArtifact opens evidence; onSetReview persists a sign-off.
+  function GoalsView({ goals, initialGoalId, self, onOpenArtifact, onSetReview, onDM, renderWiki }) {
     const [openGoal, setOpenGoal] = useState(initialGoalId || null);
+    const [spawnCtx, setSpawnCtx] = useState(null); // { northstar, id } | null — drives the MobilizeButton popover
+    const reduced = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const list = goals || [];
-    if (list.length === 0) return <Empty />;
+
+    // S4.3 / §16 Composer: where a real Composer route exists we'd open it; here we
+    // seed a spawn from the north star (the live affordance), so "Write the charter"
+    // does something real against the bus rather than dead-ending.
+    const compose = (northstar) => setSpawnCtx({ northstar, id: "" });
+    const spawnGoal = (g) => setSpawnCtx({ northstar: g.northstar || g.name, id: g.id });
+    const spawnCrit = (g, c) => setSpawnCtx({ northstar: (c && c.text) || g.northstar || g.name, id: g.id });
+    // +link a workstream (S5.4 / §14): no link-picker primitive yet — fall back to
+    // opening a DM so the operator can wire a workstream by hand. Degrades honestly.
+    const linkCrit = (g, c) => { if (onDM && c && c.owner) onDM(c.owner); else setSpawnCtx({ northstar: "Unblock: " + ((c && c.text) || (g && g.northstar) || ""), id: g.id }); };
+
+    const addCriterion = (goalId, text) => window.SX.addCriterion(goalId, text);
+    const postTopic = (goalId, text) => window.SX.postToGoalTopic(goalId, text);
+    const loadThread = async (goalId) => {
+      const res = await window.SX.get("/api/messages?subject=" + encodeURIComponent("msg.topic.goals." + goalId) + "&limit=50");
+      const msgs = (res && res.messages) || [];
+      return msgs.map((m) => ({
+        id: m.id, self: m.author === (self && self.id),
+        author: m.author, text: (m.record && (m.record.text || m.record.title)) || "",
+        time: m.createdAt ? relAge(m.createdAt) : "",
+      })).filter((m) => m.text);
+    };
+
+    if (list.length === 0 && !spawnCtx) return (
+      <React.Fragment>
+        <Empty onCompose={compose} />
+      </React.Fragment>);
+
     const g = openGoal && list.find((x) => x.id === openGoal);
-    if (g) return <Detail g={g} onBack={() => setOpenGoal(null)} onOpenArtifact={onOpenArtifact} onSetReview={onSetReview} renderWiki={renderWiki} />;
-    return <Portfolio goals={list} onOpen={(id) => setOpenGoal(id)} onDM={onDM} renderWiki={renderWiki} />;
+    return (
+      <React.Fragment>
+        {g ? (
+          <Detail g={g} self={self} onBack={() => setOpenGoal(null)}
+            onOpenArtifact={onOpenArtifact} onSetReview={onSetReview} onDM={onDM}
+            onSpawnGoal={spawnGoal} onSpawnCrit={spawnCrit} onLinkCrit={linkCrit}
+            onAddCriterion={addCriterion} onPostTopic={postTopic} loadThread={loadThread}
+            renderWiki={renderWiki} />
+        ) : (
+          <Portfolio goals={list} onOpen={(id) => setOpenGoal(id)} onDM={onDM}
+            onSpawn={spawnGoal} onCompose={compose} renderWiki={renderWiki} reduced={reduced} />
+        )}
+        {/* the spawn popover: a hidden MobilizeButton auto-opened by spawnCtx, so
+            every +spawn / Write-the-charter affordance shares the one live spawn path. */}
+        {spawnCtx && MobilizeButton && (
+          <SpawnPortal ctx={spawnCtx} onDM={onDM} onClose={() => setSpawnCtx(null)} />)}
+        <style>{GOAL_CSS}</style>
+      </React.Fragment>);
   }
+
+  // SpawnPortal mounts a MobilizeButton and auto-clicks it so the spawn popover
+  // opens immediately from any goal/criterion affordance (the button's own popover
+  // is the live spawn.request path). The trigger button itself is visually hidden.
+  function SpawnPortal({ ctx, onDM, onClose }) {
+    const ref = useRef(null);
+    useEffect(() => {
+      const btn = ref.current && ref.current.querySelector("button");
+      if (btn) btn.click();
+    }, []);
+    return (
+      <div className="dxg-spawnportal" ref={ref} onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+        <MobilizeButton context={{ type: "goal", northstar: ctx.northstar, id: ctx.id }} onDM={(id) => { onDM && onDM(id); onClose(); }} />
+      </div>);
+  }
+
+  // relAge: a coarse "Xm/Xh/Xd ago" from an ISO timestamp for thread posts.
+  function relAge(iso) {
+    const t = Date.parse(iso || ""); if (isNaN(t)) return "";
+    const s = Math.max(0, (Date.now() - t) / 1000);
+    if (s < 45) return "just now";
+    if (s < 3600) return Math.floor(s / 60) + "m ago";
+    if (s < 86400) return Math.floor(s / 3600) + "h ago";
+    return Math.floor(s / 86400) + "d ago";
+  }
+
+  const GOAL_CSS = `
+  .dxg-group-n{font-family:var(--font-mono);font-size:11px;font-weight:600;color:var(--fx-ink3);margin-left:6px;}
+  .dxg-card-escape{font-family:var(--font-mono);font-size:9.5px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:var(--wait);border:1px solid var(--wait);border-radius:5px;padding:2px 6px;}
+  .dxg-card-runs{display:flex;flex-wrap:wrap;gap:8px;margin-top:11px;padding-top:11px;border-top:1px solid var(--fx-line);}
+  .dxg-runchip{display:inline-flex;align-items:center;gap:7px;background:rgba(58,147,210,.08);border:1px solid rgba(58,147,210,.3);border-radius:20px;padding:4px 11px 4px 9px;font-size:11.5px;color:var(--ink);cursor:pointer;font-family:var(--font-mono);}
+  .dxg-runchip:hover{background:rgba(58,147,210,.15);}
+  .dxg-runpulse{width:7px;height:7px;border-radius:50%;background:var(--prog,#3a93d2);box-shadow:0 0 0 0 rgba(58,147,210,.6);animation:dxgpulse 1.8s infinite;}
+  @media (prefers-reduced-motion: reduce){ .dxg-runpulse{animation:none;} }
+  @keyframes dxgpulse{0%{box-shadow:0 0 0 0 rgba(58,147,210,.5);}70%{box-shadow:0 0 0 6px rgba(58,147,210,0);}100%{box-shadow:0 0 0 0 rgba(58,147,210,0);}}
+  .dxg-runlabel{letter-spacing:.02em;}
+  .dxg-runwatch{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--prog,#3a93d2);font-weight:600;}
+  .dxg-spawnchip{display:inline-flex;align-items:center;gap:7px;background:none;border:1px dashed var(--fx-line);border-radius:20px;padding:5px 13px;font-size:12px;color:var(--fx-ink2);cursor:pointer;}
+  .dxg-spawnchip:hover{border-color:var(--asst);color:var(--asst);}
+  .dxg-spawnchip-plus{font-size:14px;line-height:1;}
+  .dxg-newgoal-cue{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:none;border:1px dashed var(--fx-line);border-radius:12px;padding:13px 16px;font-size:13.5px;color:var(--fx-ink2);cursor:pointer;margin-bottom:18px;}
+  .dxg-newgoal-cue:hover{border-color:var(--asst);color:var(--asst);}
+  .dxg-newgoal-plus{font-size:16px;line-height:1;}
+  .dxg-newgoal{display:flex;align-items:center;gap:10px;border:1px solid var(--asst);border-radius:12px;padding:10px 12px;margin-bottom:18px;background:rgba(106,85,224,.03);}
+  .dxg-newgoal-ic{color:var(--asst);font-size:16px;}
+  .dxg-newgoal-in{flex:1;min-width:0;border:none;background:none;outline:none;font-family:'Newsreader',Georgia,serif;font-size:16px;color:var(--ink);}
+  .dxg-newgoal-go{flex:0 0 auto;background:var(--asst);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12.5px;font-weight:600;cursor:pointer;}
+  .dxg-newgoal-go:disabled{opacity:.45;cursor:default;}
+  .dxg-crit-route{font-family:var(--font-mono);font-size:10px;letter-spacing:.02em;}
+  .dxg-crit-acts{display:inline-flex;gap:8px;}
+  .dxg-critact{background:none;border:none;color:var(--asst);font-size:11.5px;font-weight:600;cursor:pointer;padding:2px 0;}
+  .dxg-critact:hover{text-decoration:underline;}
+  .dxg-topbar-spawn{margin-left:auto;background:var(--asst);color:#fff;border:none;border-radius:8px;padding:6px 13px;font-size:12px;font-weight:600;cursor:pointer;}
+  .dxg-addcrit-cue{display:inline-flex;align-items:center;gap:7px;background:none;border:none;color:var(--asst);font-size:12.5px;font-weight:600;cursor:pointer;padding:12px 2px 4px;}
+  .dxg-addcrit-plus{font-size:15px;line-height:1;}
+  .dxg-addcrit{display:flex;align-items:center;gap:10px;padding:11px 2px;border-top:1px solid var(--fx-line);}
+  .dxg-addcrit-in{flex:1;min-width:0;border:none;background:none;outline:none;font-size:14.5px;color:var(--ink);}
+  .dxg-addcrit-go{flex:0 0 auto;background:var(--asst);color:#fff;border:none;border-radius:7px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;}
+  .dxg-addcrit-go:disabled{opacity:.45;cursor:default;}
+  .dxg-topic{margin-top:26px;border-top:1px solid var(--fx-line);padding-top:18px;}
+  .dxg-topic-h{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--fx-ink3);margin-bottom:12px;}
+  .dxg-topic-thread{display:flex;flex-direction:column;gap:10px;margin-bottom:14px;}
+  .dxg-topic-msg{display:flex;flex-direction:column;gap:3px;border-left:2px solid var(--fx-line);padding:2px 0 2px 12px;}
+  .dxg-topic-msg.is-self{border-left-color:var(--asst);}
+  .dxg-topic-author{font-family:var(--font-mono);font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--fx-ink3);}
+  .dxg-topic-text{font-size:14px;line-height:1.45;color:var(--ink);}
+  .dxg-topic-time{font-family:var(--font-mono);font-size:10px;color:var(--fx-ink3);}
+  .dxg-topic-compose{display:flex;gap:10px;align-items:flex-end;}
+  .dxg-topic-in{flex:1;min-width:0;border:1px solid var(--fx-line);border-radius:10px;padding:9px 11px;font-size:13.5px;font-family:inherit;color:var(--ink);background:var(--fx-bg,transparent);resize:vertical;outline:none;}
+  .dxg-topic-in:focus{border-color:var(--asst);}
+  .dxg-topic-post{flex:0 0 auto;background:var(--asst);color:#fff;border:none;border-radius:8px;padding:9px 16px;font-size:12.5px;font-weight:600;cursor:pointer;}
+  .dxg-topic-post:disabled{opacity:.45;cursor:default;}
+  .dxg-spawnportal{position:fixed;inset:0;z-index:50;background:rgba(20,21,30,.35);display:grid;place-items:start center;padding-top:14vh;}
+  #app.dark .dxg-card-runs,#app.dark .dxg-addcrit,#app.dark .dxg-topic,#app.dark .dxg-topic-msg{border-color:#2a2d33;}
+  #app.dark .dxg-newgoal-cue,#app.dark .dxg-spawnchip{border-color:#2a2d33;}
+  #app.dark .dxg-topic-in{border-color:#2a2d33;}
+  `;
 
   Object.assign(window, { GoalsView });
 })();

@@ -61,6 +61,7 @@
     const met = crits.filter((c) => c.status === "met").length;
     const waiting = crits.filter((c) => c.status === "waiting-on-you").length;
     const blocked = crits.some((c) => c.status === "blocked");
+    const inprog = crits.filter((c) => c.status === "in-progress").length;
     const undef = !g || !g.northstar || crits.length === 0;
     const signoff = !!g && g.review === "review"; // awaiting the operator's sign-off (TASK-157)
     let verdict, tone;
@@ -70,7 +71,30 @@
     else if (met === crits.length) { verdict = "Done"; tone = "t-met"; }
     else if (blocked) { verdict = "Blocked"; tone = "t-blocked"; }
     else { verdict = "On track"; tone = "t-met"; }
-    return { verdict, tone, needsYou: undef || signoff || waiting > 0 || blocked };
+    return { verdict, tone, met, total: crits.length, inprog, needsYou: undef || signoff || waiting > 0 || blocked };
+  }
+
+  // status → the segment fill colour (mirrors goals.jsx segVar).
+  function segVar(s) {
+    return s === "met" ? "met" : s === "in-progress" ? "prog"
+      : s === "waiting-on-you" ? "wait" : s === "blocked" ? "blk" : "todo";
+  }
+
+  // briefRank: S3.3 urgency order over review-pending items. A "changes" re-review
+  // is the most urgent (you already engaged it once); then a fresh review (a
+  // decision). No richer brief-type primitive exists, so type/read-effort are
+  // derived heuristics (see briefMeta) — honest until a brief lexicon lands.
+  function briefRank(a) {
+    if (a.status === "changes") return 0; // change / re-review
+    return 1; // decision (a fresh needs-review)
+  }
+  // briefMeta: a type badge + a coarse read-effort, derived from what we have (the
+  // review state + name). Degrades to neutral labels; replace when a brief
+  // primitive carries real type/effort.
+  function briefMeta(a) {
+    const type = a.isGoal ? "Goal" : a.status === "changes" ? "Re-review" : "Decision";
+    const glyph = a.isGoal ? "◎" : a.status === "changes" ? "↻" : "✦";
+    return { type, glyph, effort: "quick read" };
   }
 
   /* ---------- the hero — flow2 routing-slip card ----------
@@ -216,23 +240,26 @@
       </React.Fragment>);
   }
 
-  /* ---------- a queue row ---------- */
+  /* ---------- a queue row (S3.4: index · type glyph · title · type badge ·
+     read-effort · originating goal · age) ---------- */
   function QRow({ a, n, onOpen }) {
     const isGoal = !!a.isGoal;
     const authorName = (a.author && a.author.name) || "agent";
     const tone = STATE_TONE[a.status] || "var(--todo)";
+    const m = briefMeta(a);
     return (
       <button className="fx-then-row" style={{ "--tn": tone }} onClick={() => onOpen(a)}>
         <span className="fx-then-idx">
           <span className="fx-then-num">{String(n).padStart(2, "0")}</span>
-          <span className="fx-then-glyph" style={{ color: tone }}>{isGoal ? "◎" : "●"}</span>
+          <span className="fx-then-glyph" style={{ color: tone }}>{m.glyph}</span>
         </span>
         <span className="fx-then-main">
           <span className="fx-then-title">{a.name}</span>
           <span className="fx-then-sub">
-            <span className="fx-tbadge" style={{ color: tone, borderColor: tone, background: "rgba(120,124,132,.08)" }}>{isGoal ? "Needs your sign-off" : (STATE_LABEL[a.status] || "Needs review")}</span>
-            <span className="fx-then-meta">{isGoal ? "goal" : "rev " + a.version}</span>
-            {a.updated && <span className="fx-then-unb">· updated {a.updated} ago</span>}
+            <span className="fx-tbadge" style={{ color: tone, borderColor: tone, background: "rgba(120,124,132,.08)" }}>{m.type}</span>
+            <span className="fx-then-effort">{m.effort}</span>
+            {a.goal && <span className="fx-then-meta">◎ {a.goal}</span>}
+            {!a.goal && <span className="fx-then-meta">{isGoal ? "goal" : "rev " + a.version}</span>}
           </span>
         </span>
         <span className="fx-then-right">
@@ -242,32 +269,66 @@
       </button>);
   }
 
-  /* ---------- the Home Goals summary ---------- */
-  // A quiet, prose-first box: "N need you" headline, then up to 3 needs-attention
-  // goals as compact rows (north-star or name + verdict chip). The full Portfolio
-  // lives in goals.jsx; this is the morning glance. Empty ⇒ a single calm line.
-  function GoalsBox({ goals, onNav }) {
-    if (!goals.length) {
-      return (
-        <div className="fx-goalsbox fx-in" style={{ animationDelay: ".16s" }}>
-          <div className="fx-goalsum-empty">No goals yet.</div>
-        </div>);
+  /* ---------- Moving on its own (S3.6) ----------
+     in-progress runs tied to a goal. No first-class run primitive yet: a run is an
+     in-progress criterion with an owner (the owner = its ULID + function), tied to
+     its goal. Each row has a live pulse, the run label/code, the goal, and its
+     latest activity (the criterion text). Rows peek into the run (open a DM with
+     the owner). Headlined "nothing needs you — this is just moving." */
+  function movingRuns(goals) {
+    const out = [];
+    for (const g of goals || []) {
+      for (const c of (g.criteria || [])) {
+        if (c.status === "in-progress" && c.owner) out.push({ owner: c.owner, goal: g, crit: c });
+      }
     }
+    return out;
+  }
+  function shortId(id) {
+    if (!id) return "run"; if (id.length <= 14) return id;
+    return id.slice(0, 6) + "…" + id.slice(-4);
+  }
+  function MovingRow({ run, onDM }) {
+    return (
+      <button className="fx-moving-row" onClick={() => onDM && onDM(run.owner)}>
+        <span className="fx-moving-pulse" />
+        <span className="fx-moving-main">
+          <span className="fx-moving-label"><span className="fx-moving-code">{shortId(run.owner)}</span> · {run.goal.name}</span>
+          <span className="fx-moving-act">{run.crit.text || "working…"}</span>
+        </span>
+        <span className="fx-then-chev">›</span>
+      </button>);
+  }
+
+  /* ---------- Goals · N need you (S3.5) ----------
+     Only goals with a waiting/blocked criterion (or undefined / awaiting sign-off);
+     each row carries a criteria status bar (one segment per criterion in its status
+     colour), M-of-N met, and the rollup verdict chip. Clicking a row deep-links to
+     that goal; "All goals" opens the portfolio. Returns null when none need you so
+     the section header doesn't render (S3.9). */
+  function CritBar({ g }) {
+    const crits = g.criteria || [];
+    if (!crits.length) return <span className="fx-goalsum-bar"><span className="fx-goalsum-seg is-empty" /></span>;
+    return (
+      <span className="fx-goalsum-bar">
+        {crits.map((c, i) => <span className="fx-goalsum-seg" key={i} style={{ background: "var(--" + segVar(c.status) + ")" }} />)}
+      </span>);
+  }
+  function GoalsBox({ goals, onNav }) {
     const rolled = goals.map((g) => ({ g, r: goalRoll(g) }));
     const needs = rolled.filter((x) => x.r.needsYou);
-    const head = needs.length
-      ? needs.length + (needs.length === 1 ? " goal needs you" : " goals need you")
-      : "All " + goals.length + (goals.length === 1 ? " goal is" : " goals are") + " moving on their own";
-    const rows = (needs.length ? needs : rolled).slice(0, 3);
+    if (!needs.length) return null;
     return (
       <div className="fx-goalsbox fx-in" style={{ animationDelay: ".16s" }}>
-        <div className="fx-goalsum-head">
-          <span className={"fx-goalsum-dot " + (needs.length ? "is-need" : "is-calm")} />
-          {head}
-        </div>
-        {rows.map(({ g, r }) => (
-          <button className="fx-goalsum-row" key={g.id} onClick={() => onNav && onNav("goals")}>
-            <span className="fx-goalsum-name">{g.northstar || g.name}</span>
+        {needs.slice(0, 4).map(({ g, r }) => (
+          <button className="fx-goalsum-row" key={g.id} onClick={() => onNav && onNav("goals", g.id)}>
+            <span className="fx-goalsum-body">
+              <span className="fx-goalsum-name">{g.northstar || g.name}</span>
+              <span className="fx-goalsum-meta">
+                <CritBar g={g} />
+                <span className="fx-goalsum-mn">{r.total ? r.met + " of " + r.total + " met" : "no criteria yet"}</span>
+              </span>
+            </span>
             <span className={"fx-goalsum-verdict " + r.tone}>{r.verdict}</span>
           </button>
         ))}
@@ -297,10 +358,24 @@
       name: g.northstar || g.name, isGoal: true, goalId: g.id, status: "review",
       version: g.version || 0, author: { name: g.by || "", kind: "agent" }, updated: g.updated || "",
     }));
-    const pending = artPending.concat(goalPending).sort((a, b) => (b.version || 0) - (a.version || 0));
+    // S3.3 — rank by urgency (change/re-review first, then decision), then by
+    // recency within a rank, so the hero is genuinely rank 1.
+    const pending = artPending.concat(goalPending).sort((a, b) => {
+      const r = briefRank(a) - briefRank(b);
+      return r !== 0 ? r : (b.version || 0) - (a.version || 0);
+    });
     const hero = pending[0];
     const rest = pending.slice(1);
     const total = pending.length;
+
+    // goals breakdown for the summary line + the calm sections.
+    const goalRolled = goalArr.map((gg) => ({ g: gg, r: goalRoll(gg) }));
+    const goalsNeed = goalRolled.filter((x) => x.r.needsYou).length;
+    const runs = movingRuns(goalArr); // S3.6 — in-progress runs tied to a goal
+
+    // S3.9 — respect prefers-reduced-motion: when set, drop the staggered fade-in.
+    const reduced = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const inCls = reduced ? "" : "fx-in";
 
     // open a queue item: a goal routes to the Goals view (deep-linked to that goal);
     // anything else opens the artifact review stage.
@@ -313,9 +388,18 @@
     const hr = new Date().getHours();
     const defGreet = hr < 12 ? "Good morning." : hr < 18 ? "Good afternoon." : "Good evening.";
     const heading = (g && g.heading) || defGreet;
+    // S3.1 — count needing a decision · goals waiting of total · everything else
+    // is moving on its own.
+    const goalClause = goalArr.length
+      ? " · " + goalsNeed + " of " + goalArr.length + (goalArr.length === 1 ? " goal" : " goals") + " waiting"
+      : "";
     const stateLine = (g && g.note) ? g.note
-      : total === 0 ? "Inbox zero — nothing needs your review right now."
-      : total + (total === 1 ? " thing needs you" : " things need you") + " · everything else is moving on its own";
+      : total === 0 && goalsNeed === 0 ? "Nothing needs a decision" + goalClause + " · everything else is moving on its own."
+      : (total ? total + (total === 1 ? " thing needs" : " things need") + " a decision" : "Nothing needs a decision")
+        + goalClause + " · everything else is moving on its own.";
+
+    // S3.8 — the true empty state: nothing needs you AND nothing is running.
+    const isEmpty = total === 0 && goalsNeed === 0 && runs.length === 0 && goalArr.length === 0 && approved === 0;
 
     // secondary curated panels (pinned + quick-links) fold in below when present.
     const home = (ctx && ctx.home) || {};
@@ -335,22 +419,49 @@
       : [];
     const hasAgenda = agendaItems.length > 0;
 
+    // S3.8 — empty state: greeting + "Nothing needs you, because nothing's running
+    // yet" + two start options + a the-bus-is-live note. Sections only render with
+    // content, so when there's nothing at all this is the whole page.
+    if (isEmpty && !hasAgenda) {
+      return (
+        <article className="fx-scroll"><div className="fx-col fx-col--home sx-conv-light">
+          <style>{HOME_CSS}</style>
+          <h1 className={"fx-h1 " + inCls}>{heading}</h1>
+          <div className={"fx-emptyhome " + inCls} style={reduced ? undefined : { animationDelay: ".05s" }}>
+            <div className="fx-emptyhome-lead">Nothing needs you — because nothing's running yet.</div>
+            <div className="fx-emptyhome-opts">
+              <button className="fx-emptyhome-opt" onClick={() => ctx.onNav && ctx.onNav("goals")}>
+                <span className="fx-emptyhome-ic">◎</span>
+                <span className="fx-emptyhome-otitle">Define your first goal</span>
+                <span className="fx-emptyhome-osub">A north star + the criteria that make it true.</span>
+              </button>
+              <button className="fx-emptyhome-opt" onClick={() => ctx.onNav && ctx.onNav("workflow")}>
+                <span className="fx-emptyhome-ic">⚡</span>
+                <span className="fx-emptyhome-otitle">Build your first workflow</span>
+                <span className="fx-emptyhome-osub">Spawn an agent to start moving on something.</span>
+              </button>
+            </div>
+            <div className="fx-emptyhome-live"><span className="fx-emptyhome-livedot" /> The bus is live — the moment work starts, it surfaces here.</div>
+          </div>
+        </div></article>);
+    }
+
     return (
       <article className="fx-scroll"><div className="fx-col fx-col--home sx-conv-light">
         <style>{HOME_CSS}</style>
 
-        <h1 className="fx-h1 fx-in">{heading}</h1>
-        <p className="fx-psub fx-in" style={{ animationDelay: ".03s" }}>{stateLine}</p>
+        <h1 className={"fx-h1 " + inCls}>{heading}</h1>
+        <p className={"fx-psub " + inCls} style={reduced ? undefined : { animationDelay: ".03s" }}>{stateLine}</p>
 
         {hasAgenda ? (
           <AgendaList block={agendaBlock} items={agendaItems} ctx={ctx} />
         ) : hero ? (
           <React.Fragment>
-            <div className="fx-starthead fx-in" style={{ animationDelay: ".06s" }}>Start here</div>
+            <div className={"fx-starthead " + inCls} style={reduced ? undefined : { animationDelay: ".06s" }}>Start here</div>
             <Hero a={hero} onOpen={openItem} />
           </React.Fragment>
         ) : (
-          <div className="fx-zero fx-in">
+          <div className={"fx-zero " + inCls}>
             <span className="fx-zero-ic">✓</span>
             <div>
               <div className="fx-zero-title">You're all caught up.</div>
@@ -361,7 +472,7 @@
 
         {rest.length > 0 && (
           <React.Fragment>
-            <div className="fx-sechead fx-in" style={{ animationDelay: ".1s" }}>
+            <div className={"fx-sechead " + inCls} style={reduced ? undefined : { animationDelay: ".1s" }}>
               <span className="fx-grouplbl">Then · {rest.length} more</span>
               <button className="fx-seclink" onClick={() => ctx.onNav && ctx.onNav("artifacts")}>All artifacts →</button>
             </div>
@@ -371,26 +482,43 @@
           </React.Fragment>
         )}
 
-        {/* Goals · a calm summary of the goal primitive (ADR-0035), read from ctx.goals */}
-        <div className="fx-sechead fx-in" style={{ animationDelay: ".14s" }}>
-          <span className="fx-grouplbl">Goals</span>
-          <button className="fx-seclink" onClick={() => ctx.onNav && ctx.onNav("goals")}>All goals →</button>
-        </div>
-        <GoalsBox goals={(ctx && ctx.goals) || []} onNav={ctx.onNav} />
+        {/* S3.5 — Goals · N need you (header + rows only when goals need you) */}
+        {goalsNeed > 0 && (
+          <React.Fragment>
+            <div className={"fx-sechead " + inCls} style={reduced ? undefined : { animationDelay: ".14s" }}>
+              <span className="fx-grouplbl">Goals · {goalsNeed} need you</span>
+              <button className="fx-seclink" onClick={() => ctx.onNav && ctx.onNav("goals")}>All goals →</button>
+            </div>
+            <GoalsBox goals={goalArr} onNav={ctx.onNav} />
+          </React.Fragment>
+        )}
+
+        {/* S3.6 — Moving on its own: in-progress runs tied to a goal */}
+        {runs.length > 0 && (
+          <React.Fragment>
+            <div className={"fx-sechead " + inCls} style={reduced ? undefined : { animationDelay: ".16s" }}>
+              <span className="fx-grouplbl">Moving on its own</span>
+              <span className="fx-sechead-note">nothing needs you</span>
+            </div>
+            <div className="fx-moving-list">
+              {runs.slice(0, 6).map((run, i) => <MovingRow run={run} onDM={ctx.onDM} key={run.owner + ":" + run.crit.id + ":" + i} />)}
+            </div>
+          </React.Fragment>
+        )}
 
         {/* secondary: curated pinned + quick links (assistant-owned `home` artifact) */}
         {(pinnedBlock || linksBlock) && (
-          <div className="hm-secondary fx-in" style={{ animationDelay: ".18s" }}>
+          <div className={"hm-secondary " + inCls} style={reduced ? undefined : { animationDelay: ".18s" }}>
             {pinnedBlock && <PinnedPanel block={pinnedBlock} ctx={ctx} />}
             {linksBlock && <LinksPanel block={linksBlock} />}
           </div>
         )}
 
-        {/* "moved overnight" — calm reassurance */}
+        {/* S3.7 — Finished while you were away: one collapsed reassurance bar */}
         {approved > 0 && (
-          <div className="fx-moved fx-in" style={{ animationDelay: ".2s" }}>
+          <div className={"fx-moved " + inCls} style={reduced ? undefined : { animationDelay: ".2s" }}>
             <button className="fx-moved-bar" onClick={() => setMovedOpen((o) => !o)}>
-              <span className="fx-moved-dot" />{approved} {approved === 1 ? "artifact" : "artifacts"} approved — settled, nothing needs you
+              <span className="fx-moved-dot" />Finished while you were away · {approved} {approved === 1 ? "thing" : "things"} — no input needed
               <span className="fx-moved-go">{movedOpen ? "hide" : "show"}</span>
             </button>
             {movedOpen && (
@@ -448,18 +576,50 @@
   }
 
   const HOME_CSS = `
+  .fx-goalsbox{border:1px solid var(--fx-line);border-radius:13px;overflow:hidden;}
   .fx-goalsum-empty{padding:18px 18px;font-size:13.5px;color:var(--fx-ink2);}
-  .fx-goalsum-head{display:flex;align-items:center;gap:9px;padding:15px 18px 13px;font-size:14px;font-weight:600;color:var(--ink);border-bottom:1px solid var(--fx-line);}
-  .fx-goalsum-dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;}
-  .fx-goalsum-dot.is-need{background:var(--wait);}
-  .fx-goalsum-dot.is-calm{background:var(--met);}
-  .fx-goalsum-row{display:flex;align-items:center;gap:12px;width:100%;text-align:left;background:none;border:none;border-top:1px solid var(--fx-line);padding:13px 18px;cursor:pointer;color:var(--ink);}
+  .fx-goalsum-row{display:flex;align-items:center;gap:14px;width:100%;text-align:left;background:none;border:none;border-top:1px solid var(--fx-line);padding:14px 18px;cursor:pointer;color:var(--ink);}
   .fx-goalsum-row:first-of-type{border-top:none;}
   .fx-goalsum-row:hover{background:rgba(20,21,24,.025);}
-  .fx-goalsum-name{flex:1;min-width:0;font-family:'Newsreader',Georgia,serif;font-size:15px;line-height:1.35;color:var(--fx-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .fx-goalsum-verdict{flex:0 0 auto;font-family:var(--font-mono);font-size:9.5px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;padding:3px 9px;border-radius:20px;white-space:nowrap;}
-  #app.dark .fx-goalsum-head,#app.dark .fx-goalsum-row{border-color:#2a2d33;}
+  .fx-goalsum-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:7px;}
+  .fx-goalsum-name{min-width:0;font-family:'Newsreader',Georgia,serif;font-size:15.5px;line-height:1.3;color:var(--fx-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .fx-goalsum-meta{display:flex;align-items:center;gap:10px;}
+  .fx-goalsum-bar{display:inline-flex;gap:3px;flex:0 0 auto;}
+  .fx-goalsum-seg{width:18px;height:5px;border-radius:3px;background:var(--todo);}
+  .fx-goalsum-seg.is-empty{width:36px;background:repeating-linear-gradient(90deg,var(--fx-line),var(--fx-line) 4px,transparent 4px,transparent 8px);}
+  .fx-goalsum-mn{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.02em;color:var(--fx-ink3);}
+  .fx-goalsum-verdict{flex:0 0 auto;font-family:var(--font-mono);font-size:9.5px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;padding:3px 9px;border-radius:20px;white-space:nowrap;align-self:flex-start;}
+  #app.dark .fx-goalsbox,#app.dark .fx-goalsum-row{border-color:#2a2d33;}
   #app.dark .fx-goalsum-row:hover{background:rgba(255,255,255,.03);}
+  /* S3.4 Then-row read-effort + S3.6 Moving-on-its-own + S3.7 sechead note */
+  .fx-then-effort{font-family:var(--font-mono);font-size:10px;letter-spacing:.02em;color:var(--fx-ink3);}
+  .fx-sechead-note{margin-left:auto;font-size:11.5px;color:var(--met);font-style:italic;}
+  .fx-moving-list{display:flex;flex-direction:column;border:1px solid var(--fx-line);border-radius:13px;overflow:hidden;}
+  .fx-moving-row{display:flex;align-items:center;gap:12px;width:100%;text-align:left;background:none;border:none;border-top:1px solid var(--fx-line);padding:13px 18px;cursor:pointer;color:var(--ink);}
+  .fx-moving-row:first-child{border-top:none;}
+  .fx-moving-row:hover{background:rgba(20,21,24,.025);}
+  .fx-moving-pulse{width:8px;height:8px;border-radius:50%;flex:0 0 auto;background:var(--prog,#3a93d2);box-shadow:0 0 0 0 rgba(58,147,210,.6);animation:fxmpulse 1.8s infinite;}
+  @keyframes fxmpulse{0%{box-shadow:0 0 0 0 rgba(58,147,210,.5);}70%{box-shadow:0 0 0 6px rgba(58,147,210,0);}100%{box-shadow:0 0 0 0 rgba(58,147,210,0);}}
+  .fx-moving-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;}
+  .fx-moving-label{font-size:13px;color:var(--fx-ink2);}
+  .fx-moving-code{font-family:var(--font-mono);font-size:11.5px;color:var(--prog,#3a93d2);}
+  .fx-moving-act{font-size:13.5px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  #app.dark .fx-moving-list,#app.dark .fx-moving-row{border-color:#2a2d33;}
+  #app.dark .fx-moving-row:hover{background:rgba(255,255,255,.03);}
+  /* S3.8 empty state */
+  .fx-emptyhome{margin-top:18px;}
+  .fx-emptyhome-lead{font-family:'Newsreader',Georgia,serif;font-size:21px;line-height:1.35;color:var(--fx-ink);margin-bottom:22px;}
+  .fx-emptyhome-opts{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  @container (max-width:640px){ .fx-emptyhome-opts{grid-template-columns:1fr;} }
+  .fx-emptyhome-opt{display:flex;flex-direction:column;gap:7px;text-align:left;background:none;border:1px solid var(--fx-line);border-radius:14px;padding:20px;cursor:pointer;color:var(--ink);transition:border-color .14s,transform .14s;}
+  .fx-emptyhome-opt:hover{border-color:var(--asst);transform:translateY(-1px);}
+  .fx-emptyhome-ic{font-size:22px;color:var(--asst);}
+  .fx-emptyhome-otitle{font-size:15.5px;font-weight:600;}
+  .fx-emptyhome-osub{font-size:13px;color:var(--fx-ink2);line-height:1.4;}
+  .fx-emptyhome-live{display:flex;align-items:center;gap:9px;margin-top:22px;font-size:13px;color:var(--fx-ink2);}
+  .fx-emptyhome-livedot{width:8px;height:8px;border-radius:50%;background:var(--met);box-shadow:0 0 0 0 rgba(84,173,110,.6);animation:fxmpulse 2.4s infinite;}
+  @media (prefers-reduced-motion: reduce){ .fx-moving-pulse,.fx-emptyhome-livedot{animation:none;} .fx-in{animation:none!important;opacity:1!important;} }
+  #app.dark .fx-emptyhome-opt{border-color:#2a2d33;}
   .hm-secondary{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:30px;}
   @container (max-width:760px){ .hm-secondary{grid-template-columns:1fr;} }
   .hm-panel{border:1px solid var(--fx-line);border-radius:13px;padding:8px 16px 12px;}
