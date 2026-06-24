@@ -146,6 +146,23 @@
       await busReady;
       return SB.setCriterion(BUS, { goalId, criterionId, status, headline: headline || ("set "+criterionId), by: BUS.id() }, new Date().toISOString());
     },
+    // Artifact writes over the one bus Client (ADR-0044) — the Work-engine
+    // surfaces persist run + template records as artifacts (sextant.workflow.run/v1,
+    // sextant.workflow.template/v1). create() makes a fresh artifact; save() is an
+    // upsert that creates on first write and CAS-updates an existing one (read the
+    // current revision, then update at it). Both return the new revision.
+    createArtifact: async (name, record) => { await busReady; return BUS.createArtifact(name, record); },
+    saveArtifact: async (name, record) => {
+      await busReady;
+      try {
+        const cur = await BUS.getArtifact(name);
+        if (cur && typeof cur.revision === "number" && cur.revision > 0) {
+          return BUS.updateArtifact(name, record, cur.revision);
+        }
+      } catch (_) { /* not found → create below */ }
+      return BUS.createArtifact(name, record);
+    },
+    self: () => ({ id: BUS && BUS.id ? BUS.id() : "", name: BUS && BUS.displayName ? BUS.displayName() : "" }),
   };
 
   // The review convention (TASK-66): states + the per-artifact companion topic.
@@ -990,17 +1007,7 @@
           ) : stageMode==="workengine" ? (
             <div className="sx-canvas sx-canvas--list">
               <div className="sx-page sx-page--doc">
-                <div className="fx-scroll"><div className="fx-col sx-conv-light">
-                  <h1 className="fx-h1 fx-in">Work engine</h1>
-                  <p className="fx-psub fx-in" style={{animationDelay:".03s"}}>Where runs are templated, dispatched, and watched as they execute on the bus.</p>
-                  <div className="fx-stub fx-in" style={{animationDelay:".06s"}}>
-                    <span className="fx-stub-ic">⬡</span>
-                    <div>
-                      <div className="fx-stub-title">Coming soon</div>
-                      <div className="fx-stub-sub">The Work engine surface isn't built yet. The shell is here so the section is navigable; the run lanes land in a later ticket.</div>
-                    </div>
-                  </div>
-                </div></div>
+                <WorkEngineView goals={goalViews} artifacts={artItems} onOpenArtifact={openArtifact} renderWiki={renderWiki} />
               </div>
             </div>
           ) : stageMode==="bus" ? (
