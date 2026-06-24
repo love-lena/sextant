@@ -53,6 +53,7 @@ docs/demos/*.mp4
 /clients/go/apps/internal/dashapi/web/app/app.js
 /clients/go/apps/internal/dashapi/web/app/artifact.js
 /clients/go/apps/internal/dashapi/web/app/artifacts.js
+/clients/go/apps/internal/dashapi/web/app/bus.js
 /clients/go/apps/internal/dashapi/web/app/conversations.js
 /clients/go/apps/internal/dashapi/web/app/goals.js
 /clients/go/apps/internal/dashapi/web/app/home.js

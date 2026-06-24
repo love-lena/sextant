@@ -10,7 +10,7 @@ set -euo pipefail
 DIR="$(cd "$(dirname "$0")/../clients/go/apps/internal/dashapi/web/app" && pwd)"
 ESBUILD=(npx --yes esbuild@0.21.5)
 
-for f in tweaks-panel artifact home sidebar artifacts review conversations goals mobilize workflow app; do
+for f in tweaks-panel artifact home sidebar artifacts review conversations goals bus mobilize workflow app; do
   "${ESBUILD[@]}" "$DIR/$f.jsx" \
     --jsx=transform \
     --jsx-factory=React.createElement --jsx-fragment=React.Fragment \
