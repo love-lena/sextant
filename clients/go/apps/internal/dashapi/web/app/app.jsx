@@ -228,6 +228,12 @@
     // review-flagged goal is opened from the needs-you queue, so the nav lands on
     // that goal's detail; cleared on a plain Goals nav (lands on the portfolio).
     const [goalsOpenId, setGoalsOpenId] = useState(null);
+    // back-to-origin (TASK-220 S1.6/1.7): a detail/overlay surface (the full-page
+    // artifact review, an expanded conversation) records the surface it was opened
+    // FROM, so its top-bar back button is labelled by — and returns to — the exact
+    // origin (a goal-evidence artifact opened from Goals returns to Goals; the same
+    // artifact opened from Home returns to Home). Null on a root surface.
+    const [origin, setOrigin] = useState(null); // { mode, goalId } | null
     const [palette, setPalette] = useState(false);       // ⌘K command palette (TASK stage a)
     // Assistant FAB (stub, not wired): lifted here so ⌘K can open it with a
     // prefilled prompt. asstPrompt is the query carried over from a no-match search.
@@ -346,9 +352,13 @@
     const SIDE_MIN = 200, SIDE_MAX = 420;
     const clampSide = (w)=>Math.max(SIDE_MIN, Math.min(SIDE_MAX, Math.round(w)));
     const [sideWidth, setSideWidth] = useState(()=>{ try{ const v=parseInt(localStorage.getItem("sx-side-w")||"",10); return isNaN(v)?284:clampSide(v); }catch(_){ return 284; } });
-    const [sideCollapsed, setSideCollapsed] = useState(()=>{ try{ return localStorage.getItem("sx-side-collapsed")==="1"; }catch(_){ return false; } });
+    // The collapsed flag persists under the design's stable key (TASK-220 S22.2).
+    // Stored "1"/"0"; only ever read/written here so an operator-owned key is never
+    // clobbered. Width keeps its own (sx-side-w) key.
+    const SIDE_COLLAPSED_KEY = "sextant.sidebar.collapsed.v1";
+    const [sideCollapsed, setSideCollapsed] = useState(()=>{ try{ return localStorage.getItem(SIDE_COLLAPSED_KEY)==="1"; }catch(_){ return false; } });
     useEffect(()=>{ try{ localStorage.setItem("sx-side-w", String(sideWidth)); }catch(_){} },[sideWidth]);
-    useEffect(()=>{ try{ localStorage.setItem("sx-side-collapsed", sideCollapsed?"1":"0"); }catch(_){} },[sideCollapsed]);
+    useEffect(()=>{ try{ localStorage.setItem(SIDE_COLLAPSED_KEY, sideCollapsed?"1":"0"); }catch(_){} },[sideCollapsed]);
     const onSideWidth = useCallback((w)=>setSideWidth(clampSide(w)),[]);
     const toggleSide = useCallback(()=>setSideCollapsed(v=>!v),[]);
 
@@ -653,7 +663,13 @@
       touchRecent("art:"+name);
       setActiveArtifact(name); setArtMissing(false);
       if(opts && opts.popup){ setArtifactOpen(true); /* leave stageMode — the convo stays behind the modal */ }
-      else { setStageMode("artifact"); setArtifactOpen(false); }
+      else {
+        // record the originating surface for the back button, unless we're already
+        // ON a detail surface (don't overwrite the real root origin when chaining
+        // artifact→artifact via a [[wikilink]] in a doc body).
+        setOrigin(prev => (stageMode==="artifact"||stageMode==="conversation") ? prev : { mode: stageMode, goalId: goalsOpenId });
+        setStageMode("artifact"); setArtifactOpen(false);
+      }
       artReqRef.current = name; // mark this as the current open — the fetch below only applies if it's still current
       const subj = companionTopic(name); ensureConvo(subj); backfill(subj); // load the inline discussion (TASK-83)
       const cached = records[name];
@@ -678,7 +694,7 @@
     // the modal's "Open in full page" action: close the modal, then re-open the
     // same artifact on the full-page stage.
     function openArtifactFullPage(name){ closeArtifact(); openArtifact(name); }
-    function goHome(){ setStageMode("home"); }
+    function goHome(){ setOrigin(null); setStageMode("home"); }
     // ⌘K no-match → open the Assistant FAB with the typed query prefilled in the
     // composer (never auto-sent — the operator hits send). When violet is live the
     // FAB is the DM thread; when absent it shows the "not live yet" state. We set
@@ -696,7 +712,27 @@
     // onNav(key[, arg]): swap the stage. For "goals", an optional arg is a goal id
     // to deep-link to (TASK-157) — set it so the remounted GoalsView opens that
     // goal's detail; a plain Goals nav (no arg) clears it and lands on the portfolio.
-    function onNav(key, arg){ touchRecent("nav:"+key); if(key==="goals"){ setGoalsOpenId(typeof arg==="string"?arg:null); setGoalsEpoch(e=>e+1); } setStageMode(key); }
+    function onNav(key, arg){
+      touchRecent("nav:"+key);
+      if(key==="goals"){ setGoalsOpenId(typeof arg==="string"?arg:null); setGoalsEpoch(e=>e+1); }
+      // a nav click resets the back-stack for that root (S1.3) — UNLESS it's a
+      // deep-link into Goals (arg present), which is itself a navigation FROM the
+      // current surface, so the back button should still return there.
+      if(!(key==="goals" && typeof arg==="string")) setOrigin(null);
+      else setOrigin(prev => (stageMode==="goals") ? prev : { mode: stageMode, goalId: null });
+      setStageMode(key);
+    }
+    // STAGE_LABEL: the human label for a back-to-origin target. Falls back to a
+    // title-cased mode for any surface not in the table.
+    const STAGE_LABEL = { home:"Home", goals:"Goals", workengine:"Work engine", artifacts:"Artifacts", bus:"Bus", agents:"Agents", workflow:"Workflow", conversation:"Conversations" };
+    function originLabel(){ return (origin && STAGE_LABEL[origin.mode]) || "Back"; }
+    // goBack: return to the exact originating surface (S1.7). A goal deep-link
+    // carries its goalId back so Goals re-opens that detail.
+    function goBack(){
+      const o = origin || { mode:"home" }; setOrigin(null);
+      if(o.mode==="goals"){ setGoalsOpenId(o.goalId||null); setGoalsEpoch(e=>e+1); }
+      setStageMode(o.mode);
+    }
 
     // renderWiki: shared wikilink renderer for any view that shows goal/artifact
     // wikilinks in plain-text fields (goals north-star, criteria, etc.).
@@ -758,7 +794,11 @@
     }
     function ensureConvo(subj){ setConvos(prev=>prev[subj]?prev:{ ...prev, [subj]:{ msgs:[], last:Date.now(), lastText:"" } }); }
     function openConvo(key){ ensureConvo(key); setActiveConvo(key); backfill(key); }
-    function expandConvo(key){ touchRecent("conv:"+key); ensureConvo(key); setActiveConvo(key); setStageMode("conversation"); backfill(key); }
+    function expandConvo(key){
+      touchRecent("conv:"+key); ensureConvo(key); setActiveConvo(key);
+      setOrigin(prev => (stageMode==="artifact"||stageMode==="conversation") ? prev : { mode: stageMode, goalId: goalsOpenId });
+      setStageMode("conversation"); backfill(key);
+    }
     function send(){
       if(!draft.trim()||!activeConvo) return;
       const text=draft.trim();
@@ -841,7 +881,7 @@
       const items=[];
       // "Go to" — the four Workspace nav hubs as jump targets (same as clicking
       // the sidebar nav). Listed first so a name-clash still surfaces the hub.
-      [["Home","home"],["Artifacts","artifacts"],["Goals","goals"],["Agents","agents"],["Workflow","workflow"]]
+      [["Home","home"],["Goals","goals"],["Work engine","workengine"],["Artifacts","artifacts"],["Bus","bus"],["Agents","agents"],["Workflow","workflow"]]
         .forEach(([label,key])=>items.push({ key:"nav:"+key, type:"Go to", label,
           sub:"workspace", kw:("go to "+label+" "+key).toLowerCase(), go:()=>onNav(key) }));
       artItems.forEach(a=>items.push({ key:"art:"+a.name, type:"Artifact", label:a.name,
@@ -886,6 +926,14 @@
             </div>
           )}
           <div className="sx-topbar">
+            <div className="sx-topbar-left">
+            {/* back-to-origin (S1.6/1.7): present on a detail/overlay surface,
+                labelled by — and returning to — the exact surface it opened from. */}
+            {origin && (
+              <button className="sx-back" title={"Back to "+originLabel()} onClick={goBack}>
+                <span className="sx-back-ic">←</span><span className="sx-back-lbl">{originLabel()}</span>
+              </button>
+            )}
             <div className="sx-crumb">
               {stageMode==="home" ? (
                 <React.Fragment>
@@ -897,6 +945,10 @@
                 <span className="sx-crumb-topic">Artifacts</span>
               ) : stageMode==="goals" ? (
                 <span className="sx-crumb-topic">Goals</span>
+              ) : stageMode==="workengine" ? (
+                <span className="sx-crumb-topic">Work engine</span>
+              ) : stageMode==="bus" ? (
+                <span className="sx-crumb-topic">Bus</span>
               ) : stageMode==="agents" ? (
                 <span className="sx-crumb-topic">Agents</span>
               ) : stageMode==="workflow" ? (
@@ -914,6 +966,7 @@
                   <span className="sx-crumb-art">{convo.type==="topic"?"# ":"@ "}{convo.name}</span>
                 </React.Fragment>
               )}
+            </div>
             </div>
             <div className="sx-stage-tools">
               <span className="sx-live"><span className="sx-live-dot" />live</span>
@@ -933,6 +986,38 @@
           ) : stageMode==="goals" ? (
             <div className="sx-canvas sx-canvas--list">
               <div className="sx-page sx-page--doc"><GoalsView key={goalsEpoch} goals={goalViews} initialGoalId={goalsOpenId} onOpenArtifact={openArtifact} onSetReview={setReview} onDM={startDM} renderWiki={renderWiki} /></div>
+            </div>
+          ) : stageMode==="workengine" ? (
+            <div className="sx-canvas sx-canvas--list">
+              <div className="sx-page sx-page--doc">
+                <div className="fx-scroll"><div className="fx-col sx-conv-light">
+                  <h1 className="fx-h1 fx-in">Work engine</h1>
+                  <p className="fx-psub fx-in" style={{animationDelay:".03s"}}>Where runs are templated, dispatched, and watched as they execute on the bus.</p>
+                  <div className="fx-stub fx-in" style={{animationDelay:".06s"}}>
+                    <span className="fx-stub-ic">⬡</span>
+                    <div>
+                      <div className="fx-stub-title">Coming soon</div>
+                      <div className="fx-stub-sub">The Work engine surface isn't built yet. The shell is here so the section is navigable; the run lanes land in a later ticket.</div>
+                    </div>
+                  </div>
+                </div></div>
+              </div>
+            </div>
+          ) : stageMode==="bus" ? (
+            <div className="sx-canvas sx-canvas--list">
+              <div className="sx-page sx-page--doc">
+                <div className="fx-scroll"><div className="fx-col sx-conv-light">
+                  <h1 className="fx-h1 fx-in">Bus</h1>
+                  <p className="fx-psub fx-in" style={{animationDelay:".03s"}}>The live message bus — topics, conversations, and the traffic flowing across them.</p>
+                  <div className="fx-stub fx-in" style={{animationDelay:".06s"}}>
+                    <span className="fx-stub-ic">⇆</span>
+                    <div>
+                      <div className="fx-stub-title">Coming soon</div>
+                      <div className="fx-stub-sub">The Bus surface isn't built yet. The shell is here so the section is navigable; the topic + traffic views land in a later ticket.</div>
+                    </div>
+                  </div>
+                </div></div>
+              </div>
             </div>
           ) : stageMode==="agents" ? (
             <div className="sx-canvas sx-canvas--list">

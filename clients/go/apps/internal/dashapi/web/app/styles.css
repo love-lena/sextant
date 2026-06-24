@@ -203,6 +203,13 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 /* ============ STAGE ============ */
 .sx-stage{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--paper);height:100vh;animation:sxin .45s .06s ease both;}
 .sx-topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 18px;height:42px;flex:0 0 auto;border-bottom:1px solid var(--hair);}
+.sx-topbar-left{display:flex;align-items:center;gap:12px;min-width:0;}
+/* back-to-origin button (TASK-220 S1.6/1.7) — a hairline pill labelled by the
+   originating surface; sits left of the breadcrumb on detail/overlay surfaces. */
+.sx-back{display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid var(--hair);border-radius:8px;padding:4px 10px 4px 8px;font-family:var(--font-ui);font-size:12.5px;font-weight:500;color:var(--ink-2);cursor:pointer;flex:0 0 auto;transition:.12s;}
+.sx-back:hover{color:var(--ink);border-color:var(--ink-2);}
+.sx-back-ic{font-size:13px;line-height:1;}
+.sx-back-lbl{white-space:nowrap;}
 .sx-crumb{display:flex;align-items:center;gap:10px;font-size:14px;white-space:nowrap;min-width:0;}
 .sx-crumb-art{font-weight:600;color:var(--ink);letter-spacing:-.01em;white-space:nowrap;flex-shrink:0;}
 .sx-crumb-topic{font-family:var(--font-mono);font-size:12.5px;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;flex-shrink:1;}

@@ -423,8 +423,11 @@
       </div>);
   }
 
-  /* ---------- sidebar shell: Workspace nav + editable conversations ---------- */
-  const WORKSPACE = [["⌂", "Home", "home"], ["❡", "Artifacts", "artifacts"], ["◎", "Goals", "goals"], ["◍", "Agents", "agents"], ["⬡", "Workflow", "workflow"]];
+  /* ---------- sidebar shell: Workspace nav + editable conversations ----------
+     The five design nav rows in their exact order (TASK-220 S1.2): Home, Goals,
+     Work engine, Artifacts, Bus. The Agents + Workflow surfaces still exist as
+     code (reachable via ⌘K / deep-links) but are not primary nav rows. */
+  const WORKSPACE = [["⌂", "Home", "home"], ["◎", "Goals", "goals"], ["⬡", "Work engine", "workengine"], ["❡", "Artifacts", "artifacts"], ["⇆", "Bus", "bus"]];
 
   function ConvNav({ ctx }) {
     const [showHidden, setShowHidden] = useState(false);
@@ -470,9 +473,13 @@
   // drag that's still in progress when the component unmounts can't leak
   // document-level listeners.
   function Sidebar({ ctx, busName, navMode, sideWidth, sideCollapsed, onSideWidth, onToggleSide }) {
+    // Map the open stage to the primary nav row it lives under, so the active row
+    // is marked (S1.2). An artifact opened from Goals still marks Artifacts (it's
+    // the artifact stage); a goal/conversation/agents/workflow stage maps to no
+    // primary row when it isn't one of the five.
     const section = ctx.stageMode === "conversation" ? "convo"
       : ctx.stageMode === "artifact" ? "artifacts"
-      : ctx.stageMode; // home | artifacts | agents | goals
+      : ctx.stageMode; // home | goals | workengine | artifacts | bus | agents | workflow
     const meName = (ctx.self && ctx.self.display_name) || "you";
 
     // right-edge drag to resize — same shape as review.jsx's onHandleDown.
