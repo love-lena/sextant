@@ -1338,17 +1338,7 @@
           ) : stageMode==="bus" ? (
             <div className="sx-canvas sx-canvas--list">
               <div className="sx-page sx-page--doc">
-                <div className="fx-scroll"><div className="fx-col sx-conv-light">
-                  <h1 className="fx-h1 fx-in">Bus</h1>
-                  <p className="fx-psub fx-in" style={{animationDelay:".03s"}}>The live message bus — topics, conversations, and the traffic flowing across them.</p>
-                  <div className="fx-stub fx-in" style={{animationDelay:".06s"}}>
-                    <span className="fx-stub-ic">⇆</span>
-                    <div>
-                      <div className="fx-stub-title">Coming soon</div>
-                      <div className="fx-stub-sub">The Bus surface isn't built yet. The shell is here so the section is navigable; the topic + traffic views land in a later ticket.</div>
-                    </div>
-                  </div>
-                </div></div>
+                <BusInspector />
               </div>
             </div>
           ) : stageMode==="agents" ? (
