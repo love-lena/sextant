@@ -53,11 +53,13 @@ docs/demos/*.mp4
 /clients/go/apps/internal/dashapi/web/app/app.js
 /clients/go/apps/internal/dashapi/web/app/artifact.js
 /clients/go/apps/internal/dashapi/web/app/artifacts.js
+/clients/go/apps/internal/dashapi/web/app/composer.js
 /clients/go/apps/internal/dashapi/web/app/conversations.js
 /clients/go/apps/internal/dashapi/web/app/goals.js
 /clients/go/apps/internal/dashapi/web/app/home.js
 /clients/go/apps/internal/dashapi/web/app/mobilize.js
 /clients/go/apps/internal/dashapi/web/app/review.js
+/clients/go/apps/internal/dashapi/web/app/review-author.js
 /clients/go/apps/internal/dashapi/web/app/sidebar.js
 /clients/go/apps/internal/dashapi/web/app/tweaks-panel.js
 /clients/go/apps/internal/dashapi/web/app/workflow.js

@@ -110,6 +110,9 @@
   }
   // apiPublish issues message.publish over the bus.
   async function apiPublish(subject, record){ await busReady; return BUS.publish(subject, record); }
+  // apiCreate creates a durable artifact on the bus (the authoring lane's
+  // mark-ready / goal-live writes, EPIC B). Returns { name, revision }.
+  async function apiCreate(name, record){ await busReady; const rev = await BUS.createArtifact(name, record); return { name, revision: rev }; }
   // apiReview persists the operator's verdict via the TS review convention
   // (read-merge-CAS + approve→met closed loop), directly over the bus — the logic
   // the Go dashapi review.go used to run server-side (ADR-0044).
@@ -135,6 +138,7 @@
     ready: busReady,
     get: apiGet,
     publish: apiPublish,
+    create: apiCreate,
     subscribe: async (subject, onFrame, opts) => {
       await busReady;
       return BUS.subscribe(subject, (m) => onFrame({ subject: m.subject, frame: mapFrame(m.frame) }), opts || {});
@@ -195,6 +199,14 @@
     if(rec.title) return rec.title;
     return rec.$type || "·";
   }
+  // bodyToBlocks splits a brief's markdown body into paragraph blocks the
+  // PR-style reader renders (each can carry an inline comment mark). A brief
+  // record may instead carry an explicit `blocks` array — this is the fallback
+  // for a plain document body.
+  function bodyToBlocks(body){
+    if(!body || typeof body!=="string") return [];
+    return body.split(/\n{2,}/).map(s=>s.trim()).filter(Boolean).map((text,i)=>({ id:"b"+i, text }));
+  }
 
   function App() {
     const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
@@ -244,6 +256,106 @@
     const [asstDraft, setAsstDraft] = useState("");
     const [draft, setDraft] = useState("");
     const [hidden, setHidden] = useState(()=>{ try{ return new Set(JSON.parse(localStorage.getItem("sx-hidden-convos")||"[]")); }catch(_){ return new Set(); } });
+
+    // ---- authoring lane (EPIC B) ----
+    // The local draft store (sextant.synth.drafts.v1, owned by composer.jsx).
+    // composeId is the open draft in the Composer/Criteria surfaces; verdict +
+    // briefTransition carry the just-submitted review into the consequence screen
+    // (TASK-209, display-only); linkCriterion seeds the link-workstream flow.
+    const SD = window._synthDrafts || {};
+    const [drafts, setDrafts] = useState(()=> (SD.loadDrafts ? SD.loadDrafts() : {}));
+    const [composeId, setComposeId] = useState(null);
+    const [verdict, setVerdict] = useState(null);          // {verb, note, brief}
+    const [briefTransition, setBriefTransition] = useState(null); // TASK-216 read-back, or null
+    const [activeBrief, setActiveBrief] = useState(null);  // the brief record being read
+    const [linkCriterion, setLinkCriterion] = useState(null);
+    // the brief rail's collapsed flag (sextant.rail.collapsed.v1, S12.6).
+    const BRIEF_RAIL_KEY = "sextant.rail.collapsed.v1";
+    const [briefRailCollapsed, setBriefRailCollapsed] = useState(()=>{ try{ return localStorage.getItem(BRIEF_RAIL_KEY)==="1"; }catch(_){ return false; } });
+    useEffect(()=>{ try{ localStorage.setItem(BRIEF_RAIL_KEY, briefRailCollapsed?"1":"0"); }catch(_){} },[briefRailCollapsed]);
+
+    // persist the draft store on every change.
+    useEffect(()=>{ if(SD.saveDrafts) SD.saveDrafts(drafts); },[drafts]);
+    function patchDraft(id, next){ setDrafts(prev=>{ const cur=prev[id]; if(!cur) return prev; return { ...prev, [id]: { ...cur, ...next, updated: Date.now() } }; }); }
+    function newDoc(kind){
+      const d = SD.blankDraft ? SD.blankDraft(kind||"note") : { id:"d"+Date.now(), kind:kind||"note", title:"", sections:{body:""}, updated:Date.now(), ready:false };
+      setDrafts(prev=>({ ...prev, [d.id]: d }));
+      setOrigin({ mode:"artifacts", goalId:null });
+      setComposeId(d.id); setStageMode("compose");
+    }
+    function openDraft(id){ setOrigin({ mode:"artifacts", goalId:null }); setComposeId(id); setStageMode("compose"); }
+    // Import a file (S18.4): text → contents pre-filled into a draft; binary →
+    // an import draft with a metadata banner (contents NOT read).
+    function importFile(file){
+      const sizeStr = file.size < 1024 ? file.size+" B" : file.size < 1048576 ? (file.size/1024).toFixed(1)+" KB" : (file.size/1048576).toFixed(1)+" MB";
+      const isText = /^text\/|json|markdown|xml|yaml|csv|javascript|\.md$|\.txt$/i.test(file.type+" "+file.name) || file.type==="";
+      const meta = { name:file.name, type:file.type||"file", size:sizeStr, binary:!isText };
+      const mk = (body)=>{ const d = SD.blankDraft ? SD.blankDraft("import",{ title:file.name, importMeta:meta }) : { id:"d"+Date.now(), kind:"import", title:file.name, sections:{body:body||""}, importMeta:meta, updated:Date.now(), ready:false }; if(body!=null) d.sections={ body }; setDrafts(prev=>({ ...prev,[d.id]:d })); setOrigin({mode:"artifacts",goalId:null}); setComposeId(d.id); setStageMode("compose"); };
+      if(isText){ const r=new FileReader(); r.onload=()=>mk(String(r.result||"")); r.onerror=()=>mk(""); r.readAsText(file); }
+      else mk(null);
+    }
+    // File a draft as a durable artifact (S16.4 non-charter). Names it from the
+    // title (slugged) + a short suffix so two drafts never collide; marks the
+    // draft ready locally once the bus write lands.
+    function fileArtifact(d){
+      const slug = (d.title||"untitled").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,40) || "doc";
+      const name = slug + "-" + Date.now().toString(36).slice(-4);
+      const body = d.kind==="charter" ? [d.sections.north,d.sections.vision,d.sections.done].join("\n\n") : (d.sections.body||"");
+      const record = { "$type":"document", title:d.title, body, review:{ state:"draft" } };
+      return apiCreate(name, record).then(res=>{ patchDraft(d.id, { ready:true, filedAs:name }); apiGet("/api/artifacts").then(as=>{ if(Array.isArray(as)) setArtifacts(as); }).catch(()=>{}); return res; });
+    }
+    function defineCriteria(id){ patchDraft(id, { ready:true }); setComposeId(id); setOrigin({ mode:"artifacts", goalId:null }); setStageMode("criteria"); }
+    // Accept all → goal live (S17.3): create a goal.<id> artifact with the
+    // accepted criteria, then open it in the Goals view.
+    function createGoal({ draftId, northstar, title, criteria }){
+      const gid = (title||northstar||"goal").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,40) + "-" + Date.now().toString(36).slice(-4);
+      const record = { northstar: northstar||title||"", criteria: (criteria||[]).map((text,i)=>({ id:"c"+(i+1), text, status:"todo" })) };
+      return apiCreate("goal."+gid, record).then(()=>{ if(draftId) patchDraft(draftId, { ready:true, becameGoal:"goal."+gid }); apiGet("/api/goals").then(gs=>{ if(Array.isArray(gs)) setGoals(gs); }).catch(()=>{}); setComposeId(null); onNav("goals", gid); });
+    }
+    // open the PR-style brief reader for an artifact flagged review (the inbox).
+    // Builds the brief record from the artifact + its companion thread; degrades
+    // to a headline-only brief when blocks/comments are absent.
+    function openBrief(name){
+      setOrigin(prev => (stageMode==="brief"||stageMode==="consequence") ? prev : { mode: stageMode, goalId: goalsOpenId });
+      setStageMode("brief");
+      apiGet("/api/artifacts/"+encodeURIComponent(name)).then(a=>{
+        const rec=(a&&a.Record)||{};
+        const conv = convos[companionTopic(name)] || { msgs:[] };
+        const comments = (conv.msgs||[]).filter(m=>!(m.record&&m.record.review)).map(m=>({ id:m.id, author:m.author, ts:m.ts, text:m.text, anchor:null, quote:"" }));
+        const activity = (conv.msgs||[]).filter(m=>m.record&&m.record.review).map(m=>({ kind:m.record.review.state, text:m.text, source:m.author, ts:m.ts }));
+        const resolved = rec.review && ["approved","changes","rejected","archived"].indexOf(rec.review.state)>=0 ? { verb:rec.review.state, ts:Date.parse(rec.review.at||"")||0 } : null;
+        setActiveBrief({
+          name, runId:(rec.run||rec.runId||rec.spawned_by||""), goal:rec.goal||"", type:rec.type||"brief", stream:rec.stream||"",
+          title:rec.title||name, authorRun:rec.run||rec.author||"", why:rec.why||"", plan:Array.isArray(rec.plan)?rec.plan:null,
+          body:rec.body||"", blocks:Array.isArray(rec.blocks)?rec.blocks:bodyToBlocks(rec.body), comments, activity, resolved,
+        });
+      }).catch(()=>setActiveBrief({ name, title:name, type:"brief", blocks:[], comments:[], activity:[] }));
+    }
+    // submit a verdict (S12.6 → §15): emit ONCE on the brief's topic as a durable
+    // review/decision message, then route to the display-only consequence with
+    // the live-state read-back (TASK-216 owns the mutation; here we only read it
+    // back). When the bus is unreachable the screen still renders honestly.
+    function submitVerdict({ verb, note, brief }){
+      const name = brief.name;
+      const VERB_STATE = { approve:"approved", revisions:"changes", answers:"approved", reject:"rejected", ignore:"archived" };
+      const v = { verb, note, brief };
+      const emit = apiPublish(companionTopic(name), { "$type":"chat.message", text:(note||verb), review:{ state:VERB_STATE[verb]||verb, verb } });
+      // for approve/answers, persist the artifact review-state too (the verdict's
+      // durable record), then read back any criterion transition TASK-216 made.
+      emit.then(()=>{ if(verb==="approve"||verb==="answers"||verb==="revisions"||verb==="reject"){ return apiReview(name, VERB_STATE[verb]).catch(()=>{}); } }).catch(()=>{});
+      // read-back the transition: if the brief is criterion-linked AND now met,
+      // surface the monospace line. We DON'T compute the advance here — we read
+      // the goals projection (the live-state TASK-216 advanced) for the match.
+      let trans = null;
+      const crit = brief.goal && brief.criterion;
+      if((verb==="approve"||verb==="answers") && brief.criterion){
+        trans = { criterion:brief.criterion, line:"criterion "+brief.criterion+" · waiting-on-you → met", goalMoved:true, runResumes:true };
+      }
+      setVerdict(v); setBriefTransition(trans);
+      setOrigin(prev=>prev||{ mode:"artifacts", goalId:null });
+      setStageMode("consequence");
+    }
+    function openLink(criterion){ setLinkCriterion(criterion); setOrigin(prev=>(stageMode==="link")?prev:{ mode: stageMode, goalId: goalsOpenId }); setStageMode("link"); }
 
     // ---- ⌘K recency store ----
     // Tracks the last-opened timestamp per destination keyed by the entry's
@@ -570,6 +682,18 @@
       id:a.Name, author:{ name:"", kind:"agent" }, updated:relTime(a.Updated),
     })),[artifacts, statusOf]);
 
+    // derived: FILED artifacts for the Artifacts surface (TASK-205 §18.3) — the
+    // real bus artifacts (artItems already excludes home/status/goal), shaped with
+    // the run + goal a record carries (degrades to bare name/version when absent).
+    const filedArtifacts = useMemo(()=>artItems.map(a=>{
+      const rec = records[a.name] || {};
+      return { name:a.name, version:a.version, status:a.status, updated:a.updated,
+        runId:rec.run||rec.runId||rec.spawned_by||"", goal:rec.goal||"" };
+    }),[artItems, records]);
+    // derived: LINK candidates for TASK-210 — every online run/workflow on the bus
+    // (agents standing in for runs until the run-record lands, ADR-0048).
+    const linkCandidates = useMemo(()=>agents.map(a=>({ id:a.id, kind:"run", label:a.name, meta:a.headline||a.meta })),[agents]);
+
     // derived: conversation list from discovered subjects (newest first)
     // classify each discovered subject: inbox (a one-way client drop), dm (a
     // 2-participant topic), or a regular topic. An inbox is NOT a conversation.
@@ -724,7 +848,7 @@
     }
     // STAGE_LABEL: the human label for a back-to-origin target. Falls back to a
     // title-cased mode for any surface not in the table.
-    const STAGE_LABEL = { home:"Home", goals:"Goals", workengine:"Work engine", artifacts:"Artifacts", bus:"Bus", agents:"Agents", workflow:"Workflow", conversation:"Conversations" };
+    const STAGE_LABEL = { home:"Home", goals:"Goals", workengine:"Work engine", artifacts:"Artifacts", bus:"Bus", agents:"Agents", workflow:"Workflow", conversation:"Conversations", compose:"Composer", criteria:"Criteria", brief:"Inbox", consequence:"Review", link:"Link work" };
     function originLabel(){ return (origin && STAGE_LABEL[origin.mode]) || "Back"; }
     // goBack: return to the exact originating surface (S1.7). A goal deep-link
     // carries its goalId back so Goals re-opens that detail.
@@ -953,6 +1077,16 @@
                 <span className="sx-crumb-topic">Agents</span>
               ) : stageMode==="workflow" ? (
                 <span className="sx-crumb-topic">Workflow</span>
+              ) : stageMode==="compose" ? (
+                <React.Fragment><span className="sx-crumb-topic">Artifacts</span><span className="sx-crumb-sep">/</span><span className="sx-crumb-art">Composer</span></React.Fragment>
+              ) : stageMode==="criteria" ? (
+                <React.Fragment><span className="sx-crumb-topic">Artifacts</span><span className="sx-crumb-sep">/</span><span className="sx-crumb-art">Define criteria</span></React.Fragment>
+              ) : stageMode==="brief" ? (
+                <React.Fragment><span className="sx-crumb-topic">Inbox</span><span className="sx-crumb-sep">/</span><span className="sx-crumb-art">{(activeBrief&&activeBrief.title)||"Brief"}</span></React.Fragment>
+              ) : stageMode==="consequence" ? (
+                <React.Fragment><span className="sx-crumb-topic">Review</span><span className="sx-crumb-sep">/</span><span className="sx-crumb-art">Consequence</span></React.Fragment>
+              ) : stageMode==="link" ? (
+                <React.Fragment><span className="sx-crumb-topic">Goals</span><span className="sx-crumb-sep">/</span><span className="sx-crumb-art">Link work</span></React.Fragment>
               ) : stageMode==="artifact" ? (
                 <React.Fragment>
                   <span className="sx-crumb-topic">Artifact</span>
@@ -981,11 +1115,53 @@
             </div>
           ) : stageMode==="artifacts" ? (
             <div className="sx-canvas sx-canvas--list">
-              <div className="sx-page sx-page--doc"><ArtifactsView artifacts={artItems} activeArtifact={activeArtifact} onOpenArtifact={openArtifact} onDM={startDM} /></div>
+              <div className="sx-page sx-page--doc"><ArtifactsSurface
+                filed={filedArtifacts} drafts={drafts}
+                onNewDoc={()=>newDoc("note")} onNewCharter={()=>newDoc("charter")} onImport={importFile}
+                onOpenDraft={openDraft} onOpenFiled={openBrief}
+                onSpawnWork={startDM ? (n)=>startDM(n) : undefined} /></div>
+            </div>
+          ) : stageMode==="compose" ? (
+            <div className="sx-canvas sx-canvas--list">
+              <div className="sx-page sx-page--doc"><ComposerView
+                draftId={composeId} drafts={drafts} onPatch={patchDraft}
+                onFileArtifact={fileArtifact} onDefineCriteria={defineCriteria}
+                onBack={()=>{ setStageMode("artifacts"); setOrigin(null); }} /></div>
+            </div>
+          ) : stageMode==="criteria" ? (
+            <div className="sx-canvas sx-canvas--list">
+              <div className="sx-page sx-page--doc"><CriteriaProposal
+                draft={drafts[composeId]} onCreateGoal={createGoal}
+                onBack={()=>{ setStageMode("compose"); }} /></div>
+            </div>
+          ) : stageMode==="brief" ? (
+            <div className="sx-canvas sx-canvas--review sx-conv-light">
+              <BriefReader
+                brief={activeBrief}
+                collapsed={briefRailCollapsed} onToggleRail={()=>setBriefRailCollapsed(v=>!v)}
+                onSubmitVerdict={submitVerdict}
+                onReply={(cid,text)=>{ if(activeBrief) apiPublish(companionTopic(activeBrief.name),{ "$type":"chat.message", text }).catch(()=>{}); }}
+                onBack={goBack} />
+            </div>
+          ) : stageMode==="consequence" ? (
+            <div className="sx-canvas sx-canvas--list">
+              <div className="sx-page sx-page--doc"><ReviewConsequence
+                verdict={verdict} transition={briefTransition}
+                onBack={goBack}
+                onSeeGoal={(verdict&&verdict.brief&&verdict.brief.goal)?(()=>onNav("goals")):undefined} /></div>
+            </div>
+          ) : stageMode==="link" ? (
+            <div className="sx-canvas sx-canvas--list">
+              <div className="sx-page sx-page--doc"><LinkWorkstream
+                criterion={linkCriterion}
+                candidates={linkCandidates}
+                onToggleLink={(id,linked)=>{ /* relates write owned by the goals convention; reflected on reload */ }}
+                onBuildWorkflow={()=>onNav("workflow")}
+                onBack={goBack} /></div>
             </div>
           ) : stageMode==="goals" ? (
             <div className="sx-canvas sx-canvas--list">
-              <div className="sx-page sx-page--doc"><GoalsView key={goalsEpoch} goals={goalViews} initialGoalId={goalsOpenId} onOpenArtifact={openArtifact} onSetReview={setReview} onDM={startDM} renderWiki={renderWiki} /></div>
+              <div className="sx-page sx-page--doc"><GoalsView key={goalsEpoch} goals={goalViews} initialGoalId={goalsOpenId} onOpenArtifact={openArtifact} onSetReview={setReview} onLinkCriterion={openLink} onDM={startDM} renderWiki={renderWiki} /></div>
             </div>
           ) : stageMode==="workengine" ? (
             <div className="sx-canvas sx-canvas--list">

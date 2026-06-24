@@ -126,7 +126,7 @@
   }
 
   /* ---------- L2 · Goal detail ---------- */
-  function Criterion({ c, onOpenArtifact, renderWiki }) {
+  function Criterion({ c, goalName, onOpenArtifact, onLinkCriterion, renderWiki }) {
     const s = stat(c.status);
     const evidence = c.evidence || [];
     const rw = renderWiki || ((t) => t);
@@ -142,6 +142,11 @@
                     onClick={() => onOpenArtifact && onOpenArtifact(e.name)}
                     title={(e.kind === "proof" ? "proof · " : "related · ") + e.name}>{e.name}</button>))
               : <span className="dxg-noevi">— no work yet</span>}
+            {onLinkCriterion && (
+              <button className="dxg-chip dxg-chip--link" type="button"
+                onClick={() => onLinkCriterion({ id: c.id, text: c.text, goal: goalName, linked: evidence.map((e) => e.name) })}
+                title="Link a workstream to this criterion">+ link work</button>
+            )}
           </div>
         </div>
         <div className="dxg-crit-right">
@@ -197,7 +202,7 @@
       </div>);
   }
 
-  function Detail({ g, onBack, onOpenArtifact, onSetReview, renderWiki }) {
+  function Detail({ g, onBack, onOpenArtifact, onSetReview, onLinkCriterion, renderWiki }) {
     const r = roll(g);
     const crits = g.criteria || [];
     const rw = renderWiki || ((t) => t);
@@ -226,7 +231,7 @@
 
             <div className="dxg-crits">
               {crits.length
-                ? crits.map((c, i) => <Criterion c={c} onOpenArtifact={onOpenArtifact} renderWiki={renderWiki} key={c.id || i} />)
+                ? crits.map((c, i) => <Criterion c={c} goalName={g.name || g.id} onOpenArtifact={onOpenArtifact} onLinkCriterion={onLinkCriterion} renderWiki={renderWiki} key={c.id || i} />)
                 : <div className="dxg-noevi" style={{ padding: "14px 0" }}>No criteria yet — this goal hasn't been broken down into checkable outcomes.</div>}
             </div>
 
@@ -260,12 +265,12 @@
   // each Goals nav, so the prop seeds the initial selection). onOpenArtifact opens an
   // evidence artifact in the review stage; onSetReview persists a goal sign-off
   // verdict (the same review primitive the rest of the dash uses).
-  function GoalsView({ goals, initialGoalId, onOpenArtifact, onSetReview, onDM, renderWiki }) {
+  function GoalsView({ goals, initialGoalId, onOpenArtifact, onSetReview, onLinkCriterion, onDM, renderWiki }) {
     const [openGoal, setOpenGoal] = useState(initialGoalId || null);
     const list = goals || [];
     if (list.length === 0) return <Empty />;
     const g = openGoal && list.find((x) => x.id === openGoal);
-    if (g) return <Detail g={g} onBack={() => setOpenGoal(null)} onOpenArtifact={onOpenArtifact} onSetReview={onSetReview} renderWiki={renderWiki} />;
+    if (g) return <Detail g={g} onBack={() => setOpenGoal(null)} onOpenArtifact={onOpenArtifact} onSetReview={onSetReview} onLinkCriterion={onLinkCriterion} renderWiki={renderWiki} />;
     return <Portfolio goals={list} onOpen={(id) => setOpenGoal(id)} onDM={onDM} renderWiki={renderWiki} />;
   }
 
