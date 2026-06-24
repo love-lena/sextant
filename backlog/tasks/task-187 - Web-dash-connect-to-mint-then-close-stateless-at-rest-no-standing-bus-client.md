@@ -3,10 +3,10 @@ id: TASK-187
 title: >-
   Web dash: connect-to-mint-then-close (stateless at rest, no standing bus
   client)
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-23 19:33'
-updated_date: '2026-06-23 19:59'
+updated_date: '2026-06-24 01:01'
 labels:
   - feature
   - dash

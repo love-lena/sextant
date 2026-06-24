@@ -1,10 +1,10 @@
 ---
 id: TASK-186
 title: Extract the web dash into a standalone sextant-dash binary (ADR-0046)
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-23 19:33'
-updated_date: '2026-06-23 20:12'
+updated_date: '2026-06-24 01:01'
 labels:
   - feature
   - dash

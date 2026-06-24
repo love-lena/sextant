@@ -546,3 +546,95 @@ func TestStartConsumer_ErrorPathNoLeak(t *testing.T) {
 		// good: only one delivery (the observer itself), no leaked coordinator
 	}
 }
+
+// TestStartConsumer_IgnoresHistoricalStart is the TASK-192 regression: the
+// listen-mode start consumer must deliver only NEW workflow.start requests, never
+// replay history. Before the fix it subscribed with DeliverAll, so every (re)start
+// re-ran EVERY historical start — including stale ones whose step can never
+// complete (no dispatcher → no spawn.ack → 90s timeout → drain → respawn) —
+// crash-looping the coordinator. A start published BEFORE the consumer subscribes
+// must be ignored (no ack); a start published after is handled (ok ack).
+func TestStartConsumer_IgnoresHistoricalStart(t *testing.T) {
+	b, err := bus.Start(t.Context(), bus.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("bus.Start: %v", err)
+	}
+	t.Cleanup(b.Shutdown)
+
+	requester := dialBusClient(t, b, "requester")
+	consumer := dialBusClient(t, b, "consumer")
+
+	// Background-derived ctx (not t.Context()) so a delivery goroutine never holds a
+	// t-derived context during teardown; cleanup cancels it before the bus shuts down.
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	// (1) A HISTORICAL workflow.start, published BEFORE any consumer exists.
+	histBytes, _ := json.Marshal(WorkflowStartRequest{Type: typeWorkflowStart, Prompt: "stale historical start"})
+	if _, err := requester.PublishMsg(ctx, startSubject, json.RawMessage(histBytes)); err != nil {
+		t.Fatalf("publish historical start: %v", err)
+	}
+
+	// Capture acks the consumer publishes back on startSubject (new-only: we only
+	// care about acks emitted after this subscription, which is what a replay would
+	// produce). The callback touches only the mutex-guarded slice — never *T.
+	var (
+		ackMu sync.Mutex
+		acks  []WorkflowStartAck
+	)
+	if _, err := requester.Subscribe(ctx, startSubject, func(m sextant.Message) {
+		var a WorkflowStartAck
+		if err := json.Unmarshal(m.Frame.Record, &a); err != nil || a.Type != typeWorkflowStartAck {
+			return
+		}
+		ackMu.Lock()
+		acks = append(acks, a)
+		ackMu.Unlock()
+	}); err != nil {
+		t.Fatalf("subscribe acks: %v", err)
+	}
+
+	// (2) Start the consumer. With new-only delivery it must NOT see the historical
+	// start, so it publishes no ack for it.
+	_, sub, err := newStartConsumer(ctx, consumer, "msg.topic.spawn", 2*time.Second)
+	if err != nil {
+		t.Fatalf("newStartConsumer: %v", err)
+	}
+	t.Cleanup(sub.Stop)
+
+	// Give a (wrongly) replayed historical start ample time to produce its ack.
+	time.Sleep(1500 * time.Millisecond)
+	ackMu.Lock()
+	nHist := len(acks)
+	ackMu.Unlock()
+	if nHist != 0 {
+		t.Fatalf("consumer replayed a historical workflow.start (%d ack(s), want 0) — DeliverAll regression (TASK-192)", nHist)
+	}
+
+	// (3) A NEW start published while the consumer is live IS handled (ok ack).
+	liveBytes, _ := json.Marshal(WorkflowStartRequest{Type: typeWorkflowStart, Prompt: "live start", Nonce: "live-1"})
+	if _, err := requester.PublishMsg(ctx, startSubject, json.RawMessage(liveBytes)); err != nil {
+		t.Fatalf("publish live start: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		ackMu.Lock()
+		n := len(acks)
+		ackMu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	ackMu.Lock()
+	defer ackMu.Unlock()
+	if len(acks) != 1 {
+		t.Fatalf("live start: want exactly 1 ack, got %d", len(acks))
+	}
+	if acks[0].Status != statusOK {
+		t.Errorf("live start ack.status = %q, want %q (error: %s)", acks[0].Status, statusOK, acks[0].Error)
+	}
+	if acks[0].Nonce != "live-1" {
+		t.Errorf("ack.nonce = %q, want %q", acks[0].Nonce, "live-1")
+	}
+}

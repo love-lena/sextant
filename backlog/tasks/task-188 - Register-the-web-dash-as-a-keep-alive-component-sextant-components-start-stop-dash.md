@@ -3,10 +3,10 @@ id: TASK-188
 title: >-
   Register the web dash as a keep-alive component (sextant components start/stop
   dash)
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-23 19:34'
-updated_date: '2026-06-23 19:57'
+updated_date: '2026-06-24 01:01'
 labels:
   - feature
   - dash
