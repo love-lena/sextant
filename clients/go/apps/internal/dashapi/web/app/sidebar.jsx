@@ -484,6 +484,7 @@
     // primary row when it isn't one of the five.
     const section = ctx.stageMode === "conversation" ? "convo"
       : ctx.stageMode === "artifact" ? "artifacts"
+      : (ctx.stageMode === "compose" || ctx.stageMode === "criteria" || ctx.stageMode === "brief" || ctx.stageMode === "consequence") ? "artifacts"
       : ctx.stageMode; // home | goals | workengine | artifacts | bus | agents | workflow
     const meName = (ctx.self && ctx.self.display_name) || "you";
 

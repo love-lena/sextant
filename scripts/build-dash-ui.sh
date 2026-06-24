@@ -10,13 +10,13 @@ set -euo pipefail
 DIR="$(cd "$(dirname "$0")/../clients/go/apps/internal/dashapi/web/app" && pwd)"
 ESBUILD=(npx --yes esbuild@0.21.5)
 
-for f in tweaks-panel status assistant-brain artifact home sidebar artifacts review conversations goals mobilize workflow app; do
+for f in tweaks-panel status assistant-brain artifact home sidebar artifacts review conversations goals bus mobilize workflow composer review-author workengine app; do
   "${ESBUILD[@]}" "$DIR/$f.jsx" \
     --jsx=transform \
     --jsx-factory=React.createElement --jsx-fragment=React.Fragment \
     --outfile="$DIR/$f.js" --log-level=warning
 done
-echo "built dash UI components → $DIR/{tweaks-panel,status,assistant-brain,artifact,home,sidebar,artifacts,review,conversations,goals,mobilize,workflow,app}.js"
+echo "built dash UI components → $DIR/{tweaks-panel,status,assistant-brain,artifact,home,sidebar,artifacts,review,conversations,goals,bus,mobilize,workflow,composer,review-author,workengine,app}.js"
 
 # The bus bundle (ADR-0044): bundle @sextant/sdk (browser entry), @sextant/conv-goals,
 # @sextant/conv-review and nats.ws into vendor/sextant-bus.js as a single IIFE that

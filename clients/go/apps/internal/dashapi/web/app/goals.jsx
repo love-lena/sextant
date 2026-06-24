@@ -247,7 +247,7 @@
       default:               return "";
     }
   }
-  function Criterion({ g, c, onOpenArtifact, onDM, onSpawn, onLink, renderWiki }) {
+  function Criterion({ g, c, goalName, onOpenArtifact, onDM, onSpawn, onLink, onLinkCriterion, renderWiki }) {
     const s = stat(c.status);
     const evidence = c.evidence || [];
     const rw = renderWiki || ((t) => t);
@@ -267,10 +267,15 @@
                     title={(e.kind === "proof" ? "proof · " : "related · ") + e.name}>{e.name}</button>))
               : !runOwner && <span className="dxg-noevi">— no work yet</span>}
 
-            {/* per-criterion inline actions (S5.4) */}
+            {/* per-criterion inline actions (S5.4). +link prefers the dedicated
+                LinkWorkstream overlay (review lane, onLinkCriterion) when wired,
+                else falls back to the local DM/spawn handler (onLink). */}
             <span className="dxg-crit-acts">
               {c.status === "blocked" && (
-                <button className="dxg-critact" type="button" onClick={() => onLink && onLink(g, c)}>+ link a workstream</button>)}
+                onLinkCriterion
+                  ? <button className="dxg-critact" type="button"
+                      onClick={() => onLinkCriterion({ id: c.id, text: c.text, goal: goalName, linked: evidence.map((e) => e.name) })}>+ link a workstream</button>
+                  : <button className="dxg-critact" type="button" onClick={() => onLink && onLink(g, c)}>+ link a workstream</button>)}
               {(c.status === "waiting-on-you" || c.status === "not-started") && (
                 <button className="dxg-critact" type="button" onClick={() => onSpawn && onSpawn(g, c)}>+ spawn work</button>)}
             </span>
@@ -388,7 +393,7 @@
   }
 
   /* ---------- L2 · Goal detail (S5.1) ---------- */
-  function Detail({ g, self, onBack, onOpenArtifact, onSetReview, onDM, onSpawnGoal, onSpawnCrit, onLinkCrit, onAddCriterion, onPostTopic, loadThread, renderWiki }) {
+  function Detail({ g, self, onBack, onOpenArtifact, onSetReview, onDM, onSpawnGoal, onSpawnCrit, onLinkCrit, onLinkCriterion, onAddCriterion, onPostTopic, loadThread, renderWiki }) {
     const r = roll(g);
     const crits = g.criteria || [];
     const rw = renderWiki || ((t) => t);
@@ -419,7 +424,7 @@
 
             <div className="dxg-crits">
               {crits.length
-                ? crits.map((c, i) => <Criterion g={g} c={c} onOpenArtifact={onOpenArtifact} onDM={onDM} onSpawn={onSpawnCrit} onLink={onLinkCrit} renderWiki={renderWiki} key={c.id || i} />)
+                ? crits.map((c, i) => <Criterion g={g} c={c} goalName={g.name || g.id} onOpenArtifact={onOpenArtifact} onDM={onDM} onSpawn={onSpawnCrit} onLink={onLinkCrit} onLinkCriterion={onLinkCriterion} renderWiki={renderWiki} key={c.id || i} />)
                 : <div className="dxg-noevi" style={{ padding: "14px 0" }}>No criteria yet — this goal hasn't been broken down into checkable outcomes.</div>}
               <AddCriterion onAdd={(t) => onAddCriterion(g.id, t)} />
             </div>
@@ -453,8 +458,10 @@
   /* ---------- the view ---------- */
   // GoalsView holds the L1↔L2 selection plus the live mobilize popover (spawn).
   // initialGoalId deep-links straight to a goal's detail (set when opened from the
-  // needs-you queue). onOpenArtifact opens evidence; onSetReview persists a sign-off.
-  function GoalsView({ goals, initialGoalId, self, onOpenArtifact, onSetReview, onDM, renderWiki }) {
+  // needs-you queue). onOpenArtifact opens an evidence artifact in the review stage;
+  // onSetReview persists a goal sign-off verdict (the same review primitive the rest
+  // of the dash uses); onLinkCriterion opens the LinkWorkstream overlay (review lane).
+  function GoalsView({ goals, initialGoalId, self, onOpenArtifact, onSetReview, onLinkCriterion, onDM, renderWiki }) {
     const [openGoal, setOpenGoal] = useState(initialGoalId || null);
     const [spawnCtx, setSpawnCtx] = useState(null); // { northstar, id } | null — drives the MobilizeButton popover
     const reduced = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -494,6 +501,7 @@
           <Detail g={g} self={self} onBack={() => setOpenGoal(null)}
             onOpenArtifact={onOpenArtifact} onSetReview={onSetReview} onDM={onDM}
             onSpawnGoal={spawnGoal} onSpawnCrit={spawnCrit} onLinkCrit={linkCrit}
+            onLinkCriterion={onLinkCriterion}
             onAddCriterion={addCriterion} onPostTopic={postTopic} loadThread={loadThread}
             renderWiki={renderWiki} />
         ) : (
