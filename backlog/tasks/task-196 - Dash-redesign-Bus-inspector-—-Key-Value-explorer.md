@@ -4,8 +4,10 @@ title: 'Dash redesign: Bus inspector — Key-Value explorer'
 status: To Do
 assignee: []
 created_date: '2026-06-24 00:33'
+updated_date: '2026-06-24 01:09'
 labels:
   - ready-for-agent
+  - lane-bus
 dependencies:
   - TASK-195
 priority: low
