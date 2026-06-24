@@ -1,6 +1,7 @@
 /* sidebar.jsx — Sextant Live Flow shell (v0.5 reskin, TASK stage a).
    Charcoal 284px sidebar: brand glyph + Workspace nav (Home / Goals / Work engine /
-   Artifacts / Bus) + an editable Conversations list + a "You · operator" footer.
+   Artifacts / Bus) + a "You · operator" footer. No Conversations list — the design
+   has no chat-list surface; bus topics are explored via the Bus inspector.
    The white stage to the right renders the existing views (their internals
    unchanged). No-personas (TASK-194): no Agents roster, no named-crew list.
    Exports: Sidebar, Avatar, StatusPill, MessageList, Composer, SextantGlyph,
@@ -521,15 +522,7 @@
               {key === "goals" && ctx.goalReviewCount > 0 && <span className="fx-navbadge" title="goals awaiting your sign-off">{ctx.goalReviewCount}</span>}
             </button>
           ))}
-          <div className="fx-navsec">Conversations</div>
-          <ConvNav ctx={ctx} />
         </nav>
-
-        <div className="fx-me">
-          <Avatar name={meName} kind="human" size={26} />
-          <span className="fx-me-name">You</span>
-          <span className="fx-me-key">operator</span>
-        </div>
       </aside>);
 
   }
