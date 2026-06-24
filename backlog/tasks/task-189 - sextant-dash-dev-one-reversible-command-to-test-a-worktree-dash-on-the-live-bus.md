@@ -3,10 +3,10 @@ id: TASK-189
 title: >-
   Document the side-by-side dev-dash workflow (--port 0 --ui); optional sextant
   dash dev wrapper
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-23 19:34'
-updated_date: '2026-06-23 19:59'
+updated_date: '2026-06-24 01:01'
 labels:
   - feature
   - dash
