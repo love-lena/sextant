@@ -29,7 +29,7 @@
 
   const { MobilizeButton } = window;
 
-  function ArtifactsView({ artifacts, activeArtifact, onOpenArtifact, onDM }) {
+  function ArtifactsView({ artifacts, activeArtifact, onOpenArtifact }) {
     // Seed collapsed set from localStorage; guard malformed values with try/catch.
     const [collapsed, setCollapsed] = useState(() => {
       try { return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) || "[]")); }
@@ -88,10 +88,7 @@
                         </button>
                         {MobilizeButton && (
                           <div className="fx-row-mobilize">
-                            <MobilizeButton
-                              context={{ type: "artifact", name: a.name }}
-                              onDM={onDM}
-                            />
+                            <MobilizeButton context={{ type: "artifact", name: a.name }} />
                           </div>
                         )}
                       </div>);

@@ -13,10 +13,10 @@
 (function () {
   const { useRef, useEffect } = React;
 
-  // agent state → flow2 tone + label + pulse colour. Mirrors AGENT_STATE in
-  // sidebar.jsx (AgentsView) — kept local so conversations.jsx has no hidden
-  // dependency on unexported sidebar internals. If the canonical map moves to a
-  // shared export, delete this copy and point at it.
+  // agent state → flow2 tone + label + pulse colour. The DM status strip uses it
+  // to show a counterpart run's live state above the composer. (The Agents roster
+  // that originally defined this map was retired in the no-personas sweep,
+  // TASK-194; the map lives here now, the strip's last consumer.)
   const AGENT_STATE = {
     working:           { tone: "t-met",      label: "Working",        c: "var(--met)",  live: true },
     done:              { tone: "t-met",      label: "Done",           c: "var(--met)" },
