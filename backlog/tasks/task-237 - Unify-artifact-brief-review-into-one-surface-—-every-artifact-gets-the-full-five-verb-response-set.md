@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-25 19:21'
+updated_date: '2026-06-25 19:26'
 labels:
   - feature
   - dash
@@ -43,4 +44,6 @@ Merge review.jsx (artifact DocumentView) and review-author.jsx (brief reader) in
 
 <!-- SECTION:NOTES:BEGIN -->
 Requested by Lena 2026-06-25; design pulled fresh from claude.ai/design a879e5e0-7130-4a48-bc63-c65cfc9502ad (sx-overlays.jsx BriefReader = the unified 5-verb surface; shipped review.jsx 3-verb is a flow2 leftover). Decision: briefs = a type of artifact, not functionally different; one component, all 5 verbs. Relates [[task-208]] (the 5-verb brief reader to generalize), [[task-145]] (review.state intent+verdict), [[task-112]] (needs-review explicit). SEPARATE & still-cut: the design's §13 Quick decision (sx-overlays.jsx QuickDecision) is an options-based micro-decision mode (no document), not a verb set — not built (TASK-208 noted §13 cut); track separately if wanted.
+
+2026-06-25: Quick-decision (§13) is now KILLED — wontfix, see TASK-238. Do not build it; do not treat its absence as a design divergence.
 <!-- SECTION:NOTES:END -->
