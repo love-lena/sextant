@@ -4,7 +4,7 @@ title: Dash redesign · C.6 — Live state model (runs walk their steps)
 status: Done
 assignee: []
 created_date: '2026-06-24 01:08'
-updated_date: '2026-06-25 02:31'
+updated_date: '2026-06-25 03:01'
 labels:
   - dash-redesign
   - ready-for-agent
@@ -36,6 +36,12 @@ OWNERSHIP: this ticket is the SOLE owner of run/criterion state transitions. Con
 - [ ] #5 S21.6 spawning toward a not-started/blocked criterion moves it to in-progress and (for template runs) records the run in the template's run history
 - [ ] #6 S21.7 all surfaces re-render reactively on store mutation (mode switch, create goal, spawn run, step tick); no manual refresh
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-06-24 capability-gap audit: this delivered the dash live-state VIEW (poll the run artifact, render step transitions) — confirmed working. But 'runs walk their steps' has no back half: no backend advances a run, so in practice runs never move (verified live: run 01KVYADZ4ET154VY7E5C4H54S2 frozen at s1). The executor is filed as [[feat-run-executor-workflow-run-v1]] (TASK-236). This ticket stays Done for its frontend scope; TASK-236 owns the executor.
+<!-- SECTION:NOTES:END -->
 
 ## Final Summary
 
