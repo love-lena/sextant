@@ -4,6 +4,7 @@ title: 'Dash: approving a brief artifact should fire the workflow gate control'
 status: To Do
 assignee: []
 created_date: '2026-06-15 17:00'
+updated_date: '2026-06-25 03:01'
 labels:
   - feature
   - dash
@@ -52,4 +53,6 @@ the brief in the dash but the gate didn't fire (the control is a separate
 subject). Cross-cutting: dash (artifact approve handler) + workflow (the gate
 contract). Ref: [[project_m5_spawn_spike_shipped.md]],
 [[project_agentic_dev_workflow.md]].
+
+2026-06-24 capability-gap audit: this is the pre-ADR-0048 framing of the same capability. Under the run-record contract it becomes 'approving a checkpoint step (incl. a brief) advances/resumes the run'. Folded into [[feat-run-checkpoint-resume]] (TASK-225), which depends on the run executor [[feat-run-executor-workflow-run-v1]] (TASK-224). Evidence the gate is still dead: brief reader sets runResumes:true (app.jsx:466) but nothing consumes it. Consider closing this in favour of TASK-225.
 <!-- SECTION:NOTES:END -->
