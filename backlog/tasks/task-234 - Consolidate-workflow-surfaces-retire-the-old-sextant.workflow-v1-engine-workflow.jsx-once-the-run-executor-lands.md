@@ -15,7 +15,7 @@ labels:
   - 'slug:feat-consolidate-workflow-surfaces'
   - P3
 dependencies:
-  - TASK-224
+  - TASK-236
 priority: low
 ordinal: 223000
 ---
@@ -36,5 +36,5 @@ Two parallel workflow surfaces coexist in the dash. NEW: workengine.jsx (stage '
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Discovered in: capability-gap audit 2026-06-24. Depends on [[feat-run-executor-workflow-run-v1]] (TASK-224). Relates [[task-13]], [[task-26]], [[task-192]].
+Discovered in: capability-gap audit 2026-06-24. Depends on [[feat-run-executor-workflow-run-v1]] (TASK-236). Relates [[task-13]], [[task-26]], [[task-192]].
 <!-- SECTION:NOTES:END -->

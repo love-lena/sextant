@@ -13,7 +13,7 @@ labels:
   - 'slug:feat-run-cancel-stop'
   - P2
 dependencies:
-  - TASK-224
+  - TASK-236
 priority: medium
 ordinal: 215000
 ---
@@ -34,5 +34,5 @@ ADR-0048 added an additive stop; the dash defines a terminal cancelled status (w
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Discovered in: capability-gap audit 2026-06-24. Depends on [[feat-run-executor-workflow-run-v1]] (TASK-224). Relates ADR-0048 additive stop.
+Discovered in: capability-gap audit 2026-06-24. Depends on [[feat-run-executor-workflow-run-v1]] (TASK-236). Relates ADR-0048 additive stop.
 <!-- SECTION:NOTES:END -->

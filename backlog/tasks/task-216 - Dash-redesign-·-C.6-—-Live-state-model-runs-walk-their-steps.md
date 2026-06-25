@@ -40,7 +40,7 @@ OWNERSHIP: this ticket is the SOLE owner of run/criterion state transitions. Con
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-2026-06-24 capability-gap audit: this delivered the dash live-state VIEW (poll the run artifact, render step transitions) — confirmed working. But 'runs walk their steps' has no back half: no backend advances a run, so in practice runs never move (verified live: run 01KVYADZ4ET154VY7E5C4H54S2 frozen at s1). The executor is filed as [[feat-run-executor-workflow-run-v1]] (TASK-224). This ticket stays Done for its frontend scope; TASK-224 owns the executor.
+2026-06-24 capability-gap audit: this delivered the dash live-state VIEW (poll the run artifact, render step transitions) — confirmed working. But 'runs walk their steps' has no back half: no backend advances a run, so in practice runs never move (verified live: run 01KVYADZ4ET154VY7E5C4H54S2 frozen at s1). The executor is filed as [[feat-run-executor-workflow-run-v1]] (TASK-236). This ticket stays Done for its frontend scope; TASK-236 owns the executor.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

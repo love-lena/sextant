@@ -29,11 +29,11 @@ The work-engine writes relates:[{goal,crit,kind:toward}] at spawn (workengine.js
 <!-- AC:BEGIN -->
 - [ ] #1 The goals projection surfaces kind:toward as a distinct evidence kind (not flattened to 'related')
 - [ ] #2 The Goals view renders runs bound to a criterion via toward relations (not only via in-progress+owner)
-- [ ] #3 Clearing/approving a run's brief advances each toward-criterion and moves the goal rollup (this AC depends on TASK-224)
+- [ ] #3 Clearing/approving a run's brief advances each toward-criterion and moves the goal rollup (this AC depends on TASK-236)
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Discovered in: capability-gap audit 2026-06-24. ACs 1-2 are independently shippable; AC3 depends on [[feat-run-executor-workflow-run-v1]] (TASK-224). Relates ADR-0035, ADR-0048, [[bug-review-consequence-criterion-display]], [[bug-linkworkstream-toggle-noop]].
+Discovered in: capability-gap audit 2026-06-24. ACs 1-2 are independently shippable; AC3 depends on [[feat-run-executor-workflow-run-v1]] (TASK-236). Relates ADR-0035, ADR-0048, [[bug-review-consequence-criterion-display]], [[bug-linkworkstream-toggle-noop]].
 <!-- SECTION:NOTES:END -->

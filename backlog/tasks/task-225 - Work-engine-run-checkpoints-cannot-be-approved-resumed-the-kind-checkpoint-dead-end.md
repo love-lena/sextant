@@ -16,7 +16,7 @@ labels:
   - 'slug:feat-run-checkpoint-resume'
   - P2
 dependencies:
-  - TASK-224
+  - TASK-236
 priority: medium
 ordinal: 214000
 ---
@@ -38,5 +38,5 @@ ADR-0048 runs carry kind:checkpoint steps (e.g. 'Operator approves the plan') th
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Discovered in: capability-gap audit 2026-06-24. Depends on [[feat-run-executor-workflow-run-v1]] (TASK-224). Supersedes/folds in [[task-119]] under ADR-0048. Reuse old engine pause/approve semantics (apps/workflow). Relates ADR-0048.
+Discovered in: capability-gap audit 2026-06-24. Depends on [[feat-run-executor-workflow-run-v1]] (TASK-236). Supersedes/folds in [[task-119]] under ADR-0048. Reuse old engine pause/approve semantics (apps/workflow). Relates ADR-0048.
 <!-- SECTION:NOTES:END -->
