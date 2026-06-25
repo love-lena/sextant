@@ -1,10 +1,10 @@
 ---
 id: TASK-206
 title: Dash redesign · B.2 — Composer (authoring)
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 01:08'
-updated_date: '2026-06-24 18:17'
+updated_date: '2026-06-25 02:31'
 labels:
   - dash-redesign
   - ready-for-agent
@@ -34,3 +34,9 @@ One reusable writing surface for goals, notes, and imported files. What the oper
 - [ ] #6 S16.6 compose-done screen states the consequence (defined goal / filed artifact / ready draft) and reinforces nothing-visible-until-ready
 - [ ] #7 Persistence/proof: drafts autosave to localStorage (sextant.synth.drafts.v1) and survive reload; Mark ready files a durable artifact on the bus that persists and is re-read after reload
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0 (dash redesign; tag 275522a, 2026-06-24) — built across 5 parallel lanes, integrated on dash-redesign-demo, persona-swept, design-fidelity audited 0/0/0, reviewed live, released + verified on the managed dash (:8765).
+<!-- SECTION:FINAL_SUMMARY:END -->

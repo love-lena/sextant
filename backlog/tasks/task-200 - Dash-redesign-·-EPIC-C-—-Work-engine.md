@@ -1,9 +1,10 @@
 ---
 id: TASK-200
 title: Dash redesign · EPIC C — Work engine
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 01:08'
+updated_date: '2026-06-25 02:31'
 labels:
   - dash-redesign
   - epic
@@ -29,3 +30,9 @@ Carries AC sections 6, 7, 8, 9, 10, 21.
 - [ ] #1 Run-record contract (ADR-0048) landed; all Work engine child slices merged
 - [ ] #2 A workflow is the reusable de-named template (WORKFLOW.md); a run is one live instance, ULID-identified, never a persona
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0 (dash redesign; tag 275522a, 2026-06-24) — built across 5 parallel lanes, integrated on dash-redesign-demo, persona-swept, design-fidelity audited 0/0/0, reviewed live, released + verified on the managed dash (:8765).
+<!-- SECTION:FINAL_SUMMARY:END -->

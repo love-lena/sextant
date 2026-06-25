@@ -1,9 +1,10 @@
 ---
 id: TASK-202
 title: Dash redesign · 0.2 — Command palette (⌘K)
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 01:08'
+updated_date: '2026-06-25 02:31'
 labels:
   - dash-redesign
   - ready-for-agent
@@ -32,3 +33,9 @@ Keyboard-driven jump-to-anything overlay that also starts actions. Parent: EPIC 
 - [ ] #5 S2.5 activating navigates / runs the action and closes; clicking the scrim closes without acting
 - [ ] #6 S2.6 no-match reads No matches for '...'; footer shows up/down / enter / esc hints
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0 (dash redesign; tag 275522a, 2026-06-24) — built across 5 parallel lanes, integrated on dash-redesign-demo, persona-swept, design-fidelity audited 0/0/0, reviewed live, released + verified on the managed dash (:8765).
+<!-- SECTION:FINAL_SUMMARY:END -->

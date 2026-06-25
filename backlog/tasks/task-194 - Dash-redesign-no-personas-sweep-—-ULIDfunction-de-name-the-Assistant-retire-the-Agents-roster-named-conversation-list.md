@@ -3,10 +3,10 @@ id: TASK-194
 title: >-
   Dash redesign: no-personas sweep — ULID+function, de-name the Assistant,
   retire the Agents roster & named-conversation list
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 00:33'
-updated_date: '2026-06-24 01:09'
+updated_date: '2026-06-25 02:31'
 labels:
   - ready-for-agent
   - lane-foundation
@@ -30,3 +30,9 @@ Remove personas from the operator UI. Everywhere a non-operator actor shows a na
 - [ ] #4 Steering is via goal/run topic threads; no named-agent DM surface remains.
 - [ ] #5 Review, goals, and artifacts surfaces stay functional after the sweep.
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0 (dash redesign; tag 275522a, 2026-06-24) — built across 5 parallel lanes, integrated on dash-redesign-demo, persona-swept, design-fidelity audited 0/0/0, reviewed live, released + verified on the managed dash (:8765).
+<!-- SECTION:FINAL_SUMMARY:END -->

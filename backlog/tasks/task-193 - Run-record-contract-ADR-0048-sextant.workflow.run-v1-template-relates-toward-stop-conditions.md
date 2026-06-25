@@ -3,10 +3,10 @@ id: TASK-193
 title: >-
   Run-record contract (ADR-0048): sextant.workflow.run/v1 + template, relates
   'toward', stop conditions
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 00:33'
-updated_date: '2026-06-24 18:17'
+updated_date: '2026-06-25 02:31'
 labels:
   - ready-for-agent
   - lane-work-engine
@@ -42,3 +42,9 @@ Compact record shapes:
 - sextant.workflow.template/v1 = { name, triggers:[...], steps:[...], stop:["<added prompt>",...] }  // generic; carries NO goal/criterion
 stop = additive/disjunctive plain prompt strings; baseline done+blocked on every run; a template adds non-terminal ones (e.g. plan-review); outcome carried in status. A criterion projects its toward-runs from the artifact side; never written on the criterion side.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0. ADR-0048 run-record contract is canon (PR #249, merged); sextant.workflow.run/v1 + .template/v1 record shapes (relates:toward, stop conditions) are written/read by the live Work-engine surfaces. Remaining runtime piece: a coordinator that auto-walks runs (surfaces seed on an empty bus until then).
+<!-- SECTION:FINAL_SUMMARY:END -->

@@ -1,10 +1,10 @@
 ---
 id: TASK-212
 title: Dash redesign · C.2 — Spawn work (three-step)
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 01:08'
-updated_date: '2026-06-24 18:17'
+updated_date: '2026-06-25 02:31'
 labels:
   - dash-redesign
   - ready-for-agent
@@ -35,3 +35,9 @@ Instantiating a run: the workflow defines the how, spawning gives it a concrete 
 - [ ] #6 Per ADR-0048: the run is sextant.workflow.run/v1 (ULID, ad-hoc => template:null); the goal binding is written as relates:[{goal,crit,kind:"toward"}] on the run, not a bespoke field
 - [ ] #7 Persistence/proof: spawning publishes a sextant.workflow.run/v1 artifact (ULID, template-or-null, relates:[{goal,crit,kind:toward}]) to the bus; after a reload the run appears in Active runs and the run view, re-derived from the bus — not local state
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0 (dash redesign; tag 275522a, 2026-06-24) — built across 5 parallel lanes, integrated on dash-redesign-demo, persona-swept, design-fidelity audited 0/0/0, reviewed live, released + verified on the managed dash (:8765).
+<!-- SECTION:FINAL_SUMMARY:END -->

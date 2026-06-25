@@ -1,9 +1,10 @@
 ---
 id: TASK-199
 title: Dash redesign · EPIC B — Review & authoring
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 01:08'
+updated_date: '2026-06-25 02:31'
 labels:
   - dash-redesign
   - epic
@@ -29,3 +30,9 @@ Carries AC sections 12, 14, 15, 16, 17, 18.
 - [ ] #1 All Review & authoring child slices merged
 - [ ] #2 S0.2 no rubber-stamping: the only inbox-row action is open; a decision is earned at the end of reading, expressed as a review (PR-style)
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0 (dash redesign; tag 275522a, 2026-06-24) — built across 5 parallel lanes, integrated on dash-redesign-demo, persona-swept, design-fidelity audited 0/0/0, reviewed live, released + verified on the managed dash (:8765).
+<!-- SECTION:FINAL_SUMMARY:END -->

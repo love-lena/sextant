@@ -1,9 +1,10 @@
 ---
 id: TASK-204
 title: Dash redesign · 0.4 — Status system + Tweaks / data-mode
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 01:08'
+updated_date: '2026-06-25 02:31'
 labels:
   - dash-redesign
   - ready-for-agent
@@ -29,3 +30,9 @@ The shared status vocabulary used everywhere, plus the Tweaks panel data-state t
 - [ ] #2 S22.3 the same color+glyph apply on criteria, runs, drafts, timelines, chips — every surface
 - [ ] #3 S1.9 / S21.1 Tweaks panel toggles data state between Snapshot (seeded demo) and Blank slate (empty), with Reset to empty in blank mode; choice persists (sextant.synth.datamode.v1)
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0 (dash redesign; tag 275522a, 2026-06-24) — built across 5 parallel lanes, integrated on dash-redesign-demo, persona-swept, design-fidelity audited 0/0/0, reviewed live, released + verified on the managed dash (:8765).
+<!-- SECTION:FINAL_SUMMARY:END -->

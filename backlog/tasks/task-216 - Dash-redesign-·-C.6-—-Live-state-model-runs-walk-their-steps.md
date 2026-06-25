@@ -1,9 +1,10 @@
 ---
 id: TASK-216
 title: Dash redesign · C.6 — Live state model (runs walk their steps)
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 01:08'
+updated_date: '2026-06-25 02:31'
 labels:
   - dash-redesign
   - ready-for-agent
@@ -35,3 +36,9 @@ OWNERSHIP: this ticket is the SOLE owner of run/criterion state transitions. Con
 - [ ] #5 S21.6 spawning toward a not-started/blocked criterion moves it to in-progress and (for template runs) records the run in the template's run history
 - [ ] #6 S21.7 all surfaces re-render reactively on store mutation (mode switch, create goal, spawn run, step tick); no manual refresh
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0 (dash redesign; tag 275522a, 2026-06-24) — built across 5 parallel lanes, integrated on dash-redesign-demo, persona-swept, design-fidelity audited 0/0/0, reviewed live, released + verified on the managed dash (:8765).
+<!-- SECTION:FINAL_SUMMARY:END -->

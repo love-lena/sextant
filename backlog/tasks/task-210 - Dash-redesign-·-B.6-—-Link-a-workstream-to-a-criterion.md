@@ -1,10 +1,10 @@
 ---
 id: TASK-210
 title: Dash redesign · B.6 — Link a workstream to a criterion
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 01:08'
-updated_date: '2026-06-24 18:17'
+updated_date: '2026-06-25 02:31'
 labels:
   - dash-redesign
   - ready-for-agent
@@ -30,3 +30,9 @@ Attaching existing work to a goal criterion (many-to-many). Parent: EPIC B (task
 - [ ] #2 S14.2 candidate rows toggle +link <-> ✓linked on click; a build-a-workflow-for-this affordance opens the builder
 - [ ] #3 Persistence/proof: linking writes the relation durably on the artifact side (relates); after reload the criterion shows its linked workstream(s) re-derived from the bus
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0 (dash redesign; tag 275522a, 2026-06-24) — built across 5 parallel lanes, integrated on dash-redesign-demo, persona-swept, design-fidelity audited 0/0/0, reviewed live, released + verified on the managed dash (:8765).
+<!-- SECTION:FINAL_SUMMARY:END -->

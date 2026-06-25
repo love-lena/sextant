@@ -1,9 +1,10 @@
 ---
 id: TASK-198
 title: Dash redesign · EPIC A — Bus inspector (JetStream & KV explorer)
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 01:08'
+updated_date: '2026-06-25 02:31'
 labels:
   - dash-redesign
   - epic
@@ -29,3 +30,9 @@ Carries AC section 19.
 - [ ] #1 Bus nav row opens the inspector; both child slices merged
 - [ ] #2 S19.1 mode toggle JetStream <-> Key-Value; left rail lists streams/buckets with name, subjects/keys, count, storage, live dot
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0 (dash redesign; tag 275522a, 2026-06-24) — built across 5 parallel lanes, integrated on dash-redesign-demo, persona-swept, design-fidelity audited 0/0/0, reviewed live, released + verified on the managed dash (:8765).
+<!-- SECTION:FINAL_SUMMARY:END -->

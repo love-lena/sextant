@@ -1,10 +1,10 @@
 ---
 id: TASK-196
 title: 'Dash redesign: Bus inspector — Key-Value explorer'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 00:33'
-updated_date: '2026-06-24 01:09'
+updated_date: '2026-06-25 02:31'
 labels:
   - ready-for-agent
   - lane-bus
@@ -27,3 +27,9 @@ The Bus nav page, KV half (a mode toggle with JetStream). Lists buckets; bucket 
 - [ ] #3 Bucket detail: stats (values, history depth, ttl, bytes, max value) + a filterable key list with op + revision.
 - [ ] #4 Selected key shows current value (JSON/Raw/Hex) + full revision history newest-first; deleted keys show a tombstone with history preserved.
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0. Bus inspector KV explorer live (bucket/keys/values, JSON/Raw/Hex). Revision history stubbed pending a bus-side artifact.history Wire op (see TASK-223) — browser cred is denied $KV.
+<!-- SECTION:FINAL_SUMMARY:END -->

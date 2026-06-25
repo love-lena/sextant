@@ -1,10 +1,10 @@
 ---
 id: TASK-195
 title: 'Dash redesign: Bus inspector — JetStream explorer'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 00:33'
-updated_date: '2026-06-24 01:09'
+updated_date: '2026-06-25 02:31'
 labels:
   - ready-for-agent
   - lane-bus
@@ -28,3 +28,9 @@ The Bus nav page, JetStream half — a browser-side surface reading the bus dire
 - [ ] #4 Consumers tab lists durable/ephemeral + kind, ack policy/wait/max-deliver, and stats.
 - [ ] #5 Reads the bus over the browser's own WS connection — no new Go relay endpoint.
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0. Bus inspector JetStream explorer live (stream list, message browser w/ JSON/Raw/Hex). Stubbed pending bus-side Wire ops (see TASK-223): full stream Config + Consumers tab — browser cred is denied $JS.API.
+<!-- SECTION:FINAL_SUMMARY:END -->

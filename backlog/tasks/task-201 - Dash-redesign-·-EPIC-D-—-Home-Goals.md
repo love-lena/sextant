@@ -1,9 +1,10 @@
 ---
 id: TASK-201
 title: Dash redesign · EPIC D — Home & Goals
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 01:08'
+updated_date: '2026-06-25 02:31'
 labels:
   - dash-redesign
   - epic
@@ -29,3 +30,9 @@ Carries AC sections 3, 4, 5.
 - [ ] #1 All Home & Goals child slices merged
 - [ ] #2 S0.5 goals are the front door, workstreams the escape hatch; a run may exist with no goal yet and still surface
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0 (dash redesign; tag 275522a, 2026-06-24) — built across 5 parallel lanes, integrated on dash-redesign-demo, persona-swept, design-fidelity audited 0/0/0, reviewed live, released + verified on the managed dash (:8765).
+<!-- SECTION:FINAL_SUMMARY:END -->

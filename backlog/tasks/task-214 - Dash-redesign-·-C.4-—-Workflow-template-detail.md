@@ -1,9 +1,10 @@
 ---
 id: TASK-214
 title: Dash redesign · C.4 — Workflow template detail
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 01:08'
+updated_date: '2026-06-25 02:31'
 labels:
   - dash-redesign
   - ready-for-agent
@@ -29,3 +30,9 @@ Reading a workflow template + its run history. Parent: EPIC C (task-200). Covers
 - [ ] #2 S9.2 an Actions rail: Spawn work (§7, pre-pointed at a fed goal), Edit spec (§8), and a Pause/Resume triggers toggle with a paused-state note
 - [ ] #3 S9.3 a Feeds-criteria section lists the goals/criteria this template feeds (DERIVED from where its runs were pointed via relates:toward, never declared on the template), or a not-linked-yet note
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0 (dash redesign; tag 275522a, 2026-06-24) — built across 5 parallel lanes, integrated on dash-redesign-demo, persona-swept, design-fidelity audited 0/0/0, reviewed live, released + verified on the managed dash (:8765).
+<!-- SECTION:FINAL_SUMMARY:END -->

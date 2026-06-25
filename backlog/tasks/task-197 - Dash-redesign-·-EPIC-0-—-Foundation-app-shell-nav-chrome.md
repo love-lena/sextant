@@ -1,9 +1,10 @@
 ---
 id: TASK-197
 title: 'Dash redesign · EPIC 0 — Foundation: app shell, nav & chrome'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 01:08'
+updated_date: '2026-06-25 02:31'
 labels:
   - dash-redesign
   - epic
@@ -32,3 +33,9 @@ Carries AC sections 0, 1, 2, 20, 22. Per-criterion claims live on the child slic
 - [ ] #4 S22.4 calm by default: live updates appear without focus-pulling animation; handled/finished work hidden or collapsed
 - [ ] #5 S22.6 empty states everywhere: every list/surface has a calm instructive empty state with a next action
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0 (dash redesign; tag 275522a, 2026-06-24) — built across 5 parallel lanes, integrated on dash-redesign-demo, persona-swept, design-fidelity audited 0/0/0, reviewed live, released + verified on the managed dash (:8765).
+<!-- SECTION:FINAL_SUMMARY:END -->
