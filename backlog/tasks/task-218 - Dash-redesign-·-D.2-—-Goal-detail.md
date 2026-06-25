@@ -1,10 +1,10 @@
 ---
 id: TASK-218
 title: Dash redesign · D.2 — Goal detail
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 01:08'
-updated_date: '2026-06-24 18:17'
+updated_date: '2026-06-25 02:31'
 labels:
   - dash-redesign
   - ready-for-agent
@@ -34,3 +34,9 @@ The goal as a working-backwards document with live criteria and attached work. P
 - [ ] #6 S5.6 Goal topic: a posting composer to post a message to the goal's topic; posts append to a visible thread attributed to you - just now
 - [ ] #7 Persistence/proof: a goal-topic post publishes a durable message and Add criterion updates the goal artifact; after reload both the thread post and the new criterion are re-derived from the bus
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0 (dash redesign; tag 275522a, 2026-06-24) — built across 5 parallel lanes, integrated on dash-redesign-demo, persona-swept, design-fidelity audited 0/0/0, reviewed live, released + verified on the managed dash (:8765).
+<!-- SECTION:FINAL_SUMMARY:END -->

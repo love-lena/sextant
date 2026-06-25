@@ -1,9 +1,10 @@
 ---
 id: TASK-217
 title: Dash redesign · D.1 — Goals portfolio
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 01:08'
+updated_date: '2026-06-25 02:31'
 labels:
   - dash-redesign
   - ready-for-agent
@@ -33,3 +34,9 @@ All goals as cards, ranked into three attention buckets. Parent: EPIC D (task-20
 - [ ] #6 S4.6 Not-started cards show a dashed No-work-running-yet / +spawn-work chip that opens Spawn work for that goal
 - [ ] #7 S4.7 clicking a card body opens goal detail (§5 / D.2); run + spawn chips stop propagation
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0 (dash redesign; tag 275522a, 2026-06-24) — built across 5 parallel lanes, integrated on dash-redesign-demo, persona-swept, design-fidelity audited 0/0/0, reviewed live, released + verified on the managed dash (:8765).
+<!-- SECTION:FINAL_SUMMARY:END -->

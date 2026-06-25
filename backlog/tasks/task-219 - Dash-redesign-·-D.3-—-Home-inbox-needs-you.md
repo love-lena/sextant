@@ -1,9 +1,10 @@
 ---
 id: TASK-219
 title: Dash redesign · D.3 — Home inbox (needs-you)
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 01:08'
+updated_date: '2026-06-25 02:31'
 labels:
   - dash-redesign
   - ready-for-agent
@@ -36,3 +37,9 @@ The front door: a single ranked column of what needs operator judgement now; eve
 - [ ] #8 S3.8 empty state: greeting + Nothing needs you - because nothing's running yet + Define your first goal / Build your first workflow + a the-bus-is-live note
 - [ ] #9 S3.9 sections only render with content (no empty headers); content enters with a subtle staggered fade; respect prefers-reduced-motion
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0 (dash redesign; tag 275522a, 2026-06-24) — built across 5 parallel lanes, integrated on dash-redesign-demo, persona-swept, design-fidelity audited 0/0/0, reviewed live, released + verified on the managed dash (:8765).
+<!-- SECTION:FINAL_SUMMARY:END -->

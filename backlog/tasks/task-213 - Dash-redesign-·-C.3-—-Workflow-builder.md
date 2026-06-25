@@ -1,10 +1,10 @@
 ---
 id: TASK-213
 title: Dash redesign · C.3 — Workflow builder
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 01:08'
-updated_date: '2026-06-24 18:17'
+updated_date: '2026-06-25 02:31'
 labels:
   - dash-redesign
   - ready-for-agent
@@ -35,3 +35,9 @@ Authoring a workflow spec: describe it, generate/edit steps, set triggers, watch
 - [ ] #6 S8.6 footer: Save as draft (back, no run) and Save workflow (persists + opens template detail); editing preserves identity
 - [ ] #7 Per ADR-0048: persisted as sextant.workflow.template/v1; stop conditions on the template declare only its additions to the done/blocked baseline (plain prompt strings)
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0 (dash redesign; tag 275522a, 2026-06-24) — built across 5 parallel lanes, integrated on dash-redesign-demo, persona-swept, design-fidelity audited 0/0/0, reviewed live, released + verified on the managed dash (:8765).
+<!-- SECTION:FINAL_SUMMARY:END -->

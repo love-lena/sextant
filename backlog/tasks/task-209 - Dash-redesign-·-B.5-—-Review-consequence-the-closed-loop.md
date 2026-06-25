@@ -1,9 +1,10 @@
 ---
 id: TASK-209
 title: Dash redesign · B.5 — Review consequence (the closed loop)
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 01:08'
+updated_date: '2026-06-25 02:31'
 labels:
   - dash-redesign
   - ready-for-agent
@@ -34,3 +35,9 @@ OWNERSHIP: this is the display layer only. It renders the honest consequence of 
 - [ ] #5 S15.5 when a criterion advanced, offer See-the-goal alongside Back-to-origin; the consequence copy must accurately match the verdict and whether a run resumes
 - [ ] #6 the verdict the operator submits is emitted once (by TASK-208) and the resulting transition is read back from the bus/live-state; the screen holds no authoritative copy of run or criterion state
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0 (dash redesign; tag 275522a, 2026-06-24) — built across 5 parallel lanes, integrated on dash-redesign-demo, persona-swept, design-fidelity audited 0/0/0, reviewed live, released + verified on the managed dash (:8765).
+<!-- SECTION:FINAL_SUMMARY:END -->

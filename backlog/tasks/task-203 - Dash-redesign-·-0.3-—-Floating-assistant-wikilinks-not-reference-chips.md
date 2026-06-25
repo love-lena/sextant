@@ -1,9 +1,10 @@
 ---
 id: TASK-203
 title: 'Dash redesign · 0.3 — Floating assistant (wikilinks, not reference chips)'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 01:08'
+updated_date: '2026-06-25 02:31'
 labels:
   - dash-redesign
   - ready-for-agent
@@ -29,3 +30,9 @@ Universal floating helper for quick questions about the state of things, distinc
 - [ ] #2 S20.2 answers questions about goals, what's waiting, where workstreams stand; with no data says so and points to defining a goal
 - [ ] #3 S20.3 adapted: answers may embed [[wikilinks]] that resolve to the named goal/run/artifact/surface and navigate on click (NOT the old reference-chip widget)
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0 (dash redesign; tag 275522a, 2026-06-24) — built across 5 parallel lanes, integrated on dash-redesign-demo, persona-swept, design-fidelity audited 0/0/0, reviewed live, released + verified on the managed dash (:8765).
+<!-- SECTION:FINAL_SUMMARY:END -->

@@ -3,10 +3,10 @@ id: TASK-220
 title: >-
   Dash redesign: adopt the design shell, nav & chrome (filler pages for new
   sections)
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 00:33'
-updated_date: '2026-06-24 01:08'
+updated_date: '2026-06-25 02:31'
 labels:
   - ready-for-agent
   - lane-foundation
@@ -38,3 +38,9 @@ Build/iterate with `sextant-dash --port 0 --ui <worktree>/clients/go/apps/intern
 - [ ] #8 Work engine and Bus render as clearly-placeholder filler pages — navigable, no errors.
 - [ ] #9 Visual fidelity to the design prototype is a non-gating reference check, iterated with the operator; the concrete criteria above are the gating bar.
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0 (dash redesign; tag 275522a, 2026-06-24) — built across 5 parallel lanes, integrated on dash-redesign-demo, persona-swept, design-fidelity audited 0/0/0, reviewed live, released + verified on the managed dash (:8765).
+<!-- SECTION:FINAL_SUMMARY:END -->

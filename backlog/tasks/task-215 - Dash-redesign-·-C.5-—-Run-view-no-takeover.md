@@ -1,10 +1,10 @@
 ---
 id: TASK-215
 title: Dash redesign · C.5 — Run view (no takeover)
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 01:08'
-updated_date: '2026-06-24 18:17'
+updated_date: '2026-06-25 02:31'
 labels:
   - dash-redesign
   - ready-for-agent
@@ -33,3 +33,9 @@ Watching one live run; watching != being needed. Post-pivot CUT: §11 take-the-k
 - [ ] #5 S10.5 Run topic: a posting composer to steer the run without taking over; posts append to a visible thread attributed to you
 - [ ] #6 Persistence/proof: a run-topic post publishes a durable message; after reload it appears in the run thread re-read from the bus — not local state
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0 (dash redesign; tag 275522a, 2026-06-24) — built across 5 parallel lanes, integrated on dash-redesign-demo, persona-swept, design-fidelity audited 0/0/0, reviewed live, released + verified on the managed dash (:8765).
+<!-- SECTION:FINAL_SUMMARY:END -->

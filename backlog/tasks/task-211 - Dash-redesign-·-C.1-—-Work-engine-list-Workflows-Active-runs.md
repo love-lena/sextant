@@ -1,10 +1,10 @@
 ---
 id: TASK-211
 title: Dash redesign · C.1 — Work engine list (Workflows + Active runs)
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 01:08'
-updated_date: '2026-06-24 18:17'
+updated_date: '2026-06-25 02:31'
 labels:
   - dash-redesign
   - ready-for-agent
@@ -32,3 +32,9 @@ The Work engine landing surface. Parent: EPIC C (task-200). Covers AC §6.
 - [ ] #3 S6.3 a workflow row opens its template detail (§9 / C.4); edit-spec opens the builder (§8 / C.3); a describe-a-new-workflow affordance opens the builder fresh
 - [ ] #4 S6.4 Active runs lists every in-progress/waiting/blocked run with live pulse in status color, label, ULID, via-{workflow} or ad-hoc, goal (or no goal yet); rows open the run; empty state explains
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0 (dash redesign; tag 275522a, 2026-06-24) — built across 5 parallel lanes, integrated on dash-redesign-demo, persona-swept, design-fidelity audited 0/0/0, reviewed live, released + verified on the managed dash (:8765).
+<!-- SECTION:FINAL_SUMMARY:END -->

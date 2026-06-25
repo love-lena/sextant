@@ -3,10 +3,10 @@ id: TASK-208
 title: >-
   Dash redesign · B.4 — Brief reader (PR-style) + five-verb review + inline
   comments
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-24 01:08'
-updated_date: '2026-06-24 18:17'
+updated_date: '2026-06-25 02:31'
 labels:
   - dash-redesign
   - ready-for-agent
@@ -37,3 +37,9 @@ A document brief reviewed like a pull request; the decision is earned at the end
 - [ ] #7 S12.7 an Activity section logs the brief's events (pushed/approved/changes) tagged by kind, source ULID, time
 - [ ] #8 Persistence/proof: submitting a verdict publishes a durable review/decision message (verb + comment) on the brief's topic; after reload the brief shows its resolved/closed state, re-read from JetStream — not local state
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Shipped in v0.8.0 (dash redesign; tag 275522a, 2026-06-24) — built across 5 parallel lanes, integrated on dash-redesign-demo, persona-swept, design-fidelity audited 0/0/0, reviewed live, released + verified on the managed dash (:8765).
+<!-- SECTION:FINAL_SUMMARY:END -->
