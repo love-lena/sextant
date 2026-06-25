@@ -22,14 +22,14 @@ mkdir -p "$RC_ROOT"
 
 # apps emits "<app-dir> <binary-name>" for each sextant* binary the worktree builds.
 apps() {
-  local wt="$1" d
-  for d in sextant dash tui dispatch mcp violet workflow; do
-    [ -d "$wt/clients/go/apps/$d" ] || continue
-    case "$d" in
-      sextant) echo "sextant sextant" ;;
-      *)       echo "$d sextant-$d" ;;
-    esac
-  done
+  local wt="$1"
+  [ -d "$wt/clients/sextant-cli" ]    && echo "sextant-cli sextant"
+  [ -d "$wt/clients/sextant-dash" ]   && echo "sextant-dash sextant-dash"
+  [ -d "$wt/clients/sextant-tui" ]    && echo "sextant-tui sextant-tui"
+  [ -d "$wt/clients/dispatcher" ]     && echo "dispatcher sextant-dispatch"
+  [ -d "$wt/clients/sextant-mcp" ]    && echo "sextant-mcp sextant-mcp"
+  [ -d "$wt/clients/assistant" ]      && echo "assistant sextant-violet"
+  [ -d "$wt/clients/coordinator" ]    && echo "coordinator sextant-workflow"
 }
 
 build_all() {
@@ -39,7 +39,7 @@ build_all() {
   mkdir -p "$RC_BIN"
   while read -r dir bin; do
     echo "  go build -> $bin"
-    ( cd "$wt" && go build -o "$RC_BIN/$bin" "./clients/go/apps/$dir" )
+    ( cd "$wt" && go build -o "$RC_BIN/$bin" "./clients/$dir" )
   done < <(apps "$wt")
   echo "built: $(cd "$RC_BIN" && echo *)"
 }
@@ -52,10 +52,10 @@ cmd_build() { build_all "$1"; }
 cmd_dash() {
   local wt="$1"
   local ref="${2:-$wt}"
-  local uidir="$wt/clients/go/apps/internal/dashapi/web/app"
+  local uidir="$wt/clients/sextant-dash/dashapi/web/app"
   ( cd "$wt" && make ui >/dev/null )
-  go build -o "$RC_BIN/sextant-dash" "$wt/clients/go/apps/dash" 2>/dev/null \
-    || ( cd "$wt" && go build -o "$RC_BIN/sextant-dash" ./clients/go/apps/dash )
+  go build -o "$RC_BIN/sextant-dash" "$wt/clients/sextant-dash" 2>/dev/null \
+    || ( cd "$wt" && go build -o "$RC_BIN/sextant-dash" ./clients/sextant-dash )
   local statefile; statefile="$RC_ROOT/dash-$$.state"
   "$RC_BIN/sextant-dash" --port 0 --ui "$uidir" --state-file "$statefile" \
     >"$RC_ROOT/dash-$$.log" 2>&1 &

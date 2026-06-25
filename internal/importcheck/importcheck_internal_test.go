@@ -17,8 +17,6 @@ import (
 //     predicate the bus rule fires on is a thing that genuinely occurs — the
 //     rule would catch a bus that grew such an edge.
 func TestNewEdgesBite(t *testing.T) {
-	const clientsNS = Module + "/clients/"
-
 	busClosure := Closure(t, Module+"/bus")
 	var sawNATS, sawClient bool
 	for dep, imports := range busClosure {
@@ -41,7 +39,7 @@ func TestNewEdgesBite(t *testing.T) {
 	// The CLI embeds the bus AND drives clients, so its closure is the witness
 	// that a clients/ dependency is a real, detectable shape — the bus rule
 	// would fire on a bus that grew such an edge.
-	cliClosure := Closure(t, Module+"/clients/go/apps/sextant")
+	cliClosure := Closure(t, Module+"/clients/sextant-cli")
 	witnessClient := false
 	for dep := range cliClosure {
 		if strings.HasPrefix(dep, clientsNS) {
@@ -67,6 +65,41 @@ func TestNewEdgesBite(t *testing.T) {
 	}
 	if !witnessBus {
 		t.Fatalf("bus closure contains no busNS package — cannot witness that the convention rule's predicate matches real code")
+	}
+}
+
+// TestClientIsolation pins the ADR-0049 client bright line on the live tree: the
+// Go clients are flat peers, so no client's production closure reaches another —
+// except the one sanctioned edge, the CLI embedding the dash server. The witness
+// for non-vacuity is TestNewEdgesBite (the CLI closure genuinely reaches a
+// clients/ package), so a rule that stopped firing would be caught there.
+func TestClientIsolation(t *testing.T) {
+	// The CLI embeds the dash server — the one allowed cli→dash edge.
+	AssertClientIsolation(t, Module+"/clients/sextant-cli", Module+"/clients/sextant-dash")
+	for _, c := range []string{
+		"sextant-dash", "sextant-tui", "dispatcher",
+		"coordinator", "assistant", "sextant-mcp",
+	} {
+		AssertClientIsolation(t, Module+"/clients/"+c)
+	}
+}
+
+// TestSDKImportsNoShared pins the ADR-0049 host-portability line: the SDK reaches
+// no shared/go host helper. The witness keeps it from going vacuous — a real
+// client (the CLI) DOES reach shared/go, so the forbidden shape genuinely occurs
+// and the rule would catch the SDK growing such an edge.
+func TestSDKImportsNoShared(t *testing.T) {
+	AssertSDKImportsNoShared(t, sdkPkg)
+
+	sawShared := false
+	for dep := range Closure(t, Module+"/clients/sextant-cli") {
+		if strings.HasPrefix(dep, sharedNS) {
+			sawShared = true
+			break
+		}
+	}
+	if !sawShared {
+		t.Fatalf("no clients/ package reaches a shared/ helper — cannot witness that AssertSDKImportsNoShared's predicate matches real code")
 	}
 }
 

@@ -25,12 +25,12 @@ no(){ echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
 rm -rf "$P"; mkdir -p "$S"
 echo "== build binaries =="
-( cd "$ROOT" && go build -o "$SX" ./clients/go/apps/sextant && go build -o "$SXPOC" ./clients/go/apps/spawn-poc && go build -o "$SXDISP" ./clients/go/apps/dispatch ) || { echo "build failed"; exit 2; }
+( cd "$ROOT" && go build -o "$SX" ./clients/sextant-cli && go build -o "$SXPOC" ./clients/go/apps/spawn-poc && go build -o "$SXDISP" ./clients/dispatcher ) || { echo "build failed"; exit 2; }
 
 echo "== AC#1: spawn lexicon + records (go test) =="
-( cd "$ROOT" && go test ./clients/go/apps/dispatch/ >/dev/null 2>&1 ) \
+( cd "$ROOT" && go test ./clients/dispatcher/ >/dev/null 2>&1 ) \
   && ok "spawn.request/spawn.ack records + lexicon files parse + round-trip (AC#1)" \
-  || no "clients/go/apps/dispatch unit tests failed"
+  || no "clients/dispatcher unit tests failed"
 
 echo "== throwaway bus on :$PORT =="
 "$SX" up --store "$S" --port "$PORT" >"$P/up.log" 2>&1 & BUS=$!

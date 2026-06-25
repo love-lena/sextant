@@ -20,7 +20,7 @@ import (
 func buildDashBinary(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "sextant-dash")
-	cmd := exec.Command("go", "build", "-o", bin, "./clients/go/apps/dash")
+	cmd := exec.Command("go", "build", "-o", bin, "./clients/sextant-dash")
 	cmd.Dir = "../.." // repo root, relative to tests/e2e
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build sextant-dash: %v\n%s", err, out)

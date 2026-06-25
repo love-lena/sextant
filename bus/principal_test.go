@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/love-lena/sextant/bus"
-	"github.com/love-lena/sextant/clients/go/sdk"
 	"github.com/love-lena/sextant/protocol/conninfo"
 	"github.com/love-lena/sextant/protocol/wireapi"
+	"github.com/love-lena/sextant/sdk/go"
 )
 
 // Principal designation (ADR-0030, TASK-54): the bus records its one principal in

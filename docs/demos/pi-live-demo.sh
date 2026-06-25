@@ -23,7 +23,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
-PI_DIR="$REPO/clients/ts/pi"
+PI_DIR="$REPO/clients/pi-bus"
 
 say() { printf '\033[1;36m[pi-live-demo]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[pi-live-demo] %s\033[0m\n' "$*" >&2; exit 1; }

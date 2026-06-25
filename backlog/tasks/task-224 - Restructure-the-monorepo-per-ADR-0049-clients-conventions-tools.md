@@ -1,10 +1,10 @@
 ---
 id: TASK-224
 title: 'Restructure the monorepo per ADR-0049: clients, conventions, tools'
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-25 03:10'
-updated_date: '2026-06-25 19:41'
+updated_date: '2026-06-25 20:57'
 labels:
   - ready-for-agent
 dependencies: []

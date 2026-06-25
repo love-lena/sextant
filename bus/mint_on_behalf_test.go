@@ -12,8 +12,8 @@ import (
 	"testing"
 
 	"github.com/love-lena/sextant/bus"
-	"github.com/love-lena/sextant/clients/go/sdk"
 	"github.com/love-lena/sextant/protocol/wireapi"
+	"github.com/love-lena/sextant/sdk/go"
 )
 
 // dialKind mints a top-level credential (SpawnedBy empty) of a specific kind and

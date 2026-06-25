@@ -34,7 +34,7 @@ export SEXTANT_HOME="$D/home"; STORE="$D/store"; mkdir -p "$SEXTANT_HOME" "$STOR
 BIN="$D/bin/sextant"
 say "building sextant from $REPO (embeds the committed, precompiled UI)"
 mkdir -p "$D/bin"
-(cd "$REPO" && go build -o "$BIN" ./clients/go/apps/sextant)
+(cd "$REPO" && go build -o "$BIN" ./clients/sextant-cli)
 
 say "starting a throwaway bus"
 "$BIN" up --store "$STORE" --port 0 >"$D/bus.log" 2>&1 & BUS_PID=$!

@@ -9,7 +9,7 @@ ui:
 # Build the sextant binary into ./bin (regenerates the dash bundles first, so
 # the embedded UI is present). The cross-platform release build is scripts/release.sh.
 build: ui
-	go build -o bin/sextant ./clients/go/apps/sextant
+	go build -o bin/sextant ./clients/sextant-cli
 
 # Run the Go test suite (regenerates the dash bundles first).
 test: ui
@@ -32,11 +32,11 @@ lint: vet
 		echo "$$files"; \
 		exit 1; \
 	fi
-	go test ./internal/importcheck/... ./bus/ ./clients/go/conventions/... ./clients/go/apps/internal/tui/...
+	go test ./internal/importcheck/... ./bus/ ./conventions/... ./clients/sextant-tui/internal/tui/...
 
 # Regenerate code generated from the lexicon (ADR-0041): the per-language record
 # types a convention library consumes. Today that is conv/goals' goal_gen.go,
-# emitted from protocol/lexicons/goal.json by clients/go/conventions/goals/internal/lexgen
+# emitted from protocol/lexicons/goal.json by conventions/goal/go/internal/lexgen
 # (a //go:generate directive in goals.go). Run after editing a lexicon whose Go
 # types are generated; the output is committed and gofumpt-clean.
 generate:
@@ -51,5 +51,5 @@ fmt:
 # Regenerates the generated pages from canon first (docgen), then renders.
 # Install mdbook with: cargo install mdbook (or `brew install mdbook`).
 book:
-	go run ./clients/go/apps/docgen
+	go run ./sdk/docgen
 	mdbook build docs/book

@@ -8,7 +8,7 @@
 // This package is deliberately language-neutral plumbing: it parses the vector
 // JSON and canonicalizes payloads for comparison. It imports no convention and
 // no client — the Go runner that *replays* a vector by invoking a verb lives in
-// client land (clients/go/conformance), because importing a verb would make the
+// client land (sdk/conformance), because importing a verb would make the
 // protocol depend on a client and break importcheck (ADR-0041). What lives here
 // is only what a recorder and a replayer of ANY language need to agree on: the
 // on-disk shape and the canonical-JSON rule.

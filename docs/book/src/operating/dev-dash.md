@@ -6,7 +6,7 @@ dash — no swap, no taking prod down, A/B-comparable.
 ## The one-liner
 
 ```sh
-sextant-dash --port 0 --ui <worktree>/clients/go/apps/internal/dashapi/web/app
+sextant-dash --port 0 --ui <worktree>/clients/sextant-dash/dashapi/web/app
 ```
 
 `--port 0` asks the OS to assign a free port, so the dev server never collides
@@ -32,7 +32,7 @@ For **Go-side changes** (server logic, the mint path, flag handling), rebuild
 the `sextant-dash` binary and restart:
 
 ```sh
-go install ./clients/go/apps/dash
+go install ./clients/sextant-dash
 sextant-dash --port 0
 ```
 

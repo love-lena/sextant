@@ -524,7 +524,7 @@ func readActive(t *testing.T, home string) string {
 func buildMCPBinary(t *testing.T) string {
 	t.Helper()
 	bin := t.TempDir() + "/sextant-mcp"
-	cmd := exec.Command("go", "build", "-o", bin, "./clients/go/apps/mcp")
+	cmd := exec.Command("go", "build", "-o", bin, "./clients/sextant-mcp")
 	cmd.Dir = "../.."
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build sextant-mcp: %v\n%s", err, out)

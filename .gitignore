@@ -41,38 +41,16 @@ node_modules/
 # VHS renders an mp4 alongside the gif; only the gif is committed
 docs/demos/*.mp4
 
-# stray build output of `go build [-o <name>] ./clients/go/apps/<app>` from the
+# stray build output of `go build [-o <name>] ./clients/<app>` from the
 # repo root (the apps moved out of ./cmd/ in the monorepo refactor)
 /sextant
 /sextant-*
 
-# Generated dash UI bundles (TASK-121): the *.js are transpiled from *.jsx by
-# scripts/build-dash-ui.sh at build time (make ui / go:generate / CI / release),
-# never committed. image-slot.js is hand-written source and vendor/*.min.js is
-# vendored, so neither is ignored.
-/clients/go/apps/internal/dashapi/web/app/app.js
-/clients/go/apps/internal/dashapi/web/app/artifact.js
-/clients/go/apps/internal/dashapi/web/app/artifacts.js
-/clients/go/apps/internal/dashapi/web/app/assistant-brain.js
-/clients/go/apps/internal/dashapi/web/app/bus.js
-/clients/go/apps/internal/dashapi/web/app/composer.js
-/clients/go/apps/internal/dashapi/web/app/conversations.js
-/clients/go/apps/internal/dashapi/web/app/goals.js
-/clients/go/apps/internal/dashapi/web/app/home.js
-/clients/go/apps/internal/dashapi/web/app/mobilize.js
-/clients/go/apps/internal/dashapi/web/app/review.js
-/clients/go/apps/internal/dashapi/web/app/review-author.js
-/clients/go/apps/internal/dashapi/web/app/sidebar.js
-/clients/go/apps/internal/dashapi/web/app/status.js
-/clients/go/apps/internal/dashapi/web/app/tweaks-panel.js
-/clients/go/apps/internal/dashapi/web/app/workengine.js
-/clients/go/apps/internal/dashapi/web/app/workflow.js
-# Generated build stamp (TASK-140): build-dash-ui.sh writes this with the build's
-# short SHA + UTC time; the served dash polls it for a "new version" nudge. Like
-# the *.js it's generated, not committed (it rides the all:web/app go:embed).
-/clients/go/apps/internal/dashapi/web/app/build.json
-# Generated bus bundle (ADR-0044): build-dash-ui.sh esbuild-bundles the SDK browser
-# entry + the TS conventions + nats.ws into this single IIFE the SPA loads. Generated
-# like the *.js (rides the all:web/app go:embed), never committed. bus-entry.js +
-# package.json under web/bundle ARE the committed source.
-/clients/go/apps/internal/dashapi/web/app/vendor/sextant-bus.js
+# Generated dash embed artifact (ADR-0049): clients/sextant-dash/dashapi/web/app
+# is assembled WHOLLY by scripts/build-dash-ui.sh (make ui / go:generate / CI /
+# release) from the web-dash SPA source — transpiled *.js, copied static assets,
+# the bundled vendor/sextant-bus.js, and the build.json stamp — then consumed by
+# the go:embed in debug.go. Nothing here is committed; the committed SPA source
+# (JSX, index.html, styles.css, favicon.png, image-slot.js, vendor/*.min.js, and
+# the bundle/ scope) lives under clients/web-dash.
+/clients/sextant-dash/dashapi/web/app/
