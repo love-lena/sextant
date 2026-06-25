@@ -514,6 +514,22 @@
       return ()=>clearInterval(id);
     },[]);
 
+    // Fullscreen toggle for the top-bar ⤢ control (TASK fidelity #7): a real
+    // Fullscreen API call on the app root, with a live `isFullscreen` mirror so the
+    // glyph flips ⤢ ⇄ ⤡. Degrades silently where the API is unavailable.
+    const [isFullscreen, setIsFullscreen] = useState(()=>!!document.fullscreenElement);
+    useEffect(()=>{
+      const h = ()=>setIsFullscreen(!!document.fullscreenElement);
+      document.addEventListener("fullscreenchange", h);
+      return ()=>document.removeEventListener("fullscreenchange", h);
+    },[]);
+    const toggleFullscreen = useCallback(()=>{
+      try {
+        if(document.fullscreenElement){ document.exitFullscreen && document.exitFullscreen(); }
+        else { const el = document.getElementById("app") || document.documentElement; el.requestFullscreen && el.requestFullscreen(); }
+      } catch(_) {}
+    },[]);
+
     // No-personas (TASK-194): a non-operator actor is NEVER a person name + avatar.
     // It is identified by its ULID + what the work does (its function). nameOf is
     // the one seam every byline/conversation/DM label flows through, so the rule
@@ -1217,6 +1233,9 @@
     };
 
     const hasAuthor = artifact.author && artifact.author.name;
+    // truthful live state for the top bar: a self id resolved (the bus session is up)
+    // AND the credential hasn't lapsed.
+    const busLive = !!(self && self.id) && !sessionLost;
 
     return (
       <div className="sx-app" style={{"--sx-side-w": sideCollapsed ? "0px" : sideWidth+"px"}}>
@@ -1293,9 +1312,14 @@
             </div>
             </div>
             <div className="sx-stage-tools">
-              <span className="sx-live"><span className="sx-live-dot" />live</span>
+              {/* Truthful live indicator: lit when the page holds a live bus session
+                  (a self id resolved AND the credential hasn't lapsed); otherwise it
+                  reads "reconnect" so the bar never lies about being live. */}
+              {busLive
+                ? <span className="sx-live"><span className="sx-live-dot" />live</span>
+                : <span className="sx-live is-off" title="The bus session lapsed — reload to reconnect."><span className="sx-live-dot" />reconnect</span>}
               <button className="sx-icon-btn" title={dark?"Light mode":"Dark mode"} onClick={()=>setDark(d=>!d)}>{dark?"☀":"☾"}</button>
-              <button className="sx-icon-btn" title="Fullscreen">⤢</button>
+              <button className="sx-icon-btn" title={isFullscreen?"Exit fullscreen":"Fullscreen"} aria-label={isFullscreen?"Exit fullscreen":"Fullscreen"} onClick={toggleFullscreen}>{isFullscreen?"⤡":"⤢"}</button>
             </div>
           </div>
 

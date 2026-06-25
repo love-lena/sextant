@@ -129,7 +129,7 @@
           {isGoal
             ? <div><div className="fx-dhero-rlbl">Type</div><div className="fx-dhero-rval">Goal</div></div>
             : <div><div className="fx-dhero-rlbl">Revision</div><div className="fx-dhero-rval">rev {a.version}</div></div>}
-          <span className="fx-dhero-open">{isGoal ? "Open goal →" : "Open review →"}</span>
+          <span className="fx-dhero-open">{isGoal ? "Open goal →" : "Open to decide →"}</span>
         </div>
       </button>);
   }
@@ -227,7 +227,7 @@
   // the agenda block as the "Needs you" list (replaces the auto-derived hero).
   // Calls render first (the work), context lines after (the reassurance).
   function AgendaList({ block, items, ctx }) {
-    const title = (block && block.title) || "Needs you";
+    const title = (block && block.title) || "Start here";
     const calls = items.filter((it) => it.tone !== "context");
     const ctxs = items.filter((it) => it.tone === "context");
     return (

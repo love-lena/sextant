@@ -78,7 +78,6 @@
           </div>
           <div className="sa-head-actions">
             <button className="fx-submit" onClick={onNewDoc}>＋ New doc</button>
-            <button className="sa-ghost" onClick={onNewCharter}>◎ New charter</button>
             <button className="sa-ghost" onClick={pick}>⇪ Import a file</button>
             <input ref={fileRef} type="file" style={{ display: "none" }} onChange={onFile} />
           </div>
@@ -131,7 +130,6 @@
                         {a.updated ? <> · {a.updated} ago</> : null}
                       </span>
                     </span>
-                    <span className={"fx-chip-status t-" + ({ review: "waiting", changes: "progress", approved: "met", rejected: "blocked" }[a.status] || "todo")}>{a.status || "filed"}</span>
                   </button>
                   <div className="fx-row-mobilize">
                     <button className="sa-ghost sa-ghost--sm" title="Spawn work on this artifact" onClick={() => onSpawnWork && onSpawnWork(a.name)}>spawn work</button>

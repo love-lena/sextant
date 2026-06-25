@@ -231,6 +231,8 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 .sx-vs-btn.is-on{background:var(--brand-strong);color:#fff;}
 .sx-live{display:inline-flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:11px;color:var(--ink-2);}
 .sx-live-dot{width:8px;height:8px;border-radius:50%;background:var(--c-approved);animation:sxpulse 1.8s infinite;}
+.sx-live.is-off{color:var(--c-changes,#c0573b);}
+.sx-live.is-off .sx-live-dot{background:var(--c-changes,#c0573b);animation:none;}
 .sx-icon-btn{border:1px solid var(--hair);background:#fff;border-radius:7px;width:28px;height:28px;color:var(--ink-2);cursor:pointer;font-size:13px;}
 .sx-icon-btn:hover{color:var(--ink);}
 
@@ -499,6 +501,12 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 .fx-side-search:hover{background:rgba(255,255,255,.1);color:var(--fx-stx);}
 .fx-side-search .fx-search-ic{font-size:13px;}
 .fx-side-search .fx-kbd{font-family:var(--font-mono);font-size:10px;background:rgba(255,255,255,.09);border-radius:5px;padding:2px 5px;letter-spacing:.02em;}
+/* Full-width sidebar search (design sx-app.jsx fx-search): the first nav row. */
+.fx-search{display:flex;align-items:center;gap:9px;width:100%;margin:6px 0 4px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);color:#9a9da4;font-family:inherit;font-size:13px;padding:8px 11px;border-radius:9px;cursor:pointer;}
+.fx-search:hover{background:rgba(255,255,255,.1);color:#cfd0d2;}
+.fx-search .fx-search-ic{font-size:14px;}
+.fx-search .fx-search-lbl{flex:1;text-align:left;}
+.fx-search .fx-kbd{margin-left:auto;font-family:var(--font-mono);font-size:10px;background:rgba(255,255,255,.09);border-radius:5px;padding:2px 6px;letter-spacing:.02em;}
 
 .fx-nav{flex:1;min-height:0;padding:8px 12px;overflow-y:auto;}
 .fx-navsec{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--fx-sfai);padding:15px 8px 8px;}
@@ -1313,6 +1321,13 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 .we-wf-recipe{font-size:12px;color:var(--smut);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .we-wf-right{display:flex;align-items:center;gap:10px;flex:0 0 auto;}
 .we-trigtag{font-size:11px;color:var(--smut);background:var(--sbg2);border:1px solid var(--shair);border-radius:6px;padding:2px 8px;}
+/* the "on <trigger>" tag under a workflow recipe (design sx-wf-tag). */
+.we-wf-meta{margin-top:7px;}
+.we-wf-tag{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.02em;color:var(--smut);background:var(--sbg2);border:1px solid var(--shair);border-radius:6px;padding:2px 8px;}
+/* the bottom "describe a new workflow…" field (design sx-newwf). */
+.we-newwf{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;margin-top:10px;background:var(--sbg);border:1px dashed var(--shair);border-radius:10px;padding:12px 16px;font-size:13px;font-weight:600;color:var(--brand);cursor:pointer;text-align:left;}
+.we-newwf:hover{background:var(--sbg2);border-color:var(--brand);}
+.we-newwf-go{color:var(--smut);}
 
 .we-chip{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;border-radius:5px;padding:2px 6px;}
 .we-chip-base{background:var(--brand-soft);color:var(--brand-strong);}
@@ -1477,7 +1492,20 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 .sx-bus-modeseg{display:flex;gap:4px;background:var(--fx-line2);border-radius:11px;padding:4px;margin-left:auto;}
 .sx-bus-mode{padding:7px 16px;border:none;background:transparent;color:var(--ink-2);font-family:var(--font-ui);font-size:13.5px;font-weight:600;border-radius:8px;cursor:pointer;transition:.12s;}
 .sx-bus-mode.is-on{background:var(--paper);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.08);}
-.sx-bus-bodyscroll{flex:1;overflow:auto;padding:20px 24px 40px;}
+.sx-bus-bodyscroll{flex:1;min-height:0;overflow:hidden;padding:0;}
+/* master-detail: a persistent left rail of named streams/buckets + a scrolling
+   detail pane on the right (design sx-bus master-detail). */
+.sx-bus-md{display:flex;height:100%;min-height:0;}
+.sx-bus-rail{flex:0 0 232px;display:flex;flex-direction:column;gap:2px;padding:16px 12px;border-right:1px solid var(--fx-line);overflow-y:auto;}
+.sx-bus-rail-lbl{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--fx-ink3);padding:4px 8px 8px;}
+.sx-bus-railitem{display:flex;flex-direction:column;gap:4px;width:100%;text-align:left;background:none;border:none;border-radius:9px;padding:10px 11px;cursor:pointer;color:var(--ink);}
+.sx-bus-railitem:hover{background:var(--fx-line2);}
+.sx-bus-railitem.is-on{background:var(--brand-soft);}
+.sx-bus-railitem-top{display:flex;align-items:center;gap:8px;}
+.sx-bus-railitem-name{font-size:13px;font-weight:600;letter-spacing:.02em;}
+.sx-bus-railitem-sub{font-size:10.5px;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sx-bus-railitem-meta{font-family:var(--font-mono);font-size:10px;color:var(--fx-ink3);}
+.sx-bus-md-main{flex:1;min-width:0;overflow-y:auto;padding:20px 24px 40px;}
 
 .sx-bus-note{font-size:13px;color:var(--ink-2);margin-bottom:14px;line-height:1.5;}
 .sx-bus-note-load{color:var(--brand-strong);}

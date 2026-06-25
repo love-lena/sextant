@@ -52,7 +52,7 @@
     else if (waiting) { verdict = waiting + (waiting > 1 ? " criteria" : " criterion") + " waiting on you"; tone = "t-waiting"; }
     else if (met === total) { verdict = "Done"; tone = "t-met"; }
     else if (blocked) { verdict = "Blocked"; tone = "t-blocked"; }
-    else { verdict = "On track — nothing needs you"; tone = "t-met"; }
+    else { verdict = "On track"; tone = "t-met"; }
     return { met, waiting, blocked, inprog, total, undef, signoff, verdict, tone };
   }
 
@@ -84,15 +84,6 @@
       : "todo";
   }
 
-  // runsOf(g): the runs working toward this goal, derived from in-progress criteria
-  // with an owner. Each is { owner, crit } — the owner is the run's identity (ULID +
-  // function), the crit the outcome it's working toward.
-  function runsOf(g) {
-    return (g.criteria || [])
-      .filter((c) => c.status === "in-progress" && c.owner)
-      .map((c) => ({ owner: c.owner, crit: c }));
-  }
-
   /* ---------- escape-hatch tag (S4.4) ----------
      A goal whose stream reads like an escape hatch (off-track / manual / paused)
      gets a small caution tag. The stream label is opaque to the bus, so this is a
@@ -120,13 +111,16 @@
     return id.slice(0, 6) + "…" + id.slice(-4);
   }
 
-  /* ---------- L1 · Portfolio card (S4.4–S4.7) ---------- */
+  /* ---------- L1 · Portfolio card (S4.4–S4.7) ----------
+     No-personas (operator hard line): a goal CARD carries NO owner/run chips — only
+     the criteria activity-map + status verdict (and, on a not-started card, the
+     dashed +spawn-work cue). The ULID+run-label chips that work toward a criterion
+     live in the goal DETAIL, never on the card. */
   function Card({ g, onOpen, onDM, onSpawn, renderWiki }) {
     const r = roll(g);
     const crits = g.criteria || [];
     const rw = renderWiki || ((t) => t);
     const bucket = bucketOf(g);
-    const runs = runsOf(g);
     const open = () => onOpen && onOpen(g.id);
     return (
       <div className="dxg-card" role="button" tabIndex={0}
@@ -146,13 +140,6 @@
           </div>
           <span className="dxg-rollup-txt">{r.total === 0 ? "0 criteria defined" : r.met + " of " + r.total + " met"}</span>
         </div>
-
-        {/* S4.5 — Moving cards list their active run chips (open the run, no nav into the goal) */}
-        {bucket === "moving" && runs.length > 0 && (
-          <div className="dxg-card-runs">
-            {runs.map((run, i) => <RunChip run={run} onWatch={onDM} key={i} />)}
-          </div>
-        )}
 
         {/* S4.6 — Not-started cards show a dashed +spawn-work chip */}
         {bucket === "started" && (
@@ -363,21 +350,11 @@
     const name = "goal." + g.id;
     const st = g.review;
     const [note, setNote] = useState("");
-    if (st === "approved") {
-      return (
-        <div className="dxg-signoff is-approved">
-          <span className="dxg-signoff-ic">✓</span>
-          <span className="dxg-signoff-txt">You signed off on this goal — it's settled.</span>
-          <button className="dxg-signoff-reopen" onClick={() => onSetReview(name, "review")}>Reopen</button>
-        </div>);
-    }
-    if (st === "changes") {
-      return (
-        <div className="dxg-signoff is-changes">
-          <span className="dxg-signoff-ic">↩</span>
-          <span className="dxg-signoff-txt">You requested changes — it's back with the agent now.</span>
-        </div>);
-    }
+    // No "signed off / settled" or "requested changes" confirmation banner — the
+    // design's goal detail has no such banner (the verdict reads off the criteria
+    // rollup). Only the INTERACTIVE sign-off prompt (awaiting your sign-off) renders;
+    // once approved/changes, the prompt simply isn't shown.
+    if (st === "approved" || st === "changes") return null;
     const canChanges = !!note.trim();
     return (
       <div className="dxg-signoff is-review">

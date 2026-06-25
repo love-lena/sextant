@@ -102,10 +102,34 @@
     return subject;
   }
 
+  // NAMED STREAMS (design master-detail): the left rail always lists these named
+  // streams, each a subject-prefix grouping over the live discovered subjects (no
+  // invented telemetry). A discovered subject that matches a stream's `match` is
+  // browsed under it; anything that matches none lands in OTHER so nothing is lost.
+  // wildcard is the canonical subject pattern shown in the detail header / config.
+  const NAMED_STREAMS = [
+    { key: "GOALS",     wildcard: "msg.topic.goal.>",     match: (s) => s.startsWith("msg.topic.goal") },
+    { key: "RUNS",      wildcard: "msg.topic.run.>",      match: (s) => s.startsWith("msg.topic.run") },
+    { key: "ARTIFACTS", wildcard: "msg.topic.artifact.>", match: (s) => s.startsWith("msg.topic.artifact") },
+    { key: "REVIEWS",   wildcard: "msg.topic.review.>",   match: (s) => s.startsWith("msg.topic.review") },
+    { key: "DISPATCH",  wildcard: "msg.topic.dispatch.>", match: (s) => s.startsWith("msg.topic.dispatch") || s.startsWith("msg.topic.spawn") },
+  ];
+  function streamsFor(subjects) {
+    const claimed = new Set();
+    const out = NAMED_STREAMS.map((ns) => {
+      const subs = subjects.filter((s) => ns.match(s));
+      subs.forEach((s) => claimed.add(s));
+      return { key: ns.key, wildcard: ns.wildcard, subjects: subs };
+    });
+    const other = subjects.filter((s) => !claimed.has(s));
+    if (other.length) out.push({ key: "OTHER", wildcard: "msg.>", subjects: other });
+    return out;
+  }
+
   // pageAll(subject): read the whole retained log for a subject by following the
   // message.read cursor (since=0 is the oldest; one page returns the oldest first).
   // Bounded so a very busy subject can't loop forever. Returns frames oldest-first.
-  async function pageAll(subject, cap) {
+  async function pageAllOne(subject, cap) {
     const sx = SX(); if (!sx) return [];
     const PAGE = 200, MAX_PAGES = cap || 50;
     const acc = [];
@@ -113,11 +137,21 @@
     for (let i = 0; i < MAX_PAGES; i++) {
       const res = await sx.get("/api/messages?subject=" + encodeURIComponent(subject) + "&since=" + since + "&limit=" + PAGE).catch(() => null);
       const frames = (res && res.messages) || [];
+      for (const f of frames) { if (f && !f.subject) f.subject = subject; }
       acc.push(...frames);
       const next = res && res.next_cursor;
       if (frames.length < PAGE || !next || next <= since) break;
       since = next;
     }
+    return acc;
+  }
+
+  // pageAll(subjectOrList): a named stream groups several subjects, so accept either
+  // one subject or an array and read across all of them (serial at dash scale).
+  async function pageAll(subjectOrList, cap) {
+    const list = Array.isArray(subjectOrList) ? subjectOrList : [subjectOrList];
+    const acc = [];
+    for (const s of list) { const fs = await pageAllOne(s, cap).catch(() => []); acc.push(...fs); }
     return acc;
   }
 
@@ -190,7 +224,9 @@
 
   // ============================ JetStream: message browser ============================
   // The genuinely functional half: per-subject message browsing over message.read.
-  function MessageBrowser({ subject }) {
+  function MessageBrowser({ subjects }) {
+    const list0 = Array.isArray(subjects) ? subjects : [subjects];
+    const key = list0.join("|");
     const [frames, setFrames] = useState(null); // null = loading
     const [err, setErr] = useState("");
     const [order, setOrder] = useState("newest"); // newest | oldest
@@ -201,13 +237,14 @@
 
     const load = useCallback(() => {
       setFrames(null); setErr("");
-      pageAll(subject, 50).then((fs) => setFrames(fs)).catch((e) => { setErr(String(e && e.message || e)); setFrames([]); });
-    }, [subject]);
+      if (list0.length === 0) { setFrames([]); return; }
+      pageAll(list0, 50).then((fs) => setFrames(fs)).catch((e) => { setErr(String(e && e.message || e)); setFrames([]); });
+    }, [key]);
     useEffect(() => { load(); setPage(0); setOpen({}); }, [load]);
 
     const rows = useMemo(() => {
       const list = (frames || []).map((f) => ({
-        id: f.id, subject: f.subject || subject, author: f.author, kind: f.kind,
+        id: f.id, subject: f.subject || list0[0], author: f.author, kind: f.kind,
         time: frameTime(f), size: recordSize(f.record), record: f.record, headers: frameHeaders(f),
       }));
       const q = filter.trim().toLowerCase();
@@ -217,8 +254,9 @@
         JSON.stringify(r.record || "").toLowerCase().includes(q)) : list;
       filtered.sort((a, b) => order === "newest" ? (b.time - a.time) : (a.time - b.time));
       return filtered;
-    }, [frames, filter, order, subject]);
+    }, [frames, filter, order, key]);
 
+    if (list0.length === 0) return <div className="sx-bus-empty">This stream has no live subjects yet — traffic populates it.</div>;
     if (frames === null) return <div className="sx-bus-loading">Reading messages…</div>;
     const total = rows.length;
     const start = page * PER;
@@ -286,13 +324,16 @@
   }
 
   // ============================ JetStream: stream detail ============================
-  function StreamDetail({ stream, onBack }) {
+  // Detail pane of the master-detail layout: Messages / Consumers / Config tabs for
+  // the selected NAMED stream. Messages browses across the stream's matched subjects.
+  function StreamDetail({ stream }) {
     const [tab, setTab] = useState("messages"); // messages | consumers | config
+    useEffect(() => { setTab("messages"); }, [stream.key]);
+    const subs = stream.subjects || [];
     return (
       <div className="sx-bus-detail">
         <div className="sx-bus-dethead">
-          <button className="sx-bus-back" onClick={onBack}>← Streams</button>
-          <h2 className="sx-bus-title mono">{stream.subject}</h2>
+          <h2 className="sx-bus-title mono">{stream.wildcard}</h2>
           <div className="sx-bus-chips">
             <Chip label="JetStream" tone="brand" />
             <Chip label="file storage" />
@@ -303,7 +344,7 @@
         <div className="sx-bus-statrow">
           <Stat k="messages" v={fmtNum(stream.count)} mono />
           <Stat k="bytes" v={fmtBytes(stream.bytes)} mono />
-          <Stat k="first activity" v={stream.first ? absTime(stream.first) : "—"} />
+          <Stat k="subjects" v={fmtNum(subs.length)} mono />
           <Stat k="last activity" v={stream.last ? relMs(stream.last) : "—"} />
           <Stat k="consumers" v={"—"} mono />
         </div>
@@ -315,7 +356,7 @@
         </div>
         <div className="sx-bus-tabbody">
           {tab === "messages" ? (
-            <MessageBrowser subject={stream.subject} />
+            <MessageBrowser subjects={subs} key={stream.key} />
           ) : tab === "consumers" ? (
             <Unreachable what="Consumer state"
               why="Consumer durable/ephemeral kind, ack policy, ack-wait, max-deliver and lag come from $JS.API.CONSUMER.*, which the bus denies to every client credential. A bus-side `stream.consumers` Wire-API op would surface it browser-direct." />
@@ -324,7 +365,8 @@
               <div className="sx-bus-sub">Configuration (browser-visible)</div>
               <table className="sx-bus-kv">
                 <tbody>
-                  <tr><td>subject</td><td className="mono">{stream.subject}</td></tr>
+                  <tr><td>stream</td><td className="mono">{stream.key}</td></tr>
+                  <tr><td>subjects</td><td className="mono">{subs.length ? subs.join(", ") : stream.wildcard}</td></tr>
                   <tr><td>messages</td><td className="mono">{fmtNum(stream.count)}</td></tr>
                   <tr><td>bytes</td><td className="mono">{fmtBytes(stream.bytes)}</td></tr>
                   <tr><td>first / last</td><td className="mono">{stream.first ? absTime(stream.first) : "—"} · {stream.last ? absTime(stream.last) : "—"}</td></tr>
@@ -339,61 +381,54 @@
     );
   }
 
-  // ============================ JetStream: stream list ============================
-  function JetStreamMode({ subjects, onOpen, openSubject }) {
-    // For each discovered subject, lazily compute count + last activity + bytes by
-    // paging the retained log. Cached per subject so re-renders don't re-read.
-    const [stats, setStats] = useState({}); // subject -> {count,bytes,first,last,live}
+  // ============================ JetStream: master-detail ============================
+  // A persistent left rail of NAMED streams (GOALS / RUNS / ARTIFACTS / REVIEWS /
+  // DISPATCH) + the detail pane for the selected stream. Per-stream counts/last are
+  // lazily paged across each stream's matched subjects (no invented telemetry).
+  function JetStreamMode({ subjects, sel, onSelect }) {
+    const streams = useMemo(() => streamsFor(subjects), [subjects.join("|")]);
+    const [stats, setStats] = useState({}); // streamKey -> {count,bytes,first,last,live}
     const [loading, setLoading] = useState(true);
-    const mounted = useRef(true);
-    useEffect(() => () => { mounted.current = false; }, []);
 
     useEffect(() => {
       let cancelled = false;
       setLoading(true);
       (async () => {
-        const out = {};
-        // Bound concurrency-free serial reads at dash scale (a handful of subjects).
-        for (const subj of subjects) {
-          const fs = await pageAll(subj, 25).catch(() => []);
-          let bytes = 0, first = 0, last = 0;
-          for (const f of fs) { bytes += recordSize(f.record); const t = frameTime(f); if (t) { if (!first || t < first) first = t; if (t > last) last = t; } }
-          out[subj] = { count: fs.length, bytes, first, last, live: last && (Date.now() - last < 60000) };
+        for (const st of streams) {
+          let count = 0, bytes = 0, first = 0, last = 0;
+          for (const subj of st.subjects) {
+            const fs = await pageAllOne(subj, 25).catch(() => []);
+            count += fs.length;
+            for (const f of fs) { bytes += recordSize(f.record); const t = frameTime(f); if (t) { if (!first || t < first) first = t; if (t > last) last = t; } }
+          }
           if (cancelled) return;
-          setStats((prev) => ({ ...prev, [subj]: out[subj] }));
+          setStats((prev) => ({ ...prev, [st.key]: { count, bytes, first, last, live: last && (Date.now() - last < 60000) } }));
         }
         if (!cancelled) setLoading(false);
       })();
       return () => { cancelled = true; };
-    }, [subjects.join("|")]);
+    }, [streams]);
 
-    const open = openSubject ? { subject: openSubject, ...(stats[openSubject] || { count: 0, bytes: 0 }) } : null;
-    if (open) return <StreamDetail stream={open} onBack={() => onOpen(null)} />;
-
-    const rows = subjects.map((s) => ({ subject: s, ...(stats[s] || {}) }))
-      .sort((a, b) => (b.last || 0) - (a.last || 0));
+    const selStream = streams.find((s) => s.key === sel) || streams[0];
+    const open = selStream ? { ...selStream, ...(stats[selStream.key] || { count: 0, bytes: 0 }) } : null;
     return (
-      <div className="sx-bus-list">
-        <div className="sx-bus-note">
-          The bus retains every <span className="mono">msg.&gt;</span> subject in one JetStream stream; each subject is shown here as an inspectable channel.
-          {loading ? <span className="sx-bus-note-load"> reading counts…</span> : null}
+      <div className="sx-bus-md">
+        <div className="sx-bus-rail">
+          <div className="sx-bus-rail-lbl">Streams{loading ? <span className="sx-bus-note-load"> · reading…</span> : null}</div>
+          {streams.map((s) => {
+            const st = stats[s.key] || {};
+            return (
+              <button key={s.key} className={"sx-bus-railitem" + (selStream && s.key === selStream.key ? " is-on" : "")} onClick={() => onSelect(s.key)}>
+                <div className="sx-bus-railitem-top"><span className={"sx-bus-dot" + (st.live ? " is-live" : "")} /><span className="sx-bus-railitem-name">{s.key}</span></div>
+                <div className="sx-bus-railitem-sub mono">{s.wildcard}</div>
+                <div className="sx-bus-railitem-meta">{st.count != null ? fmtNum(st.count) + " msgs" : "…"} · {s.subjects.length} subj</div>
+              </button>
+            );
+          })}
         </div>
-        <table className="sx-bus-table">
-          <thead><tr><th></th><th>subject</th><th className="r">messages</th><th className="r">storage</th><th className="r">last activity</th></tr></thead>
-          <tbody>
-            {rows.length === 0 ? (
-              <tr><td colSpan={5} className="sx-bus-empty">No subjects discovered yet — traffic populates this list.</td></tr>
-            ) : rows.map((r) => (
-              <tr key={r.subject} className="sx-bus-trow" onClick={() => onOpen(r.subject)}>
-                <td><span className={"sx-bus-dot" + (r.live ? " is-live" : "")} /></td>
-                <td className="mono sx-bus-tname">{r.subject}</td>
-                <td className="r mono">{r.count != null ? fmtNum(r.count) : "…"}</td>
-                <td className="r mono">{r.bytes != null ? fmtBytes(r.bytes) : "…"}</td>
-                <td className="r">{r.last ? relMs(r.last) : "—"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="sx-bus-md-main">
+          {open ? <StreamDetail stream={open} /> : <div className="sx-bus-empty">No streams.</div>}
+        </div>
       </div>
     );
   }
@@ -401,7 +436,7 @@
   // ============================ KV: bucket detail ============================
   // The `artifacts` bucket is reachable via the artifact Wire API. Keys = artifact
   // names; the current value + revision come from artifact.get / artifact.list.
-  function KVBucketDetail({ onBack }) {
+  function KVBucketDetail() {
     const [keys, setKeys] = useState(null); // [{name,revision,updated}]
     const [filter, setFilter] = useState("");
     const [sel, setSel] = useState(null);
@@ -438,7 +473,6 @@
     return (
       <div className="sx-bus-detail">
         <div className="sx-bus-dethead">
-          <button className="sx-bus-back" onClick={onBack}>← Buckets</button>
           <h2 className="sx-bus-title mono">artifacts</h2>
           <div className="sx-bus-chips">
             <Chip label="Key-Value" tone="brand" />
@@ -492,30 +526,27 @@
     );
   }
 
-  // ============================ KV: bucket list ============================
-  function KVMode({ onOpen, open }) {
+  // ============================ KV: master-detail ============================
+  // A persistent rail of KV buckets (today: the one `artifacts` bucket) + its detail.
+  function KVMode() {
     const [count, setCount] = useState(null);
     useEffect(() => {
       const sx = SX(); if (!sx) return;
       sx.get("/api/artifacts").then((as) => setCount(Array.isArray(as) ? as.length : 0)).catch(() => setCount(0));
     }, []);
-    if (open) return <KVBucketDetail onBack={() => onOpen(false)} />;
     return (
-      <div className="sx-bus-list">
-        <div className="sx-bus-note">
-          The artifact store is a JetStream Key-Value bucket; the operator’s artifacts are its keys.
+      <div className="sx-bus-md">
+        <div className="sx-bus-rail">
+          <div className="sx-bus-rail-lbl">Buckets</div>
+          <button className="sx-bus-railitem is-on">
+            <div className="sx-bus-railitem-top"><span className="sx-bus-dot is-live" /><span className="sx-bus-railitem-name">artifacts</span></div>
+            <div className="sx-bus-railitem-sub mono">KV_artifacts</div>
+            <div className="sx-bus-railitem-meta">{count != null ? fmtNum(count) + " keys" : "…"} · file</div>
+          </button>
         </div>
-        <table className="sx-bus-table">
-          <thead><tr><th></th><th>bucket</th><th className="r">keys</th><th className="r">storage</th></tr></thead>
-          <tbody>
-            <tr className="sx-bus-trow" onClick={() => onOpen(true)}>
-              <td><span className="sx-bus-dot is-live" /></td>
-              <td className="mono sx-bus-tname">artifacts</td>
-              <td className="r mono">{count != null ? fmtNum(count) : "…"}</td>
-              <td className="r mono">file</td>
-            </tr>
-          </tbody>
-        </table>
+        <div className="sx-bus-md-main">
+          <KVBucketDetail />
+        </div>
       </div>
     );
   }
@@ -527,8 +558,7 @@
   // /api/subjects — so it works both wired into app.jsx and standalone (#bus route).
   function BusInspector({ subjects: subjectsProp }) {
     const [mode, setMode] = useState("jetstream"); // jetstream | kv
-    const [openSubject, setOpenSubject] = useState(null);
-    const [kvOpen, setKvOpen] = useState(false);
+    const [sel, setSel] = useState("GOALS"); // selected named stream
     const [discovered, setDiscovered] = useState(null);
 
     // Discover subjects ourselves when not handed them (standalone route). Polls so
@@ -573,8 +603,8 @@
         </div>
         <div className="sx-bus-bodyscroll">
           {mode === "jetstream"
-            ? <JetStreamMode subjects={subjects} onOpen={setOpenSubject} openSubject={openSubject} />
-            : <KVMode onOpen={setKvOpen} open={kvOpen} />}
+            ? <JetStreamMode subjects={subjects} sel={sel} onSelect={setSel} />
+            : <KVMode />}
         </div>
       </div>
     );

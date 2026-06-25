@@ -223,60 +223,54 @@
         <span className="fx-asst-spark" style={accent ? { color: accent } : undefined}>✦</span>
       </button>);
 
-    // LIVE → the bus-backed DM thread (window.MessageList + window.Composer, the
-    // same primitives ConversationView uses). The Composer reads its own `draft`,
-    // so its zero-arg onSend forwards the current draft to onSend(text). Labelled
-    // "Assistant" — the bus helper is a function, not a persona.
-    if (live) {
-      const msgs = messages || [];
-      return (
-        <div className="fx-asst-panel is-live sx-conv-light" role="dialog" aria-label="Assistant">
-          <div className="fx-asst-head">
-            <span className="fx-asst-mark" style={accent ? { background: accent } : undefined}>✦</span>
-            <div>
-              <div className="fx-asst-title" style={accent ? { color: accent } : undefined}>Assistant</div>
-              <div className="fx-asst-live">
-                <span className={"fx-asst-dot" + (online ? " is-on" : "")} style={online && accent ? { background: accent } : undefined} />
-                {online ? "online" : "always here"}
-              </div>
-            </div>
-            <button className="fx-asst-close" onClick={doClose} aria-label="Close">×</button>
-          </div>
-          <div className="fx-asst-thread" ref={bodyRef}>
-            {msgs.length === 0 && (
-              <p className="fx-asst-empty">Ask the assistant anything about your workspace — it can see your goals, artifacts, and the bus.</p>
-            )}
-            <window.MessageList messages={msgs} onArtifactRef={onArtifactRef} artifactNames={artifactNames} />
-          </div>
-          <window.Composer draft={draft || ""} setDraft={setDraft} onSend={() => onSend && onSend(draft)} placeholder="Message the assistant…" />
-        </div>);
-    }
-
-    // ABSENT (no live bus assistant) → the DE-NAMED local helper (TASK-203).
-    // "Assistant · always here": a chat panel that answers from the dash's own
-    // loaded data (goals/artifacts/runs) — never a person, never an agent on the
-    // bus. Each answer may embed [[wikilinks]] that navigate on click (resolved via
-    // onArtifactRef + artifactNames). The composer is LIVE (zero-arg onSend forwards
-    // the current draft) — it computes a local answer, it doesn't publish.
-    const localMsgs = messages || [];
+    // No-personas (operator hard line): the Assistant is ONE de-named voice. The
+    // thread renders plain you/bot bubbles — NO per-message avatar, NO author name,
+    // NO "ULID · AGENT" identity chip. Both the live (bus-backed) and the local
+    // helper wear the SAME header (✦ + "Assistant" + "always here") and the SAME
+    // bubble thread; the only difference is where onSend routes. The header sub-line
+    // is always "always here" (rendered uppercase by .fx-asst-sub) — never "online".
+    const empty = live
+      ? "Ask the assistant anything about your workspace — it can see your goals, artifacts, and the bus."
+      : "Ask me about your goals, what's waiting on you, or where a workstream stands — I read your workspace. Try “what's waiting on me?”";
     return (
       <div className="fx-asst-panel is-live sx-conv-light" role="dialog" aria-label="Assistant">
         <div className="fx-asst-head">
-          <span className="fx-asst-mark">✦</span>
+          <span className="fx-asst-mark" style={accent ? { background: accent } : undefined}>✦</span>
           <div>
-            <div className="fx-asst-title">Assistant</div>
+            <div className="fx-asst-title" style={accent ? { color: accent } : undefined}>Assistant</div>
             <div className="fx-asst-sub">always here</div>
           </div>
           <button className="fx-asst-close" onClick={doClose} aria-label="Close">×</button>
         </div>
-        <div className="fx-asst-thread" ref={bodyRef}>
-          {localMsgs.length === 0 && (
-            <p className="fx-asst-empty">Ask me about your goals, what's waiting on you, or where a workstream stands — I read your workspace. Try “what's waiting on me?”</p>
-          )}
-          <window.MessageList messages={localMsgs} onArtifactRef={onArtifactRef} artifactNames={artifactNames} />
+        <div className="fx-asst-thread fx-asst-body" ref={bodyRef}>
+          {(messages || []).length === 0 && <p className="fx-asst-empty">{empty}</p>}
+          <AsstThread messages={messages || []} onArtifactRef={onArtifactRef} artifactNames={artifactNames} />
         </div>
-        <window.Composer draft={draft || ""} setDraft={setDraft} onSend={() => onSend && onSend(draft)} placeholder="Ask a quick question…" />
+        <window.Composer draft={draft || ""} setDraft={setDraft} onSend={() => onSend && onSend(draft)} placeholder={live ? "Message the assistant…" : "Ask a quick question…"} />
       </div>);
+  }
+
+  // AsstThread — the de-named assistant bubble list (no avatars, no author byline,
+  // no "agent" tag). A `you` bubble vs a `bot` bubble, with the same light markdown +
+  // [[wikilink]] rendering MessageList uses (so links remain clickable). The
+  // assistant is one voice, not a roster of personas.
+  function AsstThread({ messages, onArtifactRef, artifactNames }) {
+    function onArtClick(e) {
+      const a = e.target.closest && e.target.closest("a.sx-artlink");
+      if (a && onArtifactRef) { e.preventDefault(); onArtifactRef(a.getAttribute("data-art")); }
+    }
+    return (
+      <React.Fragment>
+        {messages.map((m) => {
+          const html = renderMessageHTML(m.text, artifactNames);
+          return (
+            <div className={"fx-asst-msg " + (m.self ? "you" : "bot")} key={m.id}>
+              {html != null
+                ? <span className="fx-asst-bub" onClick={onArtClick} dangerouslySetInnerHTML={{ __html: html }} />
+                : <span className="fx-asst-bub">{m.text}</span>}
+            </div>);
+        })}
+      </React.Fragment>);
   }
 
   /* ---------- ⌘K command palette · scoring + recency ----------
@@ -374,7 +368,7 @@
     return (
       <div className="fx-cmdk-scrim" onClick={onClose}>
         <div className="fx-cmdk" onClick={(e) => e.stopPropagation()}>
-          <input className="fx-cmdk-input" autoFocus placeholder="Search artifacts, runs, conversations…"
+          <input className="fx-cmdk-input" autoFocus placeholder="Jump to anything, or start an action…"
             value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKey} />
           <div className="fx-cmdk-results">
             {results.length === 0 && <div className="fx-cmdk-empty">{ql ? "No matches for “" + q + "”" : "Type to search."}</div>}
@@ -505,15 +499,18 @@
             <span className="fx-word">Sextant</span>
           </span>
           <div className="fx-brand-end">
-            <button className="fx-side-search" title="Search the bus  ⌘K" onClick={ctx.onSearch}>
-              <span className="fx-search-ic">⌕</span>
-              <span className="fx-kbd">⌘K</span>
-            </button>
             <button className="fx-side-collapse" title="Collapse navigation" onClick={onToggleSide} aria-label="Collapse navigation">‹</button>
           </div>
         </div>
 
         <nav className="fx-nav">
+          {/* Full-width search at the top of the nav (design sx-app.jsx fx-search):
+              "Search… ⌘K" — opens the ⌘K command palette. */}
+          <button className="fx-search" onClick={ctx.onSearch} title="Search  ⌘K">
+            <span className="fx-search-ic">⌕</span>
+            <span className="fx-search-lbl">Search…</span>
+            <span className="fx-kbd">⌘K</span>
+          </button>
           <div className="fx-navsec">Workspace</div>
           {WORKSPACE.map(([ic, label, key]) => (
             <button className={"fx-navrow" + (section === key ? " is-on" : "")} key={key} onClick={() => ctx.onNav(key)}>

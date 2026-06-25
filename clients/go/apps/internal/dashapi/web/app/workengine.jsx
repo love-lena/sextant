@@ -225,7 +225,7 @@
         <div className="we-head fx-in">
           <div>
             <h1 className="fx-h1">Work engine</h1>
-            <p className="fx-psub">Templated workflows, and the live runs walking their steps on the bus.</p>
+            <p className="fx-psub">Define the work as a spec, then watch its runs. A workflow is the de-named actor; a run is one live instance of it.</p>
           </div>
           <button className="we-spawn-btn" onClick={onSpawn}>＋ Spawn work</button>
         </div>
@@ -234,12 +234,13 @@
         <div className="we-section fx-in" style={{ animationDelay: ".03s" }}>
           <div className="we-sec-head">
             <h2 className="we-sec-title">Workflows</h2>
-            <span className="we-sec-sub">WORKFLOW.md specs · reusable, no goal of their own</span>
-            <button className="we-link" onClick={onNewWorkflow}>＋ Describe a workflow</button>
+            <span className="we-sec-sub">The templates. Reusable specs that define what gets done — trigger, steps, outputs. Nothing runs here.</span>
           </div>
           <div className="we-rows">
             {templates.map((t) => {
               const live = runs.filter((r) => r.template === t.name && isActive(r.status)).length;
+              // Trigger as an "on <trigger>" tag (design): prefer a real (non-manual)
+              // trigger, else the first; "Manual" reads "on manual".
               const trig = (t.triggers || []).find((x) => !x.manual) || (t.triggers || [])[0] || { label: "Manual" };
               return (
                 <div className="we-wf-row" key={t.name} onClick={() => onOpenTemplate(t)} role="button" tabIndex={0}
@@ -247,14 +248,13 @@
                   <div className="we-wf-main">
                     <div className="we-wf-top">
                       <span className="we-wf-name">{t.name}</span>
-                      {t.base && <span className="we-chip we-chip-base">base</span>}
                       {t.seed && <span className="we-chip we-chip-seed">sample</span>}
                       {live > 0 && <span className="we-livebadge"><Pulse status="running" />{live} live</span>}
                     </div>
                     <div className="we-wf-recipe">{stepLine(t.steps) || "no steps yet"}</div>
+                    <div className="we-wf-meta"><span className="we-wf-tag">on {(trig.label || "manual").toLowerCase().replace(/^on\s+/, "")}</span></div>
                   </div>
                   <div className="we-wf-right">
-                    <span className="we-trigtag">{trig.label}</span>
                     {!t.base && (
                       <button className="we-mini" title="Edit spec" onClick={(e) => { e.stopPropagation(); onEditTemplate(t); }}>Edit spec</button>
                     )}
@@ -266,17 +266,20 @@
               <div className="we-empty">
                 <div className="we-empty-title">No workflows yet.</div>
                 <div className="we-empty-sub">Describe a reusable spec — a trigger plus the steps a run walks.</div>
-                <button className="we-link" onClick={onNewWorkflow}>＋ Describe a workflow</button>
               </div>
             )}
           </div>
+          {/* "describe a workflow" lives at the BOTTOM as a field, not the header (design). */}
+          <button className="we-newwf" onClick={onNewWorkflow}>
+            <span>＋ describe a new workflow…</span><span className="we-newwf-go">→</span>
+          </button>
         </div>
 
         {/* ---- Active runs ---- */}
         <div className="we-section fx-in" style={{ animationDelay: ".06s" }}>
           <div className="we-sec-head">
             <h2 className="we-sec-title">Active runs</h2>
-            <span className="we-sec-sub">in-progress, waiting, or blocked</span>
+            <span className="we-sec-sub">Live work happening now — each is one instance of a workflow above (or ad-hoc). Open a run to steer it.</span>
           </div>
           <div className="we-rows">
             {active.map((r) => {
