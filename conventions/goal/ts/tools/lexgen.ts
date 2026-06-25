@@ -24,8 +24,8 @@ import { fileURLToPath } from "node:url";
 // The goals package dir (this file lives in tools/ beneath it).
 const pkgDir = dirname(dirname(fileURLToPath(import.meta.url)));
 // The goal lexicon, relative to the package dir: up to the repo root, then into
-// protocol/lexicons. (conventions/goal/ts → repo root is four up.)
-const lexiconFile = join(pkgDir, "..", "..", "..", "..", "protocol", "lexicons", "goal.json");
+// protocol/lexicons. (conventions/goal/ts → repo root is three up.)
+const lexiconFile = join(pkgDir, "..", "..", "..", "protocol", "lexicons", "goal.json");
 // The generated types file, in the package's src dir.
 const outputFile = join(pkgDir, "src", "goal_gen.ts");
 
