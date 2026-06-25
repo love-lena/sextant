@@ -67,10 +67,49 @@ in another is acceptable drift when it is contained to the components that need
 it and declared — the shared definition in `protocol` keeps coverage free to lag
 while behaviour can never fork.
 
+## The target tree
+
+```
+sextant/
+  protocol/                 # contract (core, locked): wire · wireapi · sx · lexicons · conformance
+  bus/                      # the server; internal/backend/ holds the backend seam
+  sdk/                      # libraries
+    go/  ts/                #   the two co-equal SDKs
+    docgen/                 #   tool: SDK reference docs (was apps/docgen)
+  conventions/              # promoted, offered tier — optional, forkable, NOT core
+    goal/       { go/ ts/ }
+    review/     { go/ ts/ }
+    assistant/  { go/ ts/ }
+    workflow/   { go/ ts/ } #   contract split out of apps/workflow
+    spawn/      { go/ ts/ } #   contract split out of apps/dispatch
+  shared/go/                # cross-cutting Go-host helpers — never imported by the SDK
+    clictx/  selfenroll/  seqcursor/  version/
+  clients/                  # flat vertical peers — one role each, never nested
+    sextant-cli/            #   cli      (command stays `sextant`)
+    sextant-dash/           #   service  web-dash server; holds dashapi/ dashserve/
+    sextant-tui/            #   tui      terminal cockpit; holds internal/tui/ (widget·theme·surface·layout)
+    web-dash/               #   browser  the SPA (was apps/internal/dashapi/web/app)
+    coordinator/            #   service  drives conventions/workflow (was apps/workflow)
+    dispatcher/             #   service  implements conventions/spawn (was apps/dispatch)
+    assistant/              #   service  conventions/assistant; runtime id "violet" (was apps/violet)
+    sextant-mcp/            #   service  harness bridge
+    pi-bus/                 #   harness  (was clients/ts/pi)
+    claude-code/            #   harness  rides sextant-mcp
+  tests/  docs/  backlog/  scripts/  tools/  Formula/  .github/
+  go.mod  CONTEXT.md  AGENTS.md  …
+```
+
+One root `go.mod` still spans the Go packages; the move is within the single
+module. The `tui` component library nests inside `sextant-tui` (only it and its
+dev galleries use it); `dashapi`/`dashserve` move into `sextant-dash` (its own
+HTTP face); the ex-`clientkit` helpers stand on their own under `shared/go`.
+
 ## Consequences
 
 The move is large but mechanical: `sdk/`, `conventions/`, and the Go `shared/`
 and `tui` libraries rise to the top; five clients rename or split; a browser
 client and a harness plugin relocate out of language trees; every import path and
-the `importcheck` rules are rewritten within the one Go module. It lands
-incrementally, one relocation per ticket, behind the conformance suite.
+the `importcheck` rules are rewritten within the one Go module. Because the
+intermediate states are painful to inhabit, it lands as one orchestrated change
+rather than incrementally — green at the end against the conformance suite, the
+rewritten `importcheck` rules, and the full build/test gate.
