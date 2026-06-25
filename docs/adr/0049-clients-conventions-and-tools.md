@@ -100,8 +100,9 @@ sextant/
 ```
 
 One root `go.mod` still spans the Go packages; the move is within the single
-module. The `tui` component library nests inside `sextant-tui` (only it and its
-dev galleries use it); `dashapi`/`dashserve` move into `sextant-dash` (its own
+module. The `tui` component library nests inside `sextant-tui` (only it uses it,
+now that the dev galleries are retired — TASK-190); `dashapi`/`dashserve` move
+into `sextant-dash` (its own
 HTTP face); the ex-`clientkit` helpers stand on their own under `shared/go`.
 
 ## Consequences

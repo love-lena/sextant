@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-25 19:41'
-updated_date: '2026-06-25 19:49'
+updated_date: '2026-06-25 22:41'
 labels:
   - ready-for-agent
 dependencies:
@@ -73,4 +73,5 @@ Scope broadened in-session 2026-06-25 from "Go review only" to full go<->ts conv
 - [ ] #7 conventions/workflow/ts built co-equal with conventions/workflow/go, vectors-bound; the dash creates/edits/renders workflows over it (replacing ad-hoc dash writes)
 - [ ] #8 conventions/spawn/ts built co-equal with conventions/spawn/go, vectors-bound
 - [ ] #9 after this task every convention (goal, review, workflow, spawn) is co-equal go+ts, each with conformance vectors both SDKs replay green
+- [ ] #10 The 4 M5-era demos that build the retired clients/go/apps/spawn-poc (docs/demos/{agentic-dev-workflow,m5-workflow-demo,m5-dispatcher-demo,spawn-spike-demo}.sh) are re-pointed at the dispatcher (the client that graduated spawn-poc) or retired; none reference spawn-poc. Deferred out of TASK-224 because re-pointing is a behavioral demo change.
 <!-- AC:END -->
