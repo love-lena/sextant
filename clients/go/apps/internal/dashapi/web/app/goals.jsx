@@ -96,12 +96,15 @@
 
   /* ---------- run chip (S4.5 / S5.4) ---------- */
   function RunChip({ run, onWatch }) {
-    const label = run.owner;
+    // no-personas (TASK-194): a run is identified by function + ULID, never its
+    // owner's name. Show a neutral ⬡ run marker (+ short ULID when one exists),
+    // matching the Home "Moving on its own" rows — never run.owner.
+    const id = run.ulid || run.id || run.runId || null;
     return (
-      <button type="button" className="dxg-runchip" title={"Run " + label + " — watch"}
+      <button type="button" className="dxg-runchip" title="Watch the run"
         onClick={(e) => { e.stopPropagation(); onWatch && onWatch(); }}>
         <span className="dxg-runpulse" />
-        <span className="dxg-runlabel">{shortId(label)}</span>
+        <span className="dxg-runlabel">⬡ {id ? shortId(id) : "run"}</span>
         <span className="dxg-runwatch">watch</span>
       </button>);
   }
@@ -273,7 +276,6 @@
         <div className="dxg-crit-right">
           <span className={"dxg-crit-route " + s.tone}>{routeFor(c.status)}</span>
           <span className={"dxg-crit-status " + s.tone}>{s.label}</span>
-          {c.owner && !runOwner && <span className="dxg-crit-owner"><Avatar name={c.owner} kind="agent" size={20} /></span>}
         </div>
       </div>);
   }
