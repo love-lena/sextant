@@ -265,10 +265,8 @@
     );
   }
 
-  /* WorkflowView — the Workflow page canvas.
-     Props:
-       onDM(agentId) — calls app.jsx's startDM to open the DM conversation */
-  function WorkflowView({ onDM }) {
+  /* WorkflowView — the Workflow page canvas. */
+  function WorkflowView() {
     const [prompt, setPrompt] = useState("");
     const [nickname, setNickname] = useState("");
 
@@ -436,13 +434,6 @@
                   <div className="wf-ok-name">{spawned.nickname || spawned.id}</div>
                   <div className="wf-ok-id mono">{spawned.id}</div>
                 </div>
-                <button
-                  className="wf-msg-btn"
-                  onClick={function() { onDM && onDM(spawned.id); }}
-                  title={"Open DM with " + (spawned.nickname || spawned.id)}
-                >
-                  Message →
-                </button>
               </div>
             )}
 

@@ -6,14 +6,13 @@
    Uses the existing dash token system — no new visual language.
 
    Props:
-     context  { type: "artifact", name: string }
-              | { type: "goal", northstar: string, id: string }
-              | { label: string }   (generic fallback)
-     onDM(agentId)  optional — if the spawned agent is detected via /api/clients
-                    polling within ~10s, called with the minted id so the caller
-                    can open a DM. If not detected in time, the popover shows
-                    "Spawn request sent — check Agents list" (still fail-loud about
-                    the fact the agent may be coming).
+     context   { type: "artifact", name: string }
+               | { type: "goal", northstar: string, id: string }
+               | { label: string }   (generic fallback)
+     autoOpen  optional — start in the open phase with the prompt pre-seeded
+               (a spawn affordance mounts the button already-open; no hidden click).
+     onClose   optional — called when an autoOpen popover dismisses, so the parent
+               can unmount it.
 
    Exports MobilizeButton to window. */
 (function () {
@@ -42,26 +41,34 @@
   }
 
   // phase: idle | open | sending | polling | sent | error
-  function MobilizeButton({ context, onDM }) {
-    const [phase, setPhase] = useState("idle");
-    const [promptText, setPromptText] = useState("");
+  // autoOpen: start directly in the "open" phase with the prompt pre-seeded (used
+  //   when the button is mounted by a spawn affordance that should open the popover
+  //   immediately — no hidden auto-click). onClose fires when the popover dismisses.
+  function MobilizeButton({ context, autoOpen, onClose }) {
+    const [phase, setPhase] = useState(autoOpen ? "open" : "idle");
+    const [promptText, setPromptText] = useState(autoOpen ? seedPrompt(context) : "");
     const [errMsg, setErrMsg] = useState("");
     const [spawnedId, setSpawnedId] = useState(null);
     const popoverRef = useRef(null);
     const mountedRef = useRef(true);
     useEffect(function() { return function() { mountedRef.current = false; }; }, []);
 
-    // close on click outside the popover
+    // close on click outside the popover. When mounted by a spawn affordance
+    // (autoOpen), there's no idle trigger button to fall back to — dismissing
+    // tells the parent to unmount via onClose. The handler is registered on a
+    // timeout so the same click that mounted an autoOpen popover doesn't
+    // immediately close it.
     useEffect(function() {
       if (phase === "idle") return;
       function onDown(e) {
         if (popoverRef.current && !popoverRef.current.contains(e.target)) {
-          setPhase("idle");
+          if (autoOpen) { if (onClose) onClose(); }
+          else setPhase("idle");
         }
       }
-      document.addEventListener("mousedown", onDown);
-      return function() { document.removeEventListener("mousedown", onDown); };
-    }, [phase]);
+      var id = setTimeout(function() { document.addEventListener("mousedown", onDown); }, 0);
+      return function() { clearTimeout(id); document.removeEventListener("mousedown", onDown); };
+    }, [phase, autoOpen]);
 
     function openPopover(e) {
       e.stopPropagation();
@@ -90,7 +97,6 @@
         if (found) {
           setSpawnedFn(found.ID);
           setPhFn("sent");
-          if (onDM) onDM(found.ID);
         } else {
           setTimeout(function() {
             pollForAgent(knownIds, deadline, setSpawnedFn, setPhFn);
@@ -140,6 +146,7 @@
 
     function handleClose(e) {
       if (e) { e.stopPropagation(); e.preventDefault(); }
+      if (autoOpen) { if (onClose) onClose(); return; }
       setPhase("idle");
     }
 
@@ -212,12 +219,6 @@
                 <React.Fragment>
                   <span className="wf-status-ic" style={{ color: "var(--met)" }}>✓</span>
                   <span className="mb-sent-txt">Agent spawned</span>
-                  {onDM && (
-                    <button className="wf-msg-btn" type="button"
-                      onClick={function() { onDM(spawnedId); handleClose(); }}>
-                      Message →
-                    </button>
-                  )}
                 </React.Fragment>
               ) : (
                 <React.Fragment>

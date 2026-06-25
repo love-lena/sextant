@@ -75,6 +75,11 @@
   function slugify(s) {
     return (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "workflow";
   }
+  // shortUlid trims a full ULID to head…tail for the active-run code line.
+  function shortUlid(id) {
+    id = id || "";
+    return id.length > 14 ? id.slice(0, 6) + "…" + id.slice(-4) : id;
+  }
 
   // Run status → pulse tone + label. A live run pulses; terminal ones are calm.
   const RUN_STATUS = {
@@ -284,6 +289,9 @@
           <div className="we-rows">
             {active.map((r) => {
               const toward = (r.relates || []).find((x) => x.kind === "toward");
+              // design's Active-run row: pulse + label + a single code line
+              // ({ULID-short} · via {workflow} · {goal}) + watch ▸. No SAMPLE or
+              // "Needs you" badge — the pulse already carries the live status.
               return (
                 <div className="we-run-row" key={r.id} onClick={() => onOpenRun(r)} role="button" tabIndex={0}
                   onKeyDown={(e) => { if (e.key === "Enter") onOpenRun(r); }}>
@@ -291,15 +299,14 @@
                   <div className="we-run-main">
                     <div className="we-run-top">
                       <span className="we-run-label">{r.label}</span>
-                      <span className="we-run-via">{r.template ? "via " + r.template : "ad-hoc"}</span>
-                      {r.seed && <span className="we-chip we-chip-seed">sample</span>}
                     </div>
                     <div className="we-run-meta">
-                      <span className="we-ulid mono">{r.id}</span>
-                      <span className="we-run-goal">{toward ? "→ " + (toward.goal || "goal") + " · " + (toward.crit || "criterion") : "no goal yet"}</span>
+                      <span className="we-ulid mono">{shortUlid(r.id)}</span>
+                      <span className="we-run-via">· {r.template ? "via " + r.template : "ad-hoc"}</span>
+                      <span className="we-run-goal">· {toward ? (toward.goal || "goal") + " · " + (toward.crit || "criterion") : "no goal yet"}</span>
                     </div>
                   </div>
-                  <span className="we-run-status" style={{ color: (RUN_STATUS[r.status] || {}).c }}>{(RUN_STATUS[r.status] || {}).label}</span>
+                  <span className="we-run-watch">watch ▸</span>
                 </div>
               );
             })}

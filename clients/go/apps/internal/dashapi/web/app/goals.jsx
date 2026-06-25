@@ -11,12 +11,13 @@
 
    No first-class run/brief primitive exists yet, so a "run" is derived honestly:
    an in-progress criterion with an owner is a run working toward that criterion
-   (the owner is its ULID + function). Watch opens a DM with that owner; spawn uses
-   the shared MobilizeButton. Where nothing backs a piece, we degrade to the
-   design's empty/dashed states. Exports GoalsView to window. */
+   (the owner is its ULID + function). "Watch" opens the run's goal (no run view
+   yet — never a DM); every spawn affordance opens the shared top-level Spawn-work
+   flow (app.jsx's openSpawn → the MobilizeButton popover). Where nothing backs a
+   piece, we degrade to the design's empty/dashed states. Exports GoalsView. */
 (function () {
   const { useState, useEffect, useRef } = React;
-  const { Avatar, MobilizeButton } = window;
+  const { Avatar } = window;
 
   // stat(s) — the goal lexicon (ADR-0035): met / in-progress / waiting-on-you /
   // blocked / not-started. The glyph + label come from the ONE canonical status
@@ -98,7 +99,7 @@
     const label = run.owner;
     return (
       <button type="button" className="dxg-runchip" title={"Run " + label + " — watch"}
-        onClick={(e) => { e.stopPropagation(); onWatch && onWatch(run.owner); }}>
+        onClick={(e) => { e.stopPropagation(); onWatch && onWatch(); }}>
         <span className="dxg-runpulse" />
         <span className="dxg-runlabel">{shortId(label)}</span>
         <span className="dxg-runwatch">watch</span>
@@ -116,7 +117,7 @@
      the criteria activity-map + status verdict (and, on a not-started card, the
      dashed +spawn-work cue). The ULID+run-label chips that work toward a criterion
      live in the goal DETAIL, never on the card. */
-  function Card({ g, onOpen, onDM, onSpawn, renderWiki }) {
+  function Card({ g, onOpen, onSpawn, renderWiki }) {
     const r = roll(g);
     const crits = g.criteria || [];
     const rw = renderWiki || ((t) => t);
@@ -156,7 +157,7 @@
   /* ---------- inline New-goal creator (S4.3) ----------
      A one-line north-star input. "Write the charter" hands the north star to the
      Composer (onCompose) — which, where wired, opens the §16 composer pre-seeded.
-     Where no composer is wired we fall back to the MobilizeButton path so the
+     Where no composer is wired we fall back to the shared Spawn-work flow so the
      affordance still does something live. */
   function NewGoal({ onCompose }) {
     const [open, setOpen] = useState(false);
@@ -187,7 +188,7 @@
     { key: "started", label: "Not started" },
     { key: "moving",  label: "Moving on its own" },
   ];
-  function Portfolio({ goals, onOpen, onDM, onSpawn, onCompose, renderWiki, reduced }) {
+  function Portfolio({ goals, onOpen, onSpawn, onCompose, renderWiki, reduced }) {
     const by = { needs: [], started: [], moving: [] };
     for (const g of goals) by[bucketOf(g)].push(g);
     const needCount = by.needs.length;
@@ -209,7 +210,7 @@
               <div className="dxg-cards">
                 {list.map((g, i) => (
                   <div className={reduced ? "" : "fx-in"} style={reduced ? undefined : { animationDelay: (0.04 + i * 0.03) + "s" }} key={g.id}>
-                    <Card g={g} onOpen={onOpen} onDM={onDM} onSpawn={onSpawn} renderWiki={renderWiki} />
+                    <Card g={g} onOpen={onOpen} onSpawn={onSpawn} renderWiki={renderWiki} />
                   </div>))}
               </div>
             </React.Fragment>);
@@ -234,7 +235,7 @@
       default:               return "";
     }
   }
-  function Criterion({ g, c, goalName, onOpenArtifact, onDM, onSpawn, onLink, onLinkCriterion, renderWiki }) {
+  function Criterion({ g, c, goalName, onOpenArtifact, onOpenRun, onSpawn, onLink, onLinkCriterion, renderWiki }) {
     const s = stat(c.status);
     const evidence = c.evidence || [];
     const rw = renderWiki || ((t) => t);
@@ -245,8 +246,9 @@
         <div className="dxg-crit-main">
           <div className="dxg-crit-text">{c.text ? rw(c.text) : c.text}</div>
           <div className="dxg-crit-evi">
-            {/* the run(s) working toward this criterion — ULID chips (S5.2) */}
-            {runOwner && <RunChip run={{ owner: runOwner, crit: c }} onWatch={onDM} />}
+            {/* the run(s) working toward this criterion — ULID chips (S5.2).
+                "watch" opens the run's goal (no run view yet); never a DM. */}
+            {runOwner && <RunChip run={{ owner: runOwner, crit: c }} onWatch={() => onOpenRun && onOpenRun(g)} />}
             {evidence.length
               ? evidence.map((e, i) => (
                   <button className="dxg-chip" key={i} type="button"
@@ -370,7 +372,7 @@
   }
 
   /* ---------- L2 · Goal detail (S5.1) ---------- */
-  function Detail({ g, self, onBack, onOpenArtifact, onSetReview, onDM, onSpawnGoal, onSpawnCrit, onLinkCrit, onLinkCriterion, onAddCriterion, onPostTopic, loadThread, renderWiki }) {
+  function Detail({ g, self, onBack, onOpenArtifact, onSetReview, onOpenRun, onSpawnGoal, onSpawnCrit, onLinkCrit, onLinkCriterion, onAddCriterion, onPostTopic, loadThread, renderWiki }) {
     const r = roll(g);
     const crits = g.criteria || [];
     const rw = renderWiki || ((t) => t);
@@ -401,7 +403,7 @@
 
             <div className="dxg-crits">
               {crits.length
-                ? crits.map((c, i) => <Criterion g={g} c={c} goalName={g.name || g.id} onOpenArtifact={onOpenArtifact} onDM={onDM} onSpawn={onSpawnCrit} onLink={onLinkCrit} onLinkCriterion={onLinkCriterion} renderWiki={renderWiki} key={c.id || i} />)
+                ? crits.map((c, i) => <Criterion g={g} c={c} goalName={g.name || g.id} onOpenArtifact={onOpenArtifact} onOpenRun={onOpenRun} onSpawn={onSpawnCrit} onLink={onLinkCrit} onLinkCriterion={onLinkCriterion} renderWiki={renderWiki} key={c.id || i} />)
                 : <div className="dxg-noevi" style={{ padding: "14px 0" }}>No criteria yet — this goal hasn't been broken down into checkable outcomes.</div>}
               <AddCriterion onAdd={(t) => onAddCriterion(g.id, t)} />
             </div>
@@ -438,21 +440,27 @@
   // needs-you queue). onOpenArtifact opens an evidence artifact in the review stage;
   // onSetReview persists a goal sign-off verdict (the same review primitive the rest
   // of the dash uses); onLinkCriterion opens the LinkWorkstream overlay (review lane).
-  function GoalsView({ goals, initialGoalId, self, onOpenArtifact, onSetReview, onLinkCriterion, onDM, renderWiki }) {
+  function GoalsView({ goals, initialGoalId, self, onOpenArtifact, onSetReview, onLinkCriterion, onSpawn, renderWiki }) {
     const [openGoal, setOpenGoal] = useState(initialGoalId || null);
-    const [spawnCtx, setSpawnCtx] = useState(null); // { northstar, id } | null — drives the MobilizeButton popover
     const reduced = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const list = goals || [];
 
+    // Every spawn affordance opens the shared top-level Spawn-work flow (app.jsx's
+    // openSpawn → the MobilizeButton popover, the live spawn.request path). No
+    // hidden auto-clicked button, and no DM/Conversations fallback.
+    const spawn = (ctx) => onSpawn && onSpawn(ctx);
     // S4.3 / §16 Composer: where a real Composer route exists we'd open it; here we
     // seed a spawn from the north star (the live affordance), so "Write the charter"
     // does something real against the bus rather than dead-ending.
-    const compose = (northstar) => setSpawnCtx({ northstar, id: "" });
-    const spawnGoal = (g) => setSpawnCtx({ northstar: g.northstar || g.name, id: g.id });
-    const spawnCrit = (g, c) => setSpawnCtx({ northstar: (c && c.text) || g.northstar || g.name, id: g.id });
-    // +link a workstream (S5.4 / §14): no link-picker primitive yet — fall back to
-    // opening a DM so the operator can wire a workstream by hand. Degrades honestly.
-    const linkCrit = (g, c) => { if (onDM && c && c.owner) onDM(c.owner); else setSpawnCtx({ northstar: "Unblock: " + ((c && c.text) || (g && g.northstar) || ""), id: g.id }); };
+    const compose = (northstar) => spawn({ type: "goal", northstar, id: "" });
+    const spawnGoal = (g) => spawn({ type: "goal", northstar: g.northstar || g.name, id: g.id });
+    const spawnCrit = (g, c) => spawn({ type: "goal", northstar: (c && c.text) || g.northstar || g.name, id: g.id });
+    // +link a workstream (S5.4 / §14): no link-picker primitive yet — seed a spawn
+    // to wire a workstream toward the blocked criterion. Degrades honestly.
+    const linkCrit = (g, c) => spawn({ type: "goal", northstar: "Unblock: " + ((c && c.text) || (g && g.northstar) || ""), id: g.id });
+    // a run has no first-class view yet → "watch" deep-links the goal it works
+    // toward (the run view's stand-in). No DM, no owner rendered.
+    const openRun = (g) => setOpenGoal(g.id);
 
     const addCriterion = (goalId, text) => window.SX.addCriterion(goalId, text);
     const postTopic = (goalId, text) => window.SX.postToGoalTopic(goalId, text);
@@ -466,7 +474,7 @@
       })).filter((m) => m.text);
     };
 
-    if (list.length === 0 && !spawnCtx) return (
+    if (list.length === 0) return (
       <React.Fragment>
         <Empty onCompose={compose} />
       </React.Fragment>);
@@ -476,36 +484,17 @@
       <React.Fragment>
         {g ? (
           <Detail g={g} self={self} onBack={() => setOpenGoal(null)}
-            onOpenArtifact={onOpenArtifact} onSetReview={onSetReview} onDM={onDM}
+            onOpenArtifact={onOpenArtifact} onSetReview={onSetReview} onOpenRun={openRun}
             onSpawnGoal={spawnGoal} onSpawnCrit={spawnCrit} onLinkCrit={linkCrit}
             onLinkCriterion={onLinkCriterion}
             onAddCriterion={addCriterion} onPostTopic={postTopic} loadThread={loadThread}
             renderWiki={renderWiki} />
         ) : (
-          <Portfolio goals={list} onOpen={(id) => setOpenGoal(id)} onDM={onDM}
+          <Portfolio goals={list} onOpen={(id) => setOpenGoal(id)}
             onSpawn={spawnGoal} onCompose={compose} renderWiki={renderWiki} reduced={reduced} />
         )}
-        {/* the spawn popover: a hidden MobilizeButton auto-opened by spawnCtx, so
-            every +spawn / Write-the-charter affordance shares the one live spawn path. */}
-        {spawnCtx && MobilizeButton && (
-          <SpawnPortal ctx={spawnCtx} onDM={onDM} onClose={() => setSpawnCtx(null)} />)}
         <style>{GOAL_CSS}</style>
       </React.Fragment>);
-  }
-
-  // SpawnPortal mounts a MobilizeButton and auto-clicks it so the spawn popover
-  // opens immediately from any goal/criterion affordance (the button's own popover
-  // is the live spawn.request path). The trigger button itself is visually hidden.
-  function SpawnPortal({ ctx, onDM, onClose }) {
-    const ref = useRef(null);
-    useEffect(() => {
-      const btn = ref.current && ref.current.querySelector("button");
-      if (btn) btn.click();
-    }, []);
-    return (
-      <div className="dxg-spawnportal" ref={ref} onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-        <MobilizeButton context={{ type: "goal", northstar: ctx.northstar, id: ctx.id }} onDM={(id) => { onDM && onDM(id); onClose(); }} />
-      </div>);
   }
 
   // relAge: a coarse "Xm/Xh/Xd ago" from an ISO timestamp for thread posts.

@@ -74,7 +74,7 @@
         <div className="sa-head fx-in">
           <div>
             <h1 className="fx-h1">Artifacts</h1>
-            <p className="fx-psub">Versioned documents — what you draft, and what your runs bring back. Authored-by is a bus identity, never a person.</p>
+            <p className="fx-psub">Versioned documents — what you draft, and what your runs bring back. Authored-by is a ULID, never a persona.</p>
           </div>
           <div className="sa-head-actions">
             <button className="fx-submit" onClick={onNewDoc}>＋ New doc</button>

@@ -171,7 +171,7 @@
       if (known.has(target)) {
         const onClick = (e) => {
           e.stopPropagation();
-          if (target.indexOf("goal.") === 0) { ctx.onNav && ctx.onNav("goals"); }
+          if (target.indexOf("goal.") === 0) { ctx.onNav && ctx.onNav("goals", target.slice(5)); }
           else { ctx.onOpenArtifact && ctx.onOpenArtifact(target); }
         };
         return <span key={i} className="sx-artlink" role="link" tabIndex={0} onClick={onClick}
@@ -186,7 +186,7 @@
   // opens the named artifact. Empty ref ⇒ no-op (the row stays inert).
   function openAgendaRef(ref, ctx) {
     if (!ref || typeof ref !== "string") return;
-    if (ref.indexOf("goal.") === 0) { ctx.onNav && ctx.onNav("goals"); }
+    if (ref.indexOf("goal.") === 0) { ctx.onNav && ctx.onNav("goals", ref.slice(5)); }
     else { ctx.onOpenArtifact && ctx.onOpenArtifact(ref); }
   }
 
@@ -275,9 +275,9 @@
      by goal + latest activity (the criterion text) only.
      No-personas (TASK-194): a criterion's `owner` is a free-text convenience label
      (often an agent NAME on the live bus), never a ULID — so it is NEVER rendered.
-     The run code is a neutral run marker + the goal name; the owner is used only to
-     route the peek (open a DM), and stays out of the visible row. Headlined
-     "nothing needs you — this is just moving." */
+     The run code is a neutral run marker + the goal name; the owner stays out of
+     the visible row. Clicking a row opens the run's GOAL (there's no first-class run
+     view yet — never a DM). Headlined "nothing needs you — this is just moving." */
   function movingRuns(goals) {
     const out = [];
     for (const g of goals || []) {
@@ -287,9 +287,9 @@
     }
     return out;
   }
-  function MovingRow({ run, onDM }) {
+  function MovingRow({ run, onOpenRun }) {
     return (
-      <button className="fx-moving-row" onClick={() => onDM && onDM(run.owner)}>
+      <button className="fx-moving-row" onClick={() => onOpenRun && onOpenRun(run)}>
         <span className="fx-moving-pulse" />
         <span className="fx-moving-main">
           <span className="fx-moving-label"><span className="fx-moving-code">⬡ run</span> · {run.goal.name}</span>
@@ -390,15 +390,12 @@
     const hr = new Date().getHours();
     const defGreet = hr < 12 ? "Good morning." : hr < 18 ? "Good afternoon." : "Good evening.";
     const heading = (g && g.heading) || defGreet;
-    // S3.1 — count needing a decision · goals waiting of total · everything else
-    // is moving on its own.
-    const goalClause = goalArr.length
-      ? " · " + goalsNeed + " of " + goalArr.length + (goalArr.length === 1 ? " goal" : " goals") + " waiting"
-      : "";
+    // S3.1 — the design's one-line summary: "N need a decision · X of Y goals
+    // waiting · everything else is moving on its own" (all three clauses always
+    // present, counts derived from live data). A curated `home` note overrides it.
     const stateLine = (g && g.note) ? g.note
-      : total === 0 && goalsNeed === 0 ? "Nothing needs a decision" + goalClause + " · everything else is moving on its own."
-      : (total ? total + (total === 1 ? " thing needs" : " things need") + " a decision" : "Nothing needs a decision")
-        + goalClause + " · everything else is moving on its own.";
+      : total + " need a decision · " + goalsNeed + " of " + goalArr.length
+        + (goalArr.length === 1 ? " goal" : " goals") + " waiting · everything else is moving on its own";
 
     // S3.8 — the true empty state: nothing needs you AND nothing is running.
     const isEmpty = total === 0 && goalsNeed === 0 && runs.length === 0 && goalArr.length === 0 && approved === 0;
@@ -506,7 +503,7 @@
               <span className="fx-sechead-note">nothing needs you</span>
             </div>
             <div className="fx-moving-list">
-              {runs.slice(0, 6).map((run, i) => <MovingRow run={run} onDM={ctx.onDM} key={run.owner + ":" + run.crit.id + ":" + i} />)}
+              {runs.slice(0, 6).map((run, i) => <MovingRow run={run} onOpenRun={ctx.onOpenRun} key={run.owner + ":" + run.crit.id + ":" + i} />)}
             </div>
           </React.Fragment>
         )}

@@ -364,6 +364,12 @@
     const [asstLocalMsgs, setAsstLocalMsgs] = useState([]);
     const [draft, setDraft] = useState("");
     const [hidden, setHidden] = useState(()=>{ try{ return new Set(JSON.parse(localStorage.getItem("sx-hidden-convos")||"[]")); }catch(_){ return new Set(); } });
+    // the shared Spawn-work flow (the 3-step MobilizeButton popover): a single
+    // top-level overlay every spawn affordance (Home, Goals, Artifacts) opens with
+    // a seeded context. null ⇒ closed. This is the real spawn.request path — it
+    // replaces the retired onDM→Conversations DM hack the spawn links used to take.
+    const [spawnCtx, setSpawnCtx] = useState(null); // MobilizeButton context | null
+    const openSpawn = useCallback((context)=>setSpawnCtx(context||{ label:"" }),[]);
 
     // ---- authoring lane (EPIC B) ----
     // The local draft store (sextant.synth.drafts.v1, owned by composer.jsx).
@@ -881,7 +887,7 @@
     // helper need not be connected).
     const assistantOnline = !!(assistantClient && clients.some(c=>c.ID===assistantClient.id && c.Online));
 
-    // the violet DM subject (the same canonical 2-party topic startDM derives) and
+    // the violet DM subject (the canonical 2-party topic dmSubject derives) and
     // the discovered+backfilled message thread, shaped exactly like `messages` so
     // the FAB can feed window.MessageList. Both null/empty when violet is absent.
     const asstSubject = (assistantClient && self.id) ? dmSubject(self.id, assistantClient.id) : "";
@@ -896,7 +902,7 @@
 
     // discover + backfill the violet DM as soon as both ends are known, so the
     // existing thread loads into `convos` (the same ensureConvo+backfill openArtifact
-    // / startDM use). Re-runs only when the subject changes (not per render).
+    // uses). Re-runs only when the subject changes (not per render).
     useEffect(()=>{
       if(!asstSubject) return;
       ensureConvo(asstSubject); backfill(asstSubject);
@@ -1061,7 +1067,7 @@
         if (known.has(target)) {
           const onClick = (e) => {
             e.stopPropagation();
-            if (target.indexOf("goal.") === 0) { onNav("goals"); }
+            if (target.indexOf("goal.") === 0) { onNav("goals", target.slice(5)); }
             else { openArtifact(target); }
           };
           return <span key={i} className="sx-artlink" role="link" tabIndex={0} onClick={onClick}
@@ -1151,9 +1157,11 @@
         .catch(()=>{});
     }
     // a DM is a 2-participant topic with a canonical subject from the sorted
-    // pair, so both ends derive the same one (distinct from the one-way inbox).
+    // pair, so both ends derive the same one. The only remaining DM is the
+    // de-named Assistant's 1:1 (the FAB) — there is no longer a persona-DM
+    // launcher (the retired startDM/onDM→Conversations path); a run/agent is
+    // reached via its goal/run, never a DM.
     function dmSubject(a,b){ return "msg.topic.dm."+[a,b].sort().join("."); }
-    function startDM(otherId){ if(!self.id||!otherId) return; expandConvo(dmSubject(self.id, otherId)); }
     // hiding a conversation is a per-operator view preference (local only).
     function persistHidden(set){ try{ localStorage.setItem("sx-hidden-convos", JSON.stringify([...set])); }catch(_){} }
     function hideConvo(key){ setHidden(prev=>{ const n=new Set(prev); n.add(key); persistHidden(n); return n; }); }
@@ -1179,7 +1187,14 @@
       conversations:convList, activeConvo, stageMode, onOpenConvo:openConvo, onExpandConvo:expandConvo,
       messages, draft, setDraft, onSend:send, onArtifactRef:openArtifact,
       artifacts:artsShown, activeArtifact, onOpenArtifact:openArtifact,
-      goals:goalsShown, agents:agentsShown, activity:homeActivity, self, onGoHome:goHome, home, onDM:startDM,
+      goals:goalsShown, agents:agentsShown, activity:homeActivity, self, onGoHome:goHome, home,
+      // a run has no first-class view yet → open the goal it's working toward
+      // (the run view's stand-in). No DM, no agent/owner involved.
+      onOpenRun:(run)=>{ if(run && run.goal && run.goal.id) onNav("goals", run.goal.id); },
+      // open the shared Spawn-work flow seeded for an artifact (the Artifacts
+      // "spawn work" affordance) — pre-points at the artifact's goal when known
+      // (the seeded prompt is "Advance: <goal> — interpret and act on [[name]]").
+      onSpawnArtifact:(name)=>{ const rec=records[name]||{}; const goal=rec.goal||""; openSpawn(goal ? { type:"goal", northstar:goal+" — interpret and act on [["+name+"]]", id:goal } : { type:"artifact", name }); },
       hidden, onHide:hideConvo, onUnhide:unhideConvo,
       onNav, onSearch:()=>setPalette(true), reviewCount, goalReviewCount, workingCount,
     };
@@ -1333,7 +1348,7 @@
                 filed={filedArtifacts} drafts={drafts}
                 onNewDoc={()=>newDoc("note")} onNewCharter={()=>newDoc("charter")} onImport={importFile}
                 onOpenDraft={openDraft} onOpenFiled={openBrief}
-                onSpawnWork={startDM ? (n)=>startDM(n) : undefined} /></div>
+                onSpawnWork={(n)=>ctx.onSpawnArtifact(n)} /></div>
             </div>
           ) : stageMode==="compose" ? (
             <div className="sx-canvas sx-canvas--list">
@@ -1375,7 +1390,7 @@
             </div>
           ) : stageMode==="goals" ? (
             <div className="sx-canvas sx-canvas--list">
-              <div className="sx-page sx-page--doc"><GoalsView key={goalsEpoch} goals={goalsShown} initialGoalId={goalsOpenId} self={self} onOpenArtifact={openArtifact} onSetReview={setReview} onLinkCriterion={openLink} onDM={startDM} renderWiki={renderWiki} /></div>
+              <div className="sx-page sx-page--doc"><GoalsView key={goalsEpoch} goals={goalsShown} initialGoalId={goalsOpenId} self={self} onOpenArtifact={openArtifact} onSetReview={setReview} onLinkCriterion={openLink} onSpawn={openSpawn} renderWiki={renderWiki} /></div>
             </div>
           ) : stageMode==="workengine" ? (
             <div className="sx-canvas sx-canvas--list">
@@ -1391,7 +1406,7 @@
             </div>
           ) : stageMode==="workflow" ? (
             <div className="sx-canvas sx-canvas--list">
-              <div className="sx-page sx-page--doc"><WorkflowView onDM={startDM} /></div>
+              <div className="sx-page sx-page--doc"><WorkflowView /></div>
             </div>
           ) : stageMode==="artifact" && artMissing ? (
             <div className="sx-canvas sx-canvas--list">
@@ -1495,6 +1510,16 @@
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {/* the shared Spawn-work flow (the 3-step MobilizeButton popover), opened
+            by any spawn affordance (Home moving rows route to a goal instead; the
+            Goals + Artifacts spawn affordances land here). A real spawn.request path
+            — never a DM/Conversations pane. */}
+        {spawnCtx && window.MobilizeButton && (
+          <div className="sx-spawnportal" onMouseDown={(e)=>{ if(e.target===e.currentTarget) setSpawnCtx(null); }}>
+            <window.MobilizeButton context={spawnCtx} autoOpen onClose={()=>setSpawnCtx(null)} />
           </div>
         )}
 
