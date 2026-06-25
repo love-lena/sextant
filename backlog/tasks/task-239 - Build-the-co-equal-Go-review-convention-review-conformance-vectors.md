@@ -1,9 +1,12 @@
 ---
 id: TASK-239
-title: Build the co-equal Go review convention + review conformance vectors
+title: >-
+  Full convention coverage across Go and TS: review (Go), workflow (TS), spawn
+  (TS) + vectors
 status: To Do
 assignee: []
 created_date: '2026-06-25 19:41'
+updated_date: '2026-06-25 19:49'
 labels:
   - ready-for-agent
 dependencies:
@@ -17,42 +20,46 @@ ordinal: 227000
 <!-- SECTION:DESCRIPTION:BEGIN -->
 ## Problem Statement
 
-Review-state is just metadata on an artifact, and any client — agents, not only the browser — will want to get/set it. But the review convention (the operator verdict: setReview + close-loop) exists only in TypeScript (clients/ts/conventions/review), and there are NO review conformance vectors, so review behaviour is not locked across languages. Go has no review convention at all. As headless clients start performing or reacting to review verdicts, the Go gap becomes real and the cross-language behaviour can silently diverge.
+Conventions should be co-equal across Go and TS, but coverage is lopsided after the ADR-0049 restructure: goal is co-equal (go+ts, vectors); review is TS-only (no Go, no vectors); workflow and spawn are Go-only (the records.go contracts, no TS, no vectors) even though the dash creates, edits, and renders workflows (and spawns runs). The restructure (TASK-224) relocates each existing side into conventions/<name>/{go,ts} and reserves the empty peer slots; this task fills them so every convention is a co-equal peer with conformance vectors binding behaviour.
 
 ## Solution
 
-Make review a proper co-equal convention. Build conventions/review/go as a peer of conventions/review/ts over the same consumer-declared Ops seam (mirroring goals): read review state, setReview (merge the review block, CAS), and closeLoop (on approve, flip proof-related criteria to met). Author review conformance vectors and have both SDKs replay them plus a live cross-language test — exactly the goals pattern.
+Bring every convention to go+ts parity, vectors-bound, using goals as the structural template and the existing side as the behavioural reference:
+- conventions/review/go — mirror TS review (setReview, mergeReview, closeLoop, read + isReviewState) over the Ops seam.
+- conventions/workflow/ts — mirror the Go workflow convention so the dash drives workflows (create/edit/render) over a real convention instead of ad-hoc writes.
+- conventions/spawn/ts — mirror the Go spawn convention.
+- Author conformance vectors for review, workflow, and spawn; both SDKs replay each set plus a live cross-language coequality test (the goals pattern).
 
 ## User Stories
 
-1. As a headless agent, I want to read an artifact's review state from a Go client, so that I can react to operator verdicts without a browser.
-2. As a Go client, I want to set/merge an artifact's review block over a convention, so that the verdict + close-loop behaves identically to the browser.
-3. As a maintainer, I want review conformance vectors replayed by both Go and TS, so that the two implementations can never drift in wire behaviour.
-4. As a maintainer, I want conventions/review/go to import only protocol (+ its Ops seam), so that it stays a library a bare client could be, never reaching bus internals.
+1. As a headless Go agent, I want to read/set an artifact's review state over a convention, so that verdict + close-loop behave identically to the browser.
+2. As the dash, I want to create/edit/render workflows over a TS workflow convention, so that workflow writes go through the convention instead of ad-hoc dash code.
+3. As the dash, I want to drive spawn over a TS spawn convention, so that spawn-request writes are co-equal with the Go side.
+4. As a maintainer, I want review/workflow/spawn conformance vectors replayed by both Go and TS, so that no convention can drift in wire behaviour.
+5. As a maintainer, I want every convention to import only protocol (+ its Ops seam), so that they stay libraries a bare client could be, never reaching bus internals.
 
 ## Implementation Decisions
 
-- Lands AFTER the ADR-0049 restructure (TASK-224), which moves TS review to conventions/review/ts and reserves the conventions/review/go slot. Depends on TASK-224.
-- Go review mirrors the TS surface: setReview, mergeReview (preserve unknown top-level fields), closeLoop (dedup proof relations, best-effort on conflict/not-found/publish-miss), read + isReviewState — over the consumer-declared Ops seam (getArtifact / updateArtifact CAS / publish). importcheck-enforced.
-- The producer-intent half (setting review.state=\"review\" on an artifact) stays a one-field write any client does directly; it is NOT part of this convention's required surface. This ticket is the operator verdict + close-loop + read model.
-- New review conformance vectors under protocol/conformance/vectors/review; both SDKs replay; add a live cross-language coequality test mirroring goals' coequality.test.ts.
-- TS review logic is the reference; goals (clients/{go,ts}/conventions/goals) is the structural template.
+- Depends on TASK-224 (the restructure relocates the existing sides and reserves the peer slots: review/go, workflow/ts, spawn/ts).
+- goals (clients/{go,ts}/conventions/goals -> conventions/goal/{go,ts}) is the structural template; the existing side of each convention is the behavioural reference for its missing peer.
+- Each convention stays a library over the consumer-declared Ops seam (getArtifact / updateArtifact CAS / publish); importcheck-enforced (imports only protocol + Ops, never the bus).
+- Producer-intent one-field writes (e.g. setting review.state) remain direct writes, not convention surface.
 
 ## Testing Decisions
 
-- A new review conformance vector set IS the intended new seam for this ticket (unlike TASK-224, which adds none) — recorded once, replayed by Go and TS so behaviour is provably identical.
-- Prior art: conventions/goals — goals.go/goals.ts, read, project, conformance_test.go, coequality.test.ts.
-- Behaviour parity: Go setReview/closeLoop must emit byte-identical operations to TS for the same record; the vectors enforce it.
+- New conformance vector sets for review, workflow, and spawn — recorded once, replayed by Go and TS; these are the intended NEW seams for this task (TASK-224 adds none).
+- Prior art: conventions/goals — conformance_test.go (Go), coequality.test.ts (TS).
+- Behaviour parity: each new peer must emit byte-identical operations to its reference side for the same record; the vectors enforce it.
 
 ## Out of Scope
 
 - The ADR-0049 restructure itself (TASK-224).
-- Any new operator-verdict UX or new bus operation; this is the convention library + vectors, consumed by existing and future clients.
-- Related goals/review dash bugs filed under #266 (e.g. TASK-227/229/232) — separate.
+- Any new operator UX or new bus operation.
+- The goals/review dash bugs filed under #266 (e.g. TASK-227/229/232) — separate.
 
 ## Further Notes
 
-Decision made in-session 2026-06-25: review becomes a proper co-equal, non-core convention rather than a TS-only corner, because review-state is artifact metadata many clients will get/set. Two-PR split: TASK-224 relocates the TS side + reserves the Go slot; this ticket builds the Go side + vectors so the restructure PR stays purely behaviour-preserving (its green gate is its review).
+Scope broadened in-session 2026-06-25 from "Go review only" to full go<->ts convention coverage: the dash renders/creates/edits workflows (and spawns), so workflow and spawn deserve TS peers too. Kept out of TASK-224 so the restructure stays purely behaviour-preserving (its green gate is its review).
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -63,4 +70,7 @@ Decision made in-session 2026-06-25: review becomes a proper co-equal, non-core 
 - [ ] #4 importcheck: conventions/review/go imports only protocol (+ its Ops seam), never the bus
 - [ ] #5 no behaviour change to the browser review path (TS review unchanged except its new home from TASK-224)
 - [ ] #6 depends on TASK-224 landing first
+- [ ] #7 conventions/workflow/ts built co-equal with conventions/workflow/go, vectors-bound; the dash creates/edits/renders workflows over it (replacing ad-hoc dash writes)
+- [ ] #8 conventions/spawn/ts built co-equal with conventions/spawn/go, vectors-bound
+- [ ] #9 after this task every convention (goal, review, workflow, spawn) is co-equal go+ts, each with conformance vectors both SDKs replay green
 <!-- AC:END -->
