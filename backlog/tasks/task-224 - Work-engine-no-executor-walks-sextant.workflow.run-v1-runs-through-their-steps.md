@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-25 02:59'
+updated_date: '2026-06-25 03:10'
 labels:
   - feature
   - workflow
@@ -46,4 +47,6 @@ Extend clients/go/apps/workflow to subscribe run artifacts / a run-start subject
 
 <!-- SECTION:NOTES:BEGIN -->
 Discovered in: capability-gap audit 2026-06-24 (the 'does the run actually work?' investigation; live run 01KVYADZ4ET154VY7E5C4H54S2 frozen). Back half of [[task-216]] (frontend live-state shipped). Relates [[task-193]] (contract), [[task-108]] (ticket->PR workflow), [[task-98]] (LLM orchestrator). Subsumes dash dead-affordances: Spawn-work run + 'steer this run' run-topic post. Cross-link [[feat-run-checkpoint-resume]], [[feat-run-cancel-stop]], [[feat-consolidate-workflow-surfaces]]. Bright-line: orchestration/autonomy seam — needs human design sign-off.
+
+Why this was never built (forensic review of prior sessions, 2026-06-24): the work-engine lane was scoped as a UX surface + a record-shape CONTRACT, never as a running system. (1) TASK-193 ('the data step') has 5 ACs — all about defining sextant.workflow.run/v1 + template/v1, the relates:toward link, the stop-prompt array, and listability; NOT ONE requires a process that advances a run's status/steps. (2) ADR-0048 explicitly keeps execution out of the substrate and names 'the coordinator' as if it already exists. (3) The 18-slice EPIC C breakdown had no executor slice — its six children are all dash surfaces + the contract. TASK-216 carried the execution-flavored ACs but framed step-walking as a FRONTEND timer ('walks its steps automatically on a timer'), and that sim was never built either (no setInterval advances steps; only SEED records hard-coded to status:done). (4) The design assumed the pre-existing sextant-workflow coordinator covered execution — but the redesign simultaneously SUPERSEDED that coordinator's contract (sextant.workflow/v1 -> sextant.workflow.run/v1) without bridging it. The gap was known at ship time: workengine.jsx:99-100 literally comments 'the coordinator that writes real runs (TASK-193) doesn't exist'. No transcript shows the missing executor being raised and consciously deferred — it fell through the 'it's just an extension, the coordinator already exists' framing. Lesson for this ticket: the executor is genuinely new work against a contract that replaced the old engine's, not a tweak to the existing coordinator.
 <!-- SECTION:NOTES:END -->
