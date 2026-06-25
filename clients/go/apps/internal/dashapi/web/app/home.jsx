@@ -226,8 +226,8 @@
 
   // the agenda block as the "Needs you" list (replaces the auto-derived hero).
   // Calls render first (the work), context lines after (the reassurance).
-  function AgendaList({ block, items, ctx }) {
-    const title = (block && block.title) || "Start here";
+  function AgendaList({ block, items, ctx, title: titleOverride }) {
+    const title = titleOverride || (block && block.title) || "Start here";
     const calls = items.filter((it) => it.tone !== "context");
     const ctxs = items.filter((it) => it.tone === "context");
     return (
@@ -271,10 +271,13 @@
 
   /* ---------- Moving on its own (S3.6) ----------
      in-progress runs tied to a goal. No first-class run primitive yet: a run is an
-     in-progress criterion with an owner (the owner = its ULID + function), tied to
-     its goal. Each row has a live pulse, the run label/code, the goal, and its
-     latest activity (the criterion text). Rows peek into the run (open a DM with
-     the owner). Headlined "nothing needs you — this is just moving." */
+     in-progress criterion with an owner, tied to its goal. Each row shows the run
+     by goal + latest activity (the criterion text) only.
+     No-personas (TASK-194): a criterion's `owner` is a free-text convenience label
+     (often an agent NAME on the live bus), never a ULID — so it is NEVER rendered.
+     The run code is a neutral run marker + the goal name; the owner is used only to
+     route the peek (open a DM), and stays out of the visible row. Headlined
+     "nothing needs you — this is just moving." */
   function movingRuns(goals) {
     const out = [];
     for (const g of goals || []) {
@@ -284,16 +287,12 @@
     }
     return out;
   }
-  function shortId(id) {
-    if (!id) return "run"; if (id.length <= 14) return id;
-    return id.slice(0, 6) + "…" + id.slice(-4);
-  }
   function MovingRow({ run, onDM }) {
     return (
       <button className="fx-moving-row" onClick={() => onDM && onDM(run.owner)}>
         <span className="fx-moving-pulse" />
         <span className="fx-moving-main">
-          <span className="fx-moving-label"><span className="fx-moving-code">{shortId(run.owner)}</span> · {run.goal.name}</span>
+          <span className="fx-moving-label"><span className="fx-moving-code">⬡ run</span> · {run.goal.name}</span>
           <span className="fx-moving-act">{run.crit.text || "working…"}</span>
         </span>
         <span className="fx-then-chev">›</span>
@@ -411,11 +410,12 @@
     const linksBlock = blocks.find((b) => b.type === "links");
 
     // D7: violet's curated agenda (the "Needs you" block of the `home` artifact).
-    // When present with items it REPLACES the auto-derived review-state hero — each
-    // item carries violet's per-item rationale (why you're seeing this) + a ref to
-    // open. When absent we fall back to the auto-derived hero (violet isn't always
-    // live, so the fallback must stay intact). An agenda block with no items is
-    // treated as absent (nothing curated to show) → fall back.
+    // The design's Home framing (greeting + "Start here" typed-brief hero + ranked
+    // list) ALWAYS renders, driven from the live review-pending data — a curated
+    // `home` artifact never masks it. violet's curated calls, when present, fold in
+    // as a SECONDARY "Also flagged" panel below the auto-derived structure (her
+    // rationale is preserved without replacing the design's routing-slip hero). An
+    // agenda block with no items is treated as absent.
     const agendaBlock = blocks.find((b) => b.type === "agenda");
     const agendaItems = (agendaBlock && Array.isArray(agendaBlock.items))
       ? agendaBlock.items.filter((it) => it && typeof it === "object" && (typeof it.text === "string" || (typeof it.ref === "string" && it.ref)))
@@ -456,13 +456,15 @@
         <h1 className={"fx-h1 " + inCls}>{heading}</h1>
         <p className={"fx-psub " + inCls} style={reduced ? undefined : { animationDelay: ".03s" }}>{stateLine}</p>
 
-        {hasAgenda ? (
-          <AgendaList block={agendaBlock} items={agendaItems} ctx={ctx} />
-        ) : hero ? (
+        {hero ? (
           <React.Fragment>
             <div className={"fx-starthead " + inCls} style={reduced ? undefined : { animationDelay: ".06s" }}>Start here</div>
             <Hero a={hero} onOpen={openItem} />
           </React.Fragment>
+        ) : hasAgenda ? (
+          /* no auto-derived review-pending item, but violet curated something —
+             surface her agenda as the "Start here" block (kept de-named). */
+          <AgendaList block={agendaBlock} items={agendaItems} ctx={ctx} />
         ) : (
           <div className={"fx-zero " + inCls}>
             <span className="fx-zero-ic">✓</span>
@@ -507,6 +509,16 @@
               {runs.slice(0, 6).map((run, i) => <MovingRow run={run} onDM={ctx.onDM} key={run.owner + ":" + run.crit.id + ":" + i} />)}
             </div>
           </React.Fragment>
+        )}
+
+        {/* secondary: violet's curated agenda folds in BELOW the design hero when
+            there's already an auto-derived "Start here" item — preserves her
+            curation without masking the routing-slip hero (Fix 2). Titled away
+            from any curated "NEEDS YOU" label. */}
+        {hero && hasAgenda && (
+          <div className={inCls} style={reduced ? undefined : { animationDelay: ".17s" }}>
+            <AgendaList block={agendaBlock} items={agendaItems} ctx={ctx} title="Also flagged" />
+          </div>
         )}
 
         {/* secondary: curated pinned + quick links (assistant-owned `home` artifact) */}

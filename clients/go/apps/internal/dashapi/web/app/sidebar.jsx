@@ -235,7 +235,10 @@
     return (
       <div className="fx-asst-panel is-live sx-conv-light" role="dialog" aria-label="Assistant">
         <div className="fx-asst-head">
-          <span className="fx-asst-mark" style={accent ? { background: accent } : undefined}>✦</span>
+          {/* the spark mark stays a dark chip with an accent ✦ (design): tinting the
+              BACKGROUND with the accent hid the same-coloured glyph → it read as a
+              solid avatar-square. Accent the glyph colour, never the chip fill. */}
+          <span className="fx-asst-mark" style={accent ? { color: accent } : undefined}>✦</span>
           <div>
             <div className="fx-asst-title" style={accent ? { color: accent } : undefined}>Assistant</div>
             <div className="fx-asst-sub">always here</div>
