@@ -66,9 +66,27 @@ The patterns built *on* the primitives that are not core — a **goal**, the
 live once in the lexicon (record types generated per language; verb logic
 hand-written — concept, not codegen), and the library issues only **operations** a
 bare client could, never reaching the **bus** internals (enforced mechanically).
-Optional and forkable; the bus stays primitive and content-opaque.
+Optional and forkable; the bus stays primitive and content-opaque. The reference
+conventions claim their lexicon namespace at the auth level (`goal`, `review`,
+`assistant`, …) — the opinionated "this is what a goal looks like" — while a fork
+defines its own (`mygoal`). They sit in their own promoted tier above clients,
+never in the locked core ([ADR-0049](docs/adr/0049-clients-conventions-and-tools.md)).
 _Avoid_: framework, engine (verb logic is a library, never a bus-interpreted
 engine), middleware
+
+**Harness plugin**:
+A **client** that makes an existing agent runtime — a coding agent, an editor — a
+first-class bus client: its own scoped identity, bus tools, often a bundled skill.
+A *role* a client plays, not a separate tier; the Claude Code plugin and `pi-bus`
+are harness plugins (one rides the Go MCP client, the other the TypeScript
+**SDK**). See [ADR-0049](docs/adr/0049-clients-conventions-and-tools.md).
+_Avoid_: integration, extension, bot
+
+**Tool**:
+Build- or dev-time code that reads the protocol or **SDK** and emits output —
+generated docs, generated types — and never connects to the **bus**. Not a
+**client**: it holds no identity. `docgen` is a tool.
+_Avoid_: calling a tool a client; "script" for a tool that is part of the build
 
 **Bus**:
 What clients connect to in order to reach each other and their shared work — the
@@ -267,6 +285,11 @@ _Avoid_: kill (reserve that for forcing a process from the outside)
 - A **bus** carries many **clients'** **messages** and holds their **artifacts**.
 - A **client** publishes and subscribes to **messages**, and reads and writes
   **artifacts**.
+- Every unit is one of a **client** (a process with an identity), a **convention**
+  (records and verbs, no identity), or a **tool** (reads and emits, never
+  connects). Where a directory is two, it splits — the convention up to the
+  conventions tier, the process down to a client
+  ([ADR-0049](docs/adr/0049-clients-conventions-and-tools.md)).
 - A **run** is one instance of a **workflow** (or ad-hoc), driven by a
   **coordinator**; a **dispatcher** spawns new **clients**. Both coordinator and
   dispatcher are just clients.
