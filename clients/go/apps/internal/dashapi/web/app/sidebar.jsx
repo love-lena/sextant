@@ -1,9 +1,11 @@
 /* sidebar.jsx — Sextant Live Flow shell (v0.5 reskin, TASK stage a).
-   Charcoal 284px sidebar: brand glyph + Workspace nav (Home / Artifacts / Goals /
-   Agents) + an editable Conversations list + a "You · operator" footer. The white
-   stage to the right renders the existing views (their internals unchanged).
+   Charcoal 284px sidebar: brand glyph + Workspace nav (Home / Goals / Work engine /
+   Artifacts / Bus) + a "You · operator" footer. No Conversations list — the design
+   has no chat-list surface; bus topics are explored via the Bus inspector.
+   The white stage to the right renders the existing views (their internals
+   unchanged). No-personas (TASK-194): no Agents roster, no named-crew list.
    Exports: Sidebar, Avatar, StatusPill, MessageList, Composer, SextantGlyph,
-   AssistantFab, CmdK, AgentsView (to window). */
+   AssistantFab, CmdK (to window). The Agents roster was retired (TASK-194). */
 (function () {
   const { useState, useEffect, useRef, useCallback } = React;
 
@@ -42,14 +44,24 @@
   }
 
   const PALETTE = ["#6a55e0", "#e0a23a", "#d2674a", "#3a93d2", "#54ad6e", "#c060a8", "#2bb6a6"];
-  function hueOf(name) {let h = 0;for (const c of name) h = h * 31 + c.charCodeAt(0) >>> 0;return PALETTE[h % PALETTE.length];}
+  function hueOf(name) {let h = 0;for (const c of name || "") h = h * 31 + c.charCodeAt(0) >>> 0;return PALETTE[h % PALETTE.length];}
   function initials(name) {
-    const parts = name.replace(/[-@#]/g, " ").split(/[\s_]+/).filter(Boolean);
+    const parts = (name || "").replace(/[-@#]/g, " ").split(/[\s_]+/).filter(Boolean);
     return ((parts[0] ? parts[0][0] : "?") + (parts[1] ? parts[1][0] : "")).toUpperCase();
   }
+  // Avatar — no-personas (TASK-194): a non-operator actor never gets a persona
+  // avatar (name-hashed colour + initials). An AGENT/run/workflow renders a NEUTRAL
+  // function glyph (a square chip with a ⬡ mark, the same neutral ink everywhere) —
+  // identity is the ULID + function in the adjacent label, not the avatar. Only a
+  // human ("you", kind="human") keeps the initialled, name-coloured chip.
   function Avatar({ name, kind, size = 26 }) {
+    if (kind === "agent") {
+      return (
+        <span className="sx-av is-agent is-run"
+        style={{ width: size, height: size, fontSize: size * 0.5 }} aria-hidden="true">⬡</span>);
+    }
     return (
-      <span className={"sx-av" + (kind === "agent" ? " is-agent" : "")}
+      <span className="sx-av"
       style={{ width: size, height: size, background: hueOf(name), fontSize: size * 0.42 }}>
         {initials(name)}
       </span>);
@@ -168,73 +180,29 @@
   }
 
   /* ---------- views (rendered in the white stage). Stage (b): flow2 ArtifactsList
-     + AgentsList internals, wired to the real /api/artifacts records + /api/clients
-     presence. ArtifactsView now lives in its own file (artifacts.jsx, TASK-112),
-     the Goals view in goals.jsx (Track 2); AgentsView remains here. ---------- */
+     internals, wired to the real /api/artifacts records. ArtifactsView lives in
+     its own file (artifacts.jsx, TASK-112), the Goals view in goals.jsx (Track 2).
+     The Agents roster was RETIRED in the no-personas sweep (TASK-194): work is
+     surfaced by ULID + function via runs/goals/conversations, not a named crew
+     list. Steering is the goal/run topic threads + the single Assistant. ---------- */
 
-  // agent state → flow2 status-chip tone + label + pulse dot colour.
-  // IDLE is GREY (a v0.5 design rule), working pulses green, blocked is amber,
-  // waiting reads as "waiting on you" red, offline is the calmest grey.
-  const AGENT_STATE = {
-    working: { tone: "t-met", label: "Working", c: "var(--met)", live: true },
-    done: { tone: "t-met", label: "Done", c: "var(--met)" },
-    idle: { tone: "t-todo", label: "Idle", c: "var(--todo)" },
-    offline: { tone: "t-todo", label: "Offline", c: "var(--todo)" },
-    "waiting-for-human": { tone: "t-waiting", label: "Waiting · you", c: "var(--wait)" },
-    "waiting-for-agent": { tone: "t-progress", label: "Waiting · agent", c: "var(--prog)" },
-    blocked: { tone: "t-blocked", label: "Blocked", c: "var(--blk)" }
-  };
+  /* ---------- floating Assistant FAB · the de-named operator helper ----------
+     "Assistant · always here": a UNIVERSAL helper, never a persona (TASK-194).
+     It is ALWAYS labelled "Assistant" — never a person's name. Controlled when
+     given open/onOpen/onClose (so ⌘K can open it with a prefilled prompt);
+     otherwise self-manages its own open state.
 
-  function AgentsView({ agents, onDM }) {
-    // offline drops to the bottom; everything else holds its incoming order.
-    const sorted = [...agents].sort((a, b) => (a.state === "offline" ? 1 : 0) - (b.state === "offline" ? 1 : 0));
-    const working = agents.filter((a) => a.state === "working").length;
-    return (
-      <div className="fx-scroll"><div className="fx-col sx-conv-light">
-        <h1 className="fx-h1 fx-in">Agents</h1>
-        <p className="fx-psub fx-in" style={{ animationDelay: ".03s" }}>{working} working · {agents.length - working} idle, blocked or offline</p>
-        <div className="fx-list" style={{ marginTop: "18px" }}>
-          {sorted.map((a, i) => {
-            const s = AGENT_STATE[a.state] || AGENT_STATE.offline;
-            const task = a.headline || a.meta || "—";
-            return (
-              <button className="fx-row" key={a.id || i}
-              onClick={() => onDM && a.id && onDM(a.id)}
-              style={{ cursor: a.id ? "pointer" : "default" }}
-              title={a.id ? ("Message " + a.name) : undefined}>
-                <Avatar name={a.name} kind="agent" size={30} />
-                <span className="fx-row-main">
-                  <span className="fx-row-name">{a.name}</span>
-                  <span className="fx-row-meta">{task}</span>
-                </span>
-                <span className="fx-row-right">
-                  <span className={"fx-pulse" + (s.live ? " is-live" : "")} style={{ background: s.c }} />
-                  <span className="fx-crit-status" style={{ color: s.c }}>{s.label}</span>
-                </span>
-              </button>);
-          })}
-          {agents.length === 0 && <p className="fx-psub" style={{ marginTop: "8px" }}>No agents connected to the bus.</p>}
-        </div>
-      </div></div>);
-
-  }
-
-  /* ---------- floating Assistant FAB · the violet DM (ADR-0039) ----------
-     Controlled when given open/onOpen/onClose (so ⌘K can open it with a
-     prefilled prompt); otherwise self-manages its own open state.
-
-     `assistant` is violet — the live operator-assistant ({ id, name, accent })
-     read from the `assistant` artifact, or null when it doesn't exist yet (it's
-     created at v0.5.0 go-live). It drives the two modes:
-       - PRESENT → the FAB panel IS the live DM thread with violet: header,
+     `assistant` is the optional live bus-backed helper ({ id, accent }) read from
+     the `assistant` artifact, or null when it doesn't exist yet. It drives two
+     modes — but BOTH wear the generic "Assistant" label:
+       - PRESENT → the FAB panel IS the live DM thread: header,
          window.MessageList (the backfilled DM history), window.Composer wired to
-         onSend (publishes to the violet DM subject). The spark is tinted with
-         violet's accent (inline, never touching the global --brand).
-       - ABSENT  → the calm "not live yet" stub: a disabled composer + the carried
-         ⌘K query shown but never answered (there's no assistant to answer it).
+         onSend (publishes to the helper's DM subject). An optional accent colour
+         tints the spark inline (never touching the global --brand), but the name
+         is never shown.
+       - ABSENT  → the local helper that answers from the dash's own loaded data.
      `prompt` is a query carried over from a ⌘K no-match (prefilled into the
-     composer by app.jsx; also shown in the absent stub). `online` is violet's
-     live bus presence → the header dot. */
+     composer by app.jsx). `online` is the helper's live bus presence → the dot. */
   function AssistantFab({ open: openProp, prompt, assistant, online, messages, self, draft, setDraft, onSend, onArtifactRef, artifactNames, onOpen, onClose } = {}) {
     const [openLocal, setOpenLocal] = useState(false);
     const controlled = openProp !== undefined;
@@ -242,7 +210,6 @@
     const doOpen = () => (controlled ? onOpen && onOpen() : setOpenLocal(true));
     const doClose = () => (controlled ? onClose && onClose() : setOpenLocal(false));
     const live = !!(assistant && assistant.id);
-    const name = (assistant && assistant.name) || "violet";
     const accent = (assistant && assistant.accent) || "";
     // keep the freshest message in view as the thread grows / on open.
     const bodyRef = useRef(null);
@@ -252,61 +219,61 @@
     }, [open, live, messages && messages.length]);
 
     if (!open) return (
-      <button className="fx-asst-btn" title={live ? ("Ask " + name) : "Assistant (not live yet)"} onClick={doOpen}>
+      <button className="fx-asst-btn" title="Assistant · always here" onClick={doOpen}>
         <span className="fx-asst-spark" style={accent ? { color: accent } : undefined}>✦</span>
       </button>);
 
-    // LIVE → the violet DM thread (window.MessageList + window.Composer, the same
-    // primitives ConversationView uses). The Composer reads its own `draft`, so
-    // its zero-arg onSend forwards the current draft to onSend(text).
-    if (live) {
-      const msgs = messages || [];
-      return (
-        <div className="fx-asst-panel is-live sx-conv-light" role="dialog" aria-label={"Chat with " + name}>
-          <div className="fx-asst-head">
-            <span className="fx-asst-mark" style={accent ? { background: accent } : undefined}>✦</span>
-            <div>
-              <div className="fx-asst-title" style={accent ? { color: accent } : undefined}>{name}</div>
-              <div className="fx-asst-live">
-                <span className={"fx-asst-dot" + (online ? " is-on" : "")} style={online && accent ? { background: accent } : undefined} />
-                {online ? "online" : "your assistant"}
-              </div>
-            </div>
-            <button className="fx-asst-close" onClick={doClose} aria-label="Close">×</button>
-          </div>
-          <div className="fx-asst-thread" ref={bodyRef}>
-            {msgs.length === 0 && (
-              <p className="fx-asst-empty">Ask {name} anything about your workspace — it can see your goals, artifacts, and the bus.</p>
-            )}
-            <window.MessageList messages={msgs} onArtifactRef={onArtifactRef} artifactNames={artifactNames} />
-          </div>
-          <window.Composer draft={draft || ""} setDraft={setDraft} onSend={() => onSend && onSend(draft)} placeholder={"Message " + name + "…"} />
-        </div>);
-    }
-
-    // ABSENT → the calm "not live yet" stub. The carried ⌘K query is shown but
-    // never answered (there's no assistant to answer it); the composer is disabled.
+    // No-personas (operator hard line): the Assistant is ONE de-named voice. The
+    // thread renders plain you/bot bubbles — NO per-message avatar, NO author name,
+    // NO "ULID · AGENT" identity chip. Both the live (bus-backed) and the local
+    // helper wear the SAME header (✦ + "Assistant" + "always here") and the SAME
+    // bubble thread; the only difference is where onSend routes. The header sub-line
+    // is always "always here" (rendered uppercase by .fx-asst-sub) — never "online".
+    const empty = live
+      ? "Ask the assistant anything about your workspace — it can see your goals, artifacts, and the bus."
+      : "Ask me about your goals, what's waiting on you, or where a workstream stands — I read your workspace. Try “what's waiting on me?”";
     return (
-      <div className="fx-asst-panel" role="dialog" aria-label="Assistant">
+      <div className="fx-asst-panel is-live sx-conv-light" role="dialog" aria-label="Assistant">
         <div className="fx-asst-head">
-          <span className="fx-asst-mark">✦</span>
-          <div><div className="fx-asst-title">Assistant</div><div className="fx-asst-sub">not live yet</div></div>
+          {/* the spark mark stays a dark chip with an accent ✦ (design): tinting the
+              BACKGROUND with the accent hid the same-coloured glyph → it read as a
+              solid avatar-square. Accent the glyph colour, never the chip fill. */}
+          <span className="fx-asst-mark" style={accent ? { color: accent } : undefined}>✦</span>
+          <div>
+            <div className="fx-asst-title" style={accent ? { color: accent } : undefined}>Assistant</div>
+            <div className="fx-asst-sub">always here</div>
+          </div>
           <button className="fx-asst-close" onClick={doClose} aria-label="Close">×</button>
         </div>
-        {prompt
-          ? <div className="fx-asst-msg you"><span className="fx-asst-bub">{prompt}</span></div>
-          : null}
-        <div className="fx-asst-stub">
-          <p className="fx-asst-stub-lead">violet isn't live yet.</p>
-          <p className="fx-asst-stub-body">{prompt
-            ? "Your question is parked here — violet will be able to answer once it's live."
-            : "Once violet is live, this is where you ask it about your goals, artifacts, and the bus."}</p>
+        <div className="fx-asst-thread fx-asst-body" ref={bodyRef}>
+          {(messages || []).length === 0 && <p className="fx-asst-empty">{empty}</p>}
+          <AsstThread messages={messages || []} onArtifactRef={onArtifactRef} artifactNames={artifactNames} />
         </div>
-        <div className="fx-asst-composer">
-          <span className="fx-asst-field">{prompt || "Ask a quick question…"} (disabled)</span>
-          <button className="fx-asst-send" disabled>↑</button>
-        </div>
+        <window.Composer draft={draft || ""} setDraft={setDraft} onSend={() => onSend && onSend(draft)} placeholder={live ? "Message the assistant…" : "Ask a quick question…"} />
       </div>);
+  }
+
+  // AsstThread — the de-named assistant bubble list (no avatars, no author byline,
+  // no "agent" tag). A `you` bubble vs a `bot` bubble, with the same light markdown +
+  // [[wikilink]] rendering MessageList uses (so links remain clickable). The
+  // assistant is one voice, not a roster of personas.
+  function AsstThread({ messages, onArtifactRef, artifactNames }) {
+    function onArtClick(e) {
+      const a = e.target.closest && e.target.closest("a.sx-artlink");
+      if (a && onArtifactRef) { e.preventDefault(); onArtifactRef(a.getAttribute("data-art")); }
+    }
+    return (
+      <React.Fragment>
+        {messages.map((m) => {
+          const html = renderMessageHTML(m.text, artifactNames);
+          return (
+            <div className={"fx-asst-msg " + (m.self ? "you" : "bot")} key={m.id}>
+              {html != null
+                ? <span className="fx-asst-bub" onClick={onArtClick} dangerouslySetInnerHTML={{ __html: html }} />
+                : <span className="fx-asst-bub">{m.text}</span>}
+            </div>);
+        })}
+      </React.Fragment>);
   }
 
   /* ---------- ⌘K command palette · scoring + recency ----------
@@ -384,13 +351,12 @@
 
     const matches = scored.slice(0, 9).map((s) => s.it);
     // No good match for a typed query → offer "Ask the assistant" as a real,
-    // selectable result that hands the query to the Assistant FAB. When violet is
-    // live (the `assistant` artifact is present) it opens a DM with violet; when
-    // absent the question is parked in the FAB's "not live yet" panel.
+    // selectable result that hands the query to the Assistant FAB. No-personas
+    // (TASK-194): the assistant is always the generic "the assistant", never a
+    // person's name. When a live bus helper is present (assistantLive) it opens a
+    // DM; otherwise the question is answered from the workspace locally.
     const askRow = (onAsk && ql && matches.length === 0)
-      ? (assistantLive
-          ? { key: "ask", type: "Ask", label: "Ask violet: “" + q.trim() + "”", sub: "opens a DM with violet", go: () => onAsk(q.trim()) }
-          : { key: "ask", type: "Ask", label: "Ask the assistant: “" + q.trim() + "”", sub: "not live yet — your question gets parked", go: () => onAsk(q.trim()) })
+      ? { key: "ask", type: "Ask", label: "Ask the assistant: “" + q.trim() + "”", sub: assistantLive ? "opens a DM" : "answers from your workspace", go: () => onAsk(q.trim()) }
       : null;
     const results = askRow ? [askRow] : matches;
     useEffect(() => { setSel(0); }, [q]);
@@ -401,11 +367,11 @@
       else if (e.key === "Enter") { e.preventDefault(); pick(results[sel]); }
       else if (e.key === "Escape") { e.preventDefault(); onClose(); }
     };
-    const TYPEC = { "Go to": "#5b6ef0", Artifact: "#c0573b", Agent: "#3f8f59", Channel: "#8a8e97", Ask: "#5b6ef0" };
+    const TYPEC = { "Go to": "#5b6ef0", Surface: "#5b6ef0", Action: "#7c6df0", Goal: "#3a82c4", Workflow: "#b9842a", Run: "#b9842a", Artifact: "#c0573b", Agent: "#3f8f59", Channel: "#8a8e97", Ask: "#5b6ef0" };
     return (
       <div className="fx-cmdk-scrim" onClick={onClose}>
         <div className="fx-cmdk" onClick={(e) => e.stopPropagation()}>
-          <input className="fx-cmdk-input" autoFocus placeholder="Search artifacts, agents, conversations…"
+          <input className="fx-cmdk-input" autoFocus placeholder="Jump to anything, or start an action…"
             value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKey} />
           <div className="fx-cmdk-results">
             {results.length === 0 && <div className="fx-cmdk-empty">{ql ? "No matches for “" + q + "”" : "Type to search."}</div>}
@@ -423,8 +389,11 @@
       </div>);
   }
 
-  /* ---------- sidebar shell: Workspace nav + editable conversations ---------- */
-  const WORKSPACE = [["⌂", "Home", "home"], ["❡", "Artifacts", "artifacts"], ["◎", "Goals", "goals"], ["◍", "Agents", "agents"], ["⬡", "Workflow", "workflow"]];
+  /* ---------- sidebar shell: Workspace nav + editable conversations ----------
+     The five design nav rows in their exact order (TASK-220 S1.2): Home, Goals,
+     Work engine, Artifacts, Bus. The Agents + Workflow surfaces still exist as
+     code (reachable via ⌘K / deep-links) but are not primary nav rows. */
+  const WORKSPACE = [["⌂", "Home", "home"], ["◎", "Goals", "goals"], ["⬡", "Work engine", "workengine"], ["❡", "Artifacts", "artifacts"], ["⇆", "Bus", "bus"]];
 
   function ConvNav({ ctx }) {
     const [showHidden, setShowHidden] = useState(false);
@@ -470,9 +439,14 @@
   // drag that's still in progress when the component unmounts can't leak
   // document-level listeners.
   function Sidebar({ ctx, busName, navMode, sideWidth, sideCollapsed, onSideWidth, onToggleSide }) {
+    // Map the open stage to the primary nav row it lives under, so the active row
+    // is marked (S1.2). An artifact opened from Goals still marks Artifacts (it's
+    // the artifact stage); a goal/conversation/agents/workflow stage maps to no
+    // primary row when it isn't one of the five.
     const section = ctx.stageMode === "conversation" ? "convo"
       : ctx.stageMode === "artifact" ? "artifacts"
-      : ctx.stageMode; // home | artifacts | agents | goals
+      : (ctx.stageMode === "compose" || ctx.stageMode === "criteria" || ctx.stageMode === "brief" || ctx.stageMode === "consequence") ? "artifacts"
+      : ctx.stageMode; // home | goals | workengine | artifacts | bus | agents | workflow
     const meName = (ctx.self && ctx.self.display_name) || "you";
 
     // right-edge drag to resize — same shape as review.jsx's onHandleDown.
@@ -528,36 +502,30 @@
             <span className="fx-word">Sextant</span>
           </span>
           <div className="fx-brand-end">
-            <button className="fx-side-search" title="Search the bus  ⌘K" onClick={ctx.onSearch}>
-              <span className="fx-search-ic">⌕</span>
-              <span className="fx-kbd">⌘K</span>
-            </button>
             <button className="fx-side-collapse" title="Collapse navigation" onClick={onToggleSide} aria-label="Collapse navigation">‹</button>
           </div>
         </div>
 
         <nav className="fx-nav">
+          {/* Full-width search at the top of the nav (design sx-app.jsx fx-search):
+              "Search… ⌘K" — opens the ⌘K command palette. */}
+          <button className="fx-search" onClick={ctx.onSearch} title="Search  ⌘K">
+            <span className="fx-search-ic">⌕</span>
+            <span className="fx-search-lbl">Search…</span>
+            <span className="fx-kbd">⌘K</span>
+          </button>
           <div className="fx-navsec">Workspace</div>
           {WORKSPACE.map(([ic, label, key]) => (
             <button className={"fx-navrow" + (section === key ? " is-on" : "")} key={key} onClick={() => ctx.onNav(key)}>
               <span className="fx-navic">{ic}</span><span>{label}</span>
               {key === "artifacts" && ctx.reviewCount > 0 && <span className="fx-navbadge">{ctx.reviewCount}</span>}
               {key === "goals" && ctx.goalReviewCount > 0 && <span className="fx-navbadge" title="goals awaiting your sign-off">{ctx.goalReviewCount}</span>}
-              {key === "agents" && ctx.workingCount > 0 && <span className="fx-navbadge tone-met">{ctx.workingCount}</span>}
             </button>
           ))}
-          <div className="fx-navsec">Conversations</div>
-          <ConvNav ctx={ctx} />
         </nav>
-
-        <div className="fx-me">
-          <Avatar name={meName} kind="human" size={26} />
-          <span className="fx-me-name">You</span>
-          <span className="fx-me-key">operator</span>
-        </div>
       </aside>);
 
   }
 
-  Object.assign(window, { Sidebar, Avatar, StatusPill, MessageList, Composer, SextantGlyph, AssistantFab, CmdK, AgentsView });
+  Object.assign(window, { Sidebar, Avatar, StatusPill, MessageList, Composer, SextantGlyph, AssistantFab, CmdK });
 })();

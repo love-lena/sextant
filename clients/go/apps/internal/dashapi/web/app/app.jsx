@@ -110,6 +110,9 @@
   }
   // apiPublish issues message.publish over the bus.
   async function apiPublish(subject, record){ await busReady; return BUS.publish(subject, record); }
+  // apiCreate creates a durable artifact on the bus (the authoring lane's
+  // mark-ready / goal-live writes, EPIC B). Returns { name, revision }.
+  async function apiCreate(name, record){ await busReady; const rev = await BUS.createArtifact(name, record); return { name, revision: rev }; }
   // apiReview persists the operator's verdict via the TS review convention
   // (read-merge-CAS + approve→met closed loop), directly over the bus — the logic
   // the Go dashapi review.go used to run server-side (ADR-0044).
@@ -135,6 +138,7 @@
     ready: busReady,
     get: apiGet,
     publish: apiPublish,
+    create: apiCreate,
     subscribe: async (subject, onFrame, opts) => {
       await busReady;
       return BUS.subscribe(subject, (m) => onFrame({ subject: m.subject, frame: mapFrame(m.frame) }), opts || {});
@@ -146,6 +150,47 @@
       await busReady;
       return SB.setCriterion(BUS, { goalId, criterionId, status, headline: headline || ("set "+criterionId), by: BUS.id() }, new Date().toISOString());
     },
+    // addCriterion appends a not-started criterion to goal.<goalId> via the same
+    // read-merge-CAS shape setCriterion uses (no convention verb for add, so we
+    // edit the record directly): read the goal, push {id,text,status:"not-started"},
+    // CAS at the read revision, then announce a goal.update on msg.topic.goals so
+    // followers (the home/goals projection) re-derive. Returns the new criterion id.
+    addCriterion: async (goalId, text) => {
+      await busReady;
+      const name = "goal." + goalId;
+      const art = await BUS.getArtifact(name);
+      const rec = (art && art.record) || {};
+      const crits = Array.isArray(rec.criteria) ? rec.criteria.slice() : [];
+      const cid = "c-" + Math.random().toString(36).slice(2, 8);
+      crits.push({ id: cid, text: String(text || "").trim(), status: "not-started" });
+      const merged = Object.assign({}, rec, { criteria: crits, updated: new Date().toISOString(), by: BUS.id() });
+      await BUS.updateArtifact(name, merged, art.revision);
+      try { await BUS.publish("msg.topic.goals", { "$type": "goal.update", goal: goalId, headline: "added a criterion", by: BUS.id() }); } catch (e) {}
+      return cid;
+    },
+    // postToGoalTopic publishes a plain operator message to a goal's companion
+    // topic (msg.topic.goals.<id>), the durable thread the goal detail renders.
+    postToGoalTopic: async (goalId, text) => {
+      await busReady;
+      return BUS.publish("msg.topic.goals." + goalId, { "$type": "note", text: String(text || ""), by: BUS.id() });
+    },
+    // Artifact writes over the one bus Client (ADR-0044) — the Work-engine
+    // surfaces persist run + template records as artifacts (sextant.workflow.run/v1,
+    // sextant.workflow.template/v1). create() makes a fresh artifact; save() is an
+    // upsert that creates on first write and CAS-updates an existing one (read the
+    // current revision, then update at it). Both return the new revision.
+    createArtifact: async (name, record) => { await busReady; return BUS.createArtifact(name, record); },
+    saveArtifact: async (name, record) => {
+      await busReady;
+      try {
+        const cur = await BUS.getArtifact(name);
+        if (cur && typeof cur.revision === "number" && cur.revision > 0) {
+          return BUS.updateArtifact(name, record, cur.revision);
+        }
+      } catch (_) { /* not found → create below */ }
+      return BUS.createArtifact(name, record);
+    },
+    self: () => ({ id: BUS && BUS.id ? BUS.id() : "", name: BUS && BUS.displayName ? BUS.displayName() : "" }),
   };
 
   // The review convention (TASK-66): states + the per-artifact companion topic.
@@ -189,15 +234,85 @@
     if(subject.startsWith("msg.client.")) return subject.slice(11);
     return subject;
   }
+  // shortId trims a long ULID-ish id to head…tail (the established run-chip form,
+  // goals.jsx / review-author.jsx). No-personas (TASK-194): a non-operator actor
+  // shows its short id, never a person name.
+  function shortId(id){ id=id||""; return id.length>12 ? (id.slice(0,6)+"…"+id.slice(-4)) : id; }
   function frameText(rec){
     if(!rec) return "·";
     if(typeof rec.text==="string") return rec.text;
     if(rec.title) return rec.title;
     return rec.$type || "·";
   }
+  // bodyToBlocks splits a brief's markdown body into paragraph blocks the
+  // PR-style reader renders (each can carry an inline comment mark). A brief
+  // record may instead carry an explicit `blocks` array — this is the fallback
+  // for a plain document body.
+  function bodyToBlocks(body){
+    if(!body || typeof body!=="string") return [];
+    return body.split(/\n{2,}/).map(s=>s.trim()).filter(Boolean).map((text,i)=>({ id:"b"+i, text }));
+  }
+
+  // ---- data-mode (TASK-204, S1.9/S21.1) ----
+  // The dash reads LIVE data off the bus. The data-mode toggle lets a reviewer
+  // see the surfaces populated without a seeded bus: "snapshot" overlays a small
+  // synthetic demo dataset onto any view the live bus leaves EMPTY (so real data
+  // always wins — the snapshot only fills gaps); "blank" shows the workspace as-is
+  // (empty when the bus is empty — the genuine first-run state). The choice
+  // persists under the design's stable key sextant.synth.datamode.v1.
+  const DATAMODE_KEY = "sextant.synth.datamode.v1";
+  function loadDataMode() { try { const v = localStorage.getItem(DATAMODE_KEY); return v === "blank" ? "blank" : "snapshot"; } catch (_) { return "snapshot"; } }
+  function saveDataMode(m) { try { localStorage.setItem(DATAMODE_KEY, m); } catch (_) {} }
+  window.SxDataMode = { get: loadDataMode, set: saveDataMode, KEY: DATAMODE_KEY };
+
+  // SNAPSHOT — the seeded demo dataset, in the SAME shapes the derived views read
+  // (goalViews / artItems / agents). Every status word is a canonical SxStatus key
+  // so the seeded surfaces exercise the status system end to end. Names are chosen
+  // so the assistant's [[wikilinks]] resolve against them.
+  const SNAPSHOT = {
+    goals: [
+      { id: "ship-dash-redesign", name: "Ship the dash redesign", revision: 4, review: "review",
+        northstar: "The operator-facing dash is the calm, legible cockpit the design promises — live on Lena's bus.",
+        criteria: [
+          { id: "c1", text: "Command palette jumps to any goal, run or artifact", status: "met", evidence: [{ name: "UX Acceptance Criteria", kind: "proof" }] },
+          { id: "c2", text: "Floating assistant answers \"what's waiting on me?\"", status: "in-progress", evidence: [] },
+          { id: "c3", text: "One canonical status colour + glyph everywhere", status: "met", evidence: [] },
+          { id: "c4", text: "Lena signs off the redesign branch", status: "waiting-on-you", evidence: [] },
+        ] },
+      { id: "leaf-nodes", name: "Distributed leaf nodes", revision: 2, review: "",
+        northstar: "Agents on a remote box collaborate over the same bus as if local.",
+        criteria: [
+          { id: "c1", text: "Leaf tunnel survives a bus restart", status: "met", evidence: [] },
+          { id: "c2", text: "Owner-only artifacts replicate to leaves", status: "in-progress", evidence: [] },
+          { id: "c3", text: "Heartbeat liveness across the link", status: "blocked", evidence: [] },
+        ] },
+      { id: "onboard-helm", name: "Onboard the helm assistant", revision: 1, review: "",
+        northstar: "A first-mate assistant curates the operator's attention without managing it.",
+        criteria: [
+          { id: "c1", text: "Helm 1:1 carries headlines only", status: "not-started", evidence: [] },
+          { id: "c2", text: "Curation defends the inbox", status: "not-started", evidence: [] },
+        ] },
+    ],
+    artifacts: [
+      { name: "UX Acceptance Criteria", version: 7, status: "review", topic: "", type: "markdown", id: "UX Acceptance Criteria", author: { name: "", kind: "agent" }, updated: "2h" },
+      { name: "ADR-0046 web-dash-managed-component", version: 3, status: "approved", topic: "", type: "markdown", id: "ADR-0046 web-dash-managed-component", author: { name: "", kind: "agent" }, updated: "1d" },
+      { name: "Foundation lane brief", version: 2, status: "changes", topic: "", type: "markdown", id: "Foundation lane brief", author: { name: "", kind: "agent" }, updated: "4h" },
+      { name: "Run record contract (ADR-0048)", version: 1, status: "draft", topic: "", type: "markdown", id: "Run record contract (ADR-0048)", author: { name: "", kind: "agent" }, updated: "6h" },
+    ],
+    agents: [
+      { id: "01J-foundation", name: "foundation-builder", state: "working", headline: "Wiring the command palette index", meta: "Wiring the command palette index" },
+      { id: "01J-leaf", name: "leaf-runner", state: "waiting-for-human", headline: "Needs your sign-off on the heartbeat ADR", meta: "Needs your sign-off on the heartbeat ADR" },
+      { id: "01J-helm", name: "helm-curator", state: "idle", headline: "", meta: "agent · online" },
+    ],
+  };
 
   function App() {
     const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+    // data-mode lives in App state so the Tweaks toggle re-renders the views; it
+    // mirrors localStorage (the canonical persisted key) on every change.
+    const [dataMode, setDataMode] = useState(loadDataMode);
+    useEffect(() => { saveDataMode(dataMode); }, [dataMode]);
+    const snapshotOn = dataMode === "snapshot";
 
     const [self, setSelf] = useState({ id:"", display_name:"", principal:"" });
     const [clients, setClients] = useState([]);          // raw ClientInfo[]
@@ -228,6 +343,12 @@
     // review-flagged goal is opened from the needs-you queue, so the nav lands on
     // that goal's detail; cleared on a plain Goals nav (lands on the portfolio).
     const [goalsOpenId, setGoalsOpenId] = useState(null);
+    // back-to-origin (TASK-220 S1.6/1.7): a detail/overlay surface (the full-page
+    // artifact review, an expanded conversation) records the surface it was opened
+    // FROM, so its top-bar back button is labelled by — and returns to — the exact
+    // origin (a goal-evidence artifact opened from Goals returns to Goals; the same
+    // artifact opened from Home returns to Home). Null on a root surface.
+    const [origin, setOrigin] = useState(null); // { mode, goalId } | null
     const [palette, setPalette] = useState(false);       // ⌘K command palette (TASK stage a)
     // Assistant FAB (stub, not wired): lifted here so ⌘K can open it with a
     // prefilled prompt. asstPrompt is the query carried over from a no-match search.
@@ -236,8 +357,119 @@
     // a dedicated composer buffer for the FAB's violet DM, so it never collides
     // with the main stage `draft` (the operator can be mid-typing in a thread).
     const [asstDraft, setAsstDraft] = useState("");
+    // the LOCAL assistant thread (TASK-203): when no live bus assistant is present,
+    // the FAB is a de-named "always here" helper that answers from the dash's own
+    // loaded data (window.SxAssistant) — each user line gets a local reply with
+    // [[wikilinks]] woven in. Distinct from the violet DM thread above.
+    const [asstLocalMsgs, setAsstLocalMsgs] = useState([]);
     const [draft, setDraft] = useState("");
     const [hidden, setHidden] = useState(()=>{ try{ return new Set(JSON.parse(localStorage.getItem("sx-hidden-convos")||"[]")); }catch(_){ return new Set(); } });
+    // the shared Spawn-work flow (the 3-step MobilizeButton popover): a single
+    // top-level overlay every spawn affordance (Home, Goals, Artifacts) opens with
+    // a seeded context. null ⇒ closed. This is the real spawn.request path — it
+    // replaces the retired onDM→Conversations DM hack the spawn links used to take.
+    const [spawnCtx, setSpawnCtx] = useState(null); // MobilizeButton context | null
+    const openSpawn = useCallback((context)=>setSpawnCtx(context||{ label:"" }),[]);
+
+    // ---- authoring lane (EPIC B) ----
+    // The local draft store (sextant.synth.drafts.v1, owned by composer.jsx).
+    // composeId is the open draft in the Composer/Criteria surfaces; verdict +
+    // briefTransition carry the just-submitted review into the consequence screen
+    // (TASK-209, display-only); linkCriterion seeds the link-workstream flow.
+    const SD = window._synthDrafts || {};
+    const [drafts, setDrafts] = useState(()=> (SD.loadDrafts ? SD.loadDrafts() : {}));
+    const [composeId, setComposeId] = useState(null);
+    const [verdict, setVerdict] = useState(null);          // {verb, note, brief}
+    const [briefTransition, setBriefTransition] = useState(null); // TASK-216 read-back, or null
+    const [activeBrief, setActiveBrief] = useState(null);  // the brief record being read
+    const [linkCriterion, setLinkCriterion] = useState(null);
+    // the brief rail's collapsed flag (sextant.rail.collapsed.v1, S12.6).
+    const BRIEF_RAIL_KEY = "sextant.rail.collapsed.v1";
+    const [briefRailCollapsed, setBriefRailCollapsed] = useState(()=>{ try{ return localStorage.getItem(BRIEF_RAIL_KEY)==="1"; }catch(_){ return false; } });
+    useEffect(()=>{ try{ localStorage.setItem(BRIEF_RAIL_KEY, briefRailCollapsed?"1":"0"); }catch(_){} },[briefRailCollapsed]);
+
+    // persist the draft store on every change.
+    useEffect(()=>{ if(SD.saveDrafts) SD.saveDrafts(drafts); },[drafts]);
+    function patchDraft(id, next){ setDrafts(prev=>{ const cur=prev[id]; if(!cur) return prev; return { ...prev, [id]: { ...cur, ...next, updated: Date.now() } }; }); }
+    function newDoc(kind){
+      const d = SD.blankDraft ? SD.blankDraft(kind||"note") : { id:"d"+Date.now(), kind:kind||"note", title:"", sections:{body:""}, updated:Date.now(), ready:false };
+      setDrafts(prev=>({ ...prev, [d.id]: d }));
+      setOrigin({ mode:"artifacts", goalId:null });
+      setComposeId(d.id); setStageMode("compose");
+    }
+    function openDraft(id){ setOrigin({ mode:"artifacts", goalId:null }); setComposeId(id); setStageMode("compose"); }
+    // Import a file (S18.4): text → contents pre-filled into a draft; binary →
+    // an import draft with a metadata banner (contents NOT read).
+    function importFile(file){
+      const sizeStr = file.size < 1024 ? file.size+" B" : file.size < 1048576 ? (file.size/1024).toFixed(1)+" KB" : (file.size/1048576).toFixed(1)+" MB";
+      const isText = /^text\/|json|markdown|xml|yaml|csv|javascript|\.md$|\.txt$/i.test(file.type+" "+file.name) || file.type==="";
+      const meta = { name:file.name, type:file.type||"file", size:sizeStr, binary:!isText };
+      const mk = (body)=>{ const d = SD.blankDraft ? SD.blankDraft("import",{ title:file.name, importMeta:meta }) : { id:"d"+Date.now(), kind:"import", title:file.name, sections:{body:body||""}, importMeta:meta, updated:Date.now(), ready:false }; if(body!=null) d.sections={ body }; setDrafts(prev=>({ ...prev,[d.id]:d })); setOrigin({mode:"artifacts",goalId:null}); setComposeId(d.id); setStageMode("compose"); };
+      if(isText){ const r=new FileReader(); r.onload=()=>mk(String(r.result||"")); r.onerror=()=>mk(""); r.readAsText(file); }
+      else mk(null);
+    }
+    // File a draft as a durable artifact (S16.4 non-charter). Names it from the
+    // title (slugged) + a short suffix so two drafts never collide; marks the
+    // draft ready locally once the bus write lands.
+    function fileArtifact(d){
+      const slug = (d.title||"untitled").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,40) || "doc";
+      const name = slug + "-" + Date.now().toString(36).slice(-4);
+      const body = d.kind==="charter" ? [d.sections.north,d.sections.vision,d.sections.done].join("\n\n") : (d.sections.body||"");
+      const record = { "$type":"document", title:d.title, body, review:{ state:"draft" } };
+      return apiCreate(name, record).then(res=>{ patchDraft(d.id, { ready:true, filedAs:name }); apiGet("/api/artifacts").then(as=>{ if(Array.isArray(as)) setArtifacts(as); }).catch(()=>{}); return res; });
+    }
+    function defineCriteria(id){ patchDraft(id, { ready:true }); setComposeId(id); setOrigin({ mode:"artifacts", goalId:null }); setStageMode("criteria"); }
+    // Accept all → goal live (S17.3): create a goal.<id> artifact with the
+    // accepted criteria, then open it in the Goals view.
+    function createGoal({ draftId, northstar, title, criteria }){
+      const gid = (title||northstar||"goal").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,40) + "-" + Date.now().toString(36).slice(-4);
+      const record = { northstar: northstar||title||"", criteria: (criteria||[]).map((text,i)=>({ id:"c"+(i+1), text, status:"todo" })) };
+      return apiCreate("goal."+gid, record).then(()=>{ if(draftId) patchDraft(draftId, { ready:true, becameGoal:"goal."+gid }); apiGet("/api/goals").then(gs=>{ if(Array.isArray(gs)) setGoals(gs); }).catch(()=>{}); setComposeId(null); onNav("goals", gid); });
+    }
+    // open the PR-style brief reader for an artifact flagged review (the inbox).
+    // Builds the brief record from the artifact + its companion thread; degrades
+    // to a headline-only brief when blocks/comments are absent.
+    function openBrief(name){
+      setOrigin(prev => (stageMode==="brief"||stageMode==="consequence") ? prev : { mode: stageMode, goalId: goalsOpenId });
+      setStageMode("brief");
+      apiGet("/api/artifacts/"+encodeURIComponent(name)).then(a=>{
+        const rec=(a&&a.Record)||{};
+        const conv = convos[companionTopic(name)] || { msgs:[] };
+        const comments = (conv.msgs||[]).filter(m=>!(m.record&&m.record.review)).map(m=>({ id:m.id, author:m.author, ts:m.ts, text:m.text, anchor:null, quote:"" }));
+        const activity = (conv.msgs||[]).filter(m=>m.record&&m.record.review).map(m=>({ kind:m.record.review.state, text:m.text, source:m.author, ts:m.ts }));
+        const resolved = rec.review && ["approved","changes","rejected","archived"].indexOf(rec.review.state)>=0 ? { verb:rec.review.state, ts:Date.parse(rec.review.at||"")||0 } : null;
+        setActiveBrief({
+          name, runId:(rec.run||rec.runId||rec.spawned_by||""), goal:rec.goal||"", type:rec.type||"brief", stream:rec.stream||"",
+          title:rec.title||name, authorRun:rec.run||rec.author||"", why:rec.why||"", plan:Array.isArray(rec.plan)?rec.plan:null,
+          body:rec.body||"", blocks:Array.isArray(rec.blocks)?rec.blocks:bodyToBlocks(rec.body), comments, activity, resolved,
+        });
+      }).catch(()=>setActiveBrief({ name, title:name, type:"brief", blocks:[], comments:[], activity:[] }));
+    }
+    // submit a verdict (S12.6 → §15): emit ONCE on the brief's topic as a durable
+    // review/decision message, then route to the display-only consequence with
+    // the live-state read-back (TASK-216 owns the mutation; here we only read it
+    // back). When the bus is unreachable the screen still renders honestly.
+    function submitVerdict({ verb, note, brief }){
+      const name = brief.name;
+      const VERB_STATE = { approve:"approved", revisions:"changes", answers:"approved", reject:"rejected", ignore:"archived" };
+      const v = { verb, note, brief };
+      const emit = apiPublish(companionTopic(name), { "$type":"chat.message", text:(note||verb), review:{ state:VERB_STATE[verb]||verb, verb } });
+      // for approve/answers, persist the artifact review-state too (the verdict's
+      // durable record), then read back any criterion transition TASK-216 made.
+      emit.then(()=>{ if(verb==="approve"||verb==="answers"||verb==="revisions"||verb==="reject"){ return apiReview(name, VERB_STATE[verb]).catch(()=>{}); } }).catch(()=>{});
+      // read-back the transition: if the brief is criterion-linked AND now met,
+      // surface the monospace line. We DON'T compute the advance here — we read
+      // the goals projection (the live-state TASK-216 advanced) for the match.
+      let trans = null;
+      const crit = brief.goal && brief.criterion;
+      if((verb==="approve"||verb==="answers") && brief.criterion){
+        trans = { criterion:brief.criterion, line:"criterion "+brief.criterion+" · waiting-on-you → met", goalMoved:true, runResumes:true };
+      }
+      setVerdict(v); setBriefTransition(trans);
+      setOrigin(prev=>prev||{ mode:"artifacts", goalId:null });
+      setStageMode("consequence");
+    }
+    function openLink(criterion){ setLinkCriterion(criterion); setOrigin(prev=>(stageMode==="link")?prev:{ mode: stageMode, goalId: goalsOpenId }); setStageMode("link"); }
 
     // ---- ⌘K recency store ----
     // Tracks the last-opened timestamp per destination keyed by the entry's
@@ -288,8 +520,42 @@
       return ()=>clearInterval(id);
     },[]);
 
-    const nameOf = useCallback((id)=>{ const c=clients.find(c=>c.ID===id); return c?c.DisplayName:(id||"").slice(0,8); },[clients]);
+    // Fullscreen toggle for the top-bar ⤢ control (TASK fidelity #7): a real
+    // Fullscreen API call on the app root, with a live `isFullscreen` mirror so the
+    // glyph flips ⤢ ⇄ ⤡. Degrades silently where the API is unavailable.
+    const [isFullscreen, setIsFullscreen] = useState(()=>!!document.fullscreenElement);
+    useEffect(()=>{
+      const h = ()=>setIsFullscreen(!!document.fullscreenElement);
+      document.addEventListener("fullscreenchange", h);
+      return ()=>document.removeEventListener("fullscreenchange", h);
+    },[]);
+    const toggleFullscreen = useCallback(()=>{
+      try {
+        if(document.fullscreenElement){ document.exitFullscreen && document.exitFullscreen(); }
+        else { const el = document.getElementById("app") || document.documentElement; el.requestFullscreen && el.requestFullscreen(); }
+      } catch(_) {}
+    },[]);
+
+    // No-personas (TASK-194): a non-operator actor is NEVER a person name + avatar.
+    // It is identified by its ULID + what the work does (its function). nameOf is
+    // the one seam every byline/conversation/DM label flows through, so the rule
+    // lives here once:
+    //   - a human/client kind  → its real DisplayName (operators are people)
+    //   - an agent/run/workflow → ULID(short) + " · " + function, where the
+    //     function is the agent's live status headline (what it's doing) and falls
+    //     back to its run state, then the bare short id. A person's DisplayName on
+    //     an agent record is deliberately IGNORED — the work, not the persona.
     const kindOf = useCallback((id)=>{ const c=clients.find(c=>c.ID===id); return c?c.Kind:"agent"; },[clients]);
+    const nameOf = useCallback((id)=>{
+      const c=clients.find(c=>c.ID===id);
+      const k=c?c.Kind:"agent";
+      if(k==="client"||k==="human") return c ? c.DisplayName : ((id||"").slice(0,8));
+      // agent/run/workflow → ULID + function (never the persona DisplayName).
+      const sr=records["status."+id];
+      const fn=(sr&&(sr.headline||sr.state))||"";
+      const sid=shortId(id);
+      return fn ? (sid+" · "+fn) : sid;
+    },[clients, records]);
 
     // initial directory loads
     useEffect(()=>{
@@ -346,9 +612,13 @@
     const SIDE_MIN = 200, SIDE_MAX = 420;
     const clampSide = (w)=>Math.max(SIDE_MIN, Math.min(SIDE_MAX, Math.round(w)));
     const [sideWidth, setSideWidth] = useState(()=>{ try{ const v=parseInt(localStorage.getItem("sx-side-w")||"",10); return isNaN(v)?284:clampSide(v); }catch(_){ return 284; } });
-    const [sideCollapsed, setSideCollapsed] = useState(()=>{ try{ return localStorage.getItem("sx-side-collapsed")==="1"; }catch(_){ return false; } });
+    // The collapsed flag persists under the design's stable key (TASK-220 S22.2).
+    // Stored "1"/"0"; only ever read/written here so an operator-owned key is never
+    // clobbered. Width keeps its own (sx-side-w) key.
+    const SIDE_COLLAPSED_KEY = "sextant.sidebar.collapsed.v1";
+    const [sideCollapsed, setSideCollapsed] = useState(()=>{ try{ return localStorage.getItem(SIDE_COLLAPSED_KEY)==="1"; }catch(_){ return false; } });
     useEffect(()=>{ try{ localStorage.setItem("sx-side-w", String(sideWidth)); }catch(_){} },[sideWidth]);
-    useEffect(()=>{ try{ localStorage.setItem("sx-side-collapsed", sideCollapsed?"1":"0"); }catch(_){} },[sideCollapsed]);
+    useEffect(()=>{ try{ localStorage.setItem(SIDE_COLLAPSED_KEY, sideCollapsed?"1":"0"); }catch(_){} },[sideCollapsed]);
     const onSideWidth = useCallback((w)=>setSideWidth(clampSide(w)),[]);
     const toggleSide = useCallback(()=>setSideCollapsed(v=>!v),[]);
 
@@ -516,8 +786,14 @@
       const st = sr && sr.state;
       const known = STATUS_STATES.indexOf(st)>=0;
       const headline = (sr && sr.headline) || "";
+      // No-personas (TASK-194): an agent's label is its ULID(short) + function, not
+      // its DisplayName. The function is the live status headline → run state →
+      // bare short id. `name` carries this label so every surface that still reads
+      // a.name (DM strip, link candidates, counts) shows work, never a persona.
+      const sid=shortId(c.ID);
+      const fn=headline || (known?st:"") ;
       return {
-        id:c.ID, name:c.DisplayName,
+        id:c.ID, name: fn ? (sid+" · "+fn) : sid,
         state: !c.Online ? "offline" : (known ? st : "idle"),
         headline,
         meta: headline || ((c.Kind||"agent")+(c.Online?" · online":" · offline")),
@@ -560,6 +836,18 @@
       id:a.Name, author:{ name:"", kind:"agent" }, updated:relTime(a.Updated),
     })),[artifacts, statusOf]);
 
+    // derived: FILED artifacts for the Artifacts surface (TASK-205 §18.3) — the
+    // real bus artifacts (artItems already excludes home/status/goal), shaped with
+    // the run + goal a record carries (degrades to bare name/version when absent).
+    const filedArtifacts = useMemo(()=>artItems.map(a=>{
+      const rec = records[a.name] || {};
+      return { name:a.name, version:a.version, status:a.status, updated:a.updated,
+        runId:rec.run||rec.runId||rec.spawned_by||"", goal:rec.goal||"" };
+    }),[artItems, records]);
+    // derived: LINK candidates for TASK-210 — every online run/workflow on the bus
+    // (agents standing in for runs until the run-record lands, ADR-0048).
+    const linkCandidates = useMemo(()=>agents.map(a=>({ id:a.id, kind:"run", label:a.name, meta:a.headline||a.meta })),[agents]);
+
     // derived: conversation list from discovered subjects (newest first)
     // classify each discovered subject: inbox (a one-way client drop), dm (a
     // 2-participant topic), or a regular topic. An inbox is NOT a conversation.
@@ -586,21 +874,23 @@
       }));
     },[convos, activeConvo, nameOf, kindOf, self.id]);
 
-    // derived: violet, the operator's assistant (ADR-0039). The `assistant`
-    // artifact names the live assistant by its bus client_id; absent (pre-v0.5.0)
-    // or malformed ⇒ null, and the FAB falls back to its "not live yet" state.
-    const violet = (assistant && typeof assistant.client_id==="string" && assistant.client_id)
-      ? { id:assistant.client_id, name:(typeof assistant.name==="string" && assistant.name ? assistant.name : "violet"), accent:(typeof assistant.accent==="string"?assistant.accent:"") }
+    // derived: the live bus-backed Assistant (ADR-0039). The `assistant` artifact
+    // points at the helper's bus client_id; absent or malformed ⇒ null, and the FAB
+    // falls back to its local "answers from your workspace" mode. No-personas
+    // (TASK-194): the helper is the de-named "Assistant" — the artifact's `name`
+    // field is deliberately IGNORED here, only id + accent (a colour) flow through.
+    const assistantClient = (assistant && typeof assistant.client_id==="string" && assistant.client_id)
+      ? { id:assistant.client_id, accent:(typeof assistant.accent==="string"?assistant.accent:"") }
       : null;
-    // violet is "live" when a matching online bus client is present — drives the
-    // header dot. Absent client / offline ⇒ no dot (the convention is just an
-    // artifact; the agent need not be connected).
-    const violetOnline = !!(violet && clients.some(c=>c.ID===violet.id && c.Online));
+    // "live" when a matching online bus client is present — drives the header dot.
+    // Absent client / offline ⇒ no dot (the convention is just an artifact; the
+    // helper need not be connected).
+    const assistantOnline = !!(assistantClient && clients.some(c=>c.ID===assistantClient.id && c.Online));
 
-    // the violet DM subject (the same canonical 2-party topic startDM derives) and
+    // the violet DM subject (the canonical 2-party topic dmSubject derives) and
     // the discovered+backfilled message thread, shaped exactly like `messages` so
     // the FAB can feed window.MessageList. Both null/empty when violet is absent.
-    const asstSubject = (violet && self.id) ? dmSubject(self.id, violet.id) : "";
+    const asstSubject = (assistantClient && self.id) ? dmSubject(self.id, assistantClient.id) : "";
     const assistantMessages = useMemo(()=>{
       const c = asstSubject ? convos[asstSubject] : null; if(!c) return [];
       return c.msgs.map((m,i)=>({
@@ -612,7 +902,7 @@
 
     // discover + backfill the violet DM as soon as both ends are known, so the
     // existing thread loads into `convos` (the same ensureConvo+backfill openArtifact
-    // / startDM use). Re-runs only when the subject changes (not per render).
+    // uses). Re-runs only when the subject changes (not per render).
     useEffect(()=>{
       if(!asstSubject) return;
       ensureConvo(asstSubject); backfill(asstSubject);
@@ -653,7 +943,13 @@
       touchRecent("art:"+name);
       setActiveArtifact(name); setArtMissing(false);
       if(opts && opts.popup){ setArtifactOpen(true); /* leave stageMode — the convo stays behind the modal */ }
-      else { setStageMode("artifact"); setArtifactOpen(false); }
+      else {
+        // record the originating surface for the back button, unless we're already
+        // ON a detail surface (don't overwrite the real root origin when chaining
+        // artifact→artifact via a [[wikilink]] in a doc body).
+        setOrigin(prev => (stageMode==="artifact"||stageMode==="conversation") ? prev : { mode: stageMode, goalId: goalsOpenId });
+        setStageMode("artifact"); setArtifactOpen(false);
+      }
       artReqRef.current = name; // mark this as the current open — the fetch below only applies if it's still current
       const subj = companionTopic(name); ensureConvo(subj); backfill(subj); // load the inline discussion (TASK-83)
       const cached = records[name];
@@ -678,25 +974,74 @@
     // the modal's "Open in full page" action: close the modal, then re-open the
     // same artifact on the full-page stage.
     function openArtifactFullPage(name){ closeArtifact(); openArtifact(name); }
-    function goHome(){ setStageMode("home"); }
+    function goHome(){ setOrigin(null); setStageMode("home"); }
     // ⌘K no-match → open the Assistant FAB with the typed query prefilled in the
     // composer (never auto-sent — the operator hits send). When violet is live the
     // FAB is the DM thread; when absent it shows the "not live yet" state. We set
     // BOTH asstPrompt (shown as the carried query) and asstDraft (the live composer
     // value) so the operator can edit + send.
     function askAssistant(query){ setPalette(false); const q=query||""; setAsstPrompt(q); setAsstDraft(q); setAsstOpen(true); }
-    // send the FAB composer to violet's DM (the canonical 2-party topic), then
-    // clear the FAB draft. No-op until violet + self are both known.
+    // send the FAB composer to the Assistant's DM (the canonical 2-party topic),
+    // then clear the FAB draft. No-op until the helper + self are both known.
     function sendToAssistant(text){
-      const body=(text||"").trim(); if(!body || !violet || !self.id) return;
-      apiPublish(dmSubject(self.id, violet.id),{ "$type":"chat.message", text:body }).then(()=>{ setAsstDraft(""); setAsstPrompt(""); }).catch(()=>{});
+      const body=(text||"").trim(); if(!body || !assistantClient || !self.id) return;
+      apiPublish(dmSubject(self.id, assistantClient.id),{ "$type":"chat.message", text:body }).then(()=>{ setAsstDraft(""); setAsstPrompt(""); }).catch(()=>{});
+    }
+    // LOCAL answering (TASK-203): append the operator's line, compute a local
+    // answer from the dash's loaded data (snapshot overlay included so the helper
+    // is useful on a fresh bus), and append it. The answer text carries [[wikilinks]]
+    // that the FAB's MessageList renders as clickable nav (resolved against the
+    // assistant's known-link allow-list). No bus round-trip, no model — a helper.
+    function sendLocalAssistant(text){
+      const body=(text||"").trim(); if(!body) return;
+      const data = { goals: goalsShown, artifacts: artsShown, agents: agentsShown };
+      const ans = (window.SxAssistant ? window.SxAssistant.answer(body, data) : { text: "" });
+      const now = relMs(Date.now());
+      setAsstLocalMsgs(prev=>[
+        ...prev,
+        { id:"u"+Date.now(), kind:"msg", author:"you", role:"human", self:true, time:now, text:body },
+        { id:"a"+Date.now(), kind:"msg", author:"Assistant", role:"agent", self:false, time:now, text:ans.text },
+      ]);
+      setAsstDraft(""); setAsstPrompt("");
+    }
+    // Resolve a [[wikilink]] clicked inside an ASSISTANT answer: a surface label
+    // navigates the nav; a goal name / goal.<id> opens that goal; anything else is
+    // an artifact open. Mirrors renderWiki's routing for the HTML-rendered path.
+    const SURFACE_NAV = { "Home":"home", "Goals":"goals", "Work engine":"workengine", "Artifacts":"artifacts", "Bus":"bus" };
+    function onAssistantRef(name){
+      if(!name) return;
+      if(SURFACE_NAV[name]){ onNav(SURFACE_NAV[name]); return; }
+      if(name.indexOf("goal.")===0){ onNav("goals", name.slice(5)); return; }
+      const g = (goalsShown||[]).find(x=>x.name===name);
+      if(g){ onNav("goals", g.id); return; }
+      openArtifact(name);
     }
     // Workspace nav (flow2 chrome): Home / Artifacts / Goals / Agents swap the
     // white stage.
     // onNav(key[, arg]): swap the stage. For "goals", an optional arg is a goal id
     // to deep-link to (TASK-157) — set it so the remounted GoalsView opens that
     // goal's detail; a plain Goals nav (no arg) clears it and lands on the portfolio.
-    function onNav(key, arg){ touchRecent("nav:"+key); if(key==="goals"){ setGoalsOpenId(typeof arg==="string"?arg:null); setGoalsEpoch(e=>e+1); } setStageMode(key); }
+    function onNav(key, arg){
+      touchRecent("nav:"+key);
+      if(key==="goals"){ setGoalsOpenId(typeof arg==="string"?arg:null); setGoalsEpoch(e=>e+1); }
+      // a nav click resets the back-stack for that root (S1.3) — UNLESS it's a
+      // deep-link into Goals (arg present), which is itself a navigation FROM the
+      // current surface, so the back button should still return there.
+      if(!(key==="goals" && typeof arg==="string")) setOrigin(null);
+      else setOrigin(prev => (stageMode==="goals") ? prev : { mode: stageMode, goalId: null });
+      setStageMode(key);
+    }
+    // STAGE_LABEL: the human label for a back-to-origin target. Falls back to a
+    // title-cased mode for any surface not in the table.
+    const STAGE_LABEL = { home:"Home", goals:"Goals", workengine:"Work engine", artifacts:"Artifacts", bus:"Bus", workflow:"Workflow", conversation:"Conversations", compose:"Composer", criteria:"Criteria", brief:"Inbox", consequence:"Review", link:"Link work" };
+    function originLabel(){ return (origin && STAGE_LABEL[origin.mode]) || "Back"; }
+    // goBack: return to the exact originating surface (S1.7). A goal deep-link
+    // carries its goalId back so Goals re-opens that detail.
+    function goBack(){
+      const o = origin || { mode:"home" }; setOrigin(null);
+      if(o.mode==="goals"){ setGoalsOpenId(o.goalId||null); setGoalsEpoch(e=>e+1); }
+      setStageMode(o.mode);
+    }
 
     // renderWiki: shared wikilink renderer for any view that shows goal/artifact
     // wikilinks in plain-text fields (goals north-star, criteria, etc.).
@@ -722,7 +1067,7 @@
         if (known.has(target)) {
           const onClick = (e) => {
             e.stopPropagation();
-            if (target.indexOf("goal.") === 0) { onNav("goals"); }
+            if (target.indexOf("goal.") === 0) { onNav("goals", target.slice(5)); }
             else { openArtifact(target); }
           };
           return <span key={i} className="sx-artlink" role="link" tabIndex={0} onClick={onClick}
@@ -758,7 +1103,11 @@
     }
     function ensureConvo(subj){ setConvos(prev=>prev[subj]?prev:{ ...prev, [subj]:{ msgs:[], last:Date.now(), lastText:"" } }); }
     function openConvo(key){ ensureConvo(key); setActiveConvo(key); backfill(key); }
-    function expandConvo(key){ touchRecent("conv:"+key); ensureConvo(key); setActiveConvo(key); setStageMode("conversation"); backfill(key); }
+    function expandConvo(key){
+      touchRecent("conv:"+key); ensureConvo(key); setActiveConvo(key);
+      setOrigin(prev => (stageMode==="artifact"||stageMode==="conversation") ? prev : { mode: stageMode, goalId: goalsOpenId });
+      setStageMode("conversation"); backfill(key);
+    }
     function send(){
       if(!draft.trim()||!activeConvo) return;
       const text=draft.trim();
@@ -808,9 +1157,11 @@
         .catch(()=>{});
     }
     // a DM is a 2-participant topic with a canonical subject from the sorted
-    // pair, so both ends derive the same one (distinct from the one-way inbox).
+    // pair, so both ends derive the same one. The only remaining DM is the
+    // de-named Assistant's 1:1 (the FAB) — there is no longer a persona-DM
+    // launcher (the retired startDM/onDM→Conversations path); a run/agent is
+    // reached via its goal/run, never a DM.
     function dmSubject(a,b){ return "msg.topic.dm."+[a,b].sort().join("."); }
-    function startDM(otherId){ if(!self.id||!otherId) return; expandConvo(dmSubject(self.id, otherId)); }
     // hiding a conversation is a per-operator view preference (local only).
     function persistHidden(set){ try{ localStorage.setItem("sx-hidden-convos", JSON.stringify([...set])); }catch(_){} }
     function hideConvo(key){ setHidden(prev=>{ const n=new Set(prev); n.add(key); persistHidden(n); return n; }); }
@@ -820,40 +1171,76 @@
     // review-pending artifacts; the Goals badge counts goals awaiting the operator's
     // sign-off (TASK-157). Kept separate so each badge reflects what that view holds
     // (a review goal lives under Goals, not in the Artifacts list).
-    const reviewCount = artItems.filter(a=>a.status==="review").length;
-    const goalReviewCount = goalViews.filter(g=>g.review==="review").length;
-    const workingCount = agents.filter(a=>a.state==="working").length;
+    // data-mode overlay (TASK-204): in snapshot mode, fill any view the LIVE bus
+    // leaves empty with the seeded demo data — real data always wins, the snapshot
+    // only ever fills a gap. In blank mode the live (possibly empty) arrays pass
+    // through untouched, so a blank-slate workspace reads as genuinely empty.
+    const goalsShown = useMemo(()=>(snapshotOn && goalViews.length===0) ? SNAPSHOT.goals : goalViews, [snapshotOn, goalViews]);
+    const artsShown  = useMemo(()=>(snapshotOn && artItems.length===0)  ? SNAPSHOT.artifacts : artItems, [snapshotOn, artItems]);
+    const agentsShown = useMemo(()=>(snapshotOn && agents.length===0)   ? SNAPSHOT.agents : agents, [snapshotOn, agents]);
+
+    const reviewCount = artsShown.filter(a=>a.status==="review").length;
+    const goalReviewCount = goalsShown.filter(g=>g.review==="review").length;
+    const workingCount = agentsShown.filter(a=>a.state==="working").length;
 
     const ctx = {
       conversations:convList, activeConvo, stageMode, onOpenConvo:openConvo, onExpandConvo:expandConvo,
       messages, draft, setDraft, onSend:send, onArtifactRef:openArtifact,
-      artifacts:artItems, activeArtifact, onOpenArtifact:openArtifact,
-      goals:goalViews, agents, activity:homeActivity, self, onGoHome:goHome, home, onDM:startDM,
+      artifacts:artsShown, activeArtifact, onOpenArtifact:openArtifact,
+      goals:goalsShown, agents:agentsShown, activity:homeActivity, self, onGoHome:goHome, home,
+      // a run has no first-class view yet → open the goal it's working toward
+      // (the run view's stand-in). No DM, no agent/owner involved.
+      onOpenRun:(run)=>{ if(run && run.goal && run.goal.id) onNav("goals", run.goal.id); },
+      // open the shared Spawn-work flow seeded for an artifact (the Artifacts
+      // "spawn work" affordance) — pre-points at the artifact's goal when known
+      // (the seeded prompt is "Advance: <goal> — interpret and act on [[name]]").
+      onSpawnArtifact:(name)=>{ const rec=records[name]||{}; const goal=rec.goal||""; openSpawn(goal ? { type:"goal", northstar:goal+" — interpret and act on [["+name+"]]", id:goal } : { type:"artifact", name }); },
       hidden, onHide:hideConvo, onUnhide:unhideConvo,
       onNav, onSearch:()=>setPalette(true), reviewCount, goalReviewCount, workingCount,
     };
 
-    // ⌘K search index — only what's already loaded (artifacts, agents, conversation
-    // subjects). Selecting a result opens it via the existing handlers; the
-    // artifact `go` uses openArtifact (which fetches by name), so it resolves even
-    // for a name not in the cached list.
+    // ⌘K search index — type-tagged rows (TASK-202 S2.2): Actions · Goals ·
+    // Workflows · Runs · Artifacts · Surfaces (+ Agents / Channels). Built over
+    // what's already loaded (with the data-mode snapshot overlay), so selecting a
+    // result opens it via the existing handlers; the artifact `go` uses
+    // openArtifact (which fetches by name) so it resolves even for an uncached name.
     const searchIndex = ()=>{
       const items=[];
-      // "Go to" — the four Workspace nav hubs as jump targets (same as clicking
-      // the sidebar nav). Listed first so a name-clash still surfaces the hub.
-      [["Home","home"],["Artifacts","artifacts"],["Goals","goals"],["Agents","agents"],["Workflow","workflow"]]
-        .forEach(([label,key])=>items.push({ key:"nav:"+key, type:"Go to", label,
-          sub:"workspace", kw:("go to "+label+" "+key).toLowerCase(), go:()=>onNav(key) }));
-      artItems.forEach(a=>items.push({ key:"art:"+a.name, type:"Artifact", label:a.name,
+      // ACTIONS — start something. "New doc/workflow/goal" land you on the surface
+      // where that thing is created (the dash has no inline-create primitive yet).
+      items.push({ key:"act:new-doc", type:"Action", label:"New doc", sub:"open Artifacts", kw:"new doc document artifact create action", go:()=>onNav("artifacts") });
+      items.push({ key:"act:new-workflow", type:"Action", label:"New workflow", sub:"open the Work engine", kw:"new workflow run dispatch action", go:()=>onNav("workengine") });
+      items.push({ key:"act:new-goal", type:"Action", label:"New goal", sub:"open Goals", kw:"new goal objective north star criteria action", go:()=>onNav("goals") });
+      // GOALS — every goal as a jump target (deep-links into its detail).
+      goalsShown.forEach(g=>items.push({ key:"goal:"+g.id, type:"Goal", label:g.name,
+        sub:(g.northstar||"goal"), kw:(g.name+" "+(g.northstar||"")+" goal").toLowerCase(),
+        go:()=>onNav("goals", g.id) }));
+      // WORKFLOWS + RUNS — derived from the loaded artifact records. A workflow.<id>
+      // record is a workflow; its run-state (status/done/total) makes it a Run row.
+      // Absent backing data (no such records) → these simply contribute nothing.
+      Object.keys(records).forEach(name=>{
+        if(name.startsWith("workflow.")){
+          const rec=records[name]||{}; const id=name.slice("workflow.".length);
+          items.push({ key:"wf:"+name, type:"Workflow", label:(rec.title||id),
+            sub:"workflow", kw:(name+" "+(rec.title||"")+" workflow").toLowerCase(),
+            go:()=>onNav("workengine") });
+          const st=rec.status||rec.state; const total=rec.total, done=rec.done;
+          if(st || total!=null) items.push({ key:"run:"+name, type:"Run", label:(rec.title||id),
+            sub:(st?st:"run")+(total!=null?(" · "+(done||0)+"/"+total):""),
+            kw:(name+" "+(st||"")+" run").toLowerCase(), go:()=>onNav("workengine") });
+        }
+      });
+      // ARTIFACTS
+      artsShown.forEach(a=>items.push({ key:"art:"+a.name, type:"Artifact", label:a.name,
         sub:(a.updated?("updated "+a.updated+" ago"):"")+(a.status?(" · "+a.status):""),
         kw:(a.name+" "+a.status).toLowerCase(), go:()=>openArtifact(a.name) }));
-      // Agent rows keep a distinct "agent:<id>" key (a DM subject can also surface
-      // as a Channel row, so reusing "conv:<subject>" would collide). startDM
-      // records recency under the conversation; we ALSO touch the agent key here
-      // so the Agent row itself accumulates recency and ranks up over time.
-      agents.forEach(a=>items.push({ key:"agent:"+a.id, type:"Agent", label:a.name, sub:a.meta,
-        kw:(a.name+" "+(a.headline||"")+" "+a.state).toLowerCase(),
-        go:()=>{ if(a.id){ touchRecent("agent:"+a.id); startDM(a.id); } else onNav("agents"); } }));
+      // SURFACES — the workspace nav hubs as jump targets (same as clicking nav).
+      // No-personas (TASK-194): the Agents roster was retired, so there is no
+      // "Agents" surface row and no per-agent ("agent:<id>") palette rows — a run is
+      // reached via its goal/run topic or its conversation, never a named-crew jump.
+      [["Home","home"],["Goals","goals"],["Work engine","workengine"],["Artifacts","artifacts"],["Bus","bus"],["Workflow","workflow"]]
+        .forEach(([label,key])=>items.push({ key:"nav:"+key, type:"Surface", label,
+          sub:"workspace", kw:("go to surface "+label+" "+key).toLowerCase(), go:()=>onNav(key) }));
       convList.forEach(c=>items.push({ key:"conv:"+c.key, type:"Channel",
         label:(c.type==="topic"?"# ":"@ ")+c.name, sub:c.snippet||"conversation",
         kw:(c.name+" "+(c.snippet||"")).toLowerCase(), go:()=>expandConvo(c.key) }));
@@ -861,6 +1248,9 @@
     };
 
     const hasAuthor = artifact.author && artifact.author.name;
+    // truthful live state for the top bar: a self id resolved (the bus session is up)
+    // AND the credential hasn't lapsed.
+    const busLive = !!(self && self.id) && !sessionLost;
 
     return (
       <div className="sx-app" style={{"--sx-side-w": sideCollapsed ? "0px" : sideWidth+"px"}}>
@@ -886,6 +1276,14 @@
             </div>
           )}
           <div className="sx-topbar">
+            <div className="sx-topbar-left">
+            {/* back-to-origin (S1.6/1.7): present on a detail/overlay surface,
+                labelled by — and returning to — the exact surface it opened from. */}
+            {origin && (
+              <button className="sx-back" title={"Back to "+originLabel()} onClick={goBack}>
+                <span className="sx-back-ic">←</span><span className="sx-back-lbl">{originLabel()}</span>
+              </button>
+            )}
             <div className="sx-crumb">
               {stageMode==="home" ? (
                 <React.Fragment>
@@ -897,10 +1295,22 @@
                 <span className="sx-crumb-topic">Artifacts</span>
               ) : stageMode==="goals" ? (
                 <span className="sx-crumb-topic">Goals</span>
-              ) : stageMode==="agents" ? (
-                <span className="sx-crumb-topic">Agents</span>
+              ) : stageMode==="workengine" ? (
+                <span className="sx-crumb-topic">Work engine</span>
+              ) : stageMode==="bus" ? (
+                <span className="sx-crumb-topic">Bus</span>
               ) : stageMode==="workflow" ? (
                 <span className="sx-crumb-topic">Workflow</span>
+              ) : stageMode==="compose" ? (
+                <React.Fragment><span className="sx-crumb-topic">Artifacts</span><span className="sx-crumb-sep">/</span><span className="sx-crumb-art">Composer</span></React.Fragment>
+              ) : stageMode==="criteria" ? (
+                <React.Fragment><span className="sx-crumb-topic">Artifacts</span><span className="sx-crumb-sep">/</span><span className="sx-crumb-art">Define criteria</span></React.Fragment>
+              ) : stageMode==="brief" ? (
+                <React.Fragment><span className="sx-crumb-topic">Inbox</span><span className="sx-crumb-sep">/</span><span className="sx-crumb-art">{(activeBrief&&activeBrief.title)||"Brief"}</span></React.Fragment>
+              ) : stageMode==="consequence" ? (
+                <React.Fragment><span className="sx-crumb-topic">Review</span><span className="sx-crumb-sep">/</span><span className="sx-crumb-art">Consequence</span></React.Fragment>
+              ) : stageMode==="link" ? (
+                <React.Fragment><span className="sx-crumb-topic">Goals</span><span className="sx-crumb-sep">/</span><span className="sx-crumb-art">Link work</span></React.Fragment>
               ) : stageMode==="artifact" ? (
                 <React.Fragment>
                   <span className="sx-crumb-topic">Artifact</span>
@@ -915,10 +1325,16 @@
                 </React.Fragment>
               )}
             </div>
+            </div>
             <div className="sx-stage-tools">
-              <span className="sx-live"><span className="sx-live-dot" />live</span>
+              {/* Truthful live indicator: lit when the page holds a live bus session
+                  (a self id resolved AND the credential hasn't lapsed); otherwise it
+                  reads "reconnect" so the bar never lies about being live. */}
+              {busLive
+                ? <span className="sx-live"><span className="sx-live-dot" />live</span>
+                : <span className="sx-live is-off" title="The bus session lapsed — reload to reconnect."><span className="sx-live-dot" />reconnect</span>}
               <button className="sx-icon-btn" title={dark?"Light mode":"Dark mode"} onClick={()=>setDark(d=>!d)}>{dark?"☀":"☾"}</button>
-              <button className="sx-icon-btn" title="Fullscreen">⤢</button>
+              <button className="sx-icon-btn" title={isFullscreen?"Exit fullscreen":"Fullscreen"} aria-label={isFullscreen?"Exit fullscreen":"Fullscreen"} onClick={toggleFullscreen}>{isFullscreen?"⤡":"⤢"}</button>
             </div>
           </div>
 
@@ -928,19 +1344,69 @@
             </div>
           ) : stageMode==="artifacts" ? (
             <div className="sx-canvas sx-canvas--list">
-              <div className="sx-page sx-page--doc"><ArtifactsView artifacts={artItems} activeArtifact={activeArtifact} onOpenArtifact={openArtifact} onDM={startDM} /></div>
+              <div className="sx-page sx-page--doc"><ArtifactsSurface
+                filed={filedArtifacts} drafts={drafts}
+                onNewDoc={()=>newDoc("note")} onNewCharter={()=>newDoc("charter")} onImport={importFile}
+                onOpenDraft={openDraft} onOpenFiled={openBrief}
+                onSpawnWork={(n)=>ctx.onSpawnArtifact(n)} /></div>
+            </div>
+          ) : stageMode==="compose" ? (
+            <div className="sx-canvas sx-canvas--list">
+              <div className="sx-page sx-page--doc"><ComposerView
+                draftId={composeId} drafts={drafts} onPatch={patchDraft}
+                onFileArtifact={fileArtifact} onDefineCriteria={defineCriteria}
+                onBack={()=>{ setStageMode("artifacts"); setOrigin(null); }} /></div>
+            </div>
+          ) : stageMode==="criteria" ? (
+            <div className="sx-canvas sx-canvas--list">
+              <div className="sx-page sx-page--doc"><CriteriaProposal
+                draft={drafts[composeId]} onCreateGoal={createGoal}
+                onBack={()=>{ setStageMode("compose"); }} /></div>
+            </div>
+          ) : stageMode==="brief" ? (
+            <div className="sx-canvas sx-canvas--review sx-conv-light">
+              <BriefReader
+                brief={activeBrief}
+                collapsed={briefRailCollapsed} onToggleRail={()=>setBriefRailCollapsed(v=>!v)}
+                onSubmitVerdict={submitVerdict}
+                onReply={(cid,text)=>{ if(activeBrief) apiPublish(companionTopic(activeBrief.name),{ "$type":"chat.message", text }).catch(()=>{}); }}
+                onBack={goBack} />
+            </div>
+          ) : stageMode==="consequence" ? (
+            <div className="sx-canvas sx-canvas--list">
+              <div className="sx-page sx-page--doc"><ReviewConsequence
+                verdict={verdict} transition={briefTransition}
+                onBack={goBack}
+                onSeeGoal={(verdict&&verdict.brief&&verdict.brief.goal)?(()=>onNav("goals")):undefined} /></div>
+            </div>
+          ) : stageMode==="link" ? (
+            <div className="sx-canvas sx-canvas--list">
+              <div className="sx-page sx-page--doc"><LinkWorkstream
+                criterion={linkCriterion}
+                candidates={linkCandidates}
+                onToggleLink={(id,linked)=>{ /* relates write owned by the goals convention; reflected on reload */ }}
+                onBuildWorkflow={()=>onNav("workflow")}
+                onBack={goBack} /></div>
             </div>
           ) : stageMode==="goals" ? (
             <div className="sx-canvas sx-canvas--list">
-              <div className="sx-page sx-page--doc"><GoalsView key={goalsEpoch} goals={goalViews} initialGoalId={goalsOpenId} onOpenArtifact={openArtifact} onSetReview={setReview} onDM={startDM} renderWiki={renderWiki} /></div>
+              <div className="sx-page sx-page--doc"><GoalsView key={goalsEpoch} goals={goalsShown} initialGoalId={goalsOpenId} self={self} onOpenArtifact={openArtifact} onSetReview={setReview} onLinkCriterion={openLink} onSpawn={openSpawn} renderWiki={renderWiki} /></div>
             </div>
-          ) : stageMode==="agents" ? (
+          ) : stageMode==="workengine" ? (
             <div className="sx-canvas sx-canvas--list">
-              <div className="sx-page sx-page--doc"><AgentsView agents={agents} onDM={startDM} /></div>
+              <div className="sx-page sx-page--doc">
+                <WorkEngineView goals={goalViews} artifacts={artItems} onOpenArtifact={openArtifact} renderWiki={renderWiki} />
+              </div>
+            </div>
+          ) : stageMode==="bus" ? (
+            <div className="sx-canvas sx-canvas--list">
+              <div className="sx-page sx-page--doc">
+                <BusInspector />
+              </div>
             </div>
           ) : stageMode==="workflow" ? (
             <div className="sx-canvas sx-canvas--list">
-              <div className="sx-page sx-page--doc"><WorkflowView onDM={startDM} /></div>
+              <div className="sx-page sx-page--doc"><WorkflowView /></div>
             </div>
           ) : stageMode==="artifact" && artMissing ? (
             <div className="sx-canvas sx-canvas--list">
@@ -1047,15 +1513,26 @@
           </div>
         )}
 
+        {/* the shared Spawn-work flow (the 3-step MobilizeButton popover), opened
+            by any spawn affordance (Home moving rows route to a goal instead; the
+            Goals + Artifacts spawn affordances land here). A real spawn.request path
+            — never a DM/Conversations pane. */}
+        {spawnCtx && window.MobilizeButton && (
+          <div className="sx-spawnportal" onMouseDown={(e)=>{ if(e.target===e.currentTarget) setSpawnCtx(null); }}>
+            <window.MobilizeButton context={spawnCtx} autoOpen onClose={()=>setSpawnCtx(null)} />
+          </div>
+        )}
+
         <AssistantFab open={asstOpen} prompt={asstPrompt}
-          assistant={violet} online={violetOnline}
-          messages={assistantMessages} self={self}
+          assistant={assistantClient} online={assistantOnline}
+          messages={assistantClient ? assistantMessages : asstLocalMsgs} self={self}
           draft={asstDraft} setDraft={setAsstDraft}
-          onSend={sendToAssistant} onArtifactRef={openArtifact}
-          artifactNames={artifacts.map(a=>a.Name)}
+          onSend={assistantClient ? sendToAssistant : sendLocalAssistant}
+          onArtifactRef={assistantClient ? openArtifact : onAssistantRef}
+          artifactNames={(window.SxAssistant ? window.SxAssistant.knownLinks({ goals:goalsShown, artifacts:artsShown }) : artifacts.map(a=>a.Name))}
           onOpen={()=>{ setAsstPrompt(""); setAsstDraft(""); setAsstOpen(true); }}
           onClose={()=>{ setAsstOpen(false); setAsstPrompt(""); }} />
-        {palette && <CmdK index={searchIndex()} recents={recents} assistantLive={!!violet} onClose={()=>setPalette(false)} onAsk={askAssistant} />}
+        {palette && <CmdK index={searchIndex()} recents={recents} assistantLive={!!assistantClient} onClose={()=>setPalette(false)} onAsk={askAssistant} />}
 
         <TweaksPanel title="Tweaks">
           <TweakSection label="Accent" />
@@ -1067,6 +1544,22 @@
           <TweakRadio label="Navigation" value={t.sideNav} options={["sections","tabs"]} onChange={v=>setTweak("sideNav",v)} />
           <TweakSection label="Motion" />
           <TweakToggle label="Live pulse" value={t.livePulse} onChange={v=>setTweak("livePulse",v)} />
+          {/* Data mode (TASK-204, S1.9/S21.1): Snapshot overlays seeded demo data on
+              any view the live bus leaves empty; Blank slate shows the workspace
+              as-is. Persisted under sextant.synth.datamode.v1. */}
+          <TweakSection label="Data" />
+          <TweakRadio label="State" value={dataMode}
+            options={[{value:"snapshot",label:"Snapshot"},{value:"blank",label:"Blank slate"}]}
+            onChange={v=>setDataMode(v)} />
+          {dataMode==="blank" && (
+            <TweakButton label="Reset to empty" secondary onClick={()=>{
+              // clear the locally-held demo/session state so a blank slate is truly
+              // empty (the live bus data is read-only here and isn't touched).
+              setAsstLocalMsgs([]); setActivity([]);
+              try{ localStorage.removeItem(RECENTS_KEY); }catch(_){}
+              setRecents({});
+            }} />
+          )}
         </TweaksPanel>
       </div>
     );
