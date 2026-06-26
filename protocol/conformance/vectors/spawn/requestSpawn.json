@@ -1,0 +1,21 @@
+{
+  "epoch": 1,
+  "convention": "spawn",
+  "verb": "requestSpawn",
+  "description": "spawn: request a dispatcher to spawn an agent — a single message.publish of a spawn.request on msg.topic.spawn. Optional lineage (job/parent) is omitted when unset; parent is never injected (the dispatcher trusts the bus-stamped author).",
+  "input": {
+    "prompt": "say hello on msg.topic.demo",
+    "nickname": "alpha"
+  },
+  "operations": [
+    {
+      "op": "message.publish",
+      "subject": "msg.topic.spawn",
+      "payload": {
+        "$type": "spawn.request",
+        "prompt": "say hello on msg.topic.demo",
+        "nickname": "alpha"
+      }
+    }
+  ]
+}

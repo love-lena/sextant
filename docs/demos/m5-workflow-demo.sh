@@ -17,14 +17,14 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 P="${P:-/tmp/m5-workflow}"; S="$P/store"; PORT="${PORT:-4495}"
-SX="${SX:-$P/sextant}"; SXPOC="${SXPOC:-$P/spawn-poc}"; SXDISP="${SXDISP:-$P/sextant-dispatch}"; SXWF="${SXWF:-$P/sextant-workflow}"
+SX="${SX:-$P/sextant}"; SXDISP="${SXDISP:-$P/sextant-dispatch}"; SXWF="${SXWF:-$P/sextant-workflow}"
 PASS=0; FAIL=0
 ok(){ echo "  PASS: $1"; PASS=$((PASS+1)); }
 no(){ echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
 rm -rf "$P"; mkdir -p "$S"
 echo "== build binaries =="
-( cd "$ROOT" && go build -o "$SX" ./clients/sextant-cli && go build -o "$SXPOC" ./clients/go/apps/spawn-poc \
+( cd "$ROOT" && go build -o "$SX" ./clients/sextant-cli \
   && go build -o "$SXDISP" ./clients/dispatcher && go build -o "$SXWF" ./clients/coordinator ) || { echo "build failed"; exit 2; }
 
 echo "== AC#1/#3: workflow records + lexicons (go test) =="

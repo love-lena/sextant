@@ -1,0 +1,34 @@
+{
+  "epoch": 1,
+  "convention": "review",
+  "verb": "setReview",
+  "description": "review: set a producer-marked doc to the 'changes' verdict — artifact.get then artifact.update (CAS the record with the review block merged in, every other field preserved). No closed loop (not an approve).",
+  "input": {
+    "name": "the-brief",
+    "state": "changes",
+    "by": "01OPERATOR",
+    "now": "2026-06-19T00:00:00Z"
+  },
+  "operations": [
+    {
+      "op": "artifact.get",
+      "name": "the-brief"
+    },
+    {
+      "op": "artifact.update",
+      "name": "the-brief",
+      "payload": {
+        "$type": "doc",
+        "body": "x",
+        "review": {
+          "state": "changes",
+          "by": "01OPERATOR",
+          "at": "2026-06-19T00:00:00Z",
+          "rev": 3
+        },
+        "title": "the brief"
+      },
+      "expectedRev": 3
+    }
+  ]
+}

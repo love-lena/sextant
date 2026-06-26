@@ -20,6 +20,12 @@
 (function () {
   const { useState, useRef, useEffect } = React;
 
+  // SB is the bundled TS conventions (window.SextantBus, ADR-0044): the dash builds
+  // its workflow.start / spawn.request records and parses workflow state through the
+  // conventions (@sextant/conv-workflow, @sextant/conv-spawn) instead of hand-rolled
+  // literals, so the wire shape has one cross-language source (TASK-239 AC#7).
+  const SB = window.SextantBus || {};
+
   const SPAWN_SUBJECT = "msg.topic.spawn";
   const POLL_INTERVAL_MS = 800;
   const TIMEOUT_MS = 10000;
@@ -94,10 +100,13 @@
       wfGet("/api/artifacts/" + encodeURIComponent("workflow." + id)).then(function (a) {
         if (!mountedRef.current) return;
         var rec = (a && a.Record) || null;
-        if (rec && rec["$type"] === "sextant.workflow/v1") {
-          var steps = Array.isArray(rec.steps) ? rec.steps : [];
+        // Render the run by parsing the state envelope through the workflow
+        // convention (replacing a hand-rolled $type check); null => not a workflow.
+        var wf = SB.parseWorkflow ? SB.parseWorkflow(rec) : (rec && rec["$type"] === "sextant.workflow/v1" ? rec : null);
+        if (wf) {
+          var steps = Array.isArray(wf.steps) ? wf.steps : [];
           var done = steps.filter(function (s) { return s && s.status === "done"; }).length;
-          setRun({ id: id, status: rec.status || "running", done: done, total: steps.length });
+          setRun({ id: id, status: wf.status || "running", done: done, total: steps.length });
           if (rec.status === "done") { setPhase("done"); return; }
           if (rec.status === "failed" || rec.status === "cancelled") { setPhase("failed"); return; }
         }
@@ -147,9 +156,13 @@
         if (acked || !mountedRef.current) { try { sub.stop(); } catch (_) {} return; }
         subRef.current = sub;
         // Subscribed: publish the workflow.start now that the ack can't be missed.
-        var record = { "$type": "workflow.start", prompt: p, nonce: nonce };
-        var nk = nickname.trim(); if (nk) record.nickname = nk;
-        var tg = target.trim(); if (tg) record.target = tg;
+        // The record is built by the workflow convention (one cross-language source).
+        var record = SB.workflowStartRecord({
+          prompt: p,
+          nonce: nonce,
+          nickname: nickname.trim() || undefined,
+          target: target.trim() || undefined,
+        });
         wfPost("/api/publish", { subject: WORKFLOW_SUBJECT, record: record })
           .then(function () { if (mountedRef.current && !acked) setPhase("waiting"); })
           .catch(function (e) { if (acked) return; acked = true; fail("Failed to publish workflow.start: " + (e && e.message ? e.message : String(e))); });
@@ -343,9 +356,8 @@
           cs.filter(function(c) { return c.Kind !== "client" && c.Kind !== "human"; })
             .forEach(function(c) { knownIds.add(c.ID); });
         }
-        var record = { "$type": "spawn.request", "prompt": p };
-        var nick = nickname.trim();
-        if (nick) record["nickname"] = nick;
+        // The spawn.request is built by the spawn convention (one cross-language source).
+        var record = SB.spawnRequestRecord({ prompt: p, nickname: nickname.trim() || undefined });
         return wfPost("/api/publish", { subject: SPAWN_SUBJECT, record: record })
           .then(function() {
             if (!mountedRef.current) return;
