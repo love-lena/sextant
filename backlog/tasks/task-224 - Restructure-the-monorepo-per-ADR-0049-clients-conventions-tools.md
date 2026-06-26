@@ -1,10 +1,10 @@
 ---
 id: TASK-224
 title: 'Restructure the monorepo per ADR-0049: clients, conventions, tools'
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-06-25 03:10'
-updated_date: '2026-06-25 20:57'
+updated_date: '2026-06-26 02:27'
 labels:
   - ready-for-agent
 dependencies: []
@@ -89,3 +89,9 @@ Decision recorded in ADR-0049 (this PR) with the explicit target tree; vocabular
 - [ ] #8 No behaviour assertions added or changed; no new test seams
 - [ ] #9 Review is co-equal (decided 2026-06-25): this restructure relocates conventions/review -> conventions/review/ts and reserves the conventions/review/go slot; the Go build + review conformance vectors are tracked separately as TASK-239, kept out of this PR so it stays purely behaviour-preserving
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Merged to main as squash 696e4ea (PR #267, 2026-06-26). Adopted the ADR-0049 layout: flat client peers under clients/, conventions/<name>/{go,ts}, and the SDKs + shared/go host-helpers + tui library as top-level libraries. 410 rename-preserving git moves; importcheck rewritten to the new isolation lines (new AssertSDKImportsNoShared + AssertClientIsolation, witnessed over all 7 Go clients); conformance vectors unchanged; shipped binary names unchanged so install/release are unaffected. Full gate green (Go + TS + mdbook + e2e). One move-induced bug found and fixed in review (goals lexgen relative-path depth). AC#9 review co-equality and the spawn-poc demo re-point are tracked in TASK-239.
+<!-- SECTION:FINAL_SUMMARY:END -->
