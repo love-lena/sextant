@@ -3,10 +3,10 @@ id: TASK-239
 title: >-
   Full convention coverage across Go and TS: review (Go), workflow (TS), spawn
   (TS) + vectors
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-06-25 19:41'
-updated_date: '2026-06-26 18:50'
+updated_date: '2026-06-26 20:11'
 labels:
   - ready-for-agent
 dependencies:
@@ -75,3 +75,9 @@ Scope broadened in-session 2026-06-25 from "Go review only" to full go<->ts conv
 - [ ] #9 after this task every convention (goal, review, workflow, spawn) is co-equal go+ts, each with conformance vectors both SDKs replay green
 - [ ] #10 The 4 M5-era demos that build the retired clients/go/apps/spawn-poc (docs/demos/{agentic-dev-workflow,m5-workflow-demo,m5-dispatcher-demo,spawn-spike-demo}.sh) are re-pointed at the dispatcher (the client that graduated spawn-poc) or retired; none reference spawn-poc. Deferred out of TASK-224 because re-pointing is a behavioral demo change.
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+All four conventions (goal, review, workflow, spawn) are now co-equal go+ts, each bound by conformance vectors both SDKs replay green. Added conventions/review/go (peer of review/ts: SetReview read-merge-CAS + approve->met closed loop over the Ops seam) with two op-transcript vectors and a live cross-language coequality test; added @sextant/conv-workflow and @sextant/conv-spawn (TS peers) plus a thin write verb (requestWorkflowStart / requestSpawn) on both languages so the records-only conventions have a replayable transcript; recorded vectors under protocol/conformance/vectors/{review,workflow,spawn}. The browser dash now builds workflow.start + spawn.request and renders workflows over the conventions (window.SextantBus) instead of hand-rolled literals (transport unchanged; verified byte-identical; review path untouched). importcheck pins each convention to SDK+protocol(+goals for review), never the bus. m5-workflow-demo re-pointed off the deleted spawn-poc (8/8); three wake-loop demos retired (ADR-0045) with stubs; TASK-240 filed to rebuild them. Full gate green (go build/vet, go test -race, make lint 0 issues, e2e, TS conformance 5/5, review coequality on a real bus) and all CI jobs pass. Shipped on PR #269.
+<!-- SECTION:FINAL_SUMMARY:END -->
