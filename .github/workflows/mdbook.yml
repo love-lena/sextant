@@ -9,16 +9,16 @@ on:
     paths:
       - "docs/book/**"
       - "protocol/**"
-      - "clients/go/sdk/**"
-      - "clients/go/apps/docgen/**"
+      - "sdk/go/**"
+      - "sdk/docgen/**"
       - ".github/workflows/mdbook.yml"
   pull_request:
     branches: [main]
     paths:
       - "docs/book/**"
       - "protocol/**"
-      - "clients/go/sdk/**"
-      - "clients/go/apps/docgen/**"
+      - "sdk/go/**"
+      - "sdk/docgen/**"
       - ".github/workflows/mdbook.yml"
   workflow_dispatch:
 
@@ -56,7 +56,7 @@ jobs:
       # protocol/ or the SDK (the same up-to-date guard the TS codegen uses).
       - name: docgen (no drift)
         run: |
-          go run ./clients/go/apps/docgen
+          go run ./sdk/docgen
           git diff --exit-code -- docs/book/src docs/book/generated \
             || { echo "::error::generated docs are stale — run 'make book' and commit"; exit 1; }
 

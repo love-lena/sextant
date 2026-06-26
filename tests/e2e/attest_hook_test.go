@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/love-lena/sextant/clients/go/apps/mcp/attest"
+	"github.com/love-lena/sextant/clients/sextant-mcp/attest"
 	"github.com/love-lena/sextant/protocol/sx"
 )
 

@@ -26,7 +26,7 @@ You drive the script underneath; **never hand the operator a raw shell one-liner
 
 1. **You are in a sextant repo checkout.** The demo builds the Go bus + dash UI and
    the TS workspace from source, so it needs the repo. Find the repo root (the dir
-   with `go.mod` + `clients/ts/pi`). If you are not in a checkout, say so and stop.
+   with `go.mod` + `clients/pi-bus`). If you are not in a checkout, say so and stop.
 2. **`ANTHROPIC_API_KEY` is set** in the environment — the pi agent runs a real
    model. If it is unset, tell the operator to export it and stop (do not invent a
    key, do not run without it).

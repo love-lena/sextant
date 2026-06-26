@@ -15,9 +15,9 @@ import (
 	"time"
 
 	"github.com/love-lena/sextant/bus"
-	"github.com/love-lena/sextant/clients/go/sdk"
 	"github.com/love-lena/sextant/protocol/conninfo"
 	"github.com/love-lena/sextant/protocol/sx"
+	"github.com/love-lena/sextant/sdk/go"
 )
 
 // TestClientAutoDMOnConnect is the TASK-55 definition-of-done: a freshly-connected

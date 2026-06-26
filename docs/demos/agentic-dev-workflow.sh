@@ -261,13 +261,13 @@ if [ "$MODE" = demo ]; then
   rm -rf "$P"; mkdir -p "$S"
   echo "== build binaries =="
   # The dash JS bundles are generated, not committed (TASK-121), and embedded by the Go build
-  # (go:embed in internal/dashapi). Generate them first or `go build ./clients/go/apps/sextant` fails on a
+  # (go:embed in internal/dashapi). Generate them first or `go build ./clients/sextant-cli` fails on a
   # fresh checkout. Best-effort: if esbuild/npx is unavailable, fall through and let go build
   # report the missing embed.
   if [ -x "$ROOT/scripts/build-dash-ui.sh" ]; then
     ( cd "$ROOT" && bash scripts/build-dash-ui.sh ) >"$P/dash-ui.log" 2>&1 || echo "  (dash UI build emitted warnings; see $P/dash-ui.log)"
   fi
-  ( cd "$ROOT" && go build -o "$SX" ./clients/go/apps/sextant && go build -o "$SXPOC" ./clients/go/apps/spawn-poc ) || { echo "build failed"; exit 2; }
+  ( cd "$ROOT" && go build -o "$SX" ./clients/sextant-cli && go build -o "$SXPOC" ./clients/go/apps/spawn-poc ) || { echo "build failed"; exit 2; }
 
   echo "== throwaway bus on :$PORT =="
   "$SX" up --store "$S" --port "$PORT" >"$P/up.log" 2>&1 & BUS=$!

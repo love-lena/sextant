@@ -10,7 +10,7 @@ in any language reads to replay the vectors and capture identical ones.
 
 The vectors are language-neutral and ship with the protocol, under
 `protocol/conformance/vectors/`. The Go runner that replays them lives in
-`clients/go/conformance/` — see [Why the runner is not in `protocol/`](#why-the-runner-is-not-in-protocol).
+`sdk/conformance/` — see [Why the runner is not in `protocol/`](#why-the-runner-is-not-in-protocol).
 
 ## The two vector kinds
 
@@ -142,7 +142,7 @@ omit `payload` compare equal.
 
 - **Recording client.** A fake client that *captures* the primitive operations a
   verb performs instead of issuing them to a bus. The Go one is `Recorder`
-  (`clients/go/conformance/recorder.go`); it implements the same primitive
+  (`sdk/conformance/recorder.go`); it implements the same primitive
   surface (`Ops`) the SDK offers, so a verb written against the SDK records
   unchanged. A verb that reads before it writes (the common goal pattern: get the
   goal, mutate a criterion, update) is given prior artifact state with
@@ -150,7 +150,7 @@ omit `payload` compare equal.
   live, and does **not** appear in the transcript.
 - **Record.** Run `verb(input)` against the recorder → captured ops → serialize to
   a vector. The Go runner exposes a `-update` flag
-  (`go test ./clients/go/conformance -update`) that re-records the on-disk
+  (`go test ./sdk/conformance -update`) that re-records the on-disk
   vectors from the registered verbs, so a deliberate verb change is a
   one-command re-record plus a reviewed diff — never a hand-edit.
 - **Replay.** The runner discovers vectors, and for each runs the named verb
@@ -183,20 +183,20 @@ bus and protocol never depend on a client). So the split is:
 
 - `protocol/conformance/` — pure vector parsing + canonicalization (no convention,
   no client import). `imports_test.go` enforces it.
-- `clients/go/conformance/` — the recorder, the SDK adapter, and the runner
+- `sdk/conformance/` — the recorder, the SDK adapter, and the runner
   (`ReplayVectors`, `ReplayWireVectors`), convention-**agnostic**: a convention's
   test package registers its verbs and calls the runner.
 
 ## The seam for the real conventions
 
 This ticket (TASK-183) lands the machinery **before** the goals convention exists
-(TASK-173). The fixture verb in `clients/go/conformance/runner_test.go` — a tiny
+(TASK-173). The fixture verb in `sdk/conformance/runner_test.go` — a tiny
 goals-like `setGoal` that emits `artifact.update` then `message.publish` — proves
 record + replay end-to-end, and its sample vector lives at
 `vectors/fixture/setGoal.json`. The wire sample lives at
 `vectors/wire/message-frame.json`.
 
-When TASK-173 lands `conv/goals`, it: registers the real goals verbs in a
+When TASK-173 lands the goals convention, it: registers the real goals verbs in a
 `Registry`, drops real vectors under `vectors/goals/`, and calls
 `ReplayVectors` — **no runner change**. TASK-174 builds the TS frame codec
 against `vectors/wire/`; TASK-175 the TS conventions against `vectors/goals/`.

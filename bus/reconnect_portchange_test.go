@@ -23,9 +23,9 @@ import (
 	"time"
 
 	"github.com/love-lena/sextant/bus"
-	"github.com/love-lena/sextant/clients/go/sdk"
 	"github.com/love-lena/sextant/protocol/conninfo"
 	"github.com/love-lena/sextant/protocol/sx"
+	"github.com/love-lena/sextant/sdk/go"
 )
 
 func TestSubscriptionFollowsBusPortChange(t *testing.T) {

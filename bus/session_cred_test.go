@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	sextant "github.com/love-lena/sextant/clients/go/sdk"
 	"github.com/love-lena/sextant/protocol/wireapi"
+	sextant "github.com/love-lena/sextant/sdk/go"
 )
 
 // TestSessionCredentialActsAsCaller (ADR-0044 browser-dash fix): clients.session

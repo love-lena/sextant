@@ -45,7 +45,7 @@ disturbing the managed one — no install, no taking prod down, A/B comparable.
    from `<store>/bus.json`; if empty, warn — the page can't connect — and point at
    `sextant config set ws-listen 127.0.0.1:7423`, then stop).
 3. `rc.sh dash <WT> <ref>` — builds `sextant-dash`, launches `--port 0 --ui
-   <WT>/clients/go/apps/internal/dashapi/web/app` against the live bus, prints the
+   <WT>/clients/sextant-dash/dashapi/web/app` against the live bus, prints the
    **URL** and tracks the pid/port.
 4. Give the operator the URL. Remind them `/rc dash` is additive — their managed/
    prod dash is untouched, and they can open both and compare.
@@ -66,7 +66,7 @@ targets before the first swap and `/rc rollback` restores them byte-for-byte.
 2. `rc.sh build <WT>` — builds every `sextant*` binary the ref produces into the rc
    bin dir (`~/.sextant-rc/bin`).
 3. **Verify gate (default on).** Before mutating the live install, prove the rc is
-   sound: `cd <WT> && go vet ./... && go test ./bus/... ./clients/go/apps/internal/dash/... ./clients/go/apps/internal/dashapi/... ./clients/go/apps/internal/dashserve/... ./clients/go/apps/sextant/...`.
+   sound: `cd <WT> && go vet ./... && go test ./bus/... ./clients/sextant-tui/internal/dash/... ./clients/sextant-dash/dashapi/... ./clients/sextant-dash/dashserve/... ./clients/sextant-cli/...`.
    If it's red, STOP and report — do not swap a broken rc onto the live machine.
    (Override only on explicit `--skip-verify`.)
 4. **Warn, then swap the binaries.** Tell the operator plainly what's about to

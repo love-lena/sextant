@@ -1,0 +1,36 @@
+{
+  "name": "@sextant/conv-review",
+  "version": "0.1.0",
+  "description": "The review convention in TypeScript (ADR-0044) — the peer of the dashapi review logic, moved into a convention library: an artifact's review-state read-merge-CAS plus the approve→met closed loop via @sextant/conv-goals. Hand-written verb logic over @sextant/sdk; no bus feature, no new protocol.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist/src",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "sextant": {
+    "epoch": 1
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test dist/test/review.test.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@sextant/sdk": "file:../../../sdk/ts",
+    "@sextant/conv-goals": "file:../../goal/ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "typescript": "^6.0.3"
+  }
+}

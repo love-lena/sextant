@@ -41,7 +41,7 @@ or flags are needed once the service is running. To upgrade later, see
 Build from a clone, or grab the prebuilt binaries from a release tarball:
 
 ```bash
-go install ./clients/go/apps/{sextant,dash,tui,mcp}                  # from a clone (dash=web, tui=terminal)
+go install ./clients/{sextant-cli,sextant-dash,sextant-tui,sextant-mcp}  # from a clone (dash=web, tui=terminal)
 # — or —
 gh release download -R love-lena/sextant -p "*darwin_arm64*" -O - | tar -xz
 install sextant_*/bin/* ~/.local/bin/                                 # anywhere on PATH

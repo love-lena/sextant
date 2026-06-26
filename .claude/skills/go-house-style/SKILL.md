@@ -86,7 +86,7 @@ Two consequences carry the most weight when you add or move code:
 
 - **No top-level `pkg/`, no `cmd/` bucket.** The pre-172 `pkg/ internal/ cmd/`
   layout is gone; do not reintroduce it. A binary lives under
-  `clients/go/apps/<name>/` (the app *is* a client); a library lives where its
+  `clients/<name>/` (the app *is* a client); a library lives where its
   domain says it belongs. Sort code by what it is, never onto an axis (public
   vs. private, binary vs. library) orthogonal to the design.
 - **Deep modules over a tree of shallow packages — the no-new-package rule.**
@@ -102,7 +102,7 @@ Two consequences carry the most weight when you add or move code:
 
 - **Single module.** One `go.mod` at the repo root; everything is a package
   beneath it. Encapsulation is a **local** property: nest an `internal/` exactly
-  where hiding is needed (e.g. `clients/go/apps/internal/tui/`, an app's
+  where hiding is needed (e.g. `clients/sextant-tui/internal/tui/`, an app's
   `internal/`), so the package is unimportable from outside that subtree and you
   can refactor its API freely.
 - **Name packages for what they provide; ban `util`/`common`/`shared`/`helpers`/`base`/`lib`** —

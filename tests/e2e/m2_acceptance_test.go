@@ -220,7 +220,7 @@ func (h *harness) childEnv(extra map[string]string) []string {
 func buildBinary(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "sextant")
-	cmd := exec.Command("go", "build", "-o", bin, "./clients/go/apps/sextant")
+	cmd := exec.Command("go", "build", "-o", bin, "./clients/sextant-cli")
 	cmd.Dir = "../.." // repo root, relative to tests/e2e
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build sextant: %v\n%s", err, out)

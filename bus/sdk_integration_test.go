@@ -25,9 +25,9 @@ import (
 	"time"
 
 	"github.com/love-lena/sextant/bus"
-	"github.com/love-lena/sextant/clients/go/sdk"
 	"github.com/love-lena/sextant/protocol/sx"
 	"github.com/love-lena/sextant/protocol/wire"
+	"github.com/love-lena/sextant/sdk/go"
 	"github.com/oklog/ulid/v2"
 )
 

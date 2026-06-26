@@ -1,9 +1,10 @@
 ---
 id: TASK-224
 title: 'Restructure the monorepo per ADR-0049: clients, conventions, tools'
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-25 03:10'
+updated_date: '2026-06-25 20:57'
 labels:
   - ready-for-agent
 dependencies: []
@@ -86,5 +87,5 @@ Decision recorded in ADR-0049 (this PR) with the explicit target tree; vocabular
 - [ ] #6 Vocabulary honoured: coordinator/dispatcher/assistant clients; workflow/spawn conventions; docgen tool
 - [ ] #7 Moves are rename-preserving (git mv) so the diff reviews as renames, not delete+add
 - [ ] #8 No behaviour assertions added or changed; no new test seams
-- [ ] #9 Go-review coverage gap explicitly resolved: declared browser-only OR a co-equal Go review convention built vectors-bound
+- [ ] #9 Review is co-equal (decided 2026-06-25): this restructure relocates conventions/review -> conventions/review/ts and reserves the conventions/review/go slot; the Go build + review conformance vectors are tracked separately as TASK-239, kept out of this PR so it stays purely behaviour-preserving
 <!-- AC:END -->

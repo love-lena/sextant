@@ -322,7 +322,7 @@ Run a dev `sextant-dash` on a free port alongside the managed dash — no swap,
 no taking prod down:
 
 ```sh
-sextant-dash --port 0 --ui <worktree>/clients/go/apps/internal/dashapi/web/app
+sextant-dash --port 0 --ui <worktree>/clients/sextant-dash/dashapi/web/app
 ```
 
 Key points:

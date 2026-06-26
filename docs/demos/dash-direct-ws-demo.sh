@@ -43,7 +43,7 @@ BIN="$D/sextant"
 
 say "building the dash UI + binary"
 ( cd "$REPO" && bash scripts/build-dash-ui.sh >/dev/null 2>&1 ) || { echo "build-dash-ui.sh failed"; exit 1; }
-( cd "$REPO" && go build -o "$BIN" ./clients/go/apps/sextant ) || { echo "go build failed"; exit 1; }
+( cd "$REPO" && go build -o "$BIN" ./clients/sextant-cli ) || { echo "go build failed"; exit 1; }
 
 say "enabling the bus WebSocket listener (ws://127.0.0.1:$WS_PORT) + starting the bus"
 "$BIN" config set --store "$STORE" ws-listen "127.0.0.1:$WS_PORT" >/dev/null

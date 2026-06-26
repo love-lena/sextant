@@ -52,7 +52,7 @@ DEMO_LOG="/tmp/sextant-demo.log"; : >"$DEMO_LOG"   # the director feed — tail 
 
 say "building sextant + sextant-mcp from $REPO"
 mkdir -p "$BIN" "$PROJ/.claude" "$HOME_CTX"
-(cd "$REPO" && go build -o "$BIN/sextant" ./clients/go/apps/sextant && go build -o "$BIN/sextant-mcp" ./clients/go/apps/mcp)
+(cd "$REPO" && go build -o "$BIN/sextant" ./clients/sextant-cli && go build -o "$BIN/sextant-mcp" ./clients/sextant-mcp)
 # A real-looking project so the worker has somewhere natural to write.
 printf '# atlas\n\nA small service. See release-notes.md for what shipped.\n' >"$PROJ/README.md"
 

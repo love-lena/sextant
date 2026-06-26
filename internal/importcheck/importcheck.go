@@ -26,7 +26,7 @@ const Module = "github.com/love-lena/sextant"
 
 const (
 	// sdkPkg is the public SDK — the one sanctioned road to the bus.
-	sdkPkg = Module + "/clients/go/sdk"
+	sdkPkg = Module + "/sdk/go"
 	// busNS prefixes the one Go bus server and its internals (the embedded-NATS
 	// wrapper, the backend). The bus is a harness concern (tests, `sextant up`)
 	// and never a TUI dependency, in any closure.
@@ -46,14 +46,20 @@ const (
 	// the presentation/feed library layer under test. The strata legitimately
 	// import each other (widget→theme, surface→busfeed), so they are the one
 	// in-module family allowed alongside the SDK and the protocol bindings.
-	tuiNS = Module + "/clients/go/apps/internal/tui/"
+	tuiNS = Module + "/clients/sextant-tui/internal/tui/"
 	// natsNS prefixes every NATS package (client, jwt, nkeys, …).
 	natsNS = "github.com/nats-io/"
+	// sharedNS prefixes the cross-cutting Go-host helpers (clictx, selfenroll,
+	// seqcursor, version). They stand BESIDE the clients (ADR-0049), never inside
+	// the SDK: a host-side helper in an SDK closure would tie the portable SDK to
+	// a host runtime. clientsNS prefixes the co-equal client peers.
+	sharedNS  = Module + "/shared/"
+	clientsNS = Module + "/clients/"
 	// seqcursorPkg is the one durable per-subject sequence cursor (TASK-182). The
 	// MCP substate, the attest hook, and violet's ack watermark are its only
 	// callers; each MUST reach it rather than re-declare the atomic-temp-rename
 	// JSON cursor + sanitize filter it used to triplicate.
-	seqcursorPkg = Module + "/clients/go/apps/internal/seqcursor"
+	seqcursorPkg = Module + "/shared/go/seqcursor"
 )
 
 // modulePkg reports whether dep is a package of this module.
@@ -174,22 +180,30 @@ func AssertSDKOnly(t *testing.T, pkgPath string) {
 	}
 }
 
-// AssertConventionDeps pins the convention stratum's bright line (ADR-0041): a
-// convention library (clients/go/conventions/…) is an engine-as-a-library over
-// the SDK — anything it does, a bare client could do over the operations. So
-// its production closure may reach the SDK and the protocol bindings, but NEVER
-// the bus (busNS): a convention that touched the embedded server would be a bus
-// feature in disguise. NATS is likewise reachable only via the SDK.
+// AssertConventionDeps pins the convention stratum's bright line (ADR-0041,
+// ADR-0049): a convention library (conventions/<name>/go) is an
+// engine-as-a-library over the SDK — anything it does, a bare client could do
+// over the operations. So its production closure may reach ONLY the SDK and the
+// protocol bindings. It must NEVER reach the bus (busNS — a convention that
+// touched the embedded server would be a bus feature in disguise), a client
+// (clientsNS — that inverts the three-kinds layering), or a host helper
+// (sharedNS — conventions are host-portable, like the SDK). NATS is reachable
+// only via the SDK.
 //
 // It reads the closure leniently: a placeholder convention package with no
-// imports (the conventions/ tree until the goals library lands) has a
-// single-package closure and is trivially compliant — there is nothing yet for
-// the rule to forbid. The rule bites on every convention library as it lands.
+// imports (a reserved peer slot until its library lands) has a single-package
+// closure and is trivially compliant — there is nothing yet for the rule to
+// forbid. The rule bites on every convention library as it lands.
 func AssertConventionDeps(t *testing.T, pkgPath string) {
 	t.Helper()
 	for dep, imports := range closureLenient(t, pkgPath) {
-		if strings.HasPrefix(dep, busNS) {
+		switch {
+		case strings.HasPrefix(dep, busNS):
 			t.Errorf("%s: a convention reaches the bus (%s); conventions are libraries over the SDK, never the bus", pkgPath, dep)
+		case strings.HasPrefix(dep, clientsNS):
+			t.Errorf("%s: a convention reaches a client (%s); a convention is a library over the SDK + protocol, never a dependency on a client", pkgPath, dep)
+		case strings.HasPrefix(dep, sharedNS):
+			t.Errorf("%s: a convention reaches a host helper (%s); conventions depend on the SDK + protocol alone", pkgPath, dep)
 		}
 		for _, imp := range imports {
 			if strings.HasPrefix(imp, natsNS) && dep != sdkPkg && !strings.HasPrefix(dep, natsNS) {
@@ -206,7 +220,6 @@ func AssertConventionDeps(t *testing.T, pkgPath string) {
 // edge is allowed and runs the other direction.)
 func AssertBusImportsNoClients(t *testing.T, pkgPath string) {
 	t.Helper()
-	const clientsNS = Module + "/clients/"
 	for dep := range Closure(t, pkgPath) {
 		if strings.HasPrefix(dep, clientsNS) {
 			t.Errorf("%s: the bus reaches a client package (%s); the bus never imports clients", pkgPath, dep)
@@ -219,16 +232,70 @@ func AssertBusImportsNoClients(t *testing.T, pkgPath string) {
 // and never depends on one. Its production closure must contain no clients/
 // package. The conformance VECTORS and the vector-FORMAT data types live in
 // protocol/conformance, but the RUNNER that replays a vector by invoking a
-// convention verb lives in clients/go/conformance precisely so this edge holds
-// — a protocol package that imported a verb would invert the dependency.
+// convention verb lives in sdk/conformance precisely so this edge holds — a
+// protocol package that imported a verb would invert the dependency.
 func AssertProtocolImportsNoClients(t *testing.T, pkgPath string) {
 	t.Helper()
-	const clientsNS = Module + "/clients/"
 	for dep := range Closure(t, pkgPath) {
 		if strings.HasPrefix(dep, clientsNS) {
 			t.Errorf("%s: a protocol package reaches a client (%s); the protocol never imports clients", pkgPath, dep)
 		}
 	}
+}
+
+// AssertSDKImportsNoShared pins an ADR-0049 bright line: the SDK (sdk/go) is a
+// host-portable library, so its production closure must contain no shared/go
+// host helper (clictx, selfenroll, seqcursor, version). Those stand BESIDE the
+// clients, never beneath the SDK — a host helper in the SDK's closure would bind
+// the portable SDK to a host runtime. The other direction (a client or a host
+// helper importing the SDK) is fine and runs the right way.
+func AssertSDKImportsNoShared(t *testing.T, pkgPath string) {
+	t.Helper()
+	for dep := range Closure(t, pkgPath) {
+		if strings.HasPrefix(dep, sharedNS) {
+			t.Errorf("%s: the SDK reaches host helper %s; shared/go stands beside the clients, never beneath the SDK", pkgPath, dep)
+		}
+	}
+}
+
+// AssertClientIsolation pins the ADR-0049 client bright line: the clients are
+// flat vertical peers, so one client's production closure must contain no OTHER
+// client — each is reachable on the bus, never by import. The one sanctioned
+// exception is passed in allowedPeers (the CLI embeds the dash server; that edge
+// runs cli→dash and no further). pkgPath and allowedPeers are client ROOTS
+// (…/clients/<name>); the rule compares the importing client's root against each
+// dependency's root and ignores its own internal/ packages.
+func AssertClientIsolation(t *testing.T, pkgPath string, allowedPeers ...string) {
+	t.Helper()
+	self := clientRoot(pkgPath)
+	allowed := make(map[string]bool, len(allowedPeers))
+	for _, p := range allowedPeers {
+		allowed[clientRoot(p)] = true
+	}
+	for dep := range Closure(t, pkgPath) {
+		if !strings.HasPrefix(dep, clientsNS) {
+			continue
+		}
+		root := clientRoot(dep)
+		if root == self || allowed[root] {
+			continue
+		}
+		t.Errorf("%s: reaches peer client %s; clients are flat peers reached on the bus, not by import (only the sanctioned cli→dash edge is allowed)", pkgPath, root)
+	}
+}
+
+// clientRoot returns the …/clients/<name> root of a clients/ package path,
+// collapsing any deeper internal/ packages to their owning client. A path that
+// is not under clients/ is returned unchanged.
+func clientRoot(pkgPath string) string {
+	rest, ok := strings.CutPrefix(pkgPath, clientsNS)
+	if !ok {
+		return pkgPath
+	}
+	if i := strings.IndexByte(rest, '/'); i >= 0 {
+		rest = rest[:i]
+	}
+	return clientsNS + rest
 }
 
 // AssertUsesSeqCursor fails when a cursor site's production closure does NOT
@@ -270,7 +337,7 @@ func AssertNoWireAtom(t *testing.T, pkgPath string) {
 // imports any of the forbidden paths, whatever the rest of the closure says.
 // The layout uses it to stay domain-free at its own boundary: its closure
 // reaches the SDK only because the Surface CONTRACT lives in
-// clients/go/apps/internal/tui/surface, never because layout code touched the
+// clients/sextant-tui/internal/tui/surface, never because layout code touched the
 // SDK or the feed adapter.
 func AssertNoDirectImport(t *testing.T, pkgPath string, forbidden ...string) {
 	t.Helper()
