@@ -15,7 +15,7 @@ import (
 // description of an agentic dev-workflow run (TASK-98). Anyone authors one as an
 // artifact, the operator reviews it on the dash, then runs it with
 // `sextant workflow run <name>` — which reads the artifact and launches the LLM
-// orchestrator (docs/demos/agentic-dev-workflow.sh). The bus stays the source of
+// orchestrator. The bus stays the source of
 // truth for the definition; the command carries the operator's authority to spawn.
 const kindWorkflowDef = "sextant.workflow.def/v1"
 

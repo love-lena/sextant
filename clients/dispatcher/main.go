@@ -1,14 +1,13 @@
-// Command sextant-dispatch is the M5.2 reference dispatcher (TASK-25). It
-// graduates the M5.1 spawn spike (cmd/spawn-poc) from "supervise one known agent"
-// into "stand up agents on demand":
+// Command sextant-dispatch is the reference dispatcher (TASK-25): it stands up
+// agents on demand and keeps them revivable.
 //
 //  1. Connect to the bus as a dispatcher identity (its own creds) and subscribe
 //     to a spawn-request subject (default msg.topic.spawn).
 //  2. On each spawn.request record, mint a NEW named client identity for the
-//     child (kind=agent), launch the harness that joins it to the bus under that
-//     identity, and — if --on-wake is set — launch a per-child supervisor
-//     (cmd/spawn-poc, its own bus client) that watches the child's DM and
-//     re-invokes the one-shot harness on inbound: the wake loop.
+//     child (kind=agent) and launch the harness that joins it to the bus under
+//     that identity. The child is registered as a revivable managed agent — a
+//     resumable one-shot (ADR-0045) that does its task and exits, then re-spawns
+//     in-process when a later message is addressed to it (revive-on-message).
 //  3. Publish a spawn.ack with the new id and the spawn lineage (job + parent).
 //
 // Recursion falls out for free: a spawned child can itself publish a
@@ -21,7 +20,7 @@
 // is no auto-naming: a name describes the run, never a cute agent identity.
 //
 // THE RECIPE IS A SWAPPABLE SEAM: --harness is a plain `sh -c CMD` with env vars,
-// and the default reference recipe (cmd/sextant-dispatch/recipes/agent.sh) launches
+// and the default reference recipe (clients/dispatcher/recipes/agent.sh) launches
 // a capable, self-directing `claude` agent wired to the CHILD's own creds. What is
 // mobilized is swapped by pointing --harness at a different recipe; WHAT to do is
 // swapped via the prompt ($SX_PROMPT) and the recipe's overridable role prompt. A
@@ -37,7 +36,7 @@
 // locally — locality is the trust, ADR-0020). AC#6 (mint-on-behalf) replaces that
 // with a SCOPED bus op so the dispatcher mints with its OWN agent authority and
 // needs no operator credential; it is a serial locked-core change (ADR-0022),
-// coordinated separately. See docs/demos/m5-dispatcher-notes.md.
+// coordinated separately.
 //
 // PoC scope: no job store, no spawn-rate limiting, no persistence of handled
 // requests across a restart (handled-request dedup is in-memory, per process);
@@ -73,16 +72,13 @@ func main() {
 	onBehalf := fs.Bool("on-behalf", false, "mint children with the dispatcher's OWN authority (mint-on-behalf, ADR-0033) instead of an operator/enroll issuer — requires the dispatcher to be a registered kind=dispatcher client")
 	kind := fs.String("kind", "agent", "kind to mint spawned clients as")
 	harness := fs.String("harness", "", "command (run via `sh -c`) that launches one spawned client; its environment carries SEXTANT_CREDS (the child's), SEXTANT_STORE, $SX_PROMPT, $SX_CHILD_ID, $SX_CHILD_NICK, $SX_JOB")
-	onWake := fs.String("on-wake", "", "command the per-child supervisor runs on an inbound DM (passed to spawn-poc --on-wake); empty disables supervision")
-	supervisor := fs.String("supervisor", "spawn-poc", "path to the spawn-poc supervisor binary (used when --on-wake is set)")
-	wakeTimeout := fs.Duration("wake-timeout", 3*time.Minute, "per-child supervisor --wake-timeout")
 	workdir := fs.String("workdir", "", "directory for per-child creds files (default: a fresh temp dir)")
 	maxSpawns := fs.Int("max", 0, "exit after dispatching this many spawns (0 = run until signalled)")
 	deadline := fs.Duration("deadline", 0, "fail loud if no spawn.request arrives within this duration (0 = wait indefinitely)")
 	_ = fs.Parse(os.Args[1:])
 
 	if *creds == "" || *harness == "" || (*issuerCreds == "" && !*onBehalf) {
-		fatal("usage: sextant-dispatch --creds F --store DIR --harness CMD (--issuer-creds F | --on-behalf) [--subject S] [--on-wake CMD] [--max N] [--deadline D]")
+		fatal("usage: sextant-dispatch --creds F --store DIR --harness CMD (--issuer-creds F | --on-behalf) [--subject S] [--max N] [--deadline D]")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -132,15 +128,11 @@ func main() {
 	}
 
 	d := &dispatcher{
-		ctx: ctx, c: c, mint: mint, store: *store, creds: *creds, subject: *subject,
-		kind: *kind, harness: *harness, onWake: *onWake, supervisor: *supervisor,
-		wakeTimeout: *wakeTimeout, workdir: *workdir,
+		ctx: ctx, c: c, mint: mint, store: *store, subject: *subject,
+		kind: *kind, harness: *harness, workdir: *workdir,
 		seen: map[string]bool{}, agents: map[string]*managedAgent{},
 		done: make(chan struct{}, 1), started: make(chan struct{}, 1),
 		maxSpawns: *maxSpawns,
-	}
-	if *onWake != "" {
-		logf("note: --on-wake is deprecated and ignored; the dispatcher revives dormant agents in-process on inbound messages (ADR-0045)")
 	}
 	logf("dispatcher up as %s (%s); watching %s for spawn.request", c.DisplayName(), short(c.ID()), *subject)
 
@@ -191,18 +183,14 @@ func main() {
 type mintFunc func(ctx context.Context, displayName, kind string) (sextant.IssuedClient, error)
 
 type dispatcher struct {
-	ctx         context.Context // the signal context; launched children are bound to it
-	c           *sextant.Client
-	mint        mintFunc
-	store       string
-	creds       string // the dispatcher's own creds (handed to per-child supervisors)
-	subject     string
-	kind        string
-	harness     string
-	onWake      string
-	supervisor  string
-	wakeTimeout time.Duration
-	workdir     string
+	ctx     context.Context // the signal context; launched children are bound to it
+	c       *sextant.Client
+	mint    mintFunc
+	store   string
+	subject string
+	kind    string
+	harness string
+	workdir string
 
 	mu        sync.Mutex
 	seen      map[string]bool          // spawn.request frame ids already handled (dedup within a run)

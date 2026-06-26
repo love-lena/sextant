@@ -6,9 +6,9 @@ import "fmt"
 // so each caches as a stable prefix; the volatile per-turn text (the snapshot,
 // the DM, the event) rides in the user message after the cache breakpoint.
 //
-// The prose is ported from docs/demos/violet-runtime.md (the durable role
-// prompt) and the violet-curation skill (the WAKE/SKIP defaults + the two
-// curation tests). In the SDK build the runtime supplies all the plumbing, so
+// The prose originated in the violet runtime prototype's durable role prompt and
+// the violet-curation skill (the WAKE/SKIP defaults + the two curation tests). In
+// the SDK build the runtime supplies all the plumbing, so
 // each role's prompt is scoped to exactly its one duty.
 
 // conversationalSystem is the ANSWER role (haiku). Answer-first, from the warm

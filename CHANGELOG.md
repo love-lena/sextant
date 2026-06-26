@@ -6,6 +6,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+
+- **The `docs/demos/` walkthrough scripts and their demo skills.** The hand-rolled
+  bash orchestration demos — an LLM orchestrator driven by a `while`-loop
+  "supervisor" that re-invoked `claude -p --resume`, with shell `wf-spawn`/
+  `wf-progress` helpers — predated and bypassed the real engine (the workflow
+  coordinator, `clients/coordinator`, driving the reference dispatcher,
+  `clients/dispatcher`) and taught agents the deprecated pattern. The whole
+  `docs/demos/` tree is removed, along with the `/spike` skill and the
+  `pi-live-demo` plugin skill that ran two of those scripts as production tooling.
+  The dispatcher's vestigial `--on-wake` / `--supervisor` / `--wake-timeout` flags
+  (deprecated and ignored since ADR-0045's in-process revive) are dropped.
+
 ### Added (prior unreleased)
 
 - **`sextant dash --serve`: a local web API + debug surface** (ADR-0032) — runs the
@@ -17,8 +30,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   surface (raw HTML/JS — the verification harness and the opinion-free baseline for
   a later designed UI); `--ui <dir>` serves a custom frontend instead. Guards:
   loopback bind, a per-launch access token printed in the URL, and a configurable
-  allowed-origin (localhost always allowed). A one-command self-validating demo
-  lives at `docs/demos/dash-serve-demo.sh`. This is a client-side face — the bus
+  allowed-origin (localhost always allowed). This is a client-side face — the bus
   protocol and epoch are untouched.
 - **The principal claims itself on first enrollment** (ADR-0031) — a self-enrolling
   human seat claims the still-unclaimed principal as part of `sextant clients
