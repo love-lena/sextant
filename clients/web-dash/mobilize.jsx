@@ -18,6 +18,11 @@
 (function () {
   const { useState, useRef, useEffect } = React;
 
+  // SB is the bundled TS conventions (window.SextantBus): the dash builds its
+  // spawn.request through the spawn convention (@sextant/conv-spawn) instead of a
+  // hand-rolled literal, so the wire shape has one cross-language source (TASK-239).
+  const SB = window.SextantBus || {};
+
   const SPAWN_SUBJECT = "msg.topic.spawn";
   const POLL_INTERVAL_MS = 800;
   const TIMEOUT_MS = 10000;
@@ -129,7 +134,7 @@
         }
         return mbPost("/api/publish", {
           subject: SPAWN_SUBJECT,
-          record: { "$type": "spawn.request", "prompt": p },
+          record: SB.spawnRequestRecord({ prompt: p }),
         });
       }).then(function() {
         if (!mountedRef.current) return;
