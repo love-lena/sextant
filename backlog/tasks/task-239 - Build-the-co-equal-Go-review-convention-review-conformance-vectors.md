@@ -3,10 +3,10 @@ id: TASK-239
 title: >-
   Full convention coverage across Go and TS: review (Go), workflow (TS), spawn
   (TS) + vectors
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-25 19:41'
-updated_date: '2026-06-25 22:41'
+updated_date: '2026-06-26 18:50'
 labels:
   - ready-for-agent
 dependencies:
