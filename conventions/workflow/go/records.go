@@ -1,6 +1,10 @@
 package workflow
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+)
 
 // The workflow lexicon (ADR-0011). A workflow is a CONVENTION over the two
 // primitives, run by an ordinary coordinator client — no engine in core. Layer-0
@@ -200,6 +204,41 @@ func (a WorkflowStartAck) Marshal() json.RawMessage {
 	a.Type = TypeWorkflowStartAck
 	b, _ := json.Marshal(a)
 	return b
+}
+
+// Ops is the primitive bus surface the workflow-start verb is written against: a
+// single message.publish. A workflow.start is one fire-and-forget request (the
+// coordinator owns the state envelope; a requester only asks it to start), so the
+// seam is the smallest it can be — declared where it is consumed, so the SDK's
+// *Client, the conformance Recorder, and the dash's publish shim each satisfy it.
+type Ops interface {
+	// Publish issues a message.publish on subject (must be under msg.) with record.
+	Publish(ctx context.Context, subject string, record json.RawMessage) error
+}
+
+// WorkflowStartRecord renders a workflow.start request as a canonical record
+// payload, stamping $type and — via the struct's omitempty tags — emitting only the
+// fields that are set. It is the single source of the workflow.start wire shape: the
+// publishing verb and a direct caller (the dash, which posts the record over its own
+// transport, replacing a hand-rolled literal) share it, so both languages emit
+// byte-identical bytes.
+func WorkflowStartRecord(req WorkflowStartRequest) json.RawMessage {
+	req.Type = TypeWorkflowStart
+	b, _ := json.Marshal(req)
+	return b
+}
+
+// RequestWorkflowStart publishes a workflow.start on StartSubject — the single bus
+// operation a requester issues to ask the coordinator to start a run. This is the
+// engine-as-a-library write the dash used to hand-roll; the op-transcript
+// conformance vector pins it to exactly one message.publish, and the TS peer
+// (conventions/workflow/ts) emits the identical record. It defines no new bus
+// operation — it issues the existing message.publish.
+func RequestWorkflowStart(ctx context.Context, ops Ops, req WorkflowStartRequest) error {
+	if err := ops.Publish(ctx, StartSubject, WorkflowStartRecord(req)); err != nil {
+		return fmt.Errorf("workflow: publish workflow.start on %s: %w", StartSubject, err)
+	}
+	return nil
 }
 
 // Minimal mirror of the spawn lexicon (the contract is protocol/lexicons/spawn.*.json;

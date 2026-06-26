@@ -59,7 +59,9 @@ build_ts_pkg() { # build_ts_pkg <dir>
 build_ts_pkg "$ROOT/sdk/ts"
 build_ts_pkg "$ROOT/conventions/goal/ts"
 build_ts_pkg "$ROOT/conventions/review/ts"
-echo "built the bundled TS packages (sdk, conv-goals, conv-review) from clean"
+build_ts_pkg "$ROOT/conventions/workflow/ts"
+build_ts_pkg "$ROOT/conventions/spawn/ts"
+echo "built the bundled TS packages (sdk, conv-goals, conv-review, conv-workflow, conv-spawn) from clean"
 
 # The bundle scope is the dependency root the three packages are linked into;
 # install so the symlinks resolve to the just-built dist/.

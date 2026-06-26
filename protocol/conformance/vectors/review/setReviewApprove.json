@@ -1,0 +1,74 @@
+{
+  "epoch": 1,
+  "convention": "review",
+  "verb": "setReview",
+  "description": "review: approve a proof-bearing doc — artifact.get + artifact.update persist the verdict, then the approve-\u003emet closed loop runs the goals convention's single write path on the backed criterion: goal.get, goal.update (CAS c1 to met), message.publish a goal.update on msg.topic.goals.",
+  "input": {
+    "name": "the-proof",
+    "state": "approved",
+    "by": "01OPERATOR",
+    "now": "2026-06-19T00:00:00Z"
+  },
+  "operations": [
+    {
+      "op": "artifact.get",
+      "name": "the-proof"
+    },
+    {
+      "op": "artifact.update",
+      "name": "the-proof",
+      "payload": {
+        "$type": "doc",
+        "relates": [
+          {
+            "goal": "g1",
+            "crit": "c1",
+            "kind": "proof"
+          }
+        ],
+        "review": {
+          "state": "approved",
+          "by": "01OPERATOR",
+          "at": "2026-06-19T00:00:00Z",
+          "rev": 2
+        },
+        "title": "PR #42"
+      },
+      "expectedRev": 2
+    },
+    {
+      "op": "artifact.get",
+      "name": "goal.g1"
+    },
+    {
+      "op": "artifact.update",
+      "name": "goal.g1",
+      "payload": {
+        "$type": "goal",
+        "criteria": [
+          {
+            "id": "c1",
+            "status": "met",
+            "text": "merged"
+          }
+        ],
+        "northstar": "ship it"
+      },
+      "expectedRev": 5
+    },
+    {
+      "op": "message.publish",
+      "subject": "msg.topic.goals",
+      "payload": {
+        "$type": "goal.update",
+        "goal": "g1",
+        "crit": "c1",
+        "status": "met",
+        "headline": "Criterion met — the-proof approved",
+        "ref": "the-proof",
+        "updated": "2026-06-19T00:00:00Z",
+        "by": "01OPERATOR"
+      }
+    }
+  ]
+}

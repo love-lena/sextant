@@ -22,7 +22,9 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node --test dist/test/review.test.js"
+    "test": "npm run build && node --test dist/test/review.test.js dist/test/conformance.test.js dist/test/coequality.test.js",
+    "test:conformance": "npm run build && node --test dist/test/review.test.js dist/test/conformance.test.js",
+    "test:coequality": "npm run build && node --test dist/test/coequality.test.js"
   },
   "license": "MIT",
   "dependencies": {

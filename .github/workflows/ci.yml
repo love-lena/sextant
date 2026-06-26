@@ -58,6 +58,8 @@ jobs:
             sdk/ts/package-lock.json
             conventions/goal/ts/package-lock.json
             conventions/review/ts/package-lock.json
+            conventions/workflow/ts/package-lock.json
+            conventions/spawn/ts/package-lock.json
             clients/pi-bus/package-lock.json
       # The integration + live scenarios spawn the real Go bus (cross-language
       # round-trip, AC#6; goals co-equality, TASK-175 AC#4) — so Go is needed here
@@ -126,9 +128,49 @@ jobs:
       - name: build (conv/review, tsc)
         working-directory: conventions/review/ts
         run: npm run build
-      - name: review verb tests (conv/review)
+      # Verb unit tests + op-transcript conformance: replays the SAME
+      # protocol/conformance/vectors/review/*.json the Go suite passes (AC#2). No bus.
+      - name: review conformance + verb tests (conv/review)
         working-directory: conventions/review/ts
-        run: node --test dist/test/review.test.js
+        run: node --test dist/test/review.test.js dist/test/conformance.test.js
+      # The live cross-language coequality scenario on a real bus: TS + Go review
+      # conventions write/read the same artifact's review block, byte-identical
+      # (AC#3) — required.
+      - name: review co-equality (real bus, conv/review)
+        working-directory: conventions/review/ts
+        run: node --test --test-timeout 180000 dist/test/coequality.test.js
+
+      # --- the TS workflow convention (TASK-239) ---
+      # @sextant/conv-workflow is the co-equal peer of conventions/workflow/go: the
+      # record types + parse/marshal helpers and the requestWorkflowStart verb the
+      # browser dash drives. It depends on @sextant/sdk via a file: link (built above).
+      - name: npm ci (conv/workflow)
+        working-directory: conventions/workflow/ts
+        run: npm ci
+      - name: build (conv/workflow, tsc)
+        working-directory: conventions/workflow/ts
+        run: npm run build
+      # Records unit tests + op-transcript conformance: replays the SAME
+      # protocol/conformance/vectors/workflow/*.json the Go suite passes (AC#7/AC#9).
+      - name: workflow conformance + unit (conv/workflow)
+        working-directory: conventions/workflow/ts
+        run: node --test dist/test/records.test.js dist/test/conformance.test.js
+
+      # --- the TS spawn convention (TASK-239) ---
+      # @sextant/conv-spawn is the co-equal peer of conventions/spawn/go: the
+      # requestSpawn verb + spawnRequestRecord builder the dash uses. Depends on
+      # @sextant/sdk via a file: link (built above).
+      - name: npm ci (conv/spawn)
+        working-directory: conventions/spawn/ts
+        run: npm ci
+      - name: build (conv/spawn, tsc)
+        working-directory: conventions/spawn/ts
+        run: npm run build
+      # Unit tests + op-transcript conformance: replays the SAME
+      # protocol/conformance/vectors/spawn/*.json the Go suite passes (AC#8/AC#9).
+      - name: spawn conformance + unit (conv/spawn)
+        working-directory: conventions/spawn/ts
+        run: node --test dist/test/spawn.test.js dist/test/conformance.test.js
 
       # --- the TS pi-bus extension (TASK-177) ---
       # @sextant/pi-bus is the pi extension that makes a pi session a first-class
