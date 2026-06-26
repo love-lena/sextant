@@ -1,0 +1,36 @@
+{
+  "name": "@sextant/conv-workflow",
+  "version": "0.1.0",
+  "description": "The workflow convention in TypeScript — a co-equal peer to conventions/workflow/go (ADR-0041, TASK-239). Record types + parse/marshal helpers, plus the requestWorkflowStart verb (publish a workflow.start). Passes the SAME conformance vector the Go suite passes.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist/src",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "sextant": {
+    "epoch": 1
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test dist/test/records.test.js dist/test/conformance.test.js",
+    "test:conformance": "npm run build && node --test dist/test/records.test.js dist/test/conformance.test.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@sextant/sdk": "file:../../../sdk/ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "typescript": "^6.0.3"
+  }
+}
