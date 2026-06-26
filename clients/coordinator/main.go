@@ -19,7 +19,7 @@
 // bucket are not reachable through the current Wire API (a client publishes only
 // to msg.* and writes only the ARTIFACTS bucket), so this client-side coordinator
 // realizes Layer-0 over msg.* + a regular Artifact — exactly ADR-0011's "convention
-// over Messages + Artifacts". See docs/demos/m5-workflow-notes.md.
+// over Messages + Artifacts".
 //
 // PoC scope: one step kind ("dispatch"); steps run sequentially (the state is a
 // flat list, no dependency graph yet); single-writer-by-convention CAS (a conflict

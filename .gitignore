@@ -38,13 +38,13 @@ node_modules/
 /.agents/
 /.superpowers/
 
-# VHS renders an mp4 alongside the gif; only the gif is committed
-docs/demos/*.mp4
-
 # stray build output of `go build [-o <name>] ./clients/<app>` from the
 # repo root (the apps moved out of ./cmd/ in the monorepo refactor)
 /sextant
 /sextant-*
+/assistant
+/coordinator
+/dispatcher
 
 # Generated dash embed artifact (ADR-0049): clients/sextant-dash/dashapi/web/app
 # is assembled WHOLLY by scripts/build-dash-ui.sh (make ui / go:generate / CI /

@@ -1,7 +1,7 @@
 // Package violet is the operator's assistant on the sextant bus, built as a
-// long-lived SDK client (milestone goal.violet, TASK-159). It replaces the bash
-// prototype (docs/demos/violet-runtime-warm.sh) that proved the warm
-// pseudo-agent design but could not meet the fast-under-load bar.
+// long-lived SDK client (milestone goal.violet, TASK-159). It replaces an earlier
+// bash prototype that proved the warm pseudo-agent design but could not meet the
+// fast-under-load bar.
 //
 // ONE registered bus client (violet's OWN scoped creds — never the principal's,
 // TASK-158) + the `assistant` designation artifact. Behind that one identity,
