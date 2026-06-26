@@ -315,7 +315,7 @@ if [ "$MODE" = run ]; then
   printf '%s' "${WF_STEPS:-[]}" > "$WF_PIPELINE"   # the def's explicit steps; the orchestrator reads + executes them
 
   # The orchestrator's turn: claude -p with the playbook as an appended system prompt.
-  # No gate, so no spawn-poc wake loop — the supervisor just re-invokes the orchestrator
+  # No gate, so no wake-loop supervisor — the supervisor just re-invokes the orchestrator
   # with a "continue" nudge until it emits DONE (the 2-step pipeline may not fit one turn).
   # A QUOTED heredoc — orch-turn.sh reads everything from the exported WF_* env at runtime.
   cat >"$WORKERS/orch-turn.sh" <<'EOF'
