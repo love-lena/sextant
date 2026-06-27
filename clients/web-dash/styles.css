@@ -1619,3 +1619,8 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 .br-html-body code{font-family:var(--font-mono);font-size:.9em;}
 .br-html-body table{display:block;max-width:100%;overflow-x:auto;border-collapse:collapse;margin:0 0 1em;}
 .br-html-body th,.br-html-body td{border:1px solid #e8e8ea;padding:6px 10px;text-align:left;}
+/* TASK-222 — HTML artifact body: overflow guards must live globally so
+   window.renderArtifactBody() works standalone (without React injecting MD_CSS). */
+.md-html-body{overflow-wrap:break-word;}
+.md-html-body table{display:block;max-width:100%;overflow-x:auto;}
+.md-html-body pre,.md-html-body code{white-space:pre-wrap;word-break:break-word;}

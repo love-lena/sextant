@@ -118,9 +118,6 @@
   .md-doc pre{background:#16181d;color:#e6e4de;font-family:var(--font-mono);font-size:13px;line-height:1.7;padding:18px 20px;border-radius:11px;overflow:auto;margin:0 0 18px;}
   .md-doc pre code{background:none;padding:0;color:inherit;font-size:13px;}
   .md-doc img{max-width:100%;height:auto;}
-  .md-html-body{overflow-wrap:break-word;}
-  .md-html-body table{display:block;max-width:100%;overflow-x:auto;}
-  .md-html-body pre,.md-html-body code{white-space:pre-wrap;word-break:break-word;}
   .md-raw{background:#f5f5f6;color:#3a3f47;font-family:var(--font-mono);font-size:13px;line-height:1.6;padding:18px 20px;border-radius:11px;white-space:pre-wrap;word-break:break-word;overflow:auto;}
   .md-doc blockquote{border-left:3px solid var(--brand-strong);background:rgba(0,0,0,.025);margin:20px 0;padding:13px 20px;font-size:16.5px;line-height:1.55;color:#41454d;font-style:italic;border-radius:0 9px 9px 0;}
   .md-doc table{width:100%;border-collapse:collapse;margin:4px 0 22px;font-family:var(--font-ui);font-size:14.5px;}
