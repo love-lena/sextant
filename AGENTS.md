@@ -18,6 +18,12 @@ a bus ([vision](docs/adr/0001-vision.md)).
   human-signed-off merge**. committed ⇔ signed-off.
 - **The loop:** signed-off short Backlog task → ephemeral work-plan → build on a
   worktree → PR + any canon updates → human review = sign-off.
+- **Always work on a worktree.** The primary checkout (`/Users/lena/dev/sextant`)
+  stays on `main` and clean. *Every* tracked change — code, an ADR or doc edit,
+  even a one-line ticket triage — happens on a sibling worktree and lands via PR;
+  never commit to `main` from the primary checkout. Only the gitignored ephemeral
+  workspace (`.work/`) and the bus are fair game in place. Start the worktree
+  *before* the first tracked edit, not after you notice the checkout is dirty.
 - A change to behaviour or the API gets an **ADR** (the why) and updates
   **CONTEXT.md** / **mdbook** (the language / the how). The API is the
   authority; code conforms to the docs.
