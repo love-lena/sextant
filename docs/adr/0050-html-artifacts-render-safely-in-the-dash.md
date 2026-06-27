@@ -23,9 +23,9 @@ client reads it.
 
 ## The dash selects the render path by `format`
 
-When `format` is `"html"` (or coerces to it), the dash sanitizes the body
-with the already-vendored **DOMPurify** (v3.1.6, default configuration) and
-inlines the result. When `format` is `"markdown"` or absent, the existing
+When `format` is exactly `"html"`, the dash sanitizes the body with the
+already-vendored **DOMPurify** (v3.1.6, default configuration) and inlines
+the result. For any other value — `"markdown"` or absent — the existing
 `marked` → DOMPurify path is unchanged.
 
 DOMPurify strips `<script>` elements, `on*` event-handler attributes, and
