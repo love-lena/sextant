@@ -5,4 +5,5 @@
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `title` | string | yes | Short human title. |
-| `body` | string | yes | Markdown body. |
+| `body` | string | yes | Document body — Markdown by default, or raw HTML when `format` is `"html"`. |
+| `format` | string |  | How the body is rendered by a client. Absent or "markdown" => the body is Markdown; "html" => the body is raw HTML, rendered sanitized (no script execution). Opaque to the substrate; a client rendering concern only. |
