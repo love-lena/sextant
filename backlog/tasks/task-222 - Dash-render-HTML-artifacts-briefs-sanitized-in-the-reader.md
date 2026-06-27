@@ -4,7 +4,7 @@ title: 'Dash: render HTML artifacts & briefs (sanitized) in the reader'
 status: In Progress
 assignee: []
 created_date: '2026-06-25 00:55'
-updated_date: '2026-06-27 00:05'
+updated_date: '2026-06-27 01:08'
 labels:
   - 'slug:feat-dash-render-html-artifacts'
 dependencies: []
@@ -24,8 +24,14 @@ Agents and the operator increasingly produce rich HTML documents (reports, roadm
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [ ] #1 An artifact/brief can carry HTML content (a content-type / kind marker) and the dash renders it as formatted HTML in the brief reader and artifact view
-- [ ] #2 HTML is rendered safely: sanitized via DOMPurify OR isolated in a sandboxed iframe — no script execution, no access to the page's bus client / token / credentials from the rendered content
+- [x] #2 HTML is rendered safely: sanitized via DOMPurify OR isolated in a sandboxed iframe — no script execution, no access to the page's bus client / token / credentials from the rendered content
 - [ ] #3 Markdown and plaintext artifacts still render exactly as today (no regression); the renderer selects the path by content-type/kind
 - [ ] #4 The PR-style brief reader renders an HTML brief body (headings, lists, tables, images, code) readably within its two-column layout; inline comment marks still work where applicable
 - [ ] #5 Large or complex HTML degrades gracefully — scrolls within its pane, never breaks the shell layout
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+RC-READY (2026-06-26) on branch worktree-task-222-dash-html-artifacts, PR #274. AFK build complete via subagent-driven dev: ADR-0050 (format field, DOMPurify, no iframe), document lexicon format marker, artifact.jsx renderArtifactBody + html path, brief reader html region, app.jsx thread + import hook. Standalone render harness 11/11 PASS (render fidelity, XSS neutralized, no markdown regression, overflow). make lint clean, make test 12/12. Final adversarial whole-branch review: READY TO MERGE, no Critical/Important. AC#2 ticked (harness-proven). AC#1/#3/#4/#5 ticked at the RC run (Task 9, operator-gated). Stays In Progress until RC-verified live; ADR-0050 needs human sign-off before merge.
+<!-- SECTION:NOTES:END -->
