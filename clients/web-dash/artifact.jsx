@@ -42,6 +42,22 @@
     });
   }
 
+  // Render an artifact/brief body to sanitized HTML, selecting the path by
+  // `format`. "html" => the body IS raw HTML (sanitized as-is); anything else
+  // (incl. absent) => the body is Markdown, parsed by marked first. Wikilinks
+  // are spliced (HTML-escaped) before sanitize either way, so they go through
+  // the same XSS gate. DOMPurify strips <script>, on* handlers, and js: URLs,
+  // so neither path can run JS or reach the page token. Falls back to "" when
+  // DOMPurify (the XSS gate) is unavailable — never inject unsanitized markup.
+  function renderArtifactBody(body, format, artifactNames) {
+    if (!body || typeof body !== "string" || !window.DOMPurify) return "";
+    const raw = (format === "html")
+      ? body
+      : (window.marked ? window.marked.parse(body) : "");
+    if (!raw) return "";
+    return window.DOMPurify.sanitize(renderWikilinks(raw, artifactNames));
+  }
+
   function MarkdownArtifact({ record, name, revision, onOpenArtifact, artifactNames }) {
     const body = record && typeof record.body === "string" ? record.body : "";
     const title = (record && record.title) || name || "";
@@ -57,9 +73,7 @@
     // would be a token-exfil XSS. Require DOMPurify; without it, fall back to raw.
     // Wikilinks are spliced (already HTML-escaped) into the marked output BEFORE
     // this sanitize call, so they go through the same XSS gate as everything else.
-    const html = (body && window.marked && window.DOMPurify)
-      ? window.DOMPurify.sanitize(renderWikilinks(window.marked.parse(body), artifactNames))
-      : "";
+    const html = renderArtifactBody(body, record && record.format, artifactNames);
     // delegated click: a valid wikilink anchor carries data-art; open it in-dash
     // instead of following a (hrefless) link. Muted spans have no data-art, so
     // they're inert.
@@ -74,7 +88,7 @@
           {stale && <div className="md-stale">⚠ Updated since {rv.state || "reviewed"} (reviewed at rev {rv.rev}, now rev {revision}) — the verdict may be stale; re-review.</div>}
           {title && <div className="md-kicker">{title}</div>}
           {html
-            ? <div dangerouslySetInnerHTML={{ __html: html }} />
+            ? <div className={record && record.format === "html" ? "md-html-body" : undefined} dangerouslySetInnerHTML={{ __html: html }} />
             : record
               ? <pre className="md-raw">{JSON.stringify(record, null, 2)}</pre>
               : <p className="md-lede">Loading…</p>}
@@ -103,6 +117,10 @@
   .md-doc code{font-family:var(--font-mono);font-size:14px;background:#f0f0f1;padding:1.5px 6px;border-radius:5px;color:#3a3f47;}
   .md-doc pre{background:#16181d;color:#e6e4de;font-family:var(--font-mono);font-size:13px;line-height:1.7;padding:18px 20px;border-radius:11px;overflow:auto;margin:0 0 18px;}
   .md-doc pre code{background:none;padding:0;color:inherit;font-size:13px;}
+  .md-doc img{max-width:100%;height:auto;}
+  .md-html-body{overflow-wrap:break-word;}
+  .md-html-body table{display:block;max-width:100%;overflow-x:auto;}
+  .md-html-body pre,.md-html-body code{white-space:pre-wrap;word-break:break-word;}
   .md-raw{background:#f5f5f6;color:#3a3f47;font-family:var(--font-mono);font-size:13px;line-height:1.6;padding:18px 20px;border-radius:11px;white-space:pre-wrap;word-break:break-word;overflow:auto;}
   .md-doc blockquote{border-left:3px solid var(--brand-strong);background:rgba(0,0,0,.025);margin:20px 0;padding:13px 20px;font-size:16.5px;line-height:1.55;color:#41454d;font-style:italic;border-radius:0 9px 9px 0;}
   .md-doc table{width:100%;border-collapse:collapse;margin:4px 0 22px;font-family:var(--font-ui);font-size:14.5px;}
@@ -115,4 +133,5 @@
   }`;
 
   window.MarkdownArtifact = MarkdownArtifact;
+  window.renderArtifactBody = renderArtifactBody;
 })();
