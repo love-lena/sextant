@@ -29,8 +29,9 @@ inlines the result. When `format` is `"markdown"` or absent, the existing
 `marked` → DOMPurify path is unchanged.
 
 DOMPurify strips `<script>` elements, `on*` event-handler attributes, and
-`javascript:`/`data:` script URLs. Rendered HTML content therefore executes
-no JavaScript and cannot reach the page's bus client, token, or credentials.
+`javascript:` URLs (it also drops `<iframe>`/`<object>`/`<embed>`). Rendered
+HTML content therefore executes no JavaScript and cannot reach the page's bus
+client, token, or credentials.
 Inline `style` and `class` attributes survive sanitization, so mockups and
 reports render close to intent.
 

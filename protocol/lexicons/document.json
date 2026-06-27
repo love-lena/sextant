@@ -15,7 +15,7 @@
           },
           "body": {
             "type": "string",
-            "description": "Markdown body."
+            "description": "Document body — Markdown by default, or raw HTML when `format` is `\"html\"`."
           },
           "format": {
             "type": "string",

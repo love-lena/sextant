@@ -68,11 +68,12 @@
     // revision === review.rev + 1, so it does not flag.)
     const rv = record && record.review;
     const stale = rv && rv.rev && revision && revision > rv.rev + 1;
-    // Sanitize the rendered markdown before injecting it: artifact bodies come
-    // from the bus, and the cockpit page holds the API token — unsanitized HTML
-    // would be a token-exfil XSS. Require DOMPurify; without it, fall back to raw.
-    // Wikilinks are spliced (already HTML-escaped) into the marked output BEFORE
-    // this sanitize call, so they go through the same XSS gate as everything else.
+    // Sanitize before injecting: artifact bodies come from the bus, and the
+    // cockpit page holds the API token — unsanitized HTML would be a token-exfil
+    // XSS. renderArtifactBody runs DOMPurify on both the markdown and html paths
+    // (wikilinks are HTML-escaped and spliced BEFORE that sanitize, so they go
+    // through the same gate). Without DOMPurify it returns "" — which falls
+    // through below to the raw JSON view (React-escaped), never raw body HTML.
     const html = renderArtifactBody(body, record && record.format, artifactNames);
     // delegated click: a valid wikilink anchor carries data-art; open it in-dash
     // instead of following a (hrefless) link. Muted spans have no data-art, so
