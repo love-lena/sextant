@@ -21,7 +21,6 @@ import {
 } from "@sextant/sdk";
 import { clientSubject, topicSubject } from "@sextant/sdk";
 import type { Config } from "./config.js";
-import { defaultActivityTopic } from "./config.js";
 import type { Tiers } from "./trust.js";
 
 // Logger is the trace seam — one structured line per lifecycle event. stderr in
@@ -57,11 +56,12 @@ export class BusConnection {
     return this.subscriptions;
   }
 
-  // activitySubject is the bus subject the activity bridge publishes on, derived
-  // from config (or pi.activity.<id> by default once we know our id).
+  // activitySubject is the per-agent activity stream: msg.agent.<id>.activity
+  // (entity.id.aspect, parallels msg.workflow.<id>.events). An explicit
+  // SEXTANT_ACTIVITY_TOPIC override still wins (wrapped as a plain topic).
   activitySubject(): string {
-    const topic = this.cfg.activityTopic || defaultActivityTopic(this.client?.id() ?? "");
-    return topicSubject(topic);
+    if (this.cfg.activityTopic) return topicSubject(this.cfg.activityTopic);
+    return "msg.agent." + (this.client?.id() ?? "") + ".activity";
   }
 
   // handoffSubject is the bus subject the managed handoff (TASK-178) announces

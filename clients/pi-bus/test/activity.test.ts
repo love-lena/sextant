@@ -1,4 +1,4 @@
-// Unit tests for the pi.activity observability bridge (the spike's adjustment 3).
+// Unit tests for the agent.activity observability bridge (the spike's adjustment 3).
 // They pin the record shapes a dash reads: turn markers, thinking + reply text
 // pulled out of an assistant message, tool start/end with truncated args/result,
 // and that a publish failure never throws into the agent.
@@ -24,7 +24,7 @@ function recordingPublisher(): { pub: Publisher; records: ActivityRecord[]; subj
 function bridge(pub: Publisher | undefined, previewMax = 600): ActivityBridge {
   return new ActivityBridge({
     publisher: () => pub,
-    topicSubject: () => "msg.topic.pi.activity.SELF",
+    topicSubject: () => "msg.agent.SELF.activity",
     previewMax,
     now: () => new Date("2026-06-19T00:00:00.000Z"),
   });
@@ -38,7 +38,7 @@ test("turn_start / turn_end emit turn markers on the activity subject", async ()
   await tick();
   const kinds = records.map((r) => r.kind);
   assert.deepEqual(kinds, ["turn_start", "turn_end"], "an empty turn emits just the markers");
-  assert.ok(subjects.every((s) => s === "msg.topic.pi.activity.SELF"));
+  assert.ok(subjects.every((s) => s === "msg.agent.SELF.activity"));
   assert.equal(records[0]!.turnIndex, 0);
 });
 
@@ -86,7 +86,7 @@ test("a publish failure never throws into the agent", async () => {
   let captured: Error | undefined;
   const b = new ActivityBridge({
     publisher: () => failing,
-    topicSubject: () => "msg.topic.pi.activity.SELF",
+    topicSubject: () => "msg.agent.SELF.activity",
     previewMax: 600,
     onError: (e) => (captured = e),
   });

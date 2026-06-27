@@ -67,7 +67,7 @@ function attachJsonlReader(stream: NodeJS.ReadableStream, onLine: (line: string)
 // startPi launches `pi --mode rpc` with the built pi-bus extension and the bus
 // wiring in its environment. The agent boots IDLE (no initial prompt), so a bus
 // frame is the only thing that can wake it — the clean wake proof.
-function startPi(bus: Bus, store: string, credsPath: string, piLog: string, activityTopic: string): PiRpc {
+function startPi(bus: Bus, store: string, credsPath: string, piLog: string): PiRpc {
   const events: Record<string, unknown>[] = [];
   const sessionDir = mkdtempSync(join(tmpdir(), "pi-bus-driven-sessions-"));
 
@@ -95,7 +95,8 @@ function startPi(bus: Bus, store: string, credsPath: string, piLog: string, acti
         SEXTANT_HOME: store,
         SEXTANT_PI_CREDS: credsPath,
         SEXTANT_BUS_URL: bus.url,
-        SEXTANT_ACTIVITY_TOPIC: activityTopic,
+        // No SEXTANT_ACTIVITY_TOPIC override: exercise the default per-agent
+        // stream msg.agent.<id>.activity (the path the dash + executor consume).
         SEXTANT_GOAL_ID: GOAL_ID,
         SEXTANT_PI_LOG: piLog,
         // Keep the headless gate ON (the default) — this is a faithful unattended run.
@@ -217,14 +218,14 @@ async function main(): Promise<void> {
   });
   console.log(`  seeded goal.${GOAL_ID} with two criteria`);
 
-  const activityTopic = `pi.activity.${piAgent.id}`;
+  const activitySubject = `msg.agent.${piAgent.id}.activity`;
   const piLog = join(tmpdir(), `pi-bus-driven-${Date.now()}.jsonl`);
   writeFileSync(piLog, "");
 
-  // The operator subscribes to the activity topic (what the dash renders) and to
-  // msg.topic.goals (the goal-transition stream the dash watches).
+  // The operator subscribes to the agent's per-agent activity stream (what the dash
+  // renders) and to msg.topic.goals (the goal-transition stream the dash watches).
   const activity: Message[] = [];
-  await op.subscribe(topicSubject(activityTopic), (m) => activity.push(m));
+  await op.subscribe(activitySubject, (m) => activity.push(m));
   const goalUpdates: Message[] = [];
   await op.subscribe(topicSubject("goals"), (m) => goalUpdates.push(m));
   // The operator's DM conversation with the agent — sextant_reply replies on the
@@ -236,7 +237,7 @@ async function main(): Promise<void> {
   let pi: PiRpc | undefined;
   try {
     section("AC#1 + AC#5: the operator DMs the idle pi agent → it wakes + replies");
-    pi = startPi(bus, bus.store, piAgent.credsPath, piLog, activityTopic);
+    pi = startPi(bus, bus.store, piAgent.credsPath, piLog);
     // Wait for the extension to connect (traced) by polling the log.
     await waitForLog(piLog, /"event":"connected"/, 30_000, "extension connect");
     await delay(1500); // let the inbox subscription settle
@@ -266,7 +267,7 @@ async function main(): Promise<void> {
       record("AC#1/#5", "FAIL", "the pi agent did not wake on the operator's DM within 90s");
     }
 
-    section("AC#3 + AC#5: tool-calls + thinking stream onto the pi.activity topic");
+    section("AC#3 + AC#5: tool-calls + thinking stream onto the agent.activity stream");
     // Drive a turn that MUST call a tool, so the activity bridge carries a tool
     // call (the dash renders these). A bus wake already happened; here we steer a
     // tool turn directly to make the tool-call evidence deterministic.
@@ -281,12 +282,12 @@ async function main(): Promise<void> {
     const sawTurn = kinds.includes("turn_start") || kinds.includes("turn_end");
     const sawTool = kinds.includes("tool_start") || kinds.includes("tool_end");
     const sawThinkingOrMsg = kinds.includes("thinking") || kinds.includes("message");
-    console.log(`  operator's view of msg.topic.${activityTopic}: ${activity.length} activity frames, kinds=${JSON.stringify([...new Set(kinds)])}`);
+    console.log(`  operator's view of ${activitySubject}: ${activity.length} activity frames, kinds=${JSON.stringify([...new Set(kinds)])}`);
     if (sawTurn && sawTool) {
       record(
         "AC#3/#5",
         "PASS",
-        `the agent's turns + tool calls${sawThinkingOrMsg ? " + thinking/reply text" : ""} streamed to msg.topic.${activityTopic} (kinds: ${JSON.stringify([...new Set(kinds)])}). The dash's conversation viewer subscribes msg.> and renders each subject's records live, so a headless pi worker is visible in the dash like any crew member.`,
+        `the agent's turns + tool calls${sawThinkingOrMsg ? " + thinking/reply text" : ""} streamed to ${activitySubject} (kinds: ${JSON.stringify([...new Set(kinds)])}). The dash's conversation viewer subscribes msg.> and renders each subject's records live, so a headless pi worker is visible in the dash like any crew member.`,
       );
     } else {
       record("AC#3/#5", sawTurn ? "PARTIAL" : "FAIL", `activity kinds seen: ${JSON.stringify([...new Set(kinds)])} (turn=${sawTurn}, tool=${sawTool})`);

@@ -3,8 +3,8 @@
 // session becomes an addressable, scoped bus participant: it holds its own SDK
 // Client on its OWN scoped credential (never the operator's), wakes on inbound
 // bus frames, exposes bus tools + a /set-goal command over the goals convention,
-// bundles a sextant skill, and bridges its own turns/thinking/tool-calls onto a
-// pi.activity bus topic so the dash renders a headless worker like any crew member.
+// bundles a sextant skill, and bridges its own turns/thinking/tool-calls onto its
+// per-agent agent.activity stream so the dash renders a headless worker like any crew member.
 //
 // Drop this extension into a pi session (`pi -e .../dist/src/index.js`, env in
 // config.ts). It is a single default-export factory, the standard pi extension
@@ -15,7 +15,7 @@
 //      .open() is close-before-open + self-serialising, so no client leaks.
 //   2. BACK-PRESSURE — WakeQueue is bounded + drop-oldest with a reserved DM slot
 //      and burst-coalescing; the queue drains one per turn_end.
-//   3. pi.activity OBSERVABILITY as a first-class lexicon (ActivityBridge).
+//   3. agent.activity OBSERVABILITY as a first-class lexicon (ActivityBridge).
 //   4. LAYERED SECURITY — own scoped creds (BusConnection) + a headless block-by-
 //      default tool gate (gate.ts) + author trust-tiering on the wake (trust.ts);
 //      bus content is treated as an untrusted prompt-injection surface.
@@ -313,7 +313,7 @@ export default function sextantPiBus(pi: ExtensionAPI): void {
     onBlock: (toolName, reason) => {
       // Surface the block on the activity bridge so the dash sees a blocked
       // action rather than a silent no-op.
-      activity.emitRaw({ $type: "pi.activity", kind: "tool_end", tool: toolName, isError: true, result: reason });
+      activity.emitRaw({ $type: "agent.activity", kind: "tool_end", tool: toolName, isError: true, result: reason });
     },
   });
 }

@@ -1,10 +1,12 @@
-// The pi.activity observability bridge (the spike's adjustment 3 — first-class,
+// The agent.activity observability bridge (the spike's adjustment 3 — first-class,
 // not a debug aid). It maps pi's own event stream (turns, thinking, the assistant
-// reply, tool calls) into pi.activity records and publishes them on a bus topic,
-// so a dash or crew client reading that topic renders a headless worker like any
-// other crew member without attaching to its terminal (the TASK-150/151 thread).
+// reply, tool calls) into agent.activity records and publishes them on the agent's
+// per-agent activity subject, so a dash or crew client reading it renders a headless
+// worker like any other crew member without attaching to its terminal (TASK-150/151).
+// pi is the first producer of this harness-neutral shape; other harnesses emit the
+// identical record on the same subject (the TASK-151 adapter seam).
 //
-// The record shape is the pi.activity lexicon (protocol/lexicons/pi.activity.json):
+// The record shape is the agent.activity lexicon (protocol/lexicons/agent.activity.json):
 // a small, fixed vocabulary — kind, turnIndex, the tool name/args/result, the
 // thinking/reply text — TRUNCATED to a preview, because the bus record is a signal
 // for the dash, not the durable log (the worker's own session JSONL keeps the
@@ -40,11 +42,11 @@ export interface Publisher {
   publish(subject: string, record: JSONValue): Promise<void>;
 }
 
-// ActivityRecord is the pi.activity lexicon record (the fields the dash reads).
+// ActivityRecord is the agent.activity lexicon record (the fields the dash reads).
 // Optional fields are omitted when empty so the published record is minimal and
 // canonicalizes predictably.
 export interface ActivityRecord {
-  $type: "pi.activity";
+  $type: "agent.activity";
   kind: "turn_start" | "turn_end" | "tool_start" | "tool_end" | "thinking" | "message";
   turnIndex?: number;
   tool?: string;
@@ -56,14 +58,14 @@ export interface ActivityRecord {
   updated?: string;
 }
 
-// ActivityBridge turns pi events into pi.activity publishes on activityTopic.
-// It owns NO pi/bus wiring — index.ts subscribes the pi events and supplies the
-// live publisher + topic-subject mapper. previewMax bounds every text field.
+// ActivityBridge turns pi events into agent.activity publishes on the per-agent
+// activity subject. It owns NO pi/bus wiring — index.ts subscribes the pi events
+// and supplies the live publisher + subject mapper. previewMax bounds every text field.
 export class ActivityBridge {
   constructor(
     private readonly opts: {
       publisher: () => Publisher | undefined; // resolved at publish time (client may be reopening)
-      topicSubject: () => string; // the bus subject to publish on (msg.topic.<activityTopic>)
+      topicSubject: () => string; // the bus subject to publish on (msg.agent.<id>.activity)
       previewMax: number;
       onError?: (e: Error) => void;
       now?: () => Date;
@@ -71,7 +73,7 @@ export class ActivityBridge {
   ) {}
 
   onTurnStart(e: TurnStartEvent): void {
-    this.emit({ $type: "pi.activity", kind: "turn_start", turnIndex: e.turnIndex });
+    this.emit({ $type: "agent.activity", kind: "turn_start", turnIndex: e.turnIndex });
   }
 
   // onTurnEnd emits the turn marker AND, if the assistant message carried any,
@@ -80,12 +82,12 @@ export class ActivityBridge {
   onTurnEnd(e: TurnEndEvent): void {
     const { thinking, text } = extractText(e.message);
     if (thinking) {
-      this.emit({ $type: "pi.activity", kind: "thinking", turnIndex: e.turnIndex, text: this.preview(thinking) });
+      this.emit({ $type: "agent.activity", kind: "thinking", turnIndex: e.turnIndex, text: this.preview(thinking) });
     }
     if (text) {
-      this.emit({ $type: "pi.activity", kind: "message", turnIndex: e.turnIndex, text: this.preview(text) });
+      this.emit({ $type: "agent.activity", kind: "message", turnIndex: e.turnIndex, text: this.preview(text) });
     }
-    this.emit({ $type: "pi.activity", kind: "turn_end", turnIndex: e.turnIndex });
+    this.emit({ $type: "agent.activity", kind: "turn_end", turnIndex: e.turnIndex });
   }
 
   // onAgentEnd is a fallback emitter for the final assistant text in modes where
@@ -97,7 +99,7 @@ export class ActivityBridge {
 
   onToolStart(e: ToolExecutionStartEvent): void {
     this.emit({
-      $type: "pi.activity",
+      $type: "agent.activity",
       kind: "tool_start",
       tool: e.toolName,
       toolCallId: e.toolCallId,
@@ -107,7 +109,7 @@ export class ActivityBridge {
 
   onToolEnd(e: ToolExecutionEndEvent): void {
     this.emit({
-      $type: "pi.activity",
+      $type: "agent.activity",
       kind: "tool_end",
       tool: e.toolName,
       toolCallId: e.toolCallId,

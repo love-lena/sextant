@@ -1,7 +1,7 @@
 {
   "name": "@sextant/pi-bus",
   "version": "0.1.0",
-  "description": "A pi extension that makes a pi coding-agent session a first-class sextant bus client (TASK-177): its own scoped identity, addressable, wakeable on inbound frames, with bus tools, a /set-goal command over @sextant/conv-goals, a bundled sextant skill, and a pi.activity bridge so the dash renders a headless worker like any crew member.",
+  "description": "A pi extension that makes a pi coding-agent session a first-class sextant bus client (TASK-177): its own scoped identity, addressable, wakeable on inbound frames, with bus tools, a /set-goal command over @sextant/conv-goals, a bundled sextant skill, and an agent.activity bridge so the dash renders a headless worker like any crew member.",
   "type": "module",
   "exports": {
     ".": {
