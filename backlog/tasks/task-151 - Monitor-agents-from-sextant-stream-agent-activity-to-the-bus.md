@@ -4,7 +4,7 @@ title: Monitor agents from sextant — stream agent activity to the bus
 status: To Do
 assignee: []
 created_date: '2026-06-17 18:44'
-updated_date: '2026-06-27 00:11'
+updated_date: '2026-06-27 01:10'
 labels:
   - feature
   - dash
@@ -43,4 +43,6 @@ Tap claude -p --output-format stream-json (and/or CC PostToolUse hooks) -> norma
 Discovered in: Lena outbox 2026-06-17. claude -p stream-json + CC hooks are the claude tap; other harnesses need per-harness adapters. Relates: [[feat-agent-status-thinking-on-turn-start]] (TASK-150), the per-agent status hook (#132), the dash stream-explorer idea.
 
 Design decision (Lena, 2026-06-26): this live agent-activity feed = EVERYTHING, the pure noise — for audit + under-the-hood debugging — and is GENERIC to agents: per-agent subject (agent.activity.<id>), never coupled to a run/goal/workflow. The pi --rpc producer ([[feat-pi-rpc-work-stream-to-bus]] TASK-235) is wanted FIRST (raised to P1), ahead of the run executor (TASK-236), to make debugging workflow runs easier. 151 and 235 share ONE common activity-event shape; whichever lands first defines it (pi is the priority producer). Keep the feed decoupled from the executor's run.event step-done signal — separate streams/topics.
+
+Refinement (Lena, 2026-06-26): the common activity-event shape = a harness-neutral agent.activity lexicon on subject msg.agent.<id>.activity (idiomatic entity.id.aspect, parallels msg.workflow.<id>.events). It is PROMOTED from the existing pi.activity (protocol/lexicons/pi.activity.json + @sextant/pi-bus, TASK-177) — pi is the first producer ([[feat-pi-rpc-work-stream-to-bus]] TASK-235, lands first). This claude tap (claude -p stream-json / CC PostToolUse) is a second producer that emits the SAME agent.activity shape onto the same subject — that is the 'documented adapter seam' (AC #3): all harnesses converge on agent.activity, no per-harness format.
 <!-- SECTION:NOTES:END -->

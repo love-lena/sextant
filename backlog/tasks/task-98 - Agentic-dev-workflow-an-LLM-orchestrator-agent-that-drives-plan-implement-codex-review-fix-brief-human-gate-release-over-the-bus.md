@@ -6,7 +6,7 @@ title: >-
 status: In Progress
 assignee: []
 created_date: '2026-06-15 01:32'
-updated_date: '2026-06-19 21:42'
+updated_date: '2026-06-27 01:13'
 labels:
   - feature
   - orchestration
@@ -52,4 +52,6 @@ Discovered in: lena's orchestration-m5 session 2026-06-14, real-use-case request
 Trigger redesigned per lena (2026-06-14): workflow-as-artifact + 'sextant workflow run <name>' (no env-var harness). cmd/sextant/workflow.go (commit 23c6b6e); progress artifact is <id>.run (distinct from the <id> def). First live target: def artifact 'task62'; run-instructions in artifact task62-run-instructions.
 
 Near-duplicate of task-108 (same agentic-dev-workflow slug). Reconcile - don't grab both.
+
+Reframe (Lena, 2026-06-26): TASK-98 is 'the first AGENT-MODE workflow' — it runs under the long-lived per-run coordinator agent defined by [[feat-agent-mode-run-coordinator]] (TASK-242), layered on the programmatic base executor [[feat-run-executor-workflow-run-v1]] (TASK-236). The LLM orchestration this ticket wants = agent mode applied to the plan->implement->review->fix->brief->gate dev workflow.
 <!-- SECTION:NOTES:END -->
