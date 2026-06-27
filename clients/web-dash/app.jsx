@@ -866,6 +866,11 @@
           const ids=subj.slice(13).split("."); const other=ids.find(x=>x!==self.id)||ids[0]||"";
           type="dm"; name=nameOf(other);
         }
+        // an agent's raw work stream (agent.activity, TASK-235): msg.agent.<id>.activity.
+        // Label it "<agent> · activity" so it groups under the agent, not as a raw subject.
+        else if(subj.startsWith("msg.agent.") && subj.endsWith(".activity")){
+          name=nameOf(subj.slice(10, -9))+" · activity";
+        }
         return { key:subj, type, name, snippet:c.lastText||"", time:relMs(c.last), unread:0, participants:0 };
       }),[convos, nameOf, self.id]);
 
