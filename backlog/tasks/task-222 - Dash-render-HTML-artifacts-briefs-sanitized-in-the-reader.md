@@ -1,13 +1,12 @@
 ---
 id: TASK-222
 title: 'Dash: render HTML artifacts & briefs (sanitized) in the reader'
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-25 00:55'
+updated_date: '2026-06-27 00:05'
 labels:
-  - dash-redesign
-  - ready-for-agent
-  - lane-review
+  - 'slug:feat-dash-render-html-artifacts'
 dependencies: []
 references:
   - >-
