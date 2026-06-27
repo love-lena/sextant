@@ -403,7 +403,8 @@
     function importFile(file){
       const sizeStr = file.size < 1024 ? file.size+" B" : file.size < 1048576 ? (file.size/1024).toFixed(1)+" KB" : (file.size/1048576).toFixed(1)+" MB";
       const isText = /^text\/|json|markdown|xml|yaml|csv|javascript|\.md$|\.txt$/i.test(file.type+" "+file.name) || file.type==="";
-      const meta = { name:file.name, type:file.type||"file", size:sizeStr, binary:!isText };
+      const isHtml = /text\/html/i.test(file.type) || /\.html?$/i.test(file.name);
+      const meta = { name:file.name, type:file.type||"file", size:sizeStr, binary:!isText, format:isHtml?"html":undefined };
       const mk = (body)=>{ const d = SD.blankDraft ? SD.blankDraft("import",{ title:file.name, importMeta:meta }) : { id:"d"+Date.now(), kind:"import", title:file.name, sections:{body:body||""}, importMeta:meta, updated:Date.now(), ready:false }; if(body!=null) d.sections={ body }; setDrafts(prev=>({ ...prev,[d.id]:d })); setOrigin({mode:"artifacts",goalId:null}); setComposeId(d.id); setStageMode("compose"); };
       if(isText){ const r=new FileReader(); r.onload=()=>mk(String(r.result||"")); r.onerror=()=>mk(""); r.readAsText(file); }
       else mk(null);
@@ -415,7 +416,9 @@
       const slug = (d.title||"untitled").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,40) || "doc";
       const name = slug + "-" + Date.now().toString(36).slice(-4);
       const body = d.kind==="charter" ? [d.sections.north,d.sections.vision,d.sections.done].join("\n\n") : (d.sections.body||"");
+      const fmt = d.importMeta && d.importMeta.format === "html" ? "html" : undefined;
       const record = { "$type":"document", title:d.title, body, review:{ state:"draft" } };
+      if (fmt) record.format = fmt;
       return apiCreate(name, record).then(res=>{ patchDraft(d.id, { ready:true, filedAs:name }); apiGet("/api/artifacts").then(as=>{ if(Array.isArray(as)) setArtifacts(as); }).catch(()=>{}); return res; });
     }
     function defineCriteria(id){ patchDraft(id, { ready:true }); setComposeId(id); setOrigin({ mode:"artifacts", goalId:null }); setStageMode("criteria"); }
@@ -441,6 +444,7 @@
         setActiveBrief({
           name, runId:(rec.run||rec.runId||rec.spawned_by||""), goal:rec.goal||"", type:rec.type||"brief", stream:rec.stream||"",
           title:rec.title||name, authorRun:rec.run||rec.author||"", why:rec.why||"", plan:Array.isArray(rec.plan)?rec.plan:null,
+          format:rec.format==="html"?"html":"markdown",
           body:rec.body||"", blocks:Array.isArray(rec.blocks)?rec.blocks:bodyToBlocks(rec.body), comments, activity, resolved,
         });
       }).catch(()=>setActiveBrief({ name, title:name, type:"brief", blocks:[], comments:[], activity:[] }));

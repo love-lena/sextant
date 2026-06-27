@@ -1,17 +1,12 @@
 ---
 id: TASK-133
 title: Native HTML artifacts with inline interaction (richer than markdown)
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-16 21:27'
+updated_date: '2026-06-27 00:05'
 labels:
-  - feature
-  - dash
-  - artifacts
-  - security
-  - 'slug:feat-native-html-artifacts-inline-interaction'
-  - P3
-  - ready-for-human
+  - wontfix
 dependencies: []
 priority: low
 ordinal: 123000
@@ -34,4 +29,12 @@ Lena's idea (#outbox 2026-06-16): artifacts/briefs today render as markdown (mar
 
 <!-- SECTION:NOTES:BEGIN -->
 Discovered in: #outbox (2026-06-16). Claimed via backlog.counter CAS (133). Design+security call (sandbox model for interactive artifact HTML) -> ready-for-human. Related: the dash artifact render (marked+DOMPurify), the design-handoff bundle (interactive HTML mockups), v0.5 redesign.
+
+Superseded by TASK-222 ([[feat-dash-render-html-artifacts]]), 2026-06-26. TASK-222 delivers the safe HTML-artifact rendering path (content-type marker + DOMPurify/sandboxed-iframe) in the brief reader and artifact view — the concrete, agent-ready slice of this idea. The interactive/JS-with-messaging extension this ticket originally scoped is deferred; if wanted later, file a fresh ticket on top of 222's renderer rather than reopening this.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Won't-do: replaced by TASK-222 (Dash: render HTML artifacts & briefs, sanitized). 222 covers safe HTML rendering — the actionable core of this idea. Interactive/sandboxed-JS artifacts are out of 222's scope and would be a new ticket if revived.
+<!-- SECTION:FINAL_SUMMARY:END -->

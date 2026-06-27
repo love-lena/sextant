@@ -127,21 +127,29 @@
               </div>
             )}
 
-            {/* body blocks; a block with a note carries an inline comment mark (S12.3) */}
-            <div className="br-body">
-              {blocks.length === 0 && <p className="br-block">{b.body || "No body — this brief has a headline only."}</p>}
-              {blocks.map((blk) => {
-                const cid = markFor(blk);
-                return (
-                  <div className={"br-block" + (cid && activeComment === cid ? " is-active" : "")} key={blk.id}>
-                    <span className="br-block-text">{blk.text}</span>
-                    {cid && (
-                      <button className="br-mark" title="Show comment" onClick={() => onMark(blk)}>💬</button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+            {/* body: an HTML brief renders as one sanitized region (TASK-222);
+                markdown/plaintext keep the per-block path with inline marks. */}
+            {b.format === "html" ? (
+              <div className="br-body">
+                <div className="br-html-body"
+                  dangerouslySetInnerHTML={{ __html: (window.renderArtifactBody ? window.renderArtifactBody(b.body || "", "html") : "") }} />
+              </div>
+            ) : (
+              <div className="br-body">
+                {blocks.length === 0 && <p className="br-block">{b.body || "No body — this brief has a headline only."}</p>}
+                {blocks.map((blk) => {
+                  const cid = markFor(blk);
+                  return (
+                    <div className={"br-block" + (cid && activeComment === cid ? " is-active" : "")} key={blk.id}>
+                      <span className="br-block-text">{blk.text}</span>
+                      {cid && (
+                        <button className="br-mark" title="Show comment" onClick={() => onMark(blk)}>💬</button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
             {/* Activity log (S12.7) */}
             <div className="br-activity">
