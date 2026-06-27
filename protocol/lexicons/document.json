@@ -4,7 +4,7 @@
   "defs": {
     "main": {
       "type": "record",
-      "description": "A titled Markdown document. One record lexicon among others — like any record, it can be carried by a frame; stored as an artifact it becomes that artifact's record.",
+      "description": "A titled document whose body is Markdown by default, or raw HTML when `format` is `\"html\"`. One record lexicon among others — like any record, it can be carried by a frame; stored as an artifact it becomes that artifact's record.",
       "record": {
         "type": "object",
         "required": ["title", "body"],
@@ -16,6 +16,11 @@
           "body": {
             "type": "string",
             "description": "Markdown body."
+          },
+          "format": {
+            "type": "string",
+            "enum": ["markdown", "html"],
+            "description": "How the body is rendered by a client. Absent or \"markdown\" => the body is Markdown; \"html\" => the body is raw HTML, rendered sanitized (no script execution). Opaque to the substrate; a client rendering concern only."
           }
         }
       }
