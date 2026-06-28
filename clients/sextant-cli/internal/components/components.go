@@ -31,10 +31,20 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/love-lena/sextant/protocol/wireapi"
 	"github.com/love-lena/sextant/shared/go/clictx"
 )
+
+// shQuote single-quotes s for safe embedding in a `sh -c` command line, so a path
+// with spaces stays ONE token. The dispatcher runs --harness via `sh -c`, and the
+// macOS components dir lives under "Application Support" (a space), so an unquoted
+// recipe path word-splits and the harness fails with exit 127. Embedded single
+// quotes are escaped the POSIX way ('\”).
+func shQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
 
 // Component is one managed runtime: the service name, the real binary it
 // re-execs into, the bus kind it enrolls as, and how its launch args are built.
@@ -98,7 +108,7 @@ var Registry = []Component{
 			// in the dispatcher's environment by the exec indirection.
 			return []string{
 				"--creds", creds, "--store", store,
-				"--on-behalf", "--harness", "sh " + recipe,
+				"--on-behalf", "--harness", "sh " + shQuote(recipe),
 			}
 		},
 	},

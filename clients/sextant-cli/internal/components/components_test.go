@@ -90,6 +90,24 @@ func TestDispatcherRegistryEntry(t *testing.T) {
 	}
 }
 
+// TestDispatcherHarnessQuotesRecipePath guards the exit-127 bug the live rc
+// caught: the dispatcher runs --harness via `sh -c`, and the macOS components dir
+// lives under "Application Support" (a space), so the recipe path MUST be quoted
+// or the inner sh word-splits it and the worker never launches.
+func TestDispatcherHarnessQuotesRecipePath(t *testing.T) {
+	c, _ := Find("dispatcher")
+	spacey := "/Users/u/Library/Application Support/sextant/components/pi.sh"
+	args := c.Args("/c/d.creds", "/s/store", spacey)
+	i := slices.Index(args, "--harness")
+	if i < 0 || i+1 >= len(args) {
+		t.Fatalf("dispatcher Args missing --harness; got %v", args)
+	}
+	want := "sh '" + spacey + "'"
+	if args[i+1] != want {
+		t.Fatalf("harness must quote the recipe path so a space survives `sh -c`;\n got  %q\n want %q", args[i+1], want)
+	}
+}
+
 // TestDashRegistryEntry pins AC#1/AC#3 of the managed-dash slice: the dash is a
 // registered component (sextant-dash, kind=dash) whose Args carry --creds/--store,
 // the managed $SEXTANT_HOME/dash.json state file, and --operator-session (so the
