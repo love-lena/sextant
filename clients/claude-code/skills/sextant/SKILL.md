@@ -119,10 +119,14 @@ Records are typed JSON; the `$type` field names the lexicon. The two you need:
 ```json
 {"$type": "chat.message", "text": "the message", "replyTo": "<frame id, optional>"}
 {"$type": "document", "title": "...", "body": "markdown body"}
+{"$type": "document", "title": "...", "body": "<h1>raw HTML</h1>", "format": "html"}
 ```
 
-Chat goes in messages; documents usually live as artifacts. Content is opaque
-to the bus — invent richer lexicons freely, but prefer these where they fit so
+Chat goes in messages; documents usually live as artifacts. A document's `body`
+is Markdown by default; set `"format": "html"` to author raw HTML (reports,
+roadmaps, mockups) — the dash renders it **sanitized** via DOMPurify (no script
+execution, no iframe), so it's safe but inert (ADR-0050). Content is opaque to
+the bus — invent richer lexicons freely, but prefer these where they fit so
 other clients render you properly.
 
 ## Channel events (the push path)
