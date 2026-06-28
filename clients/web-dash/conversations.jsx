@@ -135,6 +135,9 @@
     }, [lastMsgId, messages && messages.length, convo && convo.key]);
 
     const isDM = convo && convo.type === "dm";
+    // A read-only stream (an agent.activity observability feed, TASK-235) is watched,
+    // never posted into — suppress the composer so the operator can't pollute it.
+    const readOnly = !!(convo && convo.readOnly);
     const sigil = isDM ? "@ " : "# ";
     const name = (convo && convo.name) || "";
     const placeholder = "Message " + (isDM ? "@" : "#") + name;
@@ -155,12 +158,14 @@
               />
             </div>
             <DMStatusStrip convo={convo} agents={agents} self={self} />
-            <window.Composer
-              draft={draft}
-              setDraft={setDraft}
-              onSend={onSend}
-              placeholder={placeholder}
-            />
+            {readOnly
+              ? <div className="sx-conv-readonly">Read-only — this is {name}'s live work stream.</div>
+              : <window.Composer
+                  draft={draft}
+                  setDraft={setDraft}
+                  onSend={onSend}
+                  placeholder={placeholder}
+                />}
           </div>
         </div>
       </div>

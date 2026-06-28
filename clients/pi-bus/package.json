@@ -1,7 +1,7 @@
 {
   "name": "@sextant/pi-bus",
   "version": "0.1.0",
-  "description": "A pi extension that makes a pi coding-agent session a first-class sextant bus client (TASK-177): its own scoped identity, addressable, wakeable on inbound frames, with bus tools, a /set-goal command over @sextant/conv-goals, a bundled sextant skill, and a pi.activity bridge so the dash renders a headless worker like any crew member.",
+  "description": "A pi extension that makes a pi coding-agent session a first-class sextant bus client (TASK-177): its own scoped identity, addressable, wakeable on inbound frames, with bus tools, a /set-goal command over @sextant/conv-goals, a bundled sextant skill, and an agent.activity bridge so the dash renders a headless worker like any crew member.",
   "type": "module",
   "exports": {
     ".": {
@@ -22,7 +22,7 @@
     "epoch": 1
   },
   "scripts": {
-    "build:deps": "npm --prefix ../sdk install && npm --prefix ../sdk run build && npm --prefix ../conventions/goals install && npm --prefix ../conventions/goals run build",
+    "build:deps": "npm --prefix ../../sdk/ts install && npm --prefix ../../sdk/ts run build && npm --prefix ../../conventions/goal/ts install && npm --prefix ../../conventions/goal/ts run build",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test dist/test/backpressure.test.js dist/test/gate.test.js dist/test/activity.test.js dist/test/goal_command.test.js dist/test/handoff.test.js",

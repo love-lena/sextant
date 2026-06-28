@@ -195,6 +195,20 @@ _Avoid_: orchestrator, manager, controller
 A client that turns spawn requests into running clients.
 _Avoid_: scheduler, supervisor (it launches; it never supervises)
 
+**Activity feed (`agent.activity`)**:
+An agent's full raw work stream — every turn, thinking, tool call, and message —
+published as `agent.activity` records on `msg.agent.<id>.activity` (entity.id.aspect,
+parallels the **workflow**'s `msg.workflow.<id>.events`). It is **generic to any
+agent**, never bound to a run/goal/workflow; correlating a stream to a run is a
+reader's concern. The audit/debug **signal** the dash renders to show a headless
+worker live; a `turn_end` on it is the "worker came to rest" cue a **coordinator**
+acts on. Harness-neutral — pi-bus is the first producer, other harnesses emit the
+same shape on the same subject (ADR-0043 amendment, TASK-235/151). Untrusted, like
+any record: the bus-stamped author is authoritative, never a field.
+_Avoid_: log (it is a live signal, not the durable record — that is the worker's own
+session); the old `pi.activity` (promoted to harness-neutral `agent.activity`);
+the low-volume `run.event` step-signal (a separate stream, never shares this channel)
+
 **Goal**:
 A shared objective the crew works toward — a **north-star** plus its acceptance
 **criteria** — held as the latest-value artifact `goal.<id>`. Its **status is

@@ -17,7 +17,7 @@
 //   1. SELF-VALIDATION (AC#4): a second SDK client stands in for the operator, DMs
 //      the idle pi agent, and we PROGRAMMATICALLY assert every bus-side step —
 //      distinct pi identity; the reply DM on the operator inbox; the goal.update +
-//      the moved criterion; ≥1 pi.activity frame of each kind. Each step prints
+//      the moved criterion; ≥1 agent.activity frame of each kind. Each step prints
 //      PASS/FAIL; the run prints a final N/N summary and exits non-zero on any FAIL.
 //   2. OPERATOR-WATCHABLE (AC#2/#3): once green, it keeps the dash + the pi agent
 //      ALIVE and prints the dash URL, so the operator opens it and DMs the pi worker
@@ -109,7 +109,7 @@ function attachJsonlReader(stream: NodeJS.ReadableStream, onLine: (line: string)
 // OWN scoped creds (SEXTANT_PI_CREDS), against the throwaway bus — the exact shape
 // the dispatcher's recipes/pi.sh launches. It boots IDLE (no initial prompt), so a
 // bus frame is the only thing that can wake it: the clean headless-wake proof.
-function startPi(bus: Bus, store: string, credsPath: string, piLog: string, activityTopic: string): PiRpc {
+function startPi(bus: Bus, store: string, credsPath: string, piLog: string): PiRpc {
   const events: Record<string, unknown>[] = [];
   const sessionDir = mkdtempSync(join(tmpdir(), "pi-live-demo-sessions-"));
 
@@ -137,7 +137,8 @@ function startPi(bus: Bus, store: string, credsPath: string, piLog: string, acti
         SEXTANT_HOME: store,
         SEXTANT_PI_CREDS: credsPath,
         SEXTANT_BUS_URL: bus.url,
-        SEXTANT_ACTIVITY_TOPIC: activityTopic,
+        // The bridge publishes to the per-agent stream msg.agent.<id>.activity
+        // (the canonical path the dash + run executor consume).
         SEXTANT_GOAL_ID: GOAL_ID,
         SEXTANT_PI_LOG: piLog,
         // Keep the headless gate ON (the default) — a faithful unattended run.
@@ -295,16 +296,16 @@ async function main(): Promise<void> {
   });
   say(`seeded goal.${GOAL_ID} with two criteria (the dash Goals view reads this artifact)`);
 
-  const activityTopic = `pi.activity.${piAgent.id}`;
+  const activitySubject = `msg.agent.${piAgent.id}.activity`;
   const piLog = join(tmpdir(), `pi-live-demo-${Date.now()}.jsonl`);
   writeFileSync(piLog, "");
 
-  // The operator subscribes to the activity topic (what the dash renders), to
-  // msg.topic.goals (the goal-transition stream the dash watches), and to its DM
-  // conversation with the agent (to catch the reply via sextant_reply, which lands
-  // on the canonical 2-party DM topic the dash renders, not the operator's inbox).
+  // The operator subscribes to the agent's per-agent activity stream (what the dash
+  // renders), to msg.topic.goals (the goal-transition stream the dash watches), and
+  // to its DM conversation with the agent (to catch the reply via sextant_reply, which
+  // lands on the canonical 2-party DM topic the dash renders, not the operator's inbox).
   const activity: Message[] = [];
-  await op.subscribe(topicSubject(activityTopic), (m) => activity.push(m));
+  await op.subscribe(activitySubject, (m) => activity.push(m));
   const goalUpdates: Message[] = [];
   await op.subscribe(topicSubject("goals"), (m) => goalUpdates.push(m));
   const replies: Message[] = [];
@@ -317,7 +318,7 @@ async function main(): Promise<void> {
 
   try {
     section("AC#2: the operator DMs the idle pi agent → it WAKES + REPLIES over the bus");
-    pi = startPi(bus, bus.store, piAgent.credsPath, piLog, activityTopic);
+    pi = startPi(bus, bus.store, piAgent.credsPath, piLog);
     await waitForLog(piLog, /"event":"connected"/, 30_000, "pi-bus extension connect");
     await delay(1500); // let the inbox subscription settle
 
@@ -357,7 +358,7 @@ async function main(): Promise<void> {
         : `criterion status=${observable?.status ?? "?"} (want met), goal.update announced=${announced}`,
     );
 
-    section("AC#3: the agent's tool-calls + thinking stream to the pi.activity topic (dash renders)");
+    section("AC#3: the agent's tool-calls + thinking stream to the agent.activity stream (dash renders)");
     say(`steering a tool turn so the activity bridge carries a deterministic tool-call`);
     pi.send({
       type: "prompt",
@@ -374,7 +375,7 @@ async function main(): Promise<void> {
       "AC#3 activity streams",
       sawTurn && sawTool,
       sawTurn && sawTool
-        ? `the agent's turns + tool calls${sawThinkingOrMsg ? " + thinking/reply text" : ""} streamed to msg.topic.${activityTopic} (${activity.length} frames, kinds: ${JSON.stringify(uniq)}). The dash's conversation viewer subscribes msg.> and renders each subject's records live, so this headless pi worker is visible in the dash like any crew member.`
+        ? `the agent's turns + tool calls${sawThinkingOrMsg ? " + thinking/reply text" : ""} streamed to ${activitySubject} (${activity.length} frames, kinds: ${JSON.stringify(uniq)}). The dash's conversation viewer subscribes msg.> and renders each subject's records live, so this headless pi worker is visible in the dash like any crew member.`
         : `activity kinds seen: ${JSON.stringify(uniq)} (turn=${sawTurn}, tool=${sawTool})`,
     );
 
@@ -386,7 +387,7 @@ async function main(): Promise<void> {
       "AC#4 dash serving",
       dashUp,
       dashUp
-        ? `sextant dash --serve is live at ${dash.url} (a co-equal TS bus client over wss; it auto-renders the pi.activity topic + the goal). The operator opens it to watch + DM the pi worker.`
+        ? `sextant dash --serve is live at ${dash.url} (a co-equal TS bus client over wss; it auto-renders the agent.activity stream + the goal). The operator opens it to watch + DM the pi worker.`
         : `dash --serve did not answer 200 at ${dash.url}; log: ${safeRead(dashLog).slice(-400)}`,
     );
 

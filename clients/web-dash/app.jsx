@@ -240,9 +240,26 @@
   function shortId(id){ id=id||""; return id.length>12 ? (id.slice(0,6)+"…"+id.slice(-4)) : id; }
   function frameText(rec){
     if(!rec) return "·";
+    if(rec.$type==="agent.activity") return activityText(rec);
     if(typeof rec.text==="string") return rec.text;
     if(rec.title) return rec.title;
     return rec.$type || "·";
+  }
+  // activityText renders one agent.activity record (TASK-235) as a readable feed
+  // line. Text-bearing kinds (thinking/message) show their text; the markers
+  // (turn_*/tool_*) would otherwise fall through to the bare "agent.activity" $type,
+  // so synthesize a short human line per kind instead.
+  function activityText(a){
+    const tool=a.tool||"tool";
+    switch(a.kind){
+      case "thinking":   return a.text || "thinking…";
+      case "message":    return a.text || "(reply)";
+      case "tool_start": return "→ "+tool+(a.args?": "+a.args:"");
+      case "tool_end":   return (a.isError?"✗ ":"✓ ")+tool;
+      case "turn_start": return "turn "+(a.turnIndex??0)+" started";
+      case "turn_end":   return "turn "+(a.turnIndex??0)+" ended";
+      default:           return a.kind||"activity";
+    }
   }
   // bodyToBlocks splits a brief's markdown body into paragraph blocks the
   // PR-style reader renders (each can carry an inline comment mark). A brief
@@ -866,7 +883,14 @@
           const ids=subj.slice(13).split("."); const other=ids.find(x=>x!==self.id)||ids[0]||"";
           type="dm"; name=nameOf(other);
         }
-        return { key:subj, type, name, snippet:c.lastText||"", time:relMs(c.last), unread:0, participants:0 };
+        // an agent's raw work stream (agent.activity, TASK-235): msg.agent.<id>.activity.
+        // Label it "<agent> · activity" so it groups under the agent, not as a raw subject,
+        // and mark it READ-ONLY — it is an observability stream the worker publishes; an
+        // operator chat.message posted onto it would pollute the feed (and the executor's
+        // turn_end consumption), so the conversation view suppresses the composer.
+        const isActivity = subj.startsWith("msg.agent.") && subj.endsWith(".activity");
+        if(isActivity){ name=nameOf(subj.slice(10, -9))+" · activity"; }
+        return { key:subj, type, name, snippet:c.lastText||"", time:relMs(c.last), unread:0, participants:0, readOnly:isActivity };
       }),[convos, nameOf, self.id]);
 
     const messages = useMemo(()=>{

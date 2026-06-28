@@ -22,7 +22,7 @@ const DEFAULT_MAX_BUFFERED = 16;
 // "N new on <topic>" wake instead of N separate turns. 0 disables coalescing.
 const DEFAULT_COALESCE_WINDOW_MS = 1500;
 
-// PREVIEW_MAX caps how much of a tool's args/result/text the pi.activity bridge
+// PREVIEW_MAX caps how much of a tool's args/result/text the agent.activity bridge
 // puts on the bus. The bus record is a signal for the dash, not the durable log;
 // the worker's own session JSONL keeps the full detail.
 const DEFAULT_PREVIEW_MAX = 600;
@@ -44,10 +44,6 @@ export interface Config {
   // watchTopics are extra topics (besides the inbox) the agent subscribes to and
   // wakes on. Plain topic names (e.g. "crew"), mapped to msg.topic.<name>.
   watchTopics: string[];
-  // activityTopic is the topic the pi.activity bridge publishes to. Defaults to
-  // pi.activity.<agent-id> when empty, so each worker has its own stream the dash
-  // can render independently (TASK-150/151).
-  activityTopic: string;
   // goalId is the goal /set-goal operates on when the command is invoked without
   // an explicit goal id. "" means /set-goal requires the id as an argument.
   goalId: string;
@@ -95,7 +91,6 @@ export function resolveConfig(env: NodeJS.ProcessEnv): Config {
     busURL: env["SEXTANT_BUS_URL"] ?? "",
     busJSONPath: env["SEXTANT_BUS_JSON"] ?? "",
     watchTopics: splitTopics(env["SEXTANT_WATCH_TOPICS"] ?? env["SEXTANT_WATCH_TOPIC"] ?? ""),
-    activityTopic: env["SEXTANT_ACTIVITY_TOPIC"] ?? "",
     goalId: env["SEXTANT_GOAL_ID"] ?? "",
     maxBuffered: posInt(env["SEXTANT_PI_MAX_BUFFERED"], DEFAULT_MAX_BUFFERED),
     coalesceWindowMs: nonNegInt(env["SEXTANT_PI_COALESCE_MS"], DEFAULT_COALESCE_WINDOW_MS),
@@ -106,12 +101,6 @@ export function resolveConfig(env: NodeJS.ProcessEnv): Config {
     wfEventsSubject: env["SEXTANT_PI_WF_EVENTS"] ?? "",
     wfStep: env["SEXTANT_PI_WF_STEP"] ?? "",
   };
-}
-
-// defaultActivityTopic is pi.activity.<id> — the per-worker activity stream when
-// no explicit topic is configured.
-export function defaultActivityTopic(agentId: string): string {
-  return "pi.activity." + agentId;
 }
 
 // splitTopics parses a comma/space-separated topic list, dropping empties.
