@@ -60,7 +60,10 @@ export default function sextantPiBus(pi: ExtensionAPI): void {
   // The bus connection (adjustment 1 + 4a). onWake is the single entry every
   // inbound frame flows through, so the back-pressure policy sees them all.
   let ctxRef: ExtensionContext | undefined; // latest context, for idle checks in the wake path
-  let wfReported = false; // workflow step-done emitted once (ADR-0011), if this worker is a step
+  let runReported = false; // run.event step-done emitted once (ADR-0048), if this worker is a run step
+  // produced collects artifacts the agent created/updated this session, reported on the
+  // run.event step-done so the coordinator can attach them + gate the brief step (ADR-0048).
+  const produced: { name: string; kind: string; version: number }[] = [];
   const bus = new BusConnection(cfg, log, (m) => onInbound(m));
 
   // The activity bridge (adjustment 3). Resolves the live client at publish time
@@ -243,24 +246,27 @@ export default function sextantPiBus(pi: ExtensionAPI): void {
   // on the next message addressed to it. Without the flag the worker stays resident.
   pi.on("agent_end", async (_event, ctx) => {
     ctxRef = ctx;
-    // Workflow step (ADR-0011): the run finished, so report the step done on the
-    // coordinator's event subject — the signal it waits on — once, and deterministically
-    // (not relying on the model to have published it). Awaited so the frame lands before
-    // a drain can close the bus client.
-    if (cfg.wfEventsSubject && !wfReported) {
-      wfReported = true;
+    // Workflow run step (ADR-0048): the run finished, so report the step done on the
+    // coordinator's run-events subject — the signal it waits on — once, and
+    // deterministically (not relying on the model to have published it), carrying any
+    // artifacts the agent produced this session (so the coordinator attaches them and the
+    // brief step's gate passes). Awaited so the frame lands before a drain closes the bus.
+    if (cfg.runEventsSubject && !runReported) {
+      runReported = true;
       const client = bus.getClient();
       if (client) {
-        log("workflow_step_done", { subject: cfg.wfEventsSubject, step: cfg.wfStep });
+        log("run_step_done", { subject: cfg.runEventsSubject, step: cfg.runStep, artifacts: produced.length });
         try {
-          await client.publish(cfg.wfEventsSubject, {
-            $type: "workflow.event",
-            step: cfg.wfStep,
+          await client.publish(cfg.runEventsSubject, {
+            $type: "run.event",
+            step: cfg.runStep,
             status: "done",
             by: client.id(),
+            outcome: "done",
+            artifacts: produced.map((a) => ({ name: a.name, kind: a.kind, version: a.version })),
           } as unknown as JSONValue);
         } catch (e) {
-          log("workflow_event_error", { detail: (e as Error).message });
+          log("run_event_error", { detail: (e as Error).message });
         }
       }
     }
@@ -300,6 +306,7 @@ export default function sextantPiBus(pi: ExtensionAPI): void {
     getClient: () => bus.getClient(),
     onWake: (m) => onInbound(m),
     subscriptions: bus.runtimeSubscriptions(),
+    onArtifactProduced: (a) => produced.push(a),
   });
 
   registerGoalCommand(pi, {

@@ -91,18 +91,19 @@ export SEXTANT_BUS_JSON="${SEXTANT_BUS_JSON:-${SEXTANT_STORE}/bus.json}"
 # worker resident instead.
 export SEXTANT_PI_DRAIN_WHEN_IDLE="${SEXTANT_PI_DRAIN_WHEN_IDLE:-1}"
 
-# WORKFLOW STEP (ADR-0011 + ADR-0045). When the workflow coordinator dispatches a
-# step it appends "WF_EVENTS=<subject> WF_STEP=<id>" to the brief. We lift those into
-# the environment so the extension emits the step-done event DETERMINISTICALLY on
+# WORKFLOW RUN STEP (ADR-0048 + ADR-0045). When the run executor dispatches a step it
+# appends "RUN_EVENTS=<subject> RUN_STEP=<id>" to the brief. We lift those into the
+# environment so the extension emits the step-done run.event DETERMINISTICALLY on
 # agent_end -- not depending on the model to remember to publish it -- and strip them
-# from the brief the model sees so the task reads cleanly. Absent (a plain mobilize or
-# a revive), this is a no-op.
+# from the brief the model sees so the task reads cleanly. Absent (a plain mobilize or a
+# revive), this is a no-op. (RUN_EVENTS/RUN_STEP precede RUN_STEP on one line, so the
+# strip from RUN_EVENTS to end removes both.)
 INJECT_PROMPT="${SX_PROMPT:-}"
-WF_EVENTS=$(printf '%s' "$INJECT_PROMPT" | sed -n 's/.*WF_EVENTS=\([^[:space:]]*\).*/\1/p')
-if [ -n "$WF_EVENTS" ]; then
-  export SEXTANT_PI_WF_EVENTS="$WF_EVENTS"
-  export SEXTANT_PI_WF_STEP="$(printf '%s' "$INJECT_PROMPT" | sed -n 's/.*WF_STEP=\([^[:space:]]*\).*/\1/p')"
-  INJECT_PROMPT=$(printf '%s' "$INJECT_PROMPT" | sed 's/[[:space:]]*WF_EVENTS=.*//')
+RUN_EVENTS=$(printf '%s' "$INJECT_PROMPT" | sed -n 's/.*RUN_EVENTS=\([^[:space:]]*\).*/\1/p')
+if [ -n "$RUN_EVENTS" ]; then
+  export SEXTANT_PI_RUN_EVENTS="$RUN_EVENTS"
+  export SEXTANT_PI_RUN_STEP="$(printf '%s' "$INJECT_PROMPT" | sed -n 's/.*RUN_STEP=\([^[:space:]]*\).*/\1/p')"
+  INJECT_PROMPT=$(printf '%s' "$INJECT_PROMPT" | sed 's/[[:space:]]*RUN_EVENTS=.*//')
 fi
 
 # A light role nudge so a bus DM lands as a task and the worker replies over the bus
