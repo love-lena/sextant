@@ -1,9 +1,10 @@
 ---
 id: TASK-226
 title: 'Work-engine: a run can be spawned but never cancelled/stopped'
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-25 03:00'
+updated_date: '2026-06-28 00:36'
 labels:
   - feature
   - workflow
@@ -35,4 +36,6 @@ ADR-0048 added an additive stop; the dash defines a terminal cancelled status (w
 
 <!-- SECTION:NOTES:BEGIN -->
 Discovered in: capability-gap audit 2026-06-24. Depends on [[feat-run-executor-workflow-run-v1]] (TASK-236). Relates ADR-0048 additive stop.
+
+Folded into the run executor (TASK-236, PR #279): a run.control cancel drives the run to cancelled with a cancel activity entry; the coordinator halts. Integration-tested (TestRun_CancelHalts). Live-verify with TASK-236.
 <!-- SECTION:NOTES:END -->

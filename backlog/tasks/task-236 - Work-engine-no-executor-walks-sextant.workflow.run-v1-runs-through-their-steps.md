@@ -3,10 +3,10 @@ id: TASK-236
 title: >-
   Work-engine: no executor walks sextant.workflow.run/v1 runs through their
   steps
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-25 02:59'
-updated_date: '2026-06-27 01:12'
+updated_date: '2026-06-28 00:36'
 labels:
   - feature
   - workflow
@@ -51,4 +51,6 @@ Discovered in: capability-gap audit 2026-06-24 (the 'does the run actually work?
 Why this was never built (forensic review of prior sessions, 2026-06-24): the work-engine lane was scoped as a UX surface + a record-shape CONTRACT, never as a running system. (1) TASK-193 ('the data step') has 5 ACs — all about defining sextant.workflow.run/v1 + template/v1, the relates:toward link, the stop-prompt array, and listability; NOT ONE requires a process that advances a run's status/steps. (2) ADR-0048 explicitly keeps execution out of the substrate and names 'the coordinator' as if it already exists. (3) The 18-slice EPIC C breakdown had no executor slice — its six children are all dash surfaces + the contract. TASK-216 carried the execution-flavored ACs but framed step-walking as a FRONTEND timer ('walks its steps automatically on a timer'), and that sim was never built either (no setInterval advances steps; only SEED records hard-coded to status:done). (4) The design assumed the pre-existing sextant-workflow coordinator covered execution — but the redesign simultaneously SUPERSEDED that coordinator's contract (sextant.workflow/v1 -> sextant.workflow.run/v1) without bridging it. The gap was known at ship time: workengine.jsx:99-100 literally comments 'the coordinator that writes real runs (TASK-193) doesn't exist'. No transcript shows the missing executor being raised and consciously deferred — it fell through the 'it's just an extension, the coordinator already exists' framing. Lesson for this ticket: the executor is genuinely new work against a contract that replaced the old engine's, not a tweak to the existing coordinator.
 
 Execution-model decisions (Lena, 2026-06-26): the executor is PROGRAMMATIC + TRUSTING, but enforces (1) no-done-without-output — a work/brief step completes only on a done-signal carrying >=1 artifact or a non-empty summary; empty done is ignored (generalizes the brief-artifact gate to every step); and (2) rest = enforcement point — the coordinator watches the worker's agent.activity turn_end (the TASK-235 feed) and, on a rest with no valid output, REVIVES the worker (ADR-0045 drain-and-revive) with a 'post your output' nudge, bounded -> blocked. This needs TASK-235's turn_end signal (no other 'worker at rest' bus signal exists today) — hence dep on TASK-235 and TASK-235 ships first. Quality JUDGMENT (review/redo/edit) is NOT in this base executor — that is the opt-in agent mode, split out to [[feat-agent-mode-run-coordinator]] (TASK-242); this ticket stays the programmatic base.
+
+Code-complete in PR #279 (stacked on #277). Coordinator retargeted to sextant.workflow.run/v1: adopt-on-run.start (single-writer), walk work/checkpoint/brief, attach artifacts, embedded activity, stop-gated brief, cooperative run.control (folds TASK-225 approve + TASK-226 cancel). Run/v1 contract as co-equal Go+TS peers (additive). Dash spawns run.start + writes stop + Approve/Stop buttons. ADR-0051 + CONTEXT. Verified: coordinator integration tests over a real bus (advance-to-brief, checkpoint-approve, cancel, ack, historical-ignore) all pass; make lint 0 issues. DEFERRED to a following pass (gated on #277 merge + a release): the one-command demo + live-verify on the operator's setup (the live-operability AC), and the old sextant.workflow/v1 deletion (TASK-234 engine half, kept additive for now). FLAGGED follow-up: the production dispatcher/worker still emits old workflow.event, not run.event — a live run won't advance until that small harness change lands.
 <!-- SECTION:NOTES:END -->

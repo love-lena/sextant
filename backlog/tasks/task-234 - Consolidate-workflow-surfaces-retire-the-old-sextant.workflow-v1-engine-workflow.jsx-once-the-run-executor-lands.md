@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-25 03:00'
+updated_date: '2026-06-28 00:36'
 labels:
   - chore
   - workflow
@@ -37,4 +38,6 @@ Two parallel workflow surfaces coexist in the dash. NEW: workengine.jsx (stage '
 
 <!-- SECTION:NOTES:BEGIN -->
 Discovered in: capability-gap audit 2026-06-24. Depends on [[feat-run-executor-workflow-run-v1]] (TASK-236). Relates [[task-13]], [[task-26]], [[task-192]].
+
+Engine half (delete sextant.workflow/v1 records + the old coordinator path) is the following pass after TASK-236/PR #279: the executor retargeted the coordinator to run/v1 and left the old contract compiled-but-unused (additive). Remaining: remove old Workflow/WorkflowEvent/WorkflowControl/WorkflowStart* records + their tests/vectors/lexicons, plus the workflow.jsx UI half.
 <!-- SECTION:NOTES:END -->

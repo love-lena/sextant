@@ -3,9 +3,10 @@ id: TASK-225
 title: >-
   Work-engine: run checkpoints cannot be approved/resumed (the kind:checkpoint
   dead end)
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-25 03:00'
+updated_date: '2026-06-28 00:36'
 labels:
   - feature
   - workflow
@@ -39,4 +40,6 @@ ADR-0048 runs carry kind:checkpoint steps (e.g. 'Operator approves the plan') th
 
 <!-- SECTION:NOTES:BEGIN -->
 Discovered in: capability-gap audit 2026-06-24. Depends on [[feat-run-executor-workflow-run-v1]] (TASK-236). Supersedes/folds in [[task-119]] under ADR-0048. Reuse old engine pause/approve semantics (apps/workflow). Relates ADR-0048.
+
+Folded into the run executor (TASK-236, PR #279): a checkpoint-kind step parks the run at waiting; an operator run.control approve/resume advances it. Integration-tested (TestRun_CheckpointWaitsForApprove). Live-verify with TASK-236.
 <!-- SECTION:NOTES:END -->
