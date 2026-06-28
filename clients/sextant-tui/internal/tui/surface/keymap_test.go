@@ -46,7 +46,7 @@ func TestTopLevelBackIsNoOp(t *testing.T) {
 	})
 
 	t.Run("artifact_reader", func(t *testing.T) {
-		a := surface.NewArtifact(context.Background(), nil, "dash-plan", theme.Dark(), theme.DefaultKeymap(), surface.WithReview())
+		a := surface.NewArtifact(context.Background(), nil, "dash-plan", theme.Dark(), theme.DefaultKeymap())
 		a.SetSize(40, 8)
 		a.SetFocus(widget.FocusActive)
 		if cmd := a.Update(esc); cmd != nil {
@@ -91,33 +91,20 @@ func TestBrowserDetailPopIsOverridable(t *testing.T) {
 }
 
 // TestComposeCapturesEveryPrintableKey pins the capture rule (ADR-0026): while
-// a compose is capturing, EVERY printable key is text — including the letters
-// that share a binding with a navigation action (j and k are bound alongside
-// the arrows, q is the host's quit). The full alphabet must land in the input
-// verbatim, in both composing surfaces.
+// the stream compose is capturing, EVERY printable key is text — including the
+// letters that share a binding with a navigation action (j and k are bound
+// alongside the arrows, q is the host's quit). The full alphabet must land in
+// the input verbatim.
 func TestComposeCapturesEveryPrintableKey(t *testing.T) {
 	const alphabet = "qwertyuiopasdfghjklzxcvbnm"
 
-	t.Run("stream_compose", func(t *testing.T) {
-		s := surface.NewStream(context.Background(), nil, "msg.topic.plan", theme.Dark(), theme.DefaultKeymap(), surface.WithCompose())
-		s.SetSize(60, 8)
-		s.SetFocus(widget.FocusActive)
-		typeInto(s, alphabet)
-		if !strings.Contains(stripANSI(s.View()), alphabet) {
-			t.Errorf("compose dropped printable keys; view:\n%s", stripANSI(s.View()))
-		}
-	})
-
-	t.Run("artifact_comment", func(t *testing.T) {
-		a := surface.NewArtifact(context.Background(), nil, "dash-plan", theme.Dark(), theme.DefaultKeymap(), surface.WithReview())
-		a.SetSize(60, 10)
-		a.SetFocus(widget.FocusActive)
-		a.Update(surface.ArtifactLoadedMsg{Artifact: sampleDocument()})
-		typeIntoArtifact(a, alphabet)
-		if !strings.Contains(stripANSI(a.View()), alphabet) {
-			t.Errorf("comment compose dropped printable keys; view:\n%s", stripANSI(a.View()))
-		}
-	})
+	s := surface.NewStream(context.Background(), nil, "msg.topic.plan", theme.Dark(), theme.DefaultKeymap(), surface.WithCompose())
+	s.SetSize(60, 8)
+	s.SetFocus(widget.FocusActive)
+	typeInto(s, alphabet)
+	if !strings.Contains(stripANSI(s.View()), alphabet) {
+		t.Errorf("compose dropped printable keys; view:\n%s", stripANSI(s.View()))
+	}
 }
 
 // TestComposeDraftSurvivesBlur pins the focus-move guarantee behind ADR-0026's
