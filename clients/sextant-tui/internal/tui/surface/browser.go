@@ -141,7 +141,7 @@ func (b *Browser) Update(msg tea.Msg) tea.Cmd {
 		// In the detail: Back pops to the list (consumed here); everything else —
 		// keys, the feed pump, compose — goes to the inner Surface. A pasted text
 		// chunk never matches Back (it could spell "esc"); it is content.
-		if km, ok := msg.(tea.KeyMsg); ok && !isTextChunk(km) && key.Matches(km, b.keys.Back) {
+		if km, ok := msg.(tea.KeyMsg); ok && !widget.IsTextChunk(km) && key.Matches(km, b.keys.Back) {
 			b.popToList()
 			return nil
 		}
@@ -151,7 +151,7 @@ func (b *Browser) Update(msg tea.Msg) tea.Cmd {
 	// is the pane's top level (ADR-0026: Esc at the list does nothing; leaving
 	// the pane is a focus move, not a level). A pasted text chunk matches
 	// neither: it could spell "enter"/"esc", and text is content.
-	if km, ok := msg.(tea.KeyMsg); ok && !isTextChunk(km) {
+	if km, ok := msg.(tea.KeyMsg); ok && !widget.IsTextChunk(km) {
 		switch {
 		case key.Matches(km, b.keys.Enter):
 			return b.openSelected()

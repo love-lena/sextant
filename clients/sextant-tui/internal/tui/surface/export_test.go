@@ -25,9 +25,9 @@ func NewArtifactErrMsg(err error) any { return artifactErrMsg{err: err} }
 // golden.
 func NewArtifactsErrMsg(err error) any { return artifactsErrMsg{err: err} }
 
-// NewPublishedErrMsg builds the publish-result message a failed compose/comment
-// publish would produce, for driving the stream/artifact error footer in a
-// golden. A nil err is the success case (which clears the footer).
+// NewPublishedErrMsg builds the publish-result message a failed compose publish
+// would produce, for driving the stream error footer in a golden. A nil err is
+// the success case (which clears the footer).
 func NewPublishedErrMsg(err error) any { return publishedMsg{err: err} }
 
 // ErrMsg re-exports busfeed.ErrMsg so a test can drive the stream's terminal

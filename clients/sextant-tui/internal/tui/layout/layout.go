@@ -22,6 +22,7 @@ package layout
 
 import (
 	"fmt"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -59,14 +60,6 @@ type Model struct {
 	preset string
 	// hidden is the set of pane ids toggled off.
 	hidden map[string]bool
-
-	// placements carries the loaded Config's free-placement seam through the
-	// Model, verbatim: today's preset-mode layout never renders from it, but
-	// config.go promises a populated Placements survives a load/save round-trip
-	// — and the dash's real round-trip goes LoadConfig → New → Config →
-	// SaveConfig on exit, so dropping it here would silently delete a newer
-	// file's free-placement data every time an older binary exits.
-	placements []Placement
 
 	// rects is the last computed arrangement: visible pane id → outer Rect. Recomputed
 	// on every reflow (toggle, preset switch, resize).
@@ -139,12 +132,6 @@ func (m *Model) apply(cfg Config) {
 			m.hidden[id] = true
 		}
 	}
-	// Stash the free-placement seam so Config can emit it back unchanged.
-	// Cloned, not aliased: the layout never mutates it, but the caller still
-	// owns its cfg (and Config hands the data out again), so sharing one backing
-	// array would let an outside mutation reach into every Model copy — the same
-	// aliasing cloneHidden guards the hidden set against.
-	m.placements = clonePlacements(cfg.Placements)
 	// Focus starts on the first visible pane (ADR-0026: one pane is always
 	// focused; there is no resting layout level).
 	m.focused = m.firstVisible()
@@ -154,31 +141,14 @@ func (m *Model) apply(cfg Config) {
 // It records the active preset, the hidden set, and the theme CHOICE — auto
 // when the operator is in detection mode (never the variant auto resolved to
 // this launch, so detection re-runs next launch), the concrete variant after
-// an explicit pick — and emits the loaded Placements unchanged — preset-mode never renders from the
-// free-placement seam, but it preserves it (config.go's promise), so a dash
-// exit never deletes a newer file's data. The host calls this on change or on
-// quit and hands the result to SaveConfig.
+// an explicit pick. The host calls this on change or on quit and hands the
+// result to SaveConfig.
 func (m Model) Config() Config {
 	cfg := DefaultConfig()
 	cfg.Preset = m.preset
 	cfg.Theme = m.themeChoice
 	cfg.Hidden = m.hiddenList()
-	cfg.Placements = clonePlacements(m.placements)
 	return cfg
-}
-
-// clonePlacements returns an independent copy of a placements slice (nil for
-// an empty one, keeping omitempty clean), so the Model and the Configs it was
-// built from and snapshots to never share a backing array — the copy-on-mutate
-// discipline cloneHidden holds for the hidden set. Placement is a plain value
-// struct, so a shallow copy is fully independent.
-func clonePlacements(src []Placement) []Placement {
-	if len(src) == 0 {
-		return nil
-	}
-	dst := make([]Placement, len(src))
-	copy(dst, src)
-	return dst
 }
 
 // hiddenList returns the hidden pane ids in the host's registration order, so a
@@ -334,5 +304,158 @@ func (m Model) titleHue(s surface.Surface) lipgloss.Color {
 func (m Model) Stop() {
 	for _, id := range m.order {
 		m.surfaces[id].Stop()
+	}
+}
+
+// statusBar renders the one-row hint bar along the bottom: the focused pane
+// (its id and live title — ADR-0026: the bar names the focused pane, there is
+// no layout/pane mode to report) on the left, the key hints on the right,
+// painted on the panel background and clamped to the terminal width.
+func (m Model) statusBar() string {
+	left := "—"
+	if m.focused != "" {
+		left = m.focused
+		if title := m.surfaces[m.focused].Title(); title != "" {
+			left = fmt.Sprintf("%s — %s", m.focused, title)
+		}
+	}
+	leftSeg := lipgloss.NewStyle().Foreground(m.th.Fg).Render(" " + left + " ")
+
+	hint := lipgloss.NewStyle().Foreground(m.th.Dim).Render(m.hints())
+
+	gap := m.w - lipgloss.Width(leftSeg) - lipgloss.Width(hint)
+	if gap < 1 {
+		gap = 1
+	}
+	bar := leftSeg + strings.Repeat(" ", gap) + hint
+	return lipgloss.NewStyle().Background(m.th.Panel).Width(m.w).MaxWidth(m.w).MaxHeight(1).Render(bar)
+}
+
+// hints returns the right-hand key hints for the current state. While the
+// focused surface is capturing text, q types rather than quits, so the quit
+// hint switches to the always-true ctrl+c (the hints stay honest).
+func (m Model) hints() string {
+	if m.menu != nil {
+		return "↑/↓ move · enter select · esc close "
+	}
+	quit := "q quit"
+	if m.focusedCapturing() {
+		quit = "^c quit"
+	}
+	return "tab/^hjkl focus · enter open · esc back · " + quit + " "
+}
+
+// Box overhead: a Box draws 2 border columns + 2 padding columns wide and 2
+// border rows tall, so a surface's inner content area is (w-4, h-2). This is the
+// same convention the widgets, surfaces, and galleries use; the layout sizes
+// each surface to it on every reflow.
+const (
+	boxOverheadW = 4
+	boxOverheadH = 2
+)
+
+// visibleOrder returns the ids to lay out, in the host's registration order: the
+// panes that are not hidden.
+func (m Model) visibleOrder() []string {
+	var out []string
+	for _, id := range m.order {
+		if !m.hidden[id] {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// firstVisible returns the first visible pane id in registration order, or "" if
+// none are visible. It is the fallback focus when the focused pane is hidden or
+// the layout has just been built.
+func (m Model) firstVisible() string {
+	if v := m.visibleOrder(); len(v) > 0 {
+		return v[0]
+	}
+	return ""
+}
+
+// isVisible reports whether a pane id is currently in the visible set.
+func (m Model) isVisible(id string) bool {
+	for _, v := range m.visibleOrder() {
+		if v == id {
+			return true
+		}
+	}
+	return false
+}
+
+// firstLaidOut returns the first visible pane that actually got a rect from the
+// last reflow, in registration order — the panes the operator can really land
+// on. It differs from firstVisible only at a tiny terminal, where arrange drops
+// the visible panes that don't fit; the focus must follow what is rendered,
+// not the nominal visible set.
+func (m Model) firstLaidOut() string {
+	for _, id := range m.visibleOrder() {
+		if _, ok := m.rects[id]; ok {
+			return id
+		}
+	}
+	return ""
+}
+
+// reflow recomputes the arrangement and resizes every surface to its box inner
+// area. It is the one place geometry is applied: called on a resize, a pane
+// toggle, and a preset switch. It (1) computes the visible
+// set, (2) arranges it into outer Rects for the current size, (3) sizes each
+// visible surface to its box inner area, and (4) keeps the focus valid — if the
+// focused pane went hidden (or was dropped), focus moves to a neighbouring
+// laid-out pane, never touching any pane's content state (ADR-0026).
+func (m *Model) reflow() {
+	if m.w <= 0 || m.h <= 0 {
+		return
+	}
+	visible := m.visibleOrder()
+	m.rects = arrange(m.preset, visible, m.w, m.areaH())
+
+	for _, id := range m.order {
+		s := m.surfaces[id]
+		r, shown := m.rects[id]
+		if !shown {
+			continue
+		}
+		iw, ih := innerSize(r.W, r.H)
+		s.SetSize(iw, ih)
+	}
+
+	// Keep the focus on a pane that was actually laid out. A pane can be in the
+	// visible set yet dropped by arrange at a tiny terminal, so check the rects, not
+	// just visibility.
+	if _, ok := m.rects[m.focused]; !ok {
+		m.focused = m.firstLaidOut()
+	}
+	m.applyFocus()
+}
+
+// innerSize converts an outer box rectangle to the inner content area a surface
+// is sized to, clamped to at least 1×1 so a tiny cell never produces a negative
+// size.
+func innerSize(w, h int) (int, int) {
+	iw, ih := w-boxOverheadW, h-boxOverheadH
+	if iw < 1 {
+		iw = 1
+	}
+	if ih < 1 {
+		ih = 1
+	}
+	return iw, ih
+}
+
+// applyFocus pushes each surface's three-state focus from the layout state
+// (ADR-0026): the focused pane is active, every other visible pane is selected
+// (its cursor and detail stay visible, muted), and a hidden surface is idle.
+func (m *Model) applyFocus() {
+	for _, id := range m.order {
+		f := widget.FocusIdle
+		if m.isVisible(id) {
+			f = m.focusOf(id)
+		}
+		m.surfaces[id].SetFocus(f)
 	}
 }

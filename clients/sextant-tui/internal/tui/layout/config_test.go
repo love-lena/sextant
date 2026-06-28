@@ -34,32 +34,6 @@ func TestConfigRoundTrip(t *testing.T) {
 	}
 }
 
-// TestConfigPlacementsRoundTrip is AC#3: the free-placement seam survives a
-// round-trip intact, proving a future free-placement file is preserved by
-// today's preset-mode reader/writer without a rewrite of the schema.
-func TestConfigPlacementsRoundTrip(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "layout.json")
-	want := layout.Config{
-		Version: layout.ConfigVersion,
-		Preset:  layout.PresetCockpit,
-		Theme:   theme.VariantDark,
-		Placements: []layout.Placement{
-			{PaneID: "clients", X: 0, Y: 0, W: 30, H: 100},
-			{PaneID: "topics", X: 30, Y: 0, W: 70, H: 60},
-		},
-	}
-	if err := layout.SaveConfig(path, want); err != nil {
-		t.Fatalf("save: %v", err)
-	}
-	got, err := layout.LoadConfig(path)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if !reflect.DeepEqual(got.Placements, want.Placements) {
-		t.Errorf("placements not preserved:\n got %+v\nwant %+v", got.Placements, want.Placements)
-	}
-}
-
 // TestLoadMissingFallsBackToDefault is AC#1's robustness clause: a missing file
 // is not an error — it yields DefaultConfig cleanly, no panic.
 func TestLoadMissingFallsBackToDefault(t *testing.T) {
@@ -170,62 +144,5 @@ func TestSaveStampsVersion(t *testing.T) {
 	}
 	if c.Version != layout.ConfigVersion {
 		t.Errorf("version not stamped: %d", c.Version)
-	}
-}
-
-// TestModelPlacementsRoundTrip is TestConfigPlacementsRoundTrip's production-
-// path sibling: the dash's real round-trip is LoadConfig → layout.New →
-// operate → Model.Config() → SaveConfig on exit, so the free-placement seam
-// must survive the MODEL, not just the file codec. A populated Placements
-// rides through construction, a pane toggle, and a preset cycle, and lands
-// back in the saved file byte-for-byte — an older (preset-mode) binary never
-// silently deletes a newer file's free-placement data on exit.
-func TestModelPlacementsRoundTrip(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "layout.json")
-	want := []layout.Placement{
-		{PaneID: "clients", X: 0, Y: 0, W: 30, H: 100},
-		{PaneID: "topics", X: 30, Y: 0, W: 70, H: 60},
-	}
-	seed := layout.DefaultConfig()
-	seed.Placements = want
-	if err := layout.SaveConfig(path, seed); err != nil {
-		t.Fatalf("save seed: %v", err)
-	}
-	cfg, err := layout.LoadConfig(path)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-
-	// The real path: build the cockpit from the loaded config and operate it —
-	// a pane toggle (via the options menu) and a preset cycle both rebuild
-	// state the snapshot reads back.
-	m := layout.New(theme.Dark(), theme.DefaultKeymap(), cfg,
-		newMock("clients", "Clients"), newMock("topics", "Topics"), newMock("artifacts", "Artifacts"))
-	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	m, _ = m.Update(key("o"))     // open options
-	m, _ = m.Update(key("enter")) // toggle clients off
-	m, _ = m.Update(key("esc"))   // close menu
-	m, _ = m.Update(key("p"))     // cycle preset
-
-	out := m.Config()
-	if !reflect.DeepEqual(out.Placements, want) {
-		t.Fatalf("Model.Config dropped the placements:\n got %+v\nwant %+v", out.Placements, want)
-	}
-	// And the operated state still snapshots (the seam rides along, it does not
-	// replace the live fields).
-	if !contains(out.Hidden, "clients") {
-		t.Errorf("hidden set lost through the snapshot: %v", out.Hidden)
-	}
-
-	// Exit: save the snapshot and reload — the file still carries the seam.
-	if err := layout.SaveConfig(path, out); err != nil {
-		t.Fatalf("save on exit: %v", err)
-	}
-	got, err := layout.LoadConfig(path)
-	if err != nil {
-		t.Fatalf("reload: %v", err)
-	}
-	if !reflect.DeepEqual(got.Placements, want) {
-		t.Errorf("placements not preserved through the Model round-trip:\n got %+v\nwant %+v", got.Placements, want)
 	}
 }

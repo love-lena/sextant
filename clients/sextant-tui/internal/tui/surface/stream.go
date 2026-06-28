@@ -546,16 +546,15 @@ func (s *Stream) publish(text string) tea.Cmd {
 	}
 }
 
-// publishedMsg reports the outcome of a compose/comment publish. Success carries
-// no data (the line round-trips back through the feed); a failure carries the
-// error.
+// publishedMsg reports the outcome of a compose publish. Success carries no data
+// (the line round-trips back through the feed); a failure carries the error.
 //
-// owner addresses the result to the surface that issued the publish. The layout
-// broadcasts every non-key message to ALL mounted panes, and several publishing
-// surfaces can be live at once (a DM, a topic conversation, an artifact review),
-// so without the tag one pane's publish failure would footer every conversation
-// — and one pane's success would clear another pane's real error. It is `any`
-// because both *Stream and *Artifact publish; each claims only its own.
+// owner addresses the result to the stream that issued the publish. The layout
+// broadcasts every non-key message to ALL mounted panes, and several streams can
+// be live at once (a DM, a topic conversation), so without the tag one pane's
+// publish failure would footer every conversation — and one pane's success would
+// clear another pane's real error. It is `any` so a test can pass an untagged
+// (nil owner) result; each stream claims only its own.
 type publishedMsg struct {
 	owner any
 	err   error

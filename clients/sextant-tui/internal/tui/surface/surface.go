@@ -139,15 +139,6 @@ func isTextKey(msg tea.KeyMsg) bool {
 	return msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace
 }
 
-// isTextChunk reports whether a key message is burst/pasted text rather than a
-// single keystroke: a bracketed paste (even a single character) or a multi-rune
-// KeyRunes chunk. Such a chunk must never be matched against bindings — it is
-// content, period. The predicate itself lives in widget (the lowest stratum);
-// this is the surface stratum applying the same discipline to its own matches.
-func isTextChunk(msg tea.KeyMsg) bool {
-	return widget.IsTextChunk(msg)
-}
-
 // errorFooter renders a one-line error footer in the alert hue (base08, the
 // drain/alert slot), clamped to width and truncated to one row. Every surface
 // renders it from its captured error so a failure is visible, never swallowed
