@@ -188,7 +188,15 @@ _Avoid_: job, task, session; conflating a run (one instance) with the **workflow
 (the reusable template)
 
 **Coordinator**:
-The client that drives a **run**'s steps and records its progress.
+The client that drives a **run**'s steps and records its progress — the **run
+executor** (ADR-0051). It is the SINGLE WRITER of the run envelope: the dash writes
+the run once at spawn and is read-only after (it polls); the coordinator adopts the
+run on a **`run.start`** wake and walks its steps by kind (`work` → dispatch an
+agent; `checkpoint` → park at `waiting` for an operator **`run.control`** approve;
+`brief` → the terminal stopping brief, gated on a brief artifact). A dispatched agent
+reports a step done with a **`run.event`** on `msg.workflow.run.<id>.events` (the
+low-volume step signal — never the **activity feed**'s channel). A failed step → the
+run is `blocked` (there is no `failed` run status).
 _Avoid_: orchestrator, manager, controller
 
 **Dispatcher**:
