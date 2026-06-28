@@ -1,36 +1,34 @@
 package main
 
-// TestStartConsumer covers the workflow.start consumer (S2 slice):
+// Integration tests for the run executor (TASK-236, ADR-0048) over a REAL bus.
 //
-//   (a) a workflow.start frame starts exactly one run and an ack status:ok
-//       echoing the requestId + nonce.
-//   (b) a duplicate frame id (replayed by DeliverAll) starts NO second run
-//       (in-memory seen fence works).
-//   (c) a bad record (empty prompt) is ignored (no ack).
-//   (d) TIMING: the ok-ack arrives BEFORE the run completes (ack = accepted,
-//       not done). This is the regression test for the ack-after-completion
-//       bug: the old code ran `wfID, err := sc.runWorkflow(req)` then acked,
-//       so the ack landed only after the coordinator finished — too late for
-//       the dash's ~10s timeout in production. The new code acks immediately
-//       after prepareWorkflow, then runs in a goroutine.
+// The coordinator adopts a sextant.workflow.run/v1 run the requester (the dash)
+// wrote, then drives its steps to a terminal status. A test-side dispatcher
+// cooperates: for every spawn.request it publishes a spawn.ack, then a run.event
+// step-done on the run's events subject — echoing the step id the coordinator asked
+// for (parsed from the prompt's RUN_STEP directive), and attaching a brief artifact
+// for the brief step. This matches what the M5.2 dispatcher + a worker do in
+// production — the coordinator is not faked.
 //
-// The test drives the REAL consumer path: real bus, real Subscribe/parse/fence/ack.
-// A test-side dispatcher cooperates to make the coordinator succeed by publishing
-// a spawn.ack for every spawn.request it receives, then publishing a step-done
-// workflow.event so the coordinator's dispatch step completes. This matches what
-// the M5.2 dispatcher does in production — the consumer is not faked.
+// Coverage:
+//   - TestRun_AdvancesToBrief: work → brief advances to done; brief attached; activity.
+//   - TestRun_CheckpointWaitsForApprove: a checkpoint parks at waiting → approve → done.
+//   - TestRun_CancelHalts: a run.control cancel drives the run to cancelled.
+//   - TestStartConsumer_FreshStartAcks: run.start → ok ack echoing id + nonce.
+//   - TestStartConsumer_IgnoresHistoricalStart: TASK-192 — new-only delivery, no replay.
+
 import (
 	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/love-lena/sextant/bus"
 	"github.com/love-lena/sextant/conventions/workflow/go"
-	"github.com/love-lena/sextant/protocol/wire"
 	"github.com/love-lena/sextant/sdk/go"
 )
 
@@ -57,61 +55,26 @@ func dialBusClient(t *testing.T, b *bus.Bus, id string) *sextant.Client {
 	return c
 }
 
-// TestStartConsumer_OneRunPerRequest is the integration test for the
-// workflow.start consumer: it asserts (a-d) per the file-level comment.
-func TestStartConsumer_OneRunPerRequest(t *testing.T) {
-	// TASK-170 — temporarily quarantined under -race for the v0.5.3 cut.
-	// The race is TEST-ONLY: this test's cooperating subscriptions (the test-side
-	// dispatcher + ack collector) keep delivering across its t.Run subtests, and
-	// NATS does not wait for an in-flight delivery callback on Unsubscribe/Close —
-	// so a delivery goroutine can still be invoking the handler when the next
-	// subtest's testing.T bookkeeping runs, racing the closure-captured *T. It
-	// involves testing.T, so it cannot occur in the shipped consumer; the test
-	// runs and asserts fully WITHOUT -race. The proper fix (drain each
-	// subscription before teardown, or give each phase its own bus + subject)
-	// removes this skip. See TASK-170.
-	if raceDetectorEnabled {
-		t.Skip("quarantined under -race pending the cross-subtest harness fix (TASK-170) — test-only race, prod unaffected")
+// parseDirective pulls "KEY=value" out of a prompt (value ends at whitespace).
+func parseDirective(prompt, key string) string {
+	i := strings.Index(prompt, key+"=")
+	if i < 0 {
+		return ""
 	}
-	b, err := bus.Start(t.Context(), bus.Config{StoreDir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("bus.Start: %v", err)
+	rest := prompt[i+len(key)+1:]
+	if j := strings.IndexAny(rest, " \n\t"); j >= 0 {
+		rest = rest[:j]
 	}
-	t.Cleanup(b.Shutdown)
+	return rest
+}
 
-	// consumer = the workflow coordinator running the startConsumer.
-	consumer := dialBusClient(t, b, "consumer")
-	// requester = the client that publishes workflow.start (e.g. violet / the dash).
-	requester := dialBusClient(t, b, "requester")
-	// dispatcher = a test-side dispatcher that cooperates with the coordinator.
-	dispatcher := dialBusClient(t, b, "dispatcher")
-
-	spawnSubj := "msg.topic.spawn"
-	// stepDelay is the deliberate pause the dispatcher inserts before completing
-	// the step. The timing test asserts the ok-ack arrives well within this
-	// window — i.e. before the run finishes.
-	const stepDelay = 1500 * time.Millisecond
-	stepTimeout := 10 * time.Second
-
-	// ctx is an independent context for all shared bus clients and goroutines.
-	// We deliberately do NOT derive it from t.Context(): Go's race detector flags
-	// a race when a NATS delivery goroutine holds a context derived from
-	// t.Context() while the testing framework writes to the *T during sub-test
-	// teardown. A context.Background()-derived context avoids that and is safe
-	// because t.Cleanup cancels it before the bus shuts down.
-	ctx, cancelCtx := context.WithCancel(context.Background())
-	t.Cleanup(cancelCtx)
-
-	// runDone tracks outstanding background dispatcher goroutines so each
-	// sub-test can drain them before it exits (prevents cross-sub-test pollution).
-	var runDone sync.WaitGroup
-
-	// --- Test-side dispatcher ---
-	// Listens on the spawn subject; for every spawn.request it publishes a
-	// spawn.ack, then waits stepDelay before publishing the step-done event.
-	// The delay is intentional: it makes the timing test meaningful — the ack
-	// must arrive before the delay elapses, proving ack-before-run.
-	_, err = dispatcher.Subscribe(ctx, spawnSubj, func(m sextant.Message) {
+// cooperatingDispatcher subscribes to the spawn subject and, for every spawn.request,
+// publishes a spawn.ack then a run.event step-done (echoing RUN_STEP, with a brief
+// artifact + outcome for the brief step). delay defers the step-done so a timing
+// assertion can observe ack-before-done.
+func cooperatingDispatcher(t *testing.T, ctx context.Context, d *sextant.Client, spawnSubj string, delay time.Duration) {
+	t.Helper()
+	_, err := d.Subscribe(ctx, spawnSubj, func(m sextant.Message) {
 		var req struct {
 			Type   string `json:"$type"`
 			Job    string `json:"job,omitempty"`
@@ -120,472 +83,323 @@ func TestStartConsumer_OneRunPerRequest(t *testing.T) {
 		if err := json.Unmarshal(m.Frame.Record, &req); err != nil || req.Type != workflow.TypeSpawnRequest {
 			return
 		}
-
-		// Publish spawn.ack immediately so the coordinator's ack-wait unblocks.
-		ack := workflow.SpawnAck{
-			Type:      workflow.TypeSpawnAck,
-			ID:        "agent-test-" + m.Frame.ID[:8],
-			RequestID: m.Frame.ID,
-			Status:    "ok",
-		}
+		ack := workflow.SpawnAck{Type: workflow.TypeSpawnAck, ID: "agent-" + m.Frame.ID[:8], RequestID: m.Frame.ID, Status: workflow.StatusOK}
 		ackBytes, _ := json.Marshal(ack)
-		if err := dispatcher.Publish(ctx, spawnSubj, json.RawMessage(ackBytes)); err != nil {
+		if err := d.Publish(ctx, spawnSubj, json.RawMessage(ackBytes)); err != nil {
 			return
 		}
-
-		// Delay before completing the step. The workflow.start.ack must arrive
-		// before this sleep ends (the timing regression test).
-		runDone.Add(1)
+		stepID := parseDirective(req.Prompt, "RUN_STEP")
+		ev := workflow.RunEvent{Step: stepID, Status: workflow.StepDone}
+		if strings.Contains(req.Prompt, "stopping brief") {
+			ev.Outcome = workflow.RunDone
+			ev.Artifacts = []workflow.ProducedArtifact{{Name: "brief-" + req.Job, Kind: "brief", Version: 1}}
+		}
 		go func() {
-			defer runDone.Done()
-			select {
-			case <-time.After(stepDelay):
-			case <-ctx.Done():
-				return
+			if delay > 0 {
+				select {
+				case <-time.After(delay):
+				case <-ctx.Done():
+					return
+				}
 			}
-			evBytes := workflow.WorkflowEvent{Step: "run", Status: workflow.StepDone}.Marshal()
-			_ = dispatcher.Publish(ctx, workflow.EventsSubject(req.Job), evBytes)
+			_ = d.Publish(ctx, workflow.RunEventsSubject(req.Job), ev.Marshal())
 		}()
 	}, sextant.DeliverAll())
 	if err != nil {
 		t.Fatalf("dispatcher Subscribe: %v", err)
 	}
+}
 
-	// Start the consumer under the same background-derived context.
-	consumerCtx, cancelConsumer := context.WithCancel(ctx)
-	t.Cleanup(cancelConsumer)
+// writeRunAndStart writes the run artifact (the dash's spawn act) then publishes a
+// run.start to wake the coordinator. Returns the run id and the start frame id.
+func writeRunAndStart(t *testing.T, ctx context.Context, requester *sextant.Client, run workflow.Run, nonce string) (string, string) {
+	t.Helper()
+	if _, err := requester.CreateArtifact(ctx, workflow.RunStateName(run.ID), run.Marshal()); err != nil {
+		t.Fatalf("create run artifact: %v", err)
+	}
+	out, err := requester.PublishMsg(ctx, workflow.RunStartSubject, workflow.RunStartRecord(workflow.RunStartRequest{ID: run.ID, Nonce: nonce}))
+	if err != nil {
+		t.Fatalf("publish run.start: %v", err)
+	}
+	return run.ID, out.ID
+}
 
-	sc, sub, err := newStartConsumer(consumerCtx, consumer, spawnSubj, stepTimeout)
+// pollRun reads the run artifact until pred holds or the deadline elapses.
+func pollRun(t *testing.T, ctx context.Context, c *sextant.Client, runID string, deadline time.Duration, pred func(workflow.Run) bool) workflow.Run {
+	t.Helper()
+	end := time.Now().Add(deadline)
+	for time.Now().Before(end) {
+		art, err := c.GetArtifact(ctx, workflow.RunStateName(runID))
+		if err == nil {
+			if r, ok := workflow.ParseRun(art.Record); ok && pred(r) {
+				return r
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	art, _ := c.GetArtifact(ctx, workflow.RunStateName(runID))
+	r, _ := workflow.ParseRun(art.Record)
+	t.Fatalf("run %s did not reach the expected state within %s; last: status=%q steps=%+v", runID, deadline, r.Status, r.Steps)
+	return r
+}
+
+func startListenConsumer(t *testing.T, ctx context.Context, consumer *sextant.Client, spawnSubj string, stepTimeout time.Duration) {
+	t.Helper()
+	_, sub, err := newStartConsumer(ctx, consumer, spawnSubj, stepTimeout)
 	if err != nil {
 		t.Fatalf("newStartConsumer: %v", err)
 	}
 	t.Cleanup(sub.Stop)
+}
 
-	// Collect workflow.start.ack records published back on workflow.StartSubject.
-	type capturedAck struct {
-		ack       workflow.WorkflowStartAck
-		arrivedAt time.Time
+// TestRun_AdvancesToBrief covers AC#1–#4: a dash-spawned run with a work step and a
+// terminal brief advances on its own to done, attaching the brief and recording activity.
+func TestRun_AdvancesToBrief(t *testing.T) {
+	b, err := bus.Start(t.Context(), bus.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("bus.Start: %v", err)
 	}
+	t.Cleanup(b.Shutdown)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	consumer := dialBusClient(t, b, "consumer")
+	requester := dialBusClient(t, b, "requester")
+	dispatcher := dialBusClient(t, b, "dispatcher")
+	spawnSubj := "msg.topic.spawn"
+
+	cooperatingDispatcher(t, ctx, dispatcher, spawnSubj, 0)
+	startListenConsumer(t, ctx, consumer, spawnSubj, 10*time.Second)
+
+	run := workflow.Run{
+		ID: "01RUNADV", Status: workflow.RunRunning, Objective: "do the thing",
+		Steps: []workflow.RunStep{
+			{ID: "s1", Label: "investigate", Kind: workflow.KindWork, Status: workflow.StepRunning},
+			{ID: "brief", Label: "stopping brief", Kind: workflow.KindBrief, Status: workflow.StepUpcoming},
+		},
+	}
+	writeRunAndStart(t, ctx, requester, run, "")
+
+	got := pollRun(t, ctx, requester, run.ID, 15*time.Second, func(r workflow.Run) bool {
+		return workflow.IsTerminalRun(r.Status)
+	})
+	if got.Status != workflow.RunDone {
+		t.Errorf("final status = %q, want done", got.Status)
+	}
+	if got.Steps[0].Status != workflow.StepDone {
+		t.Errorf("s1 status = %q, want done", got.Steps[0].Status)
+	}
+	hasBrief := false
+	for _, a := range got.Artifacts {
+		if a.Kind == "brief" {
+			hasBrief = true
+		}
+	}
+	if !hasBrief {
+		t.Errorf("no brief artifact attached; artifacts=%+v", got.Artifacts)
+	}
+	if len(got.Activity) < 2 {
+		t.Errorf("want ≥2 activity entries (step done + terminal), got %d", len(got.Activity))
+	}
+}
+
+// TestRun_CheckpointWaitsForApprove covers TASK-225: a checkpoint step parks the run
+// at waiting until an operator run.control approve, then it advances to done.
+func TestRun_CheckpointWaitsForApprove(t *testing.T) {
+	b, err := bus.Start(t.Context(), bus.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("bus.Start: %v", err)
+	}
+	t.Cleanup(b.Shutdown)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	consumer := dialBusClient(t, b, "consumer")
+	requester := dialBusClient(t, b, "requester")
+	dispatcher := dialBusClient(t, b, "dispatcher")
+	spawnSubj := "msg.topic.spawn"
+
+	cooperatingDispatcher(t, ctx, dispatcher, spawnSubj, 0)
+	startListenConsumer(t, ctx, consumer, spawnSubj, 10*time.Second)
+
+	run := workflow.Run{
+		ID: "01RUNCHK", Status: workflow.RunRunning, Objective: "needs a gate",
+		Steps: []workflow.RunStep{
+			{ID: "s1", Label: "approve me", Kind: workflow.KindCheckpoint, Status: workflow.StepUpcoming},
+			{ID: "brief", Label: "stopping brief", Kind: workflow.KindBrief, Status: workflow.StepUpcoming},
+		},
+	}
+	writeRunAndStart(t, ctx, requester, run, "")
+
+	// Parks at waiting.
+	pollRun(t, ctx, requester, run.ID, 10*time.Second, func(r workflow.Run) bool {
+		return r.Status == workflow.RunWaiting && r.Steps[0].Status == workflow.StepWaiting
+	})
+
+	// Operator approves.
+	if err := requester.Publish(ctx, workflow.RunControlSubject(run.ID),
+		(workflow.RunControl{Verb: workflow.CtlApprove}).Marshal()); err != nil {
+		t.Fatalf("publish approve: %v", err)
+	}
+
+	got := pollRun(t, ctx, requester, run.ID, 15*time.Second, func(r workflow.Run) bool {
+		return workflow.IsTerminalRun(r.Status)
+	})
+	if got.Status != workflow.RunDone {
+		t.Errorf("final status = %q, want done", got.Status)
+	}
+	if got.Steps[0].Status != workflow.StepDone {
+		t.Errorf("checkpoint step status = %q, want done", got.Steps[0].Status)
+	}
+}
+
+// TestRun_CancelHalts covers TASK-226: a run.control cancel while a run is waiting at
+// a checkpoint drives it to cancelled.
+func TestRun_CancelHalts(t *testing.T) {
+	b, err := bus.Start(t.Context(), bus.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("bus.Start: %v", err)
+	}
+	t.Cleanup(b.Shutdown)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	consumer := dialBusClient(t, b, "consumer")
+	requester := dialBusClient(t, b, "requester")
+	dispatcher := dialBusClient(t, b, "dispatcher")
+	spawnSubj := "msg.topic.spawn"
+
+	cooperatingDispatcher(t, ctx, dispatcher, spawnSubj, 0)
+	startListenConsumer(t, ctx, consumer, spawnSubj, 10*time.Second)
+
+	run := workflow.Run{
+		ID: "01RUNCAN", Status: workflow.RunRunning, Objective: "cancel me",
+		Steps: []workflow.RunStep{
+			{ID: "s1", Label: "wait here", Kind: workflow.KindCheckpoint, Status: workflow.StepUpcoming},
+			{ID: "brief", Label: "stopping brief", Kind: workflow.KindBrief, Status: workflow.StepUpcoming},
+		},
+	}
+	writeRunAndStart(t, ctx, requester, run, "")
+
+	pollRun(t, ctx, requester, run.ID, 10*time.Second, func(r workflow.Run) bool {
+		return r.Status == workflow.RunWaiting
+	})
+
+	if err := requester.Publish(ctx, workflow.RunControlSubject(run.ID),
+		(workflow.RunControl{Verb: workflow.CtlCancel}).Marshal()); err != nil {
+		t.Fatalf("publish cancel: %v", err)
+	}
+
+	got := pollRun(t, ctx, requester, run.ID, 10*time.Second, func(r workflow.Run) bool {
+		return r.Status == workflow.RunCancelled
+	})
+	sawCancel := false
+	for _, a := range got.Activity {
+		if strings.Contains(a.Text, "cancel") {
+			sawCancel = true
+		}
+	}
+	if !sawCancel {
+		t.Errorf("no cancel activity entry; activity=%+v", got.Activity)
+	}
+}
+
+// TestStartConsumer_FreshStartAcks: a run.start for a written run gets an ok ack
+// echoing the run id + nonce, before the run completes.
+func TestStartConsumer_FreshStartAcks(t *testing.T) {
+	b, err := bus.Start(t.Context(), bus.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("bus.Start: %v", err)
+	}
+	t.Cleanup(b.Shutdown)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	consumer := dialBusClient(t, b, "consumer")
+	requester := dialBusClient(t, b, "requester")
+	dispatcher := dialBusClient(t, b, "dispatcher")
+	spawnSubj := "msg.topic.spawn"
+
+	// Delay step-done so the ack must arrive before the run completes.
+	cooperatingDispatcher(t, ctx, dispatcher, spawnSubj, 1500*time.Millisecond)
+	startListenConsumer(t, ctx, consumer, spawnSubj, 10*time.Second)
+
 	var (
-		ackMu   sync.Mutex
-		ackList []capturedAck
-		ackCond = sync.NewCond(&ackMu)
+		ackMu sync.Mutex
+		acks  []workflow.RunStartAck
 	)
-	_, err = requester.Subscribe(ctx, workflow.StartSubject, func(m sextant.Message) {
-		var a workflow.WorkflowStartAck
-		if err := json.Unmarshal(m.Frame.Record, &a); err != nil || a.Type != workflow.TypeWorkflowStartAck {
+	if _, err := requester.Subscribe(ctx, workflow.RunStartSubject, func(m sextant.Message) {
+		var a workflow.RunStartAck
+		if err := json.Unmarshal(m.Frame.Record, &a); err != nil || a.Type != workflow.TypeRunStartAck {
 			return
 		}
 		ackMu.Lock()
-		ackList = append(ackList, capturedAck{ack: a, arrivedAt: time.Now()})
-		ackCond.Broadcast()
+		acks = append(acks, a)
 		ackMu.Unlock()
-	}, sextant.DeliverAll())
-	if err != nil {
-		t.Fatalf("requester Subscribe: %v", err)
+	}, sextant.DeliverAll()); err != nil {
+		t.Fatalf("subscribe acks: %v", err)
 	}
 
-	// waitForAcks blocks until at least n acks have been collected or the
-	// deadline elapses.
-	waitForAcks := func(t *testing.T, n int, deadline time.Duration) []capturedAck {
-		t.Helper()
-		timer := time.AfterFunc(deadline, func() {
-			ackMu.Lock()
-			ackCond.Broadcast()
-			ackMu.Unlock()
-		})
-		defer timer.Stop()
-		end := time.Now().Add(deadline)
+	run := workflow.Run{
+		ID: "01RUNACK", Status: workflow.RunRunning, Objective: "ack me",
+		Steps: []workflow.RunStep{{ID: "s1", Kind: workflow.KindWork, Status: workflow.StepRunning}},
+	}
+	_, _ = writeRunAndStart(t, ctx, requester, run, "nonce-xyz")
+
+	deadline := time.Now().Add(750 * time.Millisecond) // < the 1.5s step delay
+	for time.Now().Before(deadline) {
 		ackMu.Lock()
-		for len(ackList) < n && time.Now().Before(end) {
-			ackCond.Wait()
-		}
-		got := make([]capturedAck, len(ackList))
-		copy(got, ackList)
+		n := len(acks)
 		ackMu.Unlock()
-		return got
+		if n > 0 {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
-
-	resetAcks := func() {
-		ackMu.Lock()
-		ackList = nil
-		ackMu.Unlock()
+	ackMu.Lock()
+	defer ackMu.Unlock()
+	if len(acks) != 1 {
+		t.Fatalf("want exactly 1 ack before the run completes, got %d", len(acks))
 	}
-
-	// --- (a) fresh workflow.start starts exactly one run + ack status:ok ---
-	t.Run("fresh_start_gets_ok_ack", func(t *testing.T) {
-		resetAcks()
-
-		const wantNonce = "dash-nonce-abc123"
-		rec := workflow.WorkflowStartRequest{
-			Type:     workflow.TypeWorkflowStart,
-			Prompt:   "build something",
-			Nonce:    wantNonce,
-			Nickname: "tester",
-		}
-		recBytes, _ := json.Marshal(rec)
-		out, err := requester.PublishMsg(ctx, workflow.StartSubject, json.RawMessage(recBytes))
-		if err != nil {
-			t.Fatalf("PublishMsg workflow.start: %v", err)
-		}
-		reqID := out.ID
-
-		acks := waitForAcks(t, 1, 10*time.Second)
-		if len(acks) != 1 {
-			t.Fatalf("want 1 ack, got %d", len(acks))
-		}
-		a := acks[0].ack
-		if a.Status != workflow.StatusOK {
-			t.Errorf("ack.status = %q, want %q (error: %s)", a.Status, workflow.StatusOK, a.Error)
-		}
-		if a.RequestID != reqID {
-			t.Errorf("ack.requestId = %q, want %q", a.RequestID, reqID)
-		}
-		if a.Nonce != wantNonce {
-			t.Errorf("ack.nonce = %q, want %q (must echo request nonce verbatim)", a.Nonce, wantNonce)
-		}
-		if a.WorkflowID == "" {
-			t.Error("ack.workflowId is empty; should carry the run id")
-		}
-
-		// Drain background goroutines before the next sub-test.
-		runDone.Wait()
-	})
-
-	// --- (b) duplicate frame id: fence prevents a second run ---
-	t.Run("duplicate_frame_id_ignored", func(t *testing.T) {
-		resetAcks()
-
-		// Simulate DeliverAll replaying a frame by injecting the frame ID directly
-		// into the consumer's seen map, then calling handle with that same ID.
-		fakeID := "FAKEID-REPLAY-1234"
-		sc.mu.Lock()
-		sc.seen[fakeID] = true
-		sc.mu.Unlock()
-
-		req := workflow.WorkflowStartRequest{Type: workflow.TypeWorkflowStart, Prompt: "replay"}
-		recBytes, _ := json.Marshal(req)
-		sc.handle(sextant.Message{
-			Frame: wire.Frame{
-				ID:     fakeID,
-				Record: json.RawMessage(recBytes),
-			},
-		})
-
-		got := waitForAcks(t, 1, 300*time.Millisecond)
-		if len(got) != 0 {
-			t.Errorf("fence failed: got %d ack(s) for duplicate frame id, want 0", len(got))
-		}
-	})
-
-	// --- (c) empty prompt is ignored (no ack) ---
-	t.Run("empty_prompt_ignored", func(t *testing.T) {
-		resetAcks()
-
-		bad := json.RawMessage(`{"$type":"workflow.start","prompt":""}`)
-		if _, err := requester.PublishMsg(ctx, workflow.StartSubject, bad); err != nil {
-			t.Fatalf("PublishMsg bad record: %v", err)
-		}
-		notWF := json.RawMessage(`{"$type":"chat.message","text":"hi"}`)
-		if _, err := requester.PublishMsg(ctx, workflow.StartSubject, notWF); err != nil {
-			t.Fatalf("PublishMsg wrong type: %v", err)
-		}
-
-		got := waitForAcks(t, 1, 300*time.Millisecond)
-		if len(got) != 0 {
-			t.Errorf("bad record not ignored: got %d ack(s), want 0", len(got))
-		}
-	})
-
-	// --- (d) TIMING: ok-ack arrives BEFORE the run completes ---
-	//
-	// The dispatcher delays the step-done signal by stepDelay (1.5s). We assert
-	// the ok-ack lands in well under half that window, proving ack-before-run.
-	// This test FAILS on the old ack-after-completion code (ack arrives ~1.5s
-	// late) and PASSES on the early-ack + goroutine-run fix.
-	t.Run("ack_arrives_before_run_completes", func(t *testing.T) {
-		resetAcks()
-
-		rec := workflow.WorkflowStartRequest{
-			Type:   workflow.TypeWorkflowStart,
-			Prompt: "timing-sensitive task",
-			Nonce:  "timing-nonce",
-		}
-		recBytes, _ := json.Marshal(rec)
-		publishedAt := time.Now()
-		if _, err := requester.PublishMsg(ctx, workflow.StartSubject, json.RawMessage(recBytes)); err != nil {
-			t.Fatalf("PublishMsg: %v", err)
-		}
-
-		// The ack should arrive well before stepDelay elapses. Give it half the
-		// step delay as a generous deadline; production expects it in < 1s.
-		ackDeadline := stepDelay / 2
-		acks := waitForAcks(t, 1, ackDeadline)
-		if len(acks) != 1 {
-			t.Fatalf("ack did not arrive within %s (want early ack, not ack-after-completion); got %d ack(s)", ackDeadline, len(acks))
-		}
-		a := acks[0].ack
-		if a.Status != workflow.StatusOK {
-			t.Errorf("ack.status = %q, want %q (error: %s)", a.Status, workflow.StatusOK, a.Error)
-		}
-		elapsed := acks[0].arrivedAt.Sub(publishedAt)
-		if elapsed >= stepDelay {
-			t.Errorf("ack arrived after run completion (elapsed %s >= stepDelay %s); ack-after-run bug NOT fixed", elapsed, stepDelay)
-		}
-		t.Logf("ack arrived %s after publish (stepDelay=%s) — ack-before-run confirmed", elapsed, stepDelay)
-
-		// Drain the background run goroutine before teardown.
-		runDone.Wait()
-	})
-}
-
-// TestStartConsumer_SubsStoppedAfterRun asserts that the helper subscriptions
-// opened by prepareWorkflow are actually TORN DOWN after each run completes —
-// not just that Stop() was called on the handle, but that delivery ceases.
-//
-// Behavioral assertion: after wg.Wait() (all runs done, stopSubs deferred),
-// publish a probe workflow.event on workflow.EventsSubject(wfID) for each completed
-// run. The coordinator's onEvent handler calls wake(co.evCh); if the sub is
-// still live, co.evCh gets a signal. Assert co.evCh is EMPTY after the probe —
-// proving the sub was stopped and the coordinator is no longer receiving.
-//
-// FAILS on the old `_ = sub` discard (sub still live → probe wakes evCh).
-// PASSES with the stopSubs closure fix (sub stopped → no wake).
-//
-// Also asserts the error path: if loadDirect succeeds but a Subscribe call
-// fails mid-loop, the already-opened subs are cleaned up (no partial leak).
-func TestStartConsumer_SubsStoppedAfterRun(t *testing.T) {
-	b, err := bus.Start(t.Context(), bus.Config{StoreDir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("bus.Start: %v", err)
+	if acks[0].Status != workflow.StatusOK {
+		t.Errorf("ack.status = %q, want ok (error: %s)", acks[0].Status, acks[0].Error)
 	}
-	t.Cleanup(b.Shutdown)
-
-	consumer := dialBusClient(t, b, "consumer-leak")
-	dispatcher := dialBusClient(t, b, "dispatcher-leak")
-	probe := dialBusClient(t, b, "probe-leak")
-
-	spawnSubj := "msg.topic.spawn"
-	stepTimeout := 5 * time.Second
-
-	ctx, cancelCtx := context.WithCancel(context.Background())
-	t.Cleanup(cancelCtx)
-
-	// Test-side dispatcher: acks immediately + fires step-done.
-	_, err = dispatcher.Subscribe(ctx, spawnSubj, func(m sextant.Message) {
-		var req struct {
-			Type string `json:"$type"`
-			Job  string `json:"job,omitempty"`
-		}
-		if err := json.Unmarshal(m.Frame.Record, &req); err != nil || req.Type != workflow.TypeSpawnRequest {
-			return
-		}
-		ack := workflow.SpawnAck{Type: workflow.TypeSpawnAck, ID: "agent-" + m.Frame.ID[:8], RequestID: m.Frame.ID, Status: "ok"}
-		ackBytes, _ := json.Marshal(ack)
-		_ = dispatcher.Publish(ctx, spawnSubj, json.RawMessage(ackBytes))
-		_ = dispatcher.Publish(ctx, workflow.EventsSubject(req.Job), workflow.WorkflowEvent{Step: "run", Status: workflow.StepDone}.Marshal())
-	}, sextant.DeliverAll())
-	if err != nil {
-		t.Fatalf("dispatcher Subscribe: %v", err)
+	if acks[0].ID != run.ID {
+		t.Errorf("ack.id = %q, want %q", acks[0].ID, run.ID)
 	}
-
-	consumerCtx, cancelConsumer := context.WithCancel(ctx)
-	t.Cleanup(cancelConsumer)
-
-	sc := &startConsumer{
-		ctx: consumerCtx, c: consumer, spawnSubject: spawnSubj, stepTimeout: stepTimeout,
-		seen: map[string]bool{},
-	}
-
-	const runs = 3
-	type runRecord struct {
-		co   *coordinator
-		wfID string
-	}
-	records := make([]runRecord, runs)
-
-	var wg sync.WaitGroup
-	for i := range runs {
-		req := workflow.WorkflowStartRequest{Type: workflow.TypeWorkflowStart, Prompt: "leak-check task"}
-		co, wfID, stopSubs, err := sc.prepareWorkflow(req)
-		if err != nil {
-			t.Fatalf("prepareWorkflow[%d]: %v", i, err)
-		}
-		records[i] = runRecord{co: co, wfID: wfID}
-
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer stopSubs()
-			if err := co.run(); err != nil {
-				t.Logf("run[%d] error (expected at teardown): %v", i, err)
-			}
-		}()
-	}
-
-	// Wait for all runs to complete and stopSubs to fire via defer.
-	wg.Wait()
-
-	// Behavioral assertion: for each completed run, publish a probe
-	// workflow.event on workflow.EventsSubject(wfID). The coordinator's onEvent calls
-	// wake(co.evCh); if the sub is still live, co.evCh would receive a signal.
-	// Drain evCh first (may have a signal from the run), then publish the probe
-	// and assert evCh stays empty — the sub is stopped, delivery is gone.
-	//
-	// The probe is published by the separate probe client so the coordinator's
-	// self-author filter (m.Frame.Author == co.c.ID()) does not suppress it.
-	for i, r := range records {
-		// Drain any pending signal left from the run itself.
-		select {
-		case <-r.co.evCh:
-		default:
-		}
-
-		// Publish a fresh step-done event from the probe client (different author).
-		probeEvent := workflow.WorkflowEvent{Step: "post-run-probe", Status: workflow.StepDone}.Marshal()
-		if err := probe.Publish(ctx, workflow.EventsSubject(r.wfID), probeEvent); err != nil {
-			t.Fatalf("probe publish[%d]: %v", i, err)
-		}
-
-		// Give the bus a moment to deliver if the sub were still live.
-		select {
-		case <-r.co.evCh:
-			t.Errorf("run[%d] wfID=%s: evCh signalled after stopSubs — events sub leaked", i, r.wfID)
-		case <-time.After(300 * time.Millisecond):
-			// good: no delivery to the stopped coordinator
-		}
+	if acks[0].Nonce != "nonce-xyz" {
+		t.Errorf("ack.nonce = %q, want nonce-xyz", acks[0].Nonce)
 	}
 }
 
-// TestStartConsumer_ErrorPathNoLeak asserts that prepareWorkflow does not leave
-// helper subscriptions running when the setup phase fails.
-//
-// The two relevant failure branches in prepareWorkflow are:
-//
-//  1. loadDirect fails (artifact creation error) — no subs were opened, so
-//     the cleanup is a trivial no-op; the returned stopSubs is func(){}.
-//
-//  2. A Subscribe call fails mid-loop — the already-opened subs are stopped
-//     inline before the error return (lines in the subs loop). This branch is
-//     code-verified: the cleanup loop runs synchronously before prepareWorkflow
-//     returns, so no goroutine can outlive it. A production-faithful behavioral
-//     test would require injecting a selective Subscribe failure; that demands a
-//     test seam in production code, which we trade away in favour of the
-//     inline-code guarantee.
-//
-// This test covers branch 1: close the client so CreateArtifact fails, verify
-// prepareWorkflow returns an error and that the returned stopSubs is safe to
-// call (no panic) and leaves nothing running (publish on the events subject
-// after the error is not delivered to any coordinator handler).
-func TestStartConsumer_ErrorPathNoLeak(t *testing.T) {
-	b, err := bus.Start(t.Context(), bus.Config{StoreDir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("bus.Start: %v", err)
-	}
-	t.Cleanup(b.Shutdown)
-
-	failClient := dialBusClient(t, b, "fail-consumer")
-	observer := dialBusClient(t, b, "error-observer")
-
-	spawnSubj := "msg.topic.spawn"
-	stepTimeout := 5 * time.Second
-
-	ctx, cancelCtx := context.WithCancel(context.Background())
-	t.Cleanup(cancelCtx)
-
-	// Use a pre-cancelled context as sc.ctx so loadDirect's CreateArtifact call
-	// gets a context.Canceled error immediately — simulating an environment
-	// failure (e.g. bus disconnect) before any subs are opened.
-	cancelledCtx, cancelIt := context.WithCancel(ctx)
-	cancelIt() // cancel before use
-
-	sc := &startConsumer{
-		ctx: cancelledCtx, c: failClient, spawnSubject: spawnSubj, stepTimeout: stepTimeout,
-		seen: map[string]bool{},
-	}
-
-	req := workflow.WorkflowStartRequest{Type: workflow.TypeWorkflowStart, Prompt: "will fail"}
-	_, wfID, stopSubs, prepErr := sc.prepareWorkflow(req)
-	if prepErr == nil {
-		t.Fatal("prepareWorkflow expected to fail after client close, but returned nil error")
-	}
-	t.Logf("prepareWorkflow returned expected error: %v", prepErr)
-
-	// stopSubs must be callable without panic even on the error path.
-	stopSubs()
-
-	// Verify no sub is lingering: publish on the events subject from the observer
-	// and confirm nothing receives it (no coordinator was ever set up).
-	received := make(chan struct{}, 1)
-	_, subErr := observer.Subscribe(ctx, workflow.EventsSubject(wfID), func(sextant.Message) {
-		select {
-		case received <- struct{}{}:
-		default:
-		}
-	}, sextant.DeliverAll())
-	if subErr != nil {
-		t.Fatalf("observer Subscribe: %v", subErr)
-	}
-
-	probe := workflow.WorkflowEvent{Step: "error-probe", Status: workflow.StepDone}.Marshal()
-	if err := observer.Publish(ctx, workflow.EventsSubject(wfID), probe); err != nil {
-		t.Fatalf("observer Publish: %v", err)
-	}
-
-	// The observer itself gets the message (it's subscribed); drain that.
-	select {
-	case <-received:
-	case <-time.After(2 * time.Second):
-		t.Fatal("observer did not receive its own probe publish — bus not working")
-	}
-
-	// Now confirm no second delivery (which would indicate a leaked coordinator sub).
-	select {
-	case <-received:
-		t.Error("error path leaked a coordinator sub — received a second delivery")
-	case <-time.After(300 * time.Millisecond):
-		// good: only one delivery (the observer itself), no leaked coordinator
-	}
-}
-
-// TestStartConsumer_IgnoresHistoricalStart is the TASK-192 regression: the
-// listen-mode start consumer must deliver only NEW workflow.start requests, never
-// replay history. Before the fix it subscribed with DeliverAll, so every (re)start
-// re-ran EVERY historical start — including stale ones whose step can never
-// complete (no dispatcher → no spawn.ack → 90s timeout → drain → respawn) —
-// crash-looping the coordinator. A start published BEFORE the consumer subscribes
-// must be ignored (no ack); a start published after is handled (ok ack).
+// TestStartConsumer_IgnoresHistoricalStart is the TASK-192 regression: new-only
+// delivery means a run.start published before the consumer subscribes is ignored.
 func TestStartConsumer_IgnoresHistoricalStart(t *testing.T) {
 	b, err := bus.Start(t.Context(), bus.Config{StoreDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("bus.Start: %v", err)
 	}
 	t.Cleanup(b.Shutdown)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 
 	requester := dialBusClient(t, b, "requester")
 	consumer := dialBusClient(t, b, "consumer")
 
-	// Background-derived ctx (not t.Context()) so a delivery goroutine never holds a
-	// t-derived context during teardown; cleanup cancels it before the bus shuts down.
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
-	// (1) A HISTORICAL workflow.start, published BEFORE any consumer exists.
-	histBytes, _ := json.Marshal(workflow.WorkflowStartRequest{Type: workflow.TypeWorkflowStart, Prompt: "stale historical start"})
-	if _, err := requester.PublishMsg(ctx, workflow.StartSubject, json.RawMessage(histBytes)); err != nil {
+	// A HISTORICAL run.start, published before any consumer exists (its run artifact
+	// need not exist — a replayed start would still produce an ack if wrongly seen).
+	if _, err := requester.PublishMsg(ctx, workflow.RunStartSubject,
+		workflow.RunStartRecord(workflow.RunStartRequest{ID: "01HIST"})); err != nil {
 		t.Fatalf("publish historical start: %v", err)
 	}
 
-	// Capture acks the consumer publishes back on workflow.StartSubject (new-only: we only
-	// care about acks emitted after this subscription, which is what a replay would
-	// produce). The callback touches only the mutex-guarded slice — never *T.
 	var (
 		ackMu sync.Mutex
-		acks  []workflow.WorkflowStartAck
+		acks  []workflow.RunStartAck
 	)
-	if _, err := requester.Subscribe(ctx, workflow.StartSubject, func(m sextant.Message) {
-		var a workflow.WorkflowStartAck
-		if err := json.Unmarshal(m.Frame.Record, &a); err != nil || a.Type != workflow.TypeWorkflowStartAck {
+	if _, err := requester.Subscribe(ctx, workflow.RunStartSubject, func(m sextant.Message) {
+		var a workflow.RunStartAck
+		if err := json.Unmarshal(m.Frame.Record, &a); err != nil || a.Type != workflow.TypeRunStartAck {
 			return
 		}
 		ackMu.Lock()
@@ -595,47 +409,13 @@ func TestStartConsumer_IgnoresHistoricalStart(t *testing.T) {
 		t.Fatalf("subscribe acks: %v", err)
 	}
 
-	// (2) Start the consumer. With new-only delivery it must NOT see the historical
-	// start, so it publishes no ack for it.
-	_, sub, err := newStartConsumer(ctx, consumer, "msg.topic.spawn", 2*time.Second)
-	if err != nil {
-		t.Fatalf("newStartConsumer: %v", err)
-	}
-	t.Cleanup(sub.Stop)
+	startListenConsumer(t, ctx, consumer, "msg.topic.spawn", 2*time.Second)
 
-	// Give a (wrongly) replayed historical start ample time to produce its ack.
 	time.Sleep(1500 * time.Millisecond)
 	ackMu.Lock()
 	nHist := len(acks)
 	ackMu.Unlock()
 	if nHist != 0 {
-		t.Fatalf("consumer replayed a historical workflow.start (%d ack(s), want 0) — DeliverAll regression (TASK-192)", nHist)
-	}
-
-	// (3) A NEW start published while the consumer is live IS handled (ok ack).
-	liveBytes, _ := json.Marshal(workflow.WorkflowStartRequest{Type: workflow.TypeWorkflowStart, Prompt: "live start", Nonce: "live-1"})
-	if _, err := requester.PublishMsg(ctx, workflow.StartSubject, json.RawMessage(liveBytes)); err != nil {
-		t.Fatalf("publish live start: %v", err)
-	}
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		ackMu.Lock()
-		n := len(acks)
-		ackMu.Unlock()
-		if n > 0 {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	ackMu.Lock()
-	defer ackMu.Unlock()
-	if len(acks) != 1 {
-		t.Fatalf("live start: want exactly 1 ack, got %d", len(acks))
-	}
-	if acks[0].Status != workflow.StatusOK {
-		t.Errorf("live start ack.status = %q, want %q (error: %s)", acks[0].Status, workflow.StatusOK, acks[0].Error)
-	}
-	if acks[0].Nonce != "live-1" {
-		t.Errorf("ack.nonce = %q, want %q", acks[0].Nonce, "live-1")
+		t.Fatalf("consumer replayed a historical run.start (%d ack(s), want 0) — DeliverAll regression (TASK-192)", nHist)
 	}
 }

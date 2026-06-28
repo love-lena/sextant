@@ -1,34 +1,29 @@
-// Command sextant-workflow is the M5.4 reference workflow coordinator (TASK-26).
+// Command sextant-workflow is the reference run executor (TASK-236, ADR-0048).
 //
-// A workflow is a CONVENTION over the two primitives, not a primitive of its own
-// (ADR-0011): there is no engine in core. This coordinator is an ordinary bus
-// client that runs the engine as a library and drives a declarative workflow:
+// A run is one live instance of work, a CONVENTION over the two primitives, not a
+// primitive of its own (ADR-0011): there is no engine in core. This coordinator is
+// an ordinary bus client that runs the engine as a library and drives a
+// sextant.workflow.run/v1 run to a terminal status:
 //
-//   - State is a sextant.workflow/v1 envelope held as an Artifact, keyed by the
-//     workflow id, single-writer (this coordinator) and CAS-checkpointed — so a
-//     restarted coordinator re-reads it and RESUMES at step granularity, skipping
-//     steps already done (idempotent resume).
-//   - A free-form event stream rides msg.workflow.<id>.events; cooperative control
-//     (pause/resume/cancel/approve) rides msg.workflow.<id>.control.
-//   - It COMPOSES the M5.2 dispatcher: a "dispatch" step publishes a spawn.request
-//     and correlates the dispatcher's spawn.ack by requestId (request/reply over
-//     pub-sub — the spawn.ack pattern, no new primitive), then waits for the
-//     spawned agent to report the step done on the event stream.
+//   - State is a sextant.workflow.run/v1 envelope held as an Artifact, keyed
+//     RunStateName(id), SINGLE-WRITER (this coordinator) and CAS-checkpointed. The
+//     dash writes it ONCE at spawn (its spawn act); the coordinator adopts it on a
+//     run.start wake and owns it from there. A restarted coordinator re-reads it and
+//     RESUMES at step granularity (idempotent resume).
+//   - Steps run by kind: work → dispatch an agent (compose the M5.2 dispatcher);
+//     checkpoint → pause for the operator (run.control approve/resume); brief → write
+//     the terminal stopping brief, gated on a brief artifact (ADR-0048).
+//   - Progress is the run's EMBEDDED activity stream (the dash polls the envelope).
+//     A dispatched agent reports a step done with a run.event on
+//     msg.workflow.run.<id>.events; cooperative control rides .control.
 //
-// Layer-0 note (ADR-0012): the reserved sx.workflow.* subjects and sx_workflows
-// bucket are not reachable through the current Wire API (a client publishes only
-// to msg.* and writes only the ARTIFACTS bucket), so this client-side coordinator
-// realizes Layer-0 over msg.* + a regular Artifact — exactly ADR-0011's "convention
-// over Messages + Artifacts".
-//
-// PoC scope: one step kind ("dispatch"); steps run sequentially (the state is a
-// flat list, no dependency graph yet); single-writer-by-convention CAS (a conflict
-// re-reads and retries); no engine persistence beyond the state envelope.
+// A failed step drives the run to BLOCKED (there is no "failed" run status). Every
+// blocking wait is deadline-bounded and logs on expiry (fail-loud, never a silent
+// hang).
 package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -41,7 +36,6 @@ import (
 	"github.com/love-lena/sextant/conventions/workflow/go"
 	"github.com/love-lena/sextant/protocol/conninfo"
 	"github.com/love-lena/sextant/sdk/go"
-	"github.com/oklog/ulid/v2"
 )
 
 func main() {
@@ -49,14 +43,13 @@ func main() {
 	creds := fs.String("creds", os.Getenv("SEXTANT_CREDS"), "coordinator credentials file (its own bus identity)")
 	store := fs.String("store", os.Getenv("SEXTANT_STORE"), "bus store dir for bus.json discovery")
 	url := fs.String("url", "", "bus URL (default: discovery file under --store)")
-	plan := fs.String("plan", "", "path to a JSON workflow plan: {\"id\":\"...\",\"steps\":[{\"id\":\"\",\"kind\":\"dispatch\",\"nickname\":\"\",\"prompt\":\"\"}]}")
-	id := fs.String("id", "", "workflow id (overrides the plan's; required to RESUME an existing workflow)")
+	id := fs.String("id", "", "run id to adopt directly (the dash already wrote the run artifact); empty = listen mode")
 	spawnSubject := fs.String("spawn-subject", "msg.topic.spawn", "subject the M5.2 dispatcher watches for spawn.request")
 	stepTimeout := fs.Duration("step-timeout", 90*time.Second, "max time for one step (spawn.ack + the agent's step-done) before it fails loud")
 	_ = fs.Parse(os.Args[1:])
 
 	if *creds == "" {
-		fatal("usage: sextant-workflow --creds F --store DIR (--plan F | --id ULID | <listen mode>) [--spawn-subject S] [--step-timeout D]")
+		fatal("usage: sextant-workflow --creds F --store DIR (--id ULID | <listen mode>) [--spawn-subject S] [--step-timeout D]")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -75,16 +68,15 @@ func main() {
 	}
 	defer func() { _ = c.Close() }()
 
-	// Listen mode: no --plan or --id — subscribe to workflow.start and run one
-	// coordinator per request (the dash's "start a workflow from a prompt" path).
-	if *plan == "" && *id == "" {
-		sc, sub, err := newStartConsumer(ctx, c, *spawnSubject, *stepTimeout)
+	// Listen mode: no --id — subscribe to run.start and adopt one run per request
+	// (the dash's "spawn a run" path).
+	if *id == "" {
+		_, sub, err := newStartConsumer(ctx, c, *spawnSubject, *stepTimeout)
 		if err != nil {
 			fatal("%v", err)
 		}
 		defer sub.Stop()
-		_ = sc
-		logf("coordinator up as %s; listening on %s for workflow.start", short(c.ID()), workflow.StartSubject)
+		logf("coordinator up as %s; listening on %s for run.start", short(c.ID()), workflow.RunStartSubject)
 		select {
 		case <-ctx.Done():
 			logf("signalled; shutting down")
@@ -94,17 +86,13 @@ func main() {
 		return
 	}
 
-	co := &coordinator{
-		ctx: ctx, c: c, spawnSubject: *spawnSubject, stepTimeout: *stepTimeout,
-		acks: map[string]workflow.SpawnAck{}, doneEvents: map[string]bool{},
-		ackCh: make(chan struct{}, 1), evCh: make(chan struct{}, 1), ctlCh: make(chan struct{}, 1),
-	}
-	if err := co.load(ctx, *plan, *id); err != nil {
+	co := newCoordinator(ctx, c, *spawnSubject, *stepTimeout)
+	if err := co.adopt(ctx, *id); err != nil {
 		fatal("%v", err)
 	}
-	logf("coordinator up as %s; workflow %s (%d steps), status %s", short(c.ID()), co.wf.ID, len(co.wf.Steps), co.wf.Status)
+	logf("coordinator up as %s; run %s (%d steps), status %s", short(c.ID()), co.run.ID, len(co.run.Steps), co.run.Status)
 
-	// Subscriptions: spawn.acks (to correlate dispatch steps), the workflow's event
+	// Subscriptions: spawn.acks (to correlate dispatch steps), the run's event
 	// stream (agents' step-done signals), and cooperative control. DeliverAll closes
 	// the start race and lets a resumed coordinator see prior state.
 	for _, s := range []struct {
@@ -112,8 +100,8 @@ func main() {
 		h    sextant.Handler
 	}{
 		{*spawnSubject, co.onSpawn},
-		{workflow.EventsSubject(co.wf.ID), co.onEvent},
-		{workflow.ControlSubject(co.wf.ID), co.onControl},
+		{workflow.RunEventsSubject(co.run.ID), co.onEvent},
+		{workflow.RunControlSubject(co.run.ID), co.onControl},
 	} {
 		sub, err := c.Subscribe(ctx, s.subj, s.h, sextant.DeliverAll())
 		if err != nil {
@@ -122,13 +110,12 @@ func main() {
 		defer sub.Stop()
 	}
 
-	// Let DeliverAll replay any retained control settle before walking — a cancel or
-	// pause issued while this coordinator was down must be honoured on (re)start, not
-	// raced past into the first step.
+	// Let DeliverAll replay any retained control settle before walking — a cancel
+	// issued while this coordinator was down must be honoured on (re)start.
 	co.settle()
 
-	if err := co.run(); err != nil {
-		fatal("workflow %s: %v", co.wf.ID, err)
+	if err := co.walk(); err != nil {
+		fatal("run %s: %v", co.run.ID, err)
 	}
 }
 
@@ -138,181 +125,138 @@ type coordinator struct {
 	spawnSubject string
 	stepTimeout  time.Duration
 
-	wf  workflow.Workflow
+	run workflow.Run
 	rev uint64 // current revision of the state artifact (for CAS)
 
 	mu         sync.Mutex
 	acks       map[string]workflow.SpawnAck // spawn.request frame id -> ack
-	doneEvents map[string]bool              // step id -> a non-self step-done event seen
-	paused     bool
+	doneEvents map[string]workflow.RunEvent // step id -> a non-self step-done event
+	approved   bool
 	cancelled  bool
 	ackCh      chan struct{} // wakes waiters: new ack
 	evCh       chan struct{} // wakes waiters: new event
 	ctlCh      chan struct{} // wakes waiters: control changed
 }
 
-// load resumes the workflow from its state artifact if it already exists, else
-// creates it from the plan. Resume is what makes the coordinator idempotent: the
-// loaded statuses tell run() which steps to skip.
-func (co *coordinator) load(ctx context.Context, planPath, idFlag string) error {
-	// Determine the id: the flag wins (to resume a known workflow), else the plan's,
-	// else a fresh ULID.
-	var planWF workflow.Workflow
-	if planPath != "" {
-		b, err := os.ReadFile(planPath)
-		if err != nil {
-			return fmt.Errorf("read plan: %w", err)
-		}
-		if err := json.Unmarshal(b, &planWF); err != nil {
-			return fmt.Errorf("parse plan: %w", err)
-		}
+func newCoordinator(ctx context.Context, c *sextant.Client, spawnSubject string, stepTimeout time.Duration) *coordinator {
+	return &coordinator{
+		ctx: ctx, c: c, spawnSubject: spawnSubject, stepTimeout: stepTimeout,
+		acks: map[string]workflow.SpawnAck{}, doneEvents: map[string]workflow.RunEvent{},
+		ackCh: make(chan struct{}, 1), evCh: make(chan struct{}, 1), ctlCh: make(chan struct{}, 1),
 	}
-	id := idFlag
-	if id == "" {
-		id = planWF.ID
-	}
-	if id == "" {
-		id = ulid.Make().String()
-	}
-
-	if art, err := co.c.GetArtifact(ctx, workflow.StateName(id)); err == nil {
-		if wf, ok := workflow.ParseWorkflow(art.Record); ok {
-			co.wf, co.rev = wf, art.Revision
-			co.wf.Owner = co.c.ID() // (re)own on resume
-			if workflow.IsTerminal(co.wf.Status) {
-				return nil // done/cancelled/failed is terminal; run() honours it
-			}
-			co.wf.Status = workflow.WfRunning
-			return co.checkpoint()
-		}
-	}
-
-	// Fresh workflow from the plan.
-	if planPath == "" {
-		return fmt.Errorf("workflow %s not found and no --plan given to create it", id)
-	}
-	co.wf = workflow.Workflow{ID: id, Status: workflow.WfRunning, Owner: co.c.ID(), Steps: planWF.Steps}
-	for i := range co.wf.Steps {
-		if co.wf.Steps[i].Status == "" {
-			co.wf.Steps[i].Status = workflow.StepPending
-		}
-	}
-	rev, err := co.c.CreateArtifact(ctx, workflow.StateName(id), co.wf.Marshal())
-	if err != nil {
-		return fmt.Errorf("create workflow state: %w", err)
-	}
-	co.rev = rev
-	return nil
 }
 
-// loadDirect initialises a fresh workflow from a pre-built workflow.Workflow struct
-// (bypasses file I/O). It is the start-consumer's entry point: the consumer
-// constructs a workflow.Workflow from the workflow.start request fields and hands it
-// straight to the coordinator, reusing the same CAS + artifact machinery.
-func (co *coordinator) loadDirect(ctx context.Context, wf workflow.Workflow) error {
-	for i := range wf.Steps {
-		if wf.Steps[i].Status == "" {
-			wf.Steps[i].Status = workflow.StepPending
-		}
-	}
-	wf.Status = workflow.WfRunning
-	wf.Owner = co.c.ID()
-	rev, err := co.c.CreateArtifact(ctx, workflow.StateName(wf.ID), wf.Marshal())
+// adopt reads the run artifact the dash wrote (single-writer handoff: the dash
+// created it at spawn; the coordinator owns it from here), (re)owns it, and resets a
+// non-terminal run to running. Idempotent on resume: a terminal run is a no-op.
+func (co *coordinator) adopt(ctx context.Context, runID string) error {
+	art, err := co.c.GetArtifact(ctx, workflow.RunStateName(runID))
 	if err != nil {
-		return fmt.Errorf("create workflow state: %w", err)
+		return fmt.Errorf("adopt %s: %w", runID, err)
 	}
-	co.wf, co.rev = wf, rev
-	return nil
+	r, ok := workflow.ParseRun(art.Record)
+	if !ok {
+		return fmt.Errorf("adopt %s: not a %s record", runID, workflow.KindRun)
+	}
+	co.run, co.rev = r, art.Revision
+	co.run.Owner = co.c.ID()
+	if workflow.IsTerminalRun(co.run.Status) {
+		return nil
+	}
+	if len(co.run.Stop) == 0 {
+		co.run.Stop = []string{"done — brief w/ proof of success", "blocked — brief documenting why"}
+	}
+	co.run.Status = workflow.RunRunning
+	return co.checkpoint()
 }
 
-// isTerminal reports whether a workflow status is final — there is no more work
-// to walk. A resumed coordinator that loads a terminal workflow does nothing
-// (so a cancelled or failed workflow is never re-run on restart).
-// run walks the steps: gate on cooperative control, find the next not-done step,
-// run it, checkpoint + emit. A resumed coordinator skips done steps for free, and
-// a resumed TERMINAL workflow (done/cancelled/failed) is a no-op.
-func (co *coordinator) run() error {
-	if workflow.IsTerminal(co.wf.Status) {
-		logf("workflow %s already %s; nothing to do", co.wf.ID, co.wf.Status)
+func (co *coordinator) nowMs() int64 { return time.Now().UnixMilli() }
+
+// appendActivity adds an entry to the run's embedded activity stream (the dash's
+// observability channel) and checkpoints. at is unix-ms to match the dash.
+func (co *coordinator) appendActivity(glyph, text string) {
+	co.run.Activity = append(co.run.Activity, workflow.ActivityEntry{
+		ID:    fmt.Sprintf("a%d-%d", co.nowMs(), len(co.run.Activity)),
+		Glyph: glyph, Text: text, Src: co.run.ID, At: co.nowMs(),
+	})
+	if err := co.checkpoint(); err != nil {
+		logf("warn: checkpoint after activity %q: %v", text, err)
+	}
+}
+
+// walk drives the steps: honour cancel, find the next not-done step, run it by kind,
+// checkpoint + append activity. A resumed coordinator skips done steps; a resumed
+// terminal run is a no-op. A failed step drives the run to BLOCKED (no failed status).
+// (Named walk, not run, to avoid colliding with the `run` state field.)
+func (co *coordinator) walk() error {
+	if workflow.IsTerminalRun(co.run.Status) {
+		logf("run %s already %s; nothing to do", co.run.ID, co.run.Status)
 		return nil
 	}
 	for {
 		if co.isCancelled() {
-			return co.finish(workflow.WfCancelled)
+			return co.finish(workflow.RunCancelled, "cancelled by operator")
 		}
-		co.waitWhilePaused()
 		if co.ctx.Err() != nil {
-			logf("signalled; leaving workflow %s resumable at its checkpoint", co.wf.ID)
+			logf("signalled; leaving run %s resumable at its checkpoint", co.run.ID)
 			return nil
 		}
-		if co.isCancelled() {
-			return co.finish(workflow.WfCancelled)
-		}
-		idx := co.wf.NextPending()
+		idx := co.run.NextPending()
 		if idx == -1 {
-			return co.finish(workflow.WfDone)
+			return co.finish(workflow.RunDone, "all steps complete")
 		}
-		step := &co.wf.Steps[idx]
+		step := &co.run.Steps[idx]
 		logf("step %s (%s): running", step.ID, step.Kind)
-		if err := co.runStep(idx); err != nil {
-			step.Status = workflow.StepFailed
-			if cerr := co.checkpoint(); cerr != nil {
-				logf("warn: checkpoint after step %s failed: %v", step.ID, cerr)
-			}
-			co.emit(workflow.WorkflowEvent{Step: step.ID, Status: workflow.StepFailed, Note: err.Error()})
-			co.wf.Status = workflow.WfFailed
-			if cerr := co.checkpoint(); cerr != nil {
-				logf("warn: checkpoint of failed status: %v", cerr)
-			}
-			co.emit(workflow.WorkflowEvent{Status: workflow.WfFailed, Note: "step " + step.ID + " failed"})
-			return fmt.Errorf("step %s: %w", step.ID, err)
+		term, err := co.runStep(idx)
+		if err != nil {
+			step.Status = workflow.StepWaiting // surfaces as "needs you" next to a blocked run
+			co.appendActivity("✗", fmt.Sprintf("step %q failed: %v", step.ID, err))
+			return co.finish(workflow.RunBlocked, "step "+step.ID+" failed")
+		}
+		if term != "" {
+			return co.finish(term, "stopping brief: "+term)
 		}
 		step.Status = workflow.StepDone
 		if err := co.checkpoint(); err != nil {
 			return err
 		}
-		co.emit(workflow.WorkflowEvent{Step: step.ID, Status: workflow.StepDone, By: step.Agent})
-		logf("step %s: done (agent %s)", step.ID, short(step.Agent))
+		co.appendActivity("✓", stepDoneText(step))
 	}
 }
 
-// finish records a terminal workflow status and emits it.
-func (co *coordinator) finish(status string) error {
-	co.wf.Status = status
-	if err := co.checkpoint(); err != nil {
-		return err
+func stepDoneText(s *workflow.RunStep) string {
+	if s.Label != "" {
+		return s.Label
 	}
-	co.emit(workflow.WorkflowEvent{Status: status})
-	logf("workflow %s: %s", co.wf.ID, status)
-	return nil
+	return "step " + s.ID + " done"
 }
 
-func (co *coordinator) runStep(idx int) error {
-	step := &co.wf.Steps[idx]
+// runStep runs one step by kind. A non-empty terminal return means the run should
+// finish with that status (the brief step's outcome).
+func (co *coordinator) runStep(idx int) (string, error) {
+	step := &co.run.Steps[idx]
 	step.Status = workflow.StepRunning
 	if err := co.checkpoint(); err != nil {
-		return err
+		return "", err
 	}
-	co.emit(workflow.WorkflowEvent{Step: step.ID, Status: workflow.StepRunning})
 	switch step.Kind {
-	case "dispatch":
-		return co.runDispatch(step)
+	case workflow.KindWork:
+		return "", co.runDispatch(step, co.workPrompt(step))
+	case workflow.KindCheckpoint:
+		return "", co.runCheckpoint(step)
+	case workflow.KindBrief:
+		return co.runBrief(step)
 	default:
-		return fmt.Errorf("unknown step kind %q", step.Kind)
+		return "", fmt.Errorf("unknown step kind %q", step.Kind)
 	}
 }
 
 // runDispatch composes the M5.2 dispatcher: publish a spawn.request, correlate the
-// spawn.ack by requestId, then wait for the spawned agent to report the step done
-// on the event stream. Each wait is bounded (fail-loud, never a silent hang).
-//
-// KNOWN (PoC): not crash-safe for an in-flight step. If the coordinator dies after
-// checkpointing workflow.StepRunning but before the done-event, resume re-dispatches the
-// step — and DeliverAll may replay the prior attempt's done-event, so step.Agent
-// can name the new agent while the recorded done came from the old one. Crash-safe
-// in-flight steps (a fencing token / dedup by attempt) are out of PoC scope.
-func (co *coordinator) runDispatch(step *workflow.Step) error {
-	req := workflow.SpawnRequest{Prompt: co.dispatchPrompt(step), Nickname: step.Nickname, Job: co.wf.ID}
+// spawn.ack by requestId, then wait for the spawned agent to report the step done on
+// the run's event stream. Each wait is bounded (fail-loud). It attaches any artifacts
+// the agent reported in its done event.
+func (co *coordinator) runDispatch(step *workflow.RunStep, prompt string) error {
+	req := workflow.SpawnRequest{Prompt: prompt, Nickname: step.Label, Job: co.run.ID}
 	out, err := co.c.PublishMsg(co.ctx, co.spawnSubject, req.Marshal())
 	if err != nil {
 		return fmt.Errorf("publish spawn.request: %w", err)
@@ -321,43 +265,194 @@ func (co *coordinator) runDispatch(step *workflow.Step) error {
 	if !ok {
 		return fmt.Errorf("no spawn.ack within %s", co.stepTimeout)
 	}
-	if ack.Status != "ok" {
+	if ack.Status != workflow.StatusOK {
 		return fmt.Errorf("dispatch rejected: %s", ack.Error)
 	}
 	step.Agent = ack.ID
-	if !co.awaitStepDone(step.ID, co.stepTimeout) {
+	ev, ok := co.awaitStepDone(step.ID, co.stepTimeout)
+	if !ok {
 		return fmt.Errorf("agent %s never reported step %q done within %s", short(ack.ID), step.ID, co.stepTimeout)
 	}
+	co.attachArtifacts(ev.Artifacts)
 	return nil
 }
 
-// dispatchPrompt augments the step's task with the reporting directive the spawned
-// agent uses to signal completion back to this workflow's event stream.
-func (co *coordinator) dispatchPrompt(step *workflow.Step) string {
-	return fmt.Sprintf("%s\nWF_EVENTS=%s WF_STEP=%s", step.Prompt, workflow.EventsSubject(co.wf.ID), step.ID)
+// workPrompt augments a work step's task with the reporting directive the agent uses
+// to signal completion on the run's event stream.
+func (co *coordinator) workPrompt(step *workflow.RunStep) string {
+	return fmt.Sprintf("%s\n\n%s\nRUN_EVENTS=%s RUN_STEP=%s",
+		co.run.Objective, step.Label,
+		workflow.RunEventsSubject(co.run.ID), step.ID)
+}
+
+// attachArtifacts records artifacts an agent reported in its done event onto the run
+// (ADR-0048), de-duped by name, newest version wins.
+func (co *coordinator) attachArtifacts(arts []workflow.ProducedArtifact) {
+	for _, a := range arts {
+		replaced := false
+		for i := range co.run.Artifacts {
+			if co.run.Artifacts[i].Name == a.Name {
+				co.run.Artifacts[i] = a
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			co.run.Artifacts = append(co.run.Artifacts, a)
+		}
+	}
+	if len(arts) > 0 {
+		if err := co.checkpoint(); err != nil {
+			logf("warn: checkpoint after attaching artifacts: %v", err)
+		}
+	}
+}
+
+// runCheckpoint sets the run to waiting and blocks until the operator approves
+// (run.control approve/resume) or cancels. Cooperative: the coordinator only acts on
+// the verb the operator sends (ADR-0048). (TASK-225)
+func (co *coordinator) runCheckpoint(step *workflow.RunStep) error {
+	step.Status = workflow.StepWaiting
+	co.run.Status = workflow.RunWaiting
+	if err := co.checkpoint(); err != nil {
+		return err
+	}
+	co.appendActivity("❡", "awaiting operator: "+stepDoneText(step))
+	co.mu.Lock()
+	co.approved = false
+	co.mu.Unlock()
+	for {
+		co.mu.Lock()
+		approved, cancelled := co.approved, co.cancelled
+		co.mu.Unlock()
+		if cancelled {
+			return nil // run() sees isCancelled() and finishes cancelled
+		}
+		if approved {
+			step.Status = workflow.StepDone
+			co.run.Status = workflow.RunRunning
+			if err := co.checkpoint(); err != nil {
+				return err
+			}
+			co.appendActivity("✓", "operator approved: "+stepDoneText(step))
+			return nil
+		}
+		select {
+		case <-co.ctlCh:
+		case <-co.ctx.Done():
+			return nil // resumable: re-adopt re-enters the still-waiting checkpoint
+		}
+	}
+}
+
+// runBrief dispatches an agent prompted with the run's stop conditions to write the
+// terminal stopping brief, then GATES: the run may not go terminal without a brief
+// artifact attached (ADR-0048 "never halt without posting the brief"). The agent's
+// reported outcome (done|blocked) becomes the terminal run status. (AC #4)
+func (co *coordinator) runBrief(step *workflow.RunStep) (string, error) {
+	req := workflow.SpawnRequest{Prompt: co.briefPrompt(step), Nickname: step.Label, Job: co.run.ID}
+	out, err := co.c.PublishMsg(co.ctx, co.spawnSubject, req.Marshal())
+	if err != nil {
+		return "", fmt.Errorf("publish brief spawn.request: %w", err)
+	}
+	ack, ok := co.awaitAck(out.ID, co.stepTimeout)
+	if !ok {
+		return "", fmt.Errorf("no spawn.ack for brief within %s", co.stepTimeout)
+	}
+	if ack.Status != workflow.StatusOK {
+		return "", fmt.Errorf("brief dispatch rejected: %s", ack.Error)
+	}
+	step.Agent = ack.ID
+	ev, ok := co.awaitStepDone(step.ID, co.stepTimeout)
+	if !ok {
+		return "", fmt.Errorf("brief agent never reported done within %s", co.stepTimeout)
+	}
+	co.attachArtifacts(ev.Artifacts)
+	if !co.hasBrief() {
+		return "", fmt.Errorf("brief step done but no brief artifact attached (stop gate)")
+	}
+	step.Status = workflow.StepDone
+	if err := co.checkpoint(); err != nil {
+		return "", err
+	}
+	if ev.Outcome == workflow.RunBlocked {
+		return workflow.RunBlocked, nil
+	}
+	return workflow.RunDone, nil // default success — a posted brief with no explicit blocked
+}
+
+func (co *coordinator) hasBrief() bool {
+	for _, a := range co.run.Artifacts {
+		if a.Kind == "brief" {
+			return true
+		}
+	}
+	return false
+}
+
+// briefPrompt hands the agent the run's stop conditions so it writes a brief that
+// justifies the stop, plus the reporting directive.
+func (co *coordinator) briefPrompt(step *workflow.RunStep) string {
+	return fmt.Sprintf(
+		"Write the stopping brief for this run as an artifact of kind \"brief\".\nObjective: %s\nStop when ANY of these is met (pick the one that holds and justify it):\n- %s\n\nReport done with the brief artifact in `artifacts` and `outcome` = done or blocked.\nRUN_EVENTS=%s RUN_STEP=%s",
+		co.run.Objective, joinStops(co.run.Stop),
+		workflow.RunEventsSubject(co.run.ID), step.ID,
+	)
+}
+
+func joinStops(stops []string) string {
+	if len(stops) == 0 {
+		return "done — brief w/ proof of success\n- blocked — brief documenting why"
+	}
+	out := stops[0]
+	for _, s := range stops[1:] {
+		out += "\n- " + s
+	}
+	return out
+}
+
+// finish records a terminal run status, checkpoints, and appends the closing activity.
+func (co *coordinator) finish(status, note string) error {
+	co.run.Status = status
+	if err := co.checkpoint(); err != nil {
+		return err
+	}
+	text := "run " + status
+	if note != "" {
+		text += ": " + note
+	}
+	co.appendActivity(terminalGlyph(status), text)
+	logf("run %s: %s", co.run.ID, status)
+	return nil
+}
+
+func terminalGlyph(status string) string {
+	switch status {
+	case workflow.RunDone:
+		return "✓"
+	case workflow.RunCancelled:
+		return "⊘"
+	default:
+		return "✗"
+	}
 }
 
 // checkpoint persists the current state envelope with CAS on the tracked revision.
-// Single-writer by convention, so a conflict is rare; on one we re-read the
-// revision and retry (last-writer-wins for our own envelope).
+// Single-writer by convention, so a conflict is rare; on one we re-read and retry.
 func (co *coordinator) checkpoint() error {
 	for attempt := 0; attempt < 5; attempt++ {
-		rev, err := co.c.UpdateArtifact(co.ctx, workflow.StateName(co.wf.ID), co.wf.Marshal(), co.rev)
+		rev, err := co.c.UpdateArtifact(co.ctx, workflow.RunStateName(co.run.ID), co.run.Marshal(), co.rev)
 		if err == nil {
 			co.rev = rev
 			return nil
 		}
-		art, gerr := co.c.GetArtifact(co.ctx, workflow.StateName(co.wf.ID))
+		art, gerr := co.c.GetArtifact(co.ctx, workflow.RunStateName(co.run.ID))
 		if gerr != nil {
-			return fmt.Errorf("checkpoint %s: %w", co.wf.ID, err)
+			return fmt.Errorf("checkpoint %s: %w", co.run.ID, err)
 		}
 		co.rev = art.Revision
 	}
-	return fmt.Errorf("checkpoint %s: exhausted CAS retries", co.wf.ID)
-}
-
-func (co *coordinator) emit(ev workflow.WorkflowEvent) {
-	_ = co.c.Publish(co.ctx, workflow.EventsSubject(co.wf.ID), ev.Marshal())
+	return fmt.Errorf("checkpoint %s: exhausted CAS retries", co.run.ID)
 }
 
 // --- subscription handlers (run on the SDK's delivery goroutines) ---
@@ -375,35 +470,35 @@ func (co *coordinator) onSpawn(m sextant.Message) {
 
 func (co *coordinator) onEvent(m sextant.Message) {
 	if m.Frame.Author == co.c.ID() {
-		return // our own emitted events are not step-done signals
+		return
 	}
-	ev, ok := workflow.ParseWorkflowEvent(m.Frame.Record)
+	ev, ok := workflow.ParseRunEvent(m.Frame.Record)
 	if !ok || ev.Step == "" || ev.Status != workflow.StepDone {
 		return
 	}
 	co.mu.Lock()
-	co.doneEvents[ev.Step] = true
+	co.doneEvents[ev.Step] = ev
 	co.mu.Unlock()
 	wake(co.evCh)
 }
 
 func (co *coordinator) onControl(m sextant.Message) {
-	ctl, ok := workflow.ParseWorkflowControl(m.Frame.Record)
+	ctl, ok := workflow.ParseRunControl(m.Frame.Record)
 	if !ok {
 		return
 	}
 	co.mu.Lock()
 	switch ctl.Verb {
 	case workflow.CtlPause:
-		co.paused = true
+		// pause is reflected only inside a checkpoint wait; a bare pause between
+		// steps is a no-op in the flat model (a checkpoint step is the pause point).
 	case workflow.CtlResume, workflow.CtlApprove:
-		co.paused = false
+		co.approved = true
 	case workflow.CtlCancel:
 		co.cancelled = true
 	}
 	co.mu.Unlock()
 	logf("control: %s", ctl.Verb)
-	co.emit(workflow.WorkflowEvent{Status: "control", Note: ctl.Verb})
 	wake(co.ctlCh)
 }
 
@@ -432,58 +527,22 @@ func (co *coordinator) awaitAck(requestID string, timeout time.Duration) (workfl
 	}
 }
 
-func (co *coordinator) awaitStepDone(stepID string, timeout time.Duration) bool {
+func (co *coordinator) awaitStepDone(stepID string, timeout time.Duration) (workflow.RunEvent, bool) {
 	t := time.NewTimer(timeout)
 	defer t.Stop()
 	for {
 		co.mu.Lock()
-		done := co.doneEvents[stepID]
+		ev, ok := co.doneEvents[stepID]
 		co.mu.Unlock()
-		if done {
-			return true
+		if ok {
+			return ev, true
 		}
 		select {
 		case <-co.evCh:
 		case <-t.C:
-			return false
+			return workflow.RunEvent{}, false
 		case <-co.ctx.Done():
-			return false
-		}
-	}
-}
-
-func (co *coordinator) waitWhilePaused() {
-	wasPaused := false
-	for {
-		co.mu.Lock()
-		paused, cancelled := co.paused, co.cancelled
-		co.mu.Unlock()
-		if cancelled {
-			return // run() records the cancel; finish() overwrites any paused status
-		}
-		if !paused {
-			if wasPaused { // resumed — reflect it in the observable envelope
-				co.wf.Status = workflow.WfRunning
-				if err := co.checkpoint(); err != nil {
-					logf("warn: checkpoint on resume: %v", err)
-				}
-				co.emit(workflow.WorkflowEvent{Status: workflow.WfRunning, Note: "resumed"})
-			}
-			return
-		}
-		if !wasPaused { // entering pause — make it visible to anyone watching the envelope
-			wasPaused = true
-			co.wf.Status = workflow.WfPaused
-			if err := co.checkpoint(); err != nil {
-				logf("warn: checkpoint on pause: %v", err)
-			}
-			co.emit(workflow.WorkflowEvent{Status: workflow.WfPaused})
-			logf("paused; awaiting resume/cancel")
-		}
-		select {
-		case <-co.ctlCh:
-		case <-co.ctx.Done():
-			return
+			return workflow.RunEvent{}, false
 		}
 	}
 }
@@ -494,12 +553,9 @@ func (co *coordinator) isCancelled() bool {
 	return co.cancelled
 }
 
-// settle gives DeliverAll a moment to replay retained control before the walk
-// begins, so a cancel/pause issued while the coordinator was down is honoured
-// rather than raced past into the first step. NOTE: this is a local-bus heuristic,
-// not a guaranteed barrier — on a slow/remote bus the replay may land after it. A
-// production coordinator should gate on an explicit drain signal or re-read the
-// control subject before the first step.
+// settle gives DeliverAll a moment to replay retained control before the walk begins,
+// so a cancel issued while the coordinator was down is honoured rather than raced past
+// into the first step. A local-bus heuristic, not a guaranteed barrier.
 func (co *coordinator) settle() {
 	select {
 	case <-time.After(300 * time.Millisecond):
@@ -515,12 +571,11 @@ func wake(ch chan struct{}) {
 	}
 }
 
-// --- workflow.start consumer ---
+// --- run.start consumer ---
 
-// startConsumer subscribes to msg.topic.workflow.start with DeliverAll, dedups
-// by frame ID (in-memory, PoC scope mirrors the dispatcher), and runs exactly
-// one workflow per fresh request. It acks every handled frame — success or
-// failure — so requesters are never left waiting on silence (fail-loud).
+// startConsumer subscribes to msg.topic.run.start, dedups by frame ID (in-memory),
+// and adopts exactly one run per fresh request. It acks every handled frame — success
+// or failure — so requesters are never left waiting on silence (fail-loud).
 type startConsumer struct {
 	ctx          context.Context
 	c            *sextant.Client
@@ -531,39 +586,31 @@ type startConsumer struct {
 	seen map[string]bool // request frame ids already handled (dedup a redelivery on reconnect)
 }
 
-// newStartConsumer builds and subscribes a startConsumer on workflow.StartSubject.
-// It returns the consumer and its subscription (caller defers sub.Stop()).
+// newStartConsumer builds and subscribes a startConsumer on workflow.RunStartSubject.
 func newStartConsumer(ctx context.Context, c *sextant.Client, spawnSubject string, stepTimeout time.Duration) (*startConsumer, sextant.Subscription, error) {
 	sc := &startConsumer{
 		ctx: ctx, c: c, spawnSubject: spawnSubject, stepTimeout: stepTimeout,
 		seen: map[string]bool{},
 	}
-	// New-only delivery (NOT DeliverAll): a workflow.start is a LIVE command, not a
-	// durable queue to replay. DeliverAll re-delivered every historical start on each
-	// (re)start — including stale ones whose step can never complete (e.g. no
-	// dispatcher, so no spawn.ack) — so a restarted listen-mode coordinator re-ran
-	// them, timed out, drained, and was respawned into a crash-loop (TASK-192). A
-	// start published while the coordinator is briefly down is intentionally missed
-	// (the requester re-issues); the seen fence still dedups a redelivery on reconnect.
-	sub, err := c.Subscribe(ctx, workflow.StartSubject, sc.handle)
+	// New-only delivery (NOT DeliverAll): a run.start is a LIVE command, not a durable
+	// queue to replay. DeliverAll re-delivered every historical start on each (re)start
+	// — including stale ones whose step can never complete — so a restarted listen-mode
+	// coordinator re-ran them, timed out, and crash-looped (TASK-192). A start published
+	// while the coordinator is briefly down is intentionally missed (the requester
+	// re-issues); the seen fence still dedups a redelivery on reconnect.
+	sub, err := c.Subscribe(ctx, workflow.RunStartSubject, sc.handle)
 	if err != nil {
-		return nil, nil, fmt.Errorf("subscribe %s: %w", workflow.StartSubject, err)
+		return nil, nil, fmt.Errorf("subscribe %s: %w", workflow.RunStartSubject, err)
 	}
 	return sc, sub, nil
 }
 
-// handle processes one frame on workflow.StartSubject. It acts only on workflow.start
-// records (ignoring its own echoed workflow.start.acks and anything else),
-// dedups by request frame id, creates the workflow, ACKS IMMEDIATELY (accepted
-// + workflowId), then runs the coordinator in a goroutine so the handler does
-// not block the delivery loop for the duration of the run.
-//
-// The ack means "accepted/started"; run failures surface on the workflow's
-// msg.workflow.<id>.events stream (the coordinator emits a failed status event),
-// NOT via a second ack. ack status:error is ONLY for couldn't-start failures
-// (loadDirect / artifact-create) that occur before the goroutine launches.
+// handle processes one frame on RunStartSubject. It acts only on run.start records
+// (ignoring its own echoed run.start.acks and anything else), dedups by request frame
+// id, adopts the run the dash wrote, ACKS (ok + id/nonce), then runs the coordinator
+// in a goroutine so the handler does not block the delivery loop.
 func (sc *startConsumer) handle(m sextant.Message) {
-	req, ok := workflow.ParseWorkflowStartRequest(m.Frame.Record)
+	req, ok := workflow.ParseRunStartRequest(m.Frame.Record)
 	if !ok {
 		return
 	}
@@ -577,89 +624,52 @@ func (sc *startConsumer) handle(m sextant.Message) {
 	sc.seen[reqID] = true
 	sc.mu.Unlock()
 
-	logf("workflow.start %s from %s: prompt=%q nick=%q", short(reqID), short(m.Frame.Author), req.Prompt, req.Nickname)
+	logf("run.start %s from %s: run=%s", short(reqID), short(m.Frame.Author), short(req.ID))
 
-	co, wfID, stopSubs, err := sc.prepareWorkflow(req)
-	ack := workflow.WorkflowStartAck{Nonce: req.Nonce, RequestID: reqID}
+	co, stopSubs, err := sc.prepareRun(req.ID)
+	ack := workflow.RunStartAck{ID: req.ID, Nonce: req.Nonce, RequestID: reqID}
 	if err != nil {
 		ack.Status = workflow.StatusError
 		ack.Error = err.Error()
-		logf("workflow.start %s: prepare failed: %v", short(reqID), err)
+		logf("run.start %s: prepare failed: %v", short(reqID), err)
 	} else {
 		ack.Status = workflow.StatusOK
-		ack.WorkflowID = wfID
-		logf("workflow.start %s: accepted, workflow %s", short(reqID), short(wfID))
 	}
-	// Publish the ack BEFORE launching the run — the dash needs workflowId
-	// promptly to subscribe to the events stream; the run may take minutes.
-	if err := sc.c.Publish(context.Background(), workflow.StartSubject, ack.Marshal()); err != nil {
-		logf("publish workflow.start.ack: %v", err)
+	if perr := sc.c.Publish(context.Background(), workflow.RunStartSubject, ack.Marshal()); perr != nil {
+		logf("publish run.start.ack: %v", perr)
 	}
 	if co == nil {
-		return // couldn't-start: already acked error above
+		return
 	}
-	// Run the coordinator asynchronously so handle() returns immediately,
-	// unblocking the delivery goroutine for the next request.
-	// stopSubs is deferred inside the goroutine so the helper subscriptions
-	// (spawn, events, control) are stopped once the run ends — preventing
-	// unbounded accumulation across sequential runs on a long-lived consumer.
 	go func() {
 		defer stopSubs()
-		if err := co.run(); err != nil {
-			logf("workflow %s run error: %v", short(wfID), err)
+		if err := co.walk(); err != nil {
+			logf("run %s error: %v", short(req.ID), err)
 		}
 	}()
 }
 
-// prepareWorkflow creates the workflow state artifact and subscribes the
-// coordinator's helper subjects. It returns the coordinator (ready to run),
-// the workflow id, a stopSubs closure that stops the helper subscriptions, and
-// any error. On failure it returns (nil, "", noop, err).
-//
-// The caller MUST call stopSubs() after run() ends (typically via defer in the
-// run goroutine) to prevent subscription accumulation across sequential runs on
-// a long-lived consumer.
-func (sc *startConsumer) prepareWorkflow(req workflow.WorkflowStartRequest) (*coordinator, string, func(), error) {
-	wfID := ulid.Make().String()
-	nick := req.Nickname
-	if nick == "" {
-		nick = "step-" + short(wfID)
-	}
-	wf := workflow.Workflow{
-		ID: wfID,
-		Steps: []workflow.Step{
-			{ID: "run", Kind: "dispatch", Nickname: nick, Prompt: req.Prompt},
-		},
-	}
-	co := &coordinator{
-		ctx: sc.ctx, c: sc.c, spawnSubject: sc.spawnSubject, stepTimeout: sc.stepTimeout,
-		acks: map[string]workflow.SpawnAck{}, doneEvents: map[string]bool{},
-		ackCh: make(chan struct{}, 1), evCh: make(chan struct{}, 1), ctlCh: make(chan struct{}, 1),
-	}
-	if err := co.loadDirect(sc.ctx, wf); err != nil {
-		return nil, wfID, func() {}, err
-	}
+// prepareRun builds the coordinator, subscribes its helper subjects (spawn, the run's
+// events + control), and adopts the run the dash wrote. It returns the coordinator
+// (ready to run), a stopSubs closure, and any error. On failure: (nil, noop, err).
+func (sc *startConsumer) prepareRun(runID string) (*coordinator, func(), error) {
+	co := newCoordinator(sc.ctx, sc.c, sc.spawnSubject, sc.stepTimeout)
 
-	// Subscribe the coordinator's helper subjects for this run's lifetime.
-	// The handles are returned as a stop closure so the run goroutine can
-	// clean them up after co.run() returns — preventing unbounded accumulation
-	// across sequential runs (the old `defer sub.Stop()` in the synchronous
-	// path was correct; this restores that guarantee for the async path).
 	var subs []sextant.Subscription
 	for _, s := range []struct {
 		subj string
 		h    sextant.Handler
 	}{
 		{sc.spawnSubject, co.onSpawn},
-		{workflow.EventsSubject(wfID), co.onEvent},
-		{workflow.ControlSubject(wfID), co.onControl},
+		{workflow.RunEventsSubject(runID), co.onEvent},
+		{workflow.RunControlSubject(runID), co.onControl},
 	} {
 		sub, err := sc.c.Subscribe(sc.ctx, s.subj, s.h, sextant.DeliverAll())
 		if err != nil {
 			for _, s := range subs {
 				s.Stop()
 			}
-			return nil, wfID, func() {}, fmt.Errorf("subscribe %s: %w", s.subj, err)
+			return nil, func() {}, fmt.Errorf("subscribe %s: %w", s.subj, err)
 		}
 		subs = append(subs, sub)
 	}
@@ -668,8 +678,13 @@ func (sc *startConsumer) prepareWorkflow(req workflow.WorkflowStartRequest) (*co
 			s.Stop()
 		}
 	}
+
+	if err := co.adopt(sc.ctx, runID); err != nil {
+		stopSubs()
+		return nil, func() {}, err
+	}
 	co.settle()
-	return co, wfID, stopSubs, nil
+	return co, stopSubs, nil
 }
 
 func short(id string) string {

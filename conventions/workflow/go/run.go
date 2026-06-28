@@ -205,6 +205,12 @@ func ParseRunEvent(record json.RawMessage) (RunEvent, bool) {
 	return e, true
 }
 
+func (c RunControl) Marshal() json.RawMessage {
+	c.Type = TypeRunControl
+	b, _ := json.Marshal(c)
+	return b
+}
+
 func ParseRunControl(record json.RawMessage) (RunControl, bool) {
 	var c RunControl
 	if err := json.Unmarshal(record, &c); err != nil || c.Type != TypeRunControl {
