@@ -6,7 +6,7 @@
 //
 //   AC#1/#5  a peer (the "operator") DMs the idle pi agent → it WAKES and REPLIES
 //            on the bus, as its OWN scoped identity.
-//   AC#3/#5  the agent's tool-calls AND thinking stream onto the pi.activity bus
+//   AC#3/#5  the agent's tool-calls AND thinking stream onto the agent.activity
 //            topic — the exact records the dash's generic conversation viewer
 //            renders live (it subscribes msg.> and shows each subject's records;
 //            thinking/message activity carry text, tool_* carry the tool name).
@@ -95,8 +95,8 @@ function startPi(bus: Bus, store: string, credsPath: string, piLog: string): PiR
         SEXTANT_HOME: store,
         SEXTANT_PI_CREDS: credsPath,
         SEXTANT_BUS_URL: bus.url,
-        // No SEXTANT_ACTIVITY_TOPIC override: exercise the default per-agent
-        // stream msg.agent.<id>.activity (the path the dash + executor consume).
+        // The bridge publishes to the per-agent stream msg.agent.<id>.activity
+        // (the canonical path the dash + run executor consume).
         SEXTANT_GOAL_ID: GOAL_ID,
         SEXTANT_PI_LOG: piLog,
         // Keep the headless gate ON (the default) — this is a faithful unattended run.

@@ -17,7 +17,7 @@
 //   1. SELF-VALIDATION (AC#4): a second SDK client stands in for the operator, DMs
 //      the idle pi agent, and we PROGRAMMATICALLY assert every bus-side step —
 //      distinct pi identity; the reply DM on the operator inbox; the goal.update +
-//      the moved criterion; ≥1 pi.activity frame of each kind. Each step prints
+//      the moved criterion; ≥1 agent.activity frame of each kind. Each step prints
 //      PASS/FAIL; the run prints a final N/N summary and exits non-zero on any FAIL.
 //   2. OPERATOR-WATCHABLE (AC#2/#3): once green, it keeps the dash + the pi agent
 //      ALIVE and prints the dash URL, so the operator opens it and DMs the pi worker
@@ -137,8 +137,8 @@ function startPi(bus: Bus, store: string, credsPath: string, piLog: string): PiR
         SEXTANT_HOME: store,
         SEXTANT_PI_CREDS: credsPath,
         SEXTANT_BUS_URL: bus.url,
-        // No SEXTANT_ACTIVITY_TOPIC override: exercise the default per-agent
-        // stream msg.agent.<id>.activity (the path the dash + executor consume).
+        // The bridge publishes to the per-agent stream msg.agent.<id>.activity
+        // (the canonical path the dash + run executor consume).
         SEXTANT_GOAL_ID: GOAL_ID,
         SEXTANT_PI_LOG: piLog,
         // Keep the headless gate ON (the default) — a faithful unattended run.

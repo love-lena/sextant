@@ -19,7 +19,7 @@ import {
   type Message,
   type Subscription,
 } from "@sextant/sdk";
-import { clientSubject, topicSubject } from "@sextant/sdk";
+import { agentActivitySubject, clientSubject, topicSubject } from "@sextant/sdk";
 import type { Config } from "./config.js";
 import type { Tiers } from "./trust.js";
 
@@ -56,12 +56,13 @@ export class BusConnection {
     return this.subscriptions;
   }
 
-  // activitySubject is the per-agent activity stream: msg.agent.<id>.activity
-  // (entity.id.aspect, parallels msg.workflow.<id>.events). An explicit
-  // SEXTANT_ACTIVITY_TOPIC override still wins (wrapped as a plain topic).
+  // activitySubject is the per-agent activity stream the bridge publishes on:
+  // msg.agent.<id>.activity (the SDK's shared helper, the one home for this wire
+  // shape; the Go peer is agentactivity.ActivitySubject). The canonical subject the
+  // dash groups by and the run executor (TASK-236) subscribes — no override, so the
+  // feed can never silently land where neither consumer looks.
   activitySubject(): string {
-    if (this.cfg.activityTopic) return topicSubject(this.cfg.activityTopic);
-    return "msg.agent." + (this.client?.id() ?? "") + ".activity";
+    return agentActivitySubject(this.client?.id() ?? "");
   }
 
   // handoffSubject is the bus subject the managed handoff (TASK-178) announces

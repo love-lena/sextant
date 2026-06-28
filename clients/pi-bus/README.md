@@ -37,7 +37,6 @@ acts on that identity, never the operator's.
 | `SEXTANT_BUS_URL` | — | bus NATS URL (wins over the discovery file) |
 | `SEXTANT_BUS_JSON` | — | a `bus.json` discovery file (fallback) |
 | `SEXTANT_WATCH_TOPICS` | — | extra topics to follow + wake on (comma/space list) |
-| `SEXTANT_ACTIVITY_TOPIC` | `msg.agent.<id>.activity` | override subject for the activity bridge (empty → the per-agent default) |
 | `SEXTANT_GOAL_ID` | — | the default goal `/set-goal` moves when no id is given |
 | `SEXTANT_PI_MAX_BUFFERED` | `16` | inbound back-pressure queue bound |
 | `SEXTANT_PI_COALESCE_MS` | `1500` | burst-coalescing window (0 disables) |

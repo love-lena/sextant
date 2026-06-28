@@ -5,6 +5,16 @@ date: 2026-06-19
 
 # The pi harness is a first-class bus client
 
+> **Amendment (TASK-235, 2026-06-27):** the observability bridge's `pi.activity`
+> lexicon was promoted to the harness-neutral **`agent.activity`**
+> (`protocol/lexicons/agent.activity.json`) on the per-agent subject
+> **`msg.agent.<id>.activity`** (entity.id.aspect, parallels
+> `msg.workflow.<id>.events`). pi-bus is the first producer; other harnesses emit
+> the identical record on the same subject (the TASK-151 adapter seam). The shape
+> below is unchanged; only the name and subject generalized. References to
+> `pi.activity` / `pi.activity.json` / a `pi.activity` *topic* below read as the new
+> name, lexicon path, and subject.
+
 A pi coding-agent session can be a full member of a sextant bus: its own scoped
 identity, addressable by anyone, woken by a message, observable in the dash, able
 to publish, read, share artifacts, and move a goal. This ADR records the decision
@@ -49,8 +59,9 @@ surfaced five design facts the production extension carries:
    inbox DM) holds a reserved slot and is delivered first, so a topic flood cannot
    starve it; a same-author/same-topic burst coalesces into one wake. The queue
    drains one per `turn_end`, so turns never stack unbounded.
-3. **The observability bridge is first-class**, shaped as the `pi.activity`
-   lexicon (`protocol/lexicons/pi.activity.json`): a small vocabulary — turn
+3. **The observability bridge is first-class**, shaped as the `agent.activity`
+   lexicon (`protocol/lexicons/agent.activity.json`, promoted from `pi.activity` per
+   the amendment above): a small vocabulary — turn
    markers, the tool name/args/result, the thinking and reply text — so the dash
    renders the worker without attaching to its terminal.
 4. **Security is layered and explicit** (below).

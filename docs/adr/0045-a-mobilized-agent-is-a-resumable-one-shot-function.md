@@ -5,6 +5,11 @@ date: 2026-06-22
 
 # A mobilized agent is a resumable one-shot function the bus wakes
 
+> **Amendment (TASK-235, 2026-06-27):** the `pi.activity` stream referenced below was
+> promoted to the harness-neutral **`agent.activity`** feed on `msg.agent.<id>.activity`
+> (see [ADR-0043](0043-the-pi-harness-is-a-first-class-bus-client.md)); read the
+> `pi.activity` mentions as that feed.
+
 A mobilized agent is a **durable identity plus a one-shot function**, not a process
 you keep alive. Mobilizing it runs the function once: it takes its brief, does the
 work, **reports**, and exits. A later message addressed to it wakes a fresh run that

@@ -44,11 +44,6 @@ export interface Config {
   // watchTopics are extra topics (besides the inbox) the agent subscribes to and
   // wakes on. Plain topic names (e.g. "crew"), mapped to msg.topic.<name>.
   watchTopics: string[];
-  // activityTopic is an OVERRIDE subject the activity bridge publishes to (set via
-  // SEXTANT_ACTIVITY_TOPIC, wrapped as a plain msg.topic.<name>). Empty by default,
-  // so the bridge publishes to the idiomatic per-agent stream msg.agent.<id>.activity
-  // — each worker its own stream the dash renders independently (TASK-150/151).
-  activityTopic: string;
   // goalId is the goal /set-goal operates on when the command is invoked without
   // an explicit goal id. "" means /set-goal requires the id as an argument.
   goalId: string;
@@ -96,7 +91,6 @@ export function resolveConfig(env: NodeJS.ProcessEnv): Config {
     busURL: env["SEXTANT_BUS_URL"] ?? "",
     busJSONPath: env["SEXTANT_BUS_JSON"] ?? "",
     watchTopics: splitTopics(env["SEXTANT_WATCH_TOPICS"] ?? env["SEXTANT_WATCH_TOPIC"] ?? ""),
-    activityTopic: env["SEXTANT_ACTIVITY_TOPIC"] ?? "",
     goalId: env["SEXTANT_GOAL_ID"] ?? "",
     maxBuffered: posInt(env["SEXTANT_PI_MAX_BUFFERED"], DEFAULT_MAX_BUFFERED),
     coalesceWindowMs: nonNegInt(env["SEXTANT_PI_COALESCE_MS"], DEFAULT_COALESCE_WINDOW_MS),
