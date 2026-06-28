@@ -1,10 +1,10 @@
 {
   "lexicon": 1,
-  "id": "pi.activity",
+  "id": "agent.activity",
   "defs": {
     "main": {
       "type": "record",
-      "description": "One observed step of a headless agent's work, published as a message on a bus activity topic (by convention msg.topic.pi.activity.<agent-id>) by the @sextant/pi-bus extension (TASK-177). It bridges a pi session's own event stream — turns, thinking, tool calls — onto the bus so a dash or crew client can render a headless worker like any other crew member without attaching to its terminal (the TASK-150/151 observe-agents-from-sextant thread). It SIGNALS what the worker is doing; it never directs it. Content is opaque to the bus; this is a convention, not a bus feature. A reader treats this as an UNTRUSTED record (the worker is a co-equal client) — the bus-stamped author is authoritative, never a field here.",
+      "description": "One observed step of any agent's work, published on msg.agent.<id>.activity by an activity bridge (pi-bus today, TASK-177; other harnesses via the TASK-151 adapter seam). Bridges a session's event stream — turns, thinking, tool calls — onto the bus so the dash/crew render a headless worker without attaching to its terminal. SIGNALS, never directs. Untrusted record; bus-stamped author is authoritative.",
       "record": {
         "type": "object",
         "required": ["kind"],

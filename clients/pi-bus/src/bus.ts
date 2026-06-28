@@ -19,9 +19,8 @@ import {
   type Message,
   type Subscription,
 } from "@sextant/sdk";
-import { clientSubject, topicSubject } from "@sextant/sdk";
+import { agentActivitySubject, clientSubject, topicSubject } from "@sextant/sdk";
 import type { Config } from "./config.js";
-import { defaultActivityTopic } from "./config.js";
 import type { Tiers } from "./trust.js";
 
 // Logger is the trace seam — one structured line per lifecycle event. stderr in
@@ -57,11 +56,13 @@ export class BusConnection {
     return this.subscriptions;
   }
 
-  // activitySubject is the bus subject the activity bridge publishes on, derived
-  // from config (or pi.activity.<id> by default once we know our id).
+  // activitySubject is the per-agent activity stream the bridge publishes on:
+  // msg.agent.<id>.activity (the SDK's shared helper, the one home for this wire
+  // shape; the Go peer is agentactivity.ActivitySubject). The canonical subject the
+  // dash groups by and the run executor (TASK-236) subscribes — no override, so the
+  // feed can never silently land where neither consumer looks.
   activitySubject(): string {
-    const topic = this.cfg.activityTopic || defaultActivityTopic(this.client?.id() ?? "");
-    return topicSubject(topic);
+    return agentActivitySubject(this.client?.id() ?? "");
   }
 
   // handoffSubject is the bus subject the managed handoff (TASK-178) announces

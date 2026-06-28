@@ -37,7 +37,6 @@ acts on that identity, never the operator's.
 | `SEXTANT_BUS_URL` | — | bus NATS URL (wins over the discovery file) |
 | `SEXTANT_BUS_JSON` | — | a `bus.json` discovery file (fallback) |
 | `SEXTANT_WATCH_TOPICS` | — | extra topics to follow + wake on (comma/space list) |
-| `SEXTANT_ACTIVITY_TOPIC` | `pi.activity.<id>` | the topic the activity bridge publishes to |
 | `SEXTANT_GOAL_ID` | — | the default goal `/set-goal` moves when no id is given |
 | `SEXTANT_PI_MAX_BUFFERED` | `16` | inbound back-pressure queue bound |
 | `SEXTANT_PI_COALESCE_MS` | `1500` | burst-coalescing window (0 disables) |
@@ -56,10 +55,12 @@ acts on that identity, never the operator's.
    The inbound queue is bounded, drop-oldest, with a **reserved slot for direct
    address** (a topic flood can't starve a DM) and **same-author/same-topic
    coalescing**; it drains one per `turn_end`, so turns never stack.
-3. **A first-class `pi.activity` bridge** ([`src/activity.ts`](src/activity.ts),
-   [`protocol/lexicons/pi.activity.json`](../../../protocol/lexicons/pi.activity.json)).
-   Turns, thinking, the reply, and tool calls are published as `pi.activity`
-   records the dash's conversation viewer renders live.
+3. **A first-class `agent.activity` bridge** ([`src/activity.ts`](src/activity.ts),
+   [`protocol/lexicons/agent.activity.json`](../../../protocol/lexicons/agent.activity.json)).
+   Turns, thinking, the reply, and tool calls are published as harness-neutral
+   `agent.activity` records on `msg.agent.<id>.activity` (entity.id.aspect, parallels
+   `msg.workflow.<id>.events`) that the dash's conversation viewer renders live. pi is
+   the first producer; other harnesses emit the same shape on the same subject (TASK-151).
 4. **Layered security** ([`src/gate.ts`](src/gate.ts), [`src/trust.ts`](src/trust.ts)).
    Bus content is an **untrusted prompt-injection surface**. Defenses: own scoped
    creds (least privilege); a **block-by-default destructive-tool gate when
@@ -115,7 +116,7 @@ so the two never overlap. The end-to-end handoff (drain → relinquish + exit �
 
 ```sh
 npm test        # unit: the wake/back-pressure policy, the headless gate,
-                # the pi.activity bridge, the /set-goal arg parse (no bus, no model)
+                # the agent.activity bridge, the /set-goal arg parse (no bus, no model)
 npm run driven  # the operator-verified AC#5 run: a real pi + a real model on a
                 # throwaway HERMETIC bus — DMs the agent, asserts it wakes + replies,
                 # its activity streams, and /set-goal moves a dash-visible goal.

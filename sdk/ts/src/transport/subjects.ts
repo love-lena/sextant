@@ -18,6 +18,14 @@ export function clientSubject(id: string): string {
   return MESSAGE_PREFIX + "client." + id;
 }
 
+// agentActivitySubject is an agent's per-agent activity stream: msg.agent.<id>.activity
+// (entity.id.aspect, parallels the workflow convention's msg.workflow.<id>.events). The
+// harness-neutral agent.activity feed (TASK-235) is published here; the Go peer is
+// agentactivity.ActivitySubject. One home for the wire shape so producers don't hand-code it.
+export function agentActivitySubject(id: string): string {
+  return MESSAGE_PREFIX + "agent." + id + ".activity";
+}
+
 // dmSubject is the subject for a direct message between two clients: a topic
 // with exactly two participants (ADR-0034). The two ULIDs are sorted so both
 // sides compute the identical subject from their own and the peer's id.

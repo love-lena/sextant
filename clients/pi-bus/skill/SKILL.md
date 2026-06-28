@@ -102,7 +102,7 @@ same way the operator's other clients do.
 
 ## Your activity is visible
 
-Your turns, your thinking, and your tool calls are bridged onto a bus activity
-topic (`pi.activity.<your id>`) as you work, so the operator can watch a headless
-you in the dash like any crew member. You don't do anything for this — it is
-automatic. Just be aware that your reasoning and tool calls are observable.
+Your turns, your thinking, and your tool calls are bridged onto your per-agent
+activity stream (`msg.agent.<your id>.activity`) as you work, so the operator can
+watch a headless you in the dash like any crew member. You don't do anything for
+this — it is automatic. Just be aware that your reasoning and tool calls are observable.

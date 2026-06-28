@@ -32,7 +32,7 @@ export {
 export { canonical, encode, encodeHex, decode, decodeHex, parseJSON, bytesToHex, hexToBytes } from "./wire/codec.js";
 
 // Pure subject helpers (no I/O).
-export { topicSubject, clientSubject, dmSubject, MESSAGE_PREFIX } from "./transport/subjects.js";
+export { topicSubject, clientSubject, dmSubject, agentActivitySubject, MESSAGE_PREFIX } from "./transport/subjects.js";
 
 // Supporting types.
 export type {
