@@ -1425,6 +1425,8 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 /* run view */
 .we-run-bar{display:flex;align-items:center;gap:14px;margin-bottom:14px;}
 .we-run-bar-main{display:flex;align-items:center;gap:12px;flex:1;}
+.we-run-stop{color:#b4232a;border-color:rgba(180,35,42,.35);}
+.we-tl-approve{margin-left:8px;color:#1a7a3a;border-color:rgba(26,122,58,.35);}
 .we-run-grid{display:grid;grid-template-columns:1fr 340px;gap:18px;align-items:start;margin-top:18px;}
 .we-timeline{display:flex;flex-direction:column;}
 .we-tl-step{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--shair);}

@@ -28,6 +28,11 @@
   const TEMPLATE_PREFIX = "workflow.template.";
   const RUN_PREFIX = "workflow.run.";
   const RUN_TOPIC = (id) => "msg.topic.run." + id;
+  // The wake signal the coordinator (run executor, TASK-236) watches: the dash
+  // writes the run artifact, then publishes run.start{id}; the coordinator adopts it.
+  const RUN_START_SUBJECT = "msg.topic.run.start";
+  const RUN_CONTROL = (id) => "msg.workflow.run." + id + ".control";
+  const BASE_STOP = ["done — brief w/ proof of success", "blocked — brief documenting why"];
 
   // The always-available base template (TASK-212 S7.2): Investigate → review → brief.
   // It is not a stored artifact — it is the floor every workflow list / spawn picker
@@ -345,6 +350,8 @@
       const name = RUN_PREFIX + id;
       const relates = (goal && crit) ? [{ goal: goal.name || goal.id, crit: crit.id, kind: "toward" }] : [];
       const steps = (tpl ? tpl.steps : BASE_TEMPLATE.steps).map((s, i) => ({ ...s, status: i === 0 ? "running" : "upcoming" }));
+      // stop conditions: the baseline two prompts plus the template's additions.
+      const stop = BASE_STOP.concat((tpl && Array.isArray(tpl.stop_conditions)) ? tpl.stop_conditions : []);
       const record = {
         "$type": RUN_TYPE,
         id,
@@ -356,6 +363,7 @@
         relates,
         activity: [{ id: "a" + Date.now(), glyph: "•", text: "Run spawned" + (tpl ? " from " + tpl.name : " (ad-hoc)"), src: id, at: Date.now() }],
         artifacts: [],
+        stop,
         created: Date.now(),
       };
       const SX = window.SX;
@@ -363,6 +371,9 @@
         // announce the spawn on the run topic so the thread has a first entry the
         // bus durably holds (TASK-215 #6 persistence floor for the run thread).
         SX.publish(RUN_TOPIC(id), { "$type": "chat.message", text: "Run spawned: " + record.label }).catch(() => {});
+        // wake the coordinator: it adopts the run we just wrote and drives it (TASK-236).
+        // Fire-and-forget — the dash polls the artifact, which the coordinator now owns.
+        SX.publish(RUN_START_SUBJECT, { "$type": "run.start", id }).catch(() => {});
         onSpawned(adaptRun(name, record));
       }).catch((e) => { setErr((e && e.message) || String(e)); setPhase("error"); });
     }
@@ -748,6 +759,13 @@
       window.SX.publish(topic, { "$type": "chat.message", text }).then(() => { setDraft(""); loadThread(); }).catch(() => {});
     }
 
+    // control publishes a cooperative run.control verb (approve/cancel) the
+    // coordinator honours (TASK-225/226). The dash never writes the run envelope —
+    // single-writer is the coordinator (ADR-0048); the 4s poll reflects the change.
+    function control(verb) {
+      window.SX.publish(RUN_CONTROL(id), { "$type": "run.control", verb }).catch(() => {});
+    }
+
     const toward = (run.relates || []).find((x) => x.kind === "toward");
     const STEP_STATUS = {
       done: { glyph: "✓", cls: "is-done", label: "met" },
@@ -765,6 +783,9 @@
             <span className="we-ulid mono">{id}</span>
             <span className="we-run-goal">{toward ? "→ " + toward.goal + " · " + toward.crit : "no goal yet"}</span>
           </div>
+          {isActive(run.status) && (
+            <button className="we-mini we-run-stop" onClick={() => control("cancel")}>Stop run</button>
+          )}
           <Pulse status={run.status} />
         </div>
         <h1 className="fx-h1 fx-in" style={{ animationDelay: ".02s" }}>{run.label}</h1>
@@ -785,6 +806,9 @@
                       {s.kind === "checkpoint" && s.status === "waiting" && <StepKindTag kind="checkpoint" />}
                       {s.kind === "brief" && <StepKindTag kind="brief" />}
                       {st.label && <span className="we-tl-status">{st.label}</span>}
+                      {s.kind === "checkpoint" && s.status === "waiting" && (
+                        <button className="we-mini we-tl-approve" onClick={() => control("approve")}>Approve</button>
+                      )}
                     </div>
                   );
                 })}
