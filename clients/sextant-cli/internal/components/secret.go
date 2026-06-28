@@ -22,21 +22,25 @@ import (
 // AnthropicKeyVar is the env var sextant-violet's --api-key defaults from.
 const AnthropicKeyVar = "ANTHROPIC_API_KEY"
 
-// VioletEnvPath is the 0600 env-file holding violet's Anthropic key, under the
-// client-config root ($SEXTANT_HOME). `sextant secret set anthropic` writes it;
-// `components exec` reads it for a NeedsKey component just before the re-exec.
+// VioletEnvPath is the 0600 env-file holding the operator's Anthropic key, under
+// the client-config root ($SEXTANT_HOME). `sextant secret set anthropic` writes
+// it; `components exec` reads it for a NeedsKey component just before the
+// re-exec. It is SHARED across NeedsKey components: violet's model turns and the
+// dispatcher's headless pi workers (pi runs a real model) both read this one
+// file, so one `sextant secret set anthropic` keys the whole managed setup. The
+// filename stays "violet.env" for backwards compatibility with existing installs.
 func VioletEnvPath() string { return filepath.Join(clictx.Root(), "violet.env") }
 
 // LoadKeyEnv reads a NeedsKey component's env-file (KEY=VALUE lines) and returns
 // its variables. It FAILS LOUD with operator guidance when the file is absent or
-// carries no ANTHROPIC_API_KEY — violet must never start keyless. Used both by
+// carries no ANTHROPIC_API_KEY — a keyed component must never start keyless. Used both by
 // `components start` (as a pre-flight before writing a plist) and by
 // `components exec` (to set the key in the environment before the re-exec).
 func LoadKeyEnv(path string) (map[string]string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("violet needs an API key — run `sextant secret set anthropic` first (expected %s)", path)
+			return nil, fmt.Errorf("a managed component needs an Anthropic API key — run `sextant secret set anthropic` first (expected %s)", path)
 		}
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}

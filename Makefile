@@ -1,4 +1,4 @@
-.PHONY: test vet lint fmt book ui build generate
+.PHONY: test vet lint fmt book ui pi-ext gen-embeds build generate
 
 # Generate the dash web UI bundles (.jsx -> .js via esbuild). The .js are
 # generated artifacts (gitignored, TASK-121) embedded by the Go build, so this
@@ -6,17 +6,28 @@
 ui:
 	bash scripts/build-dash-ui.sh
 
-# Build the sextant binary into ./bin (regenerates the dash bundles first, so
-# the embedded UI is present). The cross-platform release build is scripts/release.sh.
-build: ui
+# Generate the pi-bus extension bundle (ADR-0052): a single self-contained ESM
+# file esbuild-bundled from clients/pi-bus, gitignored, embedded by the Go build
+# into the sextant binary. Like `ui`, it must run before any go build/vet/test
+# that compiles clients/sextant-cli/internal/components.
+pi-ext:
+	bash scripts/build-pi-bus.sh
+
+# Both generated embeds the Go build needs present to COMPILE.
+gen-embeds: ui pi-ext
+
+# Build the sextant binary into ./bin (regenerates the embeds first, so the
+# embedded UI + pi-bus extension are present). The cross-platform release build
+# is scripts/release.sh.
+build: gen-embeds
 	go build -o bin/sextant ./clients/sextant-cli
 
-# Run the Go test suite (regenerates the dash bundles first).
-test: ui
+# Run the Go test suite (regenerates the embeds first).
+test: gen-embeds
 	go test ./... -race
 
-# go vet across the module (regenerates the dash bundles first).
-vet: ui
+# go vet across the module (regenerates the embeds first).
+vet: gen-embeds
 	go vet ./...
 
 # Lint: vet + the curated static-checks gate (.golangci.yml, ADR-0042) + a

@@ -21,6 +21,11 @@ jobs:
       # them before any Go compile so the go:embed in clients/sextant-dash/dashapi resolves.
       - name: build dash UI
         run: bash scripts/build-dash-ui.sh
+      # The pi-bus extension bundle is generated, not committed (ADR-0052);
+      # regenerate it before any Go compile so the go:embed in
+      # clients/sextant-cli/internal/components resolves.
+      - name: build pi-bus extension
+        run: bash scripts/build-pi-bus.sh
       - name: go vet
         run: go vet ./...
       # The curated static-checks gate (.golangci.yml, ADR-0042). v2 config schema;
@@ -71,6 +76,10 @@ jobs:
       # harness builds the `sextant` binary (mirrors the Go job).
       - name: build dash UI
         run: bash scripts/build-dash-ui.sh
+      # The sextant binary also go:embeds the generated pi-bus extension bundle
+      # (ADR-0052); regenerate it before any harness build (mirrors the Go job).
+      - name: build pi-bus extension
+        run: bash scripts/build-pi-bus.sh
 
       # --- the TS SDK (TASK-174) ---
       - name: npm ci (sdk)

@@ -54,3 +54,10 @@ node_modules/
 # (JSX, index.html, styles.css, favicon.png, image-slot.js, vendor/*.min.js, and
 # the bundle/ scope) lives under clients/web-dash.
 /clients/sextant-dash/dashapi/web/app/
+
+# Generated pi-bus extension bundle (ADR-0052): a single self-contained ESM file
+# esbuild-bundled by scripts/build-pi-bus.sh (make pi-ext / go:generate / CI /
+# release) from clients/pi-bus, then consumed by the go:embed in
+# clients/sextant-cli/internal/components/env.go. The committed source is the
+# pi-bus extension under clients/pi-bus; only the bundle is generated.
+/clients/sextant-cli/internal/components/embed/pi-bus.bundle.mjs

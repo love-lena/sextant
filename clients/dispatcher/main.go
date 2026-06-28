@@ -20,11 +20,12 @@
 // is no auto-naming: a name describes the run, never a cute agent identity.
 //
 // THE RECIPE IS A SWAPPABLE SEAM: --harness is a plain `sh -c CMD` with env vars,
-// and the default reference recipe (clients/dispatcher/recipes/agent.sh) launches
-// a capable, self-directing `claude` agent wired to the CHILD's own creds. What is
-// mobilized is swapped by pointing --harness at a different recipe; WHAT to do is
-// swapped via the prompt ($SX_PROMPT) and the recipe's overridable role prompt. A
-// future "run workflow X" recipe slots in the same way, no harness rewrite.
+// and the reference recipe (clients/dispatcher/recipes/pi.sh) launches a headless
+// `pi` worker — the work engine's sole harness (ADR-0052) — wired to the CHILD's
+// own creds. What is mobilized is swapped by pointing --harness at a different
+// recipe; WHAT to do is swapped via the prompt ($SX_PROMPT) and the recipe's
+// overridable role prompt. A future "run workflow X" recipe slots in the same
+// way, no harness rewrite.
 //
 // SECURITY: a spawn.request carries DATA only (a prompt and lineage labels),
 // never a command. The dispatcher always runs its OWN configured --harness, so a

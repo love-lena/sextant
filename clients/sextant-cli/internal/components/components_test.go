@@ -11,8 +11,8 @@ import (
 )
 
 // TestRecipeDriftGuard keeps the embedded dispatcher recipe byte-for-byte equal
-// to the source recipe in cmd/sextant-dispatch, so the source stays the single
-// source of truth and a Homebrew install (binaries only) still ships an
+// to the source recipe in clients/dispatcher/recipes, so the source stays the
+// single source of truth and a Homebrew install (binaries only) still ships an
 // up-to-date harness.
 func TestRecipeDriftGuard(t *testing.T) {
 	embedded, err := EmbeddedRecipe()
@@ -20,13 +20,31 @@ func TestRecipeDriftGuard(t *testing.T) {
 		t.Fatalf("read embedded recipe: %v", err)
 	}
 	// sextant-cli/internal/components -> repo root is four segments up, then to
-	// the dispatch app's reference recipe.
-	source, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "clients", "dispatcher", "recipes", "agent.sh"))
+	// the dispatcher's reference recipe.
+	source, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "clients", "dispatcher", "recipes", "pi.sh"))
 	if err != nil {
 		t.Fatalf("read source recipe: %v", err)
 	}
 	if string(embedded) != string(source) {
-		t.Fatalf("embedded recipe has drifted from clients/dispatcher/recipes/agent.sh — re-copy it into the components embed dir")
+		t.Fatalf("embedded recipe has drifted from clients/dispatcher/recipes/pi.sh — re-copy it into the components embed dir")
+	}
+}
+
+// TestEmbeddedPiBusBundle proves the pi-bus extension travels in the binary: the
+// embedded bundle is present (built by scripts/build-pi-bus.sh), non-trivial, and
+// is the ESM module pi loads — it carries the `sextantPiBus as default` export.
+// A build that skipped the bundle step fails to COMPILE (the go:embed), so this
+// guards that what shipped is actually the extension, not a stub.
+func TestEmbeddedPiBusBundle(t *testing.T) {
+	data, err := embedded.ReadFile("embed/pi-bus.bundle.mjs")
+	if err != nil {
+		t.Fatalf("read embedded pi-bus bundle: %v", err)
+	}
+	if len(data) < 1024 {
+		t.Fatalf("pi-bus bundle suspiciously small (%d bytes) — esbuild bundle likely failed", len(data))
+	}
+	if !strings.Contains(string(data), "sextantPiBus as default") {
+		t.Fatalf("pi-bus bundle missing the `sextantPiBus as default` export pi loads as the extension entry")
 	}
 }
 
@@ -53,13 +71,32 @@ func TestSelect(t *testing.T) {
 	}
 }
 
+// TestDispatcherRegistryEntry pins the work-engine harness contract (ADR-0052):
+// the dispatcher spawns headless pi workers, so it NeedsPi (fail loud if pi/node
+// missing), NeedsKey (pi runs a real model), and NeedsRecipe (the pi.sh harness).
+func TestDispatcherRegistryEntry(t *testing.T) {
+	c, ok := Find("dispatcher")
+	if !ok {
+		t.Fatal("dispatcher is not registered")
+	}
+	if !c.NeedsPi {
+		t.Error("dispatcher must NeedsPi — it spawns pi workers (the sole harness, ADR-0052)")
+	}
+	if !c.NeedsKey {
+		t.Error("dispatcher must NeedsKey — pi runs a real model and needs ANTHROPIC_API_KEY")
+	}
+	if !c.NeedsRecipe {
+		t.Error("dispatcher must NeedsRecipe — the embedded pi.sh harness")
+	}
+}
+
 // TestDashRegistryEntry pins AC#1/AC#3 of the managed-dash slice: the dash is a
 // registered component (sextant-dash, kind=dash) whose Args carry --creds/--store,
 // the managed $SEXTANT_HOME/dash.json state file, and --operator-session (so the
 // page mints the OPERATOR's session, ADR-0047), with NO --port (the dash defaults
 // to the stable 8765, AC#4). kind=dash is what makes the bus grant
 // dashComponentPermissions + the delegated-mint capability. It also carries a
-// HealthCheck (AC#2) and needs neither claude nor a key.
+// HealthCheck (AC#2) and needs neither pi nor a key.
 func TestDashRegistryEntry(t *testing.T) {
 	c, ok := Find("dash")
 	if !ok {
@@ -71,8 +108,8 @@ func TestDashRegistryEntry(t *testing.T) {
 	if c.Kind != wireapi.KindDash {
 		t.Errorf("dash Kind = %q, want %q (so the bus mints dashComponentPermissions + the capability)", c.Kind, wireapi.KindDash)
 	}
-	if c.NeedsClaude || c.NeedsKey || c.NeedsRecipe {
-		t.Errorf("dash needs none of claude/key/recipe; got claude=%v key=%v recipe=%v", c.NeedsClaude, c.NeedsKey, c.NeedsRecipe)
+	if c.NeedsPi || c.NeedsKey || c.NeedsRecipe {
+		t.Errorf("dash needs none of pi/key/recipe; got pi=%v key=%v recipe=%v", c.NeedsPi, c.NeedsKey, c.NeedsRecipe)
 	}
 	if c.HealthCheck == nil {
 		t.Error("dash must carry a HealthCheck (AC#2: an HTTP-200 readiness probe, not just launchd running)")
@@ -99,13 +136,17 @@ func TestDashRegistryEntry(t *testing.T) {
 }
 
 // TestResolveEnvBakesPaths proves the launchd-PATH discover-then-bake: the
-// composed PATH leads with claude's dir and sextant-mcp's dir, then sextant's
-// own dir + the system dirs, and SEXTANT_MCP_BIN is the absolute sextant-mcp.
+// composed PATH leads with pi's dir then carries node's dir and sextant-mcp's
+// dir, then sextant's own dir + the system dirs; SEXTANT_MCP_BIN is the absolute
+// sextant-mcp; and a needsPi dispatcher gets SEXTANT_PI_EXTENSION pointing at the
+// deterministic materialized-bundle path.
 func TestResolveEnvBakesPaths(t *testing.T) {
 	look := func(bin string) (string, error) {
 		switch bin {
-		case "claude":
-			return "/Users/u/.local/bin/claude", nil
+		case "pi":
+			return "/Users/u/.npm-global/bin/pi", nil
+		case "node":
+			return "/usr/local/bin/node", nil
 		case "sextant-mcp":
 			return "/opt/homebrew/bin/sextant-mcp", nil
 		}
@@ -116,33 +157,69 @@ func TestResolveEnvBakesPaths(t *testing.T) {
 		t.Fatalf("ResolveEnv: %v", err)
 	}
 	for _, want := range []string{
-		"/Users/u/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin",
+		"/Users/u/.npm-global/bin", "/usr/local/bin", "/opt/homebrew/bin", "/usr/bin", "/bin",
 	} {
 		if !strings.Contains(env.Path, want) {
 			t.Errorf("PATH missing %q; got %q", want, env.Path)
 		}
 	}
-	// claude's dir leads (it's off launchd's default PATH, so it must be present).
-	if !strings.HasPrefix(env.Path, "/Users/u/.local/bin:") {
-		t.Errorf("claude's dir should lead the PATH; got %q", env.Path)
+	// pi's dir leads (it's off launchd's default PATH, so it must be present).
+	if !strings.HasPrefix(env.Path, "/Users/u/.npm-global/bin:") {
+		t.Errorf("pi's dir should lead the PATH; got %q", env.Path)
 	}
 	if env.McpBin != "/opt/homebrew/bin/sextant-mcp" {
 		t.Fatalf("SEXTANT_MCP_BIN = %q, want the absolute sextant-mcp", env.McpBin)
 	}
-	if env.Map()["SEXTANT_MCP_BIN"] != "/opt/homebrew/bin/sextant-mcp" {
-		t.Fatalf("Map() should carry SEXTANT_MCP_BIN")
+	if env.PiExtension != PiBusPath() {
+		t.Fatalf("SEXTANT_PI_EXTENSION = %q, want the materialized-bundle path %q", env.PiExtension, PiBusPath())
+	}
+	if env.Map()["SEXTANT_PI_EXTENSION"] != PiBusPath() {
+		t.Fatalf("Map() should carry SEXTANT_PI_EXTENSION = %q", PiBusPath())
 	}
 }
 
-// TestResolveEnvFailLoudOnMissingClaude: a dispatcher (NeedsClaude) with no
-// claude on PATH must error — never write a plist that cannot spawn.
-func TestResolveEnvFailLoudOnMissingClaude(t *testing.T) {
-	noClaude := func(bin string) (string, error) { return "", os.ErrNotExist }
-	if _, err := ResolveEnv("/b/sextant", noClaude, true); err == nil {
-		t.Fatalf("a NeedsClaude component with no claude must fail loud")
+// TestResolveEnvFailLoudOnMissingPiOrNode: a dispatcher (needsPi) must fail loud
+// when pi OR node is missing — never write a plist that cannot launch a worker.
+// A non-pi component is unaffected by either being absent.
+func TestResolveEnvFailLoudOnMissingPiOrNode(t *testing.T) {
+	none := func(bin string) (string, error) { return "", os.ErrNotExist }
+	if _, err := ResolveEnv("/b/sextant", none, true); err == nil {
+		t.Fatalf("a needsPi component with no pi must fail loud")
 	}
-	// A non-claude component is fine without claude.
-	if _, err := ResolveEnv("/b/sextant", noClaude, false); err != nil {
-		t.Fatalf("a component that does not need claude must not fail when claude is absent: %v", err)
+	// pi present but node missing must still fail loud (the recipe needs node).
+	piNoNode := func(bin string) (string, error) {
+		if bin == "pi" {
+			return "/b/pi", nil
+		}
+		return "", os.ErrNotExist
+	}
+	if _, err := ResolveEnv("/b/sextant", piNoNode, true); err == nil {
+		t.Fatalf("a needsPi component with pi but no node must fail loud")
+	}
+	// A non-pi component is fine without pi/node.
+	if _, err := ResolveEnv("/b/sextant", none, false); err != nil {
+		t.Fatalf("a component that does not need pi must not fail when pi/node are absent: %v", err)
+	}
+}
+
+// TestWritePiBusMaterializes proves WritePiBus lands the embedded bundle at
+// PiBusPath() (the path ResolveEnv bakes into SEXTANT_PI_EXTENSION), byte-equal
+// to the embed — so the managed dispatcher loads exactly what shipped.
+func TestWritePiBusMaterializes(t *testing.T) {
+	t.Setenv("SEXTANT_HOME", t.TempDir())
+	path, err := WritePiBus()
+	if err != nil {
+		t.Fatalf("WritePiBus: %v", err)
+	}
+	if path != PiBusPath() {
+		t.Fatalf("WritePiBus path = %q, want PiBusPath() %q", path, PiBusPath())
+	}
+	on, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read materialized bundle: %v", err)
+	}
+	want, _ := embedded.ReadFile("embed/pi-bus.bundle.mjs")
+	if string(on) != string(want) {
+		t.Fatalf("materialized bundle differs from the embedded bundle")
 	}
 }

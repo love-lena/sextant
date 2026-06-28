@@ -15,7 +15,7 @@
 //
 // so launchd launches SEXTANT ITSELF, which resolves the environment in Go and
 // syscall.Execs the real sextant-<name>. This solves launchd's minimal-PATH
-// problem (the dispatcher's recipe shells out to `claude`, which is not on
+// problem (the dispatcher's recipe shells out to `pi` + `node`, which are not on
 // launchd's default PATH) in ONE testable Go function rather than a
 // plist-embedded shell — and it is the same seam a later env-file component
 // (violet) reuses. The resolved PATH + SEXTANT_MCP_BIN are ALSO baked into the
@@ -46,14 +46,16 @@ type Component struct {
 	Binary string
 	// Kind is the bus kind the component's identity is minted as.
 	Kind string
-	// NeedsClaude is true when the component's runtime spawns `claude` (the
-	// dispatcher), so `components start` fails loud if claude is not found —
-	// never writing a plist that silently cannot spawn.
-	NeedsClaude bool
-	// NeedsKey is true when the component's runtime needs an Anthropic API key
-	// (violet's model turns). The key is read from the 0600 VioletEnvPath() at
-	// exec time and set in the environment before the re-exec — NEVER baked into
-	// the world-readable plist. `components start` fails loud if the env-file is
+	// NeedsPi is true when the component's runtime spawns headless `pi` workers
+	// (the dispatcher — pi is the work engine's sole harness), so `components
+	// start` fails loud if pi (or node) is not found — never writing a plist that
+	// silently cannot launch a worker.
+	NeedsPi bool
+	// NeedsKey is true when the component's runtime needs an Anthropic API key:
+	// violet's model turns, and the dispatcher's pi workers (pi runs a real
+	// model). The key is read from the 0600 VioletEnvPath() at exec time and
+	// set in the environment before the re-exec — NEVER baked into the
+	// world-readable plist. `components start` fails loud if the env-file is
 	// absent or carries no key, never starting the component keyless.
 	NeedsKey bool
 	// Args builds the runtime's flags after the binary. creds is the component's
@@ -85,12 +87,15 @@ var Registry = []Component{
 		Name:        "dispatcher",
 		Binary:      "sextant-dispatch",
 		Kind:        "dispatcher",
-		NeedsClaude: true,
+		NeedsPi:     true,
+		NeedsKey:    true,
 		NeedsRecipe: true,
 		Args: func(creds, store, recipe string) []string {
 			// --on-behalf: the dispatcher mints children with its OWN authority
 			// (ADR-0033), so the launchd service runs unattended with no operator
-			// credential. The harness is the embedded recipe written to disk.
+			// credential. The harness is the embedded pi recipe written to disk; the
+			// pi-bus extension (SEXTANT_PI_EXTENSION) and the Anthropic key are set
+			// in the dispatcher's environment by the exec indirection.
 			return []string{
 				"--creds", creds, "--store", store,
 				"--on-behalf", "--harness", "sh " + recipe,
@@ -200,8 +205,12 @@ func componentsDir() string { return filepath.Join(clictx.Root(), "components") 
 // context (which the operator's CLI mutates).
 func CredsPath(name string) string { return filepath.Join(componentsDir(), name+".creds") }
 
-// RecipePath is where the embedded dispatcher recipe is materialized.
-func RecipePath() string { return filepath.Join(componentsDir(), "agent.sh") }
+// RecipePath is where the embedded dispatcher recipe (pi.sh) is materialized.
+func RecipePath() string { return filepath.Join(componentsDir(), "pi.sh") }
+
+// PiBusPath is where the embedded pi-bus extension bundle is materialized — the
+// path ResolveEnv bakes into SEXTANT_PI_EXTENSION for the dispatcher.
+func PiBusPath() string { return filepath.Join(componentsDir(), "pi-bus.bundle.mjs") }
 
 // LogPath is a component's combined stdout+stderr log.
 func LogPath(name string) string { return filepath.Join(clictx.Root(), "logs", name+".log") }
