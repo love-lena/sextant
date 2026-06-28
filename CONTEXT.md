@@ -200,7 +200,9 @@ run is `blocked` (there is no `failed` run status).
 _Avoid_: orchestrator, manager, controller
 
 **Dispatcher**:
-A client that turns spawn requests into running clients.
+A client that turns spawn requests into running clients. The managed dispatcher
+spawns headless **pi** workers — pi is the work engine's sole harness (ADR-0052);
+the recipe behind its `--harness` seam stays swappable, but pi is the one shipped.
 _Avoid_: scheduler, supervisor (it launches; it never supervises)
 
 **Activity feed (`agent.activity`)**:

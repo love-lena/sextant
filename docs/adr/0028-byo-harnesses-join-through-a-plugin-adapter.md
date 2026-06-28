@@ -5,6 +5,13 @@ date: 2026-06-10
 
 # BYO harnesses join through a plugin adapter
 
+> **Amendment (TASK-236, 2026-06-27, [ADR-0052](0052-the-work-engine-harness-is-pi.md)):**
+> BYO harnesses remain first-class clients via their adapter (the Claude Code plugin
+> still joins claude to the bus). But the **work engine's dispatched worker** — what
+> the managed dispatcher spawns to advance a run — is **pi**, the one harness that
+> emits the `run.event` step-done producer. The adapter seam below is unchanged; the
+> work engine just standardizes on pi as its dispatched harness.
+
 An agent harness becomes a sextant client through a harness-native adapter,
 not bespoke integration code. The reference adapter is the Claude Code plugin
 (`clients/claude-code/` + `cmd/sextant-mcp`): an MCP server that exposes the

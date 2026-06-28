@@ -15,6 +15,12 @@ date: 2026-06-19
 > `pi.activity` / `pi.activity.json` / a `pi.activity` *topic* below read as the new
 > name, lexicon path, and subject.
 
+> **Amendment (TASK-236, 2026-06-27, [ADR-0052](0052-the-work-engine-harness-is-pi.md)):**
+> pi is now not merely *a* first-class client but **the work engine's sole harness** —
+> the managed dispatcher spawns pi workers (the claude recipe is removed), and the
+> pi-bus extension is the deterministic `run.event` producer that advances a run.
+> The first-class-client shape below is unchanged; ADR-0052 records the elevation.
+
 A pi coding-agent session can be a full member of a sextant bus: its own scoped
 identity, addressable by anyone, woken by a message, observable in the dash, able
 to publish, read, share artifacts, and move a goal. This ADR records the decision
