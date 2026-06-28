@@ -9,7 +9,10 @@
 //     RunStateName(id), SINGLE-WRITER (this coordinator) and CAS-checkpointed. The
 //     dash writes it ONCE at spawn (its spawn act); the coordinator adopts it on a
 //     run.start wake and owns it from there. A restarted coordinator re-reads it and
-//     RESUMES at step granularity (idempotent resume).
+//     RESUMES at step granularity — idempotent for COMPLETED steps (it skips them). A
+//     step left StepRunning by a crash is re-dispatched, which can double a dispatched
+//     agent; crash-safe in-flight resume (record the agent/request id, re-attach
+//     instead of re-spawn) is a known follow-up, not yet done.
 //   - Steps run by kind: work → dispatch an agent (compose the M5.2 dispatcher);
 //     checkpoint → pause for the operator (run.control approve/resume); brief → write
 //     the terminal stopping brief, gated on a brief artifact (ADR-0048).
@@ -208,6 +211,12 @@ func (co *coordinator) walk() error {
 		step := &co.run.Steps[idx]
 		logf("step %s (%s): running", step.ID, step.Kind)
 		term, err := co.runStep(idx)
+		// A cancel can land mid-step (a checkpoint wait, or a bounded dispatch wait
+		// woken by the cancel) — honour it as cancelled, never as a failed/blocked or
+		// a spuriously-completed step.
+		if co.isCancelled() {
+			return co.finish(workflow.RunCancelled, "cancelled by operator")
+		}
 		if err != nil {
 			step.Status = workflow.StepWaiting // surfaces as "needs you" next to a blocked run
 			co.appendActivity("✗", fmt.Sprintf("step %q failed: %v", step.ID, err))
@@ -318,12 +327,15 @@ func (co *coordinator) runCheckpoint(step *workflow.RunStep) error {
 		return err
 	}
 	co.appendActivity("❡", "awaiting operator: "+stepDoneText(step))
-	co.mu.Lock()
-	co.approved = false
-	co.mu.Unlock()
+	// Do NOT reset co.approved at entry: an approve published just before a restart is
+	// replayed by DeliverAll and must still take. We consume it (reset to false) only
+	// when we act on it, so the NEXT checkpoint still waits for its own approve.
 	for {
 		co.mu.Lock()
 		approved, cancelled := co.approved, co.cancelled
+		if approved {
+			co.approved = false // consume this approve so the next checkpoint waits
+		}
 		co.mu.Unlock()
 		if cancelled {
 			return nil // run() sees isCancelled() and finishes cancelled
@@ -508,6 +520,9 @@ func (co *coordinator) awaitAck(requestID string, timeout time.Duration) (workfl
 	t := time.NewTimer(timeout)
 	defer t.Stop()
 	for {
+		if co.isCancelled() {
+			return workflow.SpawnAck{}, false // cancelled mid-step → abort; walk() finishes cancelled
+		}
 		co.mu.Lock()
 		a, ok := co.acks[requestID]
 		if ok {
@@ -519,6 +534,7 @@ func (co *coordinator) awaitAck(requestID string, timeout time.Duration) (workfl
 		}
 		select {
 		case <-co.ackCh:
+		case <-co.ctlCh: // a cancel must abort a step wait promptly, not after step-timeout
 		case <-t.C:
 			return workflow.SpawnAck{}, false
 		case <-co.ctx.Done():
@@ -531,6 +547,9 @@ func (co *coordinator) awaitStepDone(stepID string, timeout time.Duration) (work
 	t := time.NewTimer(timeout)
 	defer t.Stop()
 	for {
+		if co.isCancelled() {
+			return workflow.RunEvent{}, false // cancelled mid-step → abort; walk() finishes cancelled
+		}
 		co.mu.Lock()
 		ev, ok := co.doneEvents[stepID]
 		co.mu.Unlock()
@@ -539,6 +558,7 @@ func (co *coordinator) awaitStepDone(stepID string, timeout time.Duration) (work
 		}
 		select {
 		case <-co.evCh:
+		case <-co.ctlCh: // a cancel must abort a step wait promptly, not after step-timeout
 		case <-t.C:
 			return workflow.RunEvent{}, false
 		case <-co.ctx.Done():

@@ -90,7 +90,7 @@
   const RUN_STATUS = {
     running: { label: "Running", c: "var(--met)", live: true, active: true },
     waiting: { label: "Needs you", c: "var(--wait)", live: true, active: true },
-    blocked: { label: "Blocked", c: "var(--blk)", live: true, active: true },
+    blocked: { label: "Blocked", c: "var(--blk)", live: true }, // terminal — not active (no Stop button)
     done: { label: "Done", c: "var(--met)" },
     cancelled: { label: "Cancelled", c: "var(--todo)" },
   };

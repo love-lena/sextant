@@ -302,6 +302,61 @@ func TestRun_CancelHalts(t *testing.T) {
 	if !sawCancel {
 		t.Errorf("no cancel activity entry; activity=%+v", got.Activity)
 	}
+	// A cancelled checkpoint must NOT be recorded as done (no spurious ✓): the dash
+	// would otherwise render a stopped checkpoint as successfully approved.
+	if got.Steps[0].Status == workflow.StepDone {
+		t.Errorf("cancelled checkpoint step recorded as done; steps=%+v", got.Steps)
+	}
+}
+
+// TestRun_CancelDuringWork covers cancel responsiveness mid-step: a cancel published
+// while a work step is dispatched (the coordinator blocked in awaitStepDone) aborts
+// the wait PROMPTLY and finishes the run cancelled — not blocked after step-timeout.
+func TestRun_CancelDuringWork(t *testing.T) {
+	b, err := bus.Start(t.Context(), bus.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("bus.Start: %v", err)
+	}
+	t.Cleanup(b.Shutdown)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	consumer := dialBusClient(t, b, "consumer")
+	requester := dialBusClient(t, b, "requester")
+	dispatcher := dialBusClient(t, b, "dispatcher")
+	spawnSubj := "msg.topic.spawn"
+
+	// The dispatcher acks but defers the step-done far beyond the cancel window, so
+	// the coordinator sits in awaitStepDone when the cancel lands.
+	cooperatingDispatcher(t, ctx, dispatcher, spawnSubj, 30*time.Second)
+	// A generous step timeout so a slow cancel would be obvious (cancel must beat it).
+	startListenConsumer(t, ctx, consumer, spawnSubj, 60*time.Second)
+
+	run := workflow.Run{
+		ID: "01RUNCDW", Status: workflow.RunRunning, Objective: "cancel mid-work",
+		Steps: []workflow.RunStep{
+			{ID: "s1", Label: "long work", Kind: workflow.KindWork, Status: workflow.StepRunning},
+			{ID: "brief", Label: "stopping brief", Kind: workflow.KindBrief, Status: workflow.StepUpcoming},
+		},
+	}
+	writeRunAndStart(t, ctx, requester, run, "")
+
+	// Wait until s1 is actually running (dispatched), then cancel.
+	pollRun(t, ctx, requester, run.ID, 10*time.Second, func(r workflow.Run) bool {
+		return r.Steps[0].Status == workflow.StepRunning && r.Status == workflow.RunRunning
+	})
+	if err := requester.Publish(ctx, workflow.RunControlSubject(run.ID),
+		(workflow.RunControl{Verb: workflow.CtlCancel}).Marshal()); err != nil {
+		t.Fatalf("publish cancel: %v", err)
+	}
+
+	// Cancel must take well within the 30s dispatcher delay / 60s step timeout.
+	got := pollRun(t, ctx, requester, run.ID, 10*time.Second, func(r workflow.Run) bool {
+		return r.Status == workflow.RunCancelled
+	})
+	if got.Status != workflow.RunCancelled {
+		t.Errorf("final status = %q, want cancelled", got.Status)
+	}
 }
 
 // TestStartConsumer_FreshStartAcks: a run.start for a written run gets an ok ack
