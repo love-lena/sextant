@@ -30,11 +30,13 @@ node_modules/
 # breakdowns. Never committed; committed ⇔ signed-off.
 /.work/
 
-# Agent skills: the engineering skill bodies are COMMITTED under .claude/skills/
-# so a fresh clone has them with no install step. Ignore everything else under
-# .claude/, the other agents' skill copies, and the superpowers cache.
+# Agent skills are COMMITTED under .claude/skills/ and the shared hook wiring
+# under .claude/settings.json, so a fresh clone has them with no install step.
+# Ignore everything else under .claude/, the other agents' skill copies, and the
+# superpowers cache.
 /.claude/*
 !/.claude/skills/
+!/.claude/settings.json
 /.agents/
 /.superpowers/
 
