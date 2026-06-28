@@ -129,6 +129,17 @@ execution, no iframe), so it's safe but inert (ADR-0050). Content is opaque to
 the bus — invent richer lexicons freely, but prefer these where they fit so
 other clients render you properly.
 
+**Styling an HTML body: inline `style=` only — a `<style>` block does not
+survive.** DOMPurify keeps inline `style` and `class` attributes but drops
+`<style>` elements (and `<script>`, `on*` handlers, `javascript:` URLs), so put
+every custom rule directly on the element (`<div style="background:#ecfdf3;
+border-radius:12px;padding:14px">…`). Class-based CSS, `:hover`, `@media`
+(including dark-mode), and JS-driven tabs all silently no-op. The body renders
+inside the dash's own document container, so plain `<h2>`/`<p>`/`<table>`/
+`<code>`/`<a>` already inherit sensible styling — reach for inline styles only
+for the custom bits (banners, status pills, callouts). Author a single scrolling
+page, not tabs.
+
 ## Channel events (the push path)
 
 Inbound frames on subscribed subjects arrive as:
