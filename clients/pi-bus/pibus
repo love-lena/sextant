@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# pibus — run an interactive `pi` session as a first-class sextant bus client.
+#
+# It is plain `pi` with the @sextant/pi-bus extension loaded and the bus wiring set
+# up: the session's turns/thinking/tool-calls stream to the agent.activity feed
+# (msg.agent.<id>.activity) the dash renders live. All extra args pass through to pi.
+#
+# IDENTITY IS TIED TO THE CONVERSATION. Each fresh `pibus` mints its OWN scoped agent
+# identity (never the operator's) and derives the pi session id from it (pi-<bus-id>),
+# so one conversation = one bus agent = one activity stream — distinguishable in the
+# dash, and resumed together. `pibus -c` continues your most recent pibus conversation
+# (same identity, same session). It is NOT a single shared identity reused everywhere.
+#
+# Usage:
+#   pibus [pi args...]        start a NEW conversation (new agent + session)
+#   pibus -c | --continue     continue your most recent pibus conversation
+# Alias:
+#   alias pibus="<repo>/clients/pi-bus/pibus"
+#
+# Override hatches (env):
+#   SEXTANT_STORE          bus store dir (default: the brew/macOS Application Support store)
+#   SEXTANT_PI_EXTENSION   path to a prebuilt extension entrypoint (default: this dir's dist)
+#   SEXTANT_BUS_URL        bus URL (wins over the store's bus.json)
+#   PIBUS_HOME             where pibus keeps per-conversation creds + session logs
+set -eu
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+
+# 1. The built extension entrypoint. Build it (deps + tsc) if it is missing.
+EXT="${SEXTANT_PI_EXTENSION:-$HERE/dist/src/index.js}"
+if [ ! -f "$EXT" ]; then
+  echo "pibus: building the @sextant/pi-bus extension (first run)…" >&2
+  ( cd "$HERE" && npm run build:deps >/dev/null 2>&1 && npm run build >/dev/null 2>&1 )
+fi
+
+# 2. The bus, discovered from the store's bus.json (SEXTANT_BUS_URL still wins).
+STORE="${SEXTANT_STORE:-$HOME/Library/Application Support/sextant/jetstream}"
+export SEXTANT_BUS_JSON="${SEXTANT_BUS_JSON:-$STORE/bus.json}"
+
+# pibus state lives BESIDE the store, never inside it: the store is JetStream's data
+# dir, and a per-conversation cred + session log must survive a store reset (the same
+# sibling-not-inside discipline the dispatcher's pi.sh recipe uses for session logs).
+PIBUS_HOME="${PIBUS_HOME:-$(dirname "$STORE")/pibus}"
+CREDS_DIR="$PIBUS_HOME/creds"
+SESSION_DIR="$PIBUS_HOME/sessions"
+mkdir -p "$CREDS_DIR" "$SESSION_DIR"
+
+# 3a. CONTINUE the most recent pibus conversation: reuse its identity + session. The
+# session filename is <timestamp>_pi-<bus-id>.jsonl; the bus id keys its cred.
+if [ "${1:-}" = "-c" ] || [ "${1:-}" = "--continue" ]; then
+  shift
+  # filenames are controlled (<ts>_pi-<ulid>.jsonl), so ls -t is safe here — the same
+  # newest-session pattern the dispatcher's pi.sh recipe uses.
+  # shellcheck disable=SC2012
+  latest="$(ls -t "$SESSION_DIR"/*.jsonl 2>/dev/null | head -1 || true)"
+  [ -n "$latest" ] || { echo "pibus: no previous pibus conversation to continue." >&2; exit 1; }
+  sid="$(basename "$latest" .jsonl)"; sid="${sid#*_}"   # <ts>_pi-<id> -> pi-<id>
+  busid="${sid#pi-}"
+  creds="$CREDS_DIR/$busid.creds"
+  [ -f "$creds" ] || { echo "pibus: missing cred for $sid ($creds)." >&2; exit 1; }
+  echo "pibus: continuing conversation $sid (agent $busid)" >&2
+  export SEXTANT_PI_CREDS="$creds"
+  exec pi --session "$latest" --session-dir "$SESSION_DIR" -e "$EXT" "$@"
+fi
+
+# 3b. FRESH conversation: mint a new agent (the bus assigns the id), key the cred and
+# the pi session to that id. The operator's active context authorises the mint; the
+# session acts as this new "pibus" agent, never as the operator.
+pending="$CREDS_DIR/.pending.$$.creds"
+out="$(sextant clients register pibus --kind agent --out "$pending" ${SEXTANT_STORE:+--store "$SEXTANT_STORE"})"
+busid="$(printf '%s' "$out" | sed -n 's/^registered .* as \([A-Z0-9][A-Z0-9]*\).*/\1/p')"
+[ -n "$busid" ] || { rm -f "$pending"; echo "pibus: mint failed: $out" >&2; exit 1; }
+creds="$CREDS_DIR/$busid.creds"
+mv "$pending" "$creds"
+echo "pibus: new conversation as agent $busid (session pi-$busid)" >&2
+export SEXTANT_PI_CREDS="$creds"
+exec pi --session-id "pi-$busid" --session-dir "$SESSION_DIR" -e "$EXT" "$@"
