@@ -45,3 +45,48 @@ export {
   requestWorkflowStart,
   parseWorkflowStartAck,
 } from "./workflow.js";
+
+// The run contract (ADR-0048): the run/template/event/control/start shapes + the
+// run.start verb, the co-equal peer of conventions/workflow/go/run.go. Additive
+// alongside the older sextant.workflow/v1 exports above (the coordinator retarget
+// that consumes these is a following pass).
+export {
+  type RunStep,
+  type RelatesLink,
+  type ActivityEntry,
+  type ProducedArtifact,
+  type Run,
+  type RunEvent,
+  type RunControl,
+  type RunStartRequest,
+  type RunStartAck,
+  type Template,
+  KindRun,
+  KindTemplate,
+  TypeRunEvent,
+  TypeRunControl,
+  TypeRunStart,
+  TypeRunStartAck,
+  RunRunning,
+  RunWaiting,
+  RunBlocked,
+  RunDone,
+  RunCancelled,
+  StepUpcoming,
+  StepWaiting,
+  KindWork,
+  KindCheckpoint,
+  KindBrief,
+  RunStartSubject,
+  isTerminalRun,
+  nextPendingRun,
+  marshalRun,
+  parseRun,
+  marshalRunEvent,
+  parseRunEvent,
+  parseRunControl,
+  runStateName,
+  runEventsSubject,
+  runControlSubject,
+  runStartRecord,
+} from "./run.js";
