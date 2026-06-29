@@ -11,10 +11,10 @@ import (
 // These tests pin the owner-tag demux on the broadcast-shared messages. The
 // layout broadcasts every non-key message to ALL mounted panes, and with three
 // browsers a DM, a topic conversation, and an artifact reader can all be live at
-// once — so a publish result or a watch failure must be claimed only by the
-// surface that issued it. Without the tag, one pane's publish failure would
-// footer every conversation, and one pane's success would clear another pane's
-// real error.
+// once — so a stream's publish result or an artifact's watch failure must be
+// claimed only by the surface that issued it. Without the tag, one pane's
+// publish failure would footer every conversation, and one pane's success would
+// clear another pane's real error.
 
 // TestPublishedMsgOwnerDemux: a publishedMsg is claimed only by its owner — a
 // failure footers only the emitting stream, and a success clears only the
@@ -53,26 +53,6 @@ func TestPublishedMsgOwnerDemux(t *testing.T) {
 	c.Update(publishedMsg{err: boom})
 	if !errors.Is(c.err, boom) {
 		t.Errorf("untagged publish result was not claimed: err=%v", c.err)
-	}
-}
-
-// TestPublishedMsgNotCrossKind: an Artifact's comment-publish result must not be
-// claimed by a Stream (and vice versa) — the owner tag demuxes across surface
-// kinds too, since publishedMsg is shared by both.
-func TestPublishedMsgNotCrossKind(t *testing.T) {
-	th, keys := theme.Dark(), theme.DefaultKeymap()
-	s := NewStream(context.Background(), nil, "msg.topic.a", th, keys, WithCompose())
-	art := NewArtifact(context.Background(), nil, "doc", th, keys, WithReview())
-
-	boom := errors.New("comment rejected")
-	fail := publishedMsg{owner: art, err: boom}
-	s.Update(fail)
-	art.Update(fail)
-	if s.err != nil {
-		t.Errorf("a stream claimed an artifact's comment failure: err=%v", s.err)
-	}
-	if !errors.Is(art.err, boom) {
-		t.Errorf("the artifact did not claim its own comment failure: err=%v", art.err)
 	}
 }
 

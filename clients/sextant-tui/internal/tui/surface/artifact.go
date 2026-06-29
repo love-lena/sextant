@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -13,7 +12,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/love-lena/sextant/clients/sextant-tui/internal/tui/theme"
 	"github.com/love-lena/sextant/clients/sextant-tui/internal/tui/widget"
-	"github.com/love-lena/sextant/protocol/sx"
 	"github.com/love-lena/sextant/sdk/go"
 )
 
@@ -62,27 +60,9 @@ type artifactErrMsg struct {
 	err   error
 }
 
-// ArtifactMode is the artifact surface's mode: reader (render only) or review
-// (reader plus a comment-compose affordance).
-type ArtifactMode int
-
-const (
-	// ModeReader renders the document title + body, scrollable.
-	ModeReader ArtifactMode = iota
-	// ModeReview is the reader plus a one-line comment compose. A comment reuses
-	// the chat.message primitive (no review record type) — see the
-	// comment-publish convention below.
-	ModeReview
-)
-
 // Artifact is the artifact surface (ADR-0023): a document reader on the Detail
-// widget, with an optional thin review affordance. Reader mode renders the
-// document's Markdown body (via glamour, matching the prototype look). Review
-// mode adds a one-line comment compose that reuses the chat.message primitive —
-// a review comment is a chat.message whose replyTo is the artifact name,
-// published to the artifact's comment subject (sx.TopicSubject("artifact." +
-// name)); the surface keeps no threaded-comment model of its own (primitives,
-// not policy).
+// widget. It renders the document's Markdown body (via glamour, matching the
+// prototype look) and scrolls.
 //
 // The reader live-updates over client.WatchArtifact: Init opens a watch that
 // delivers the current value (if present) then every subsequent change, so a
@@ -95,10 +75,8 @@ type Artifact struct {
 	name   string
 	theme  theme.Theme
 	keys   theme.Keymap
-	mode   ArtifactMode
 
 	detail widget.Detail
-	input  widget.Compose
 	focus  widget.Focus
 
 	doc      document
@@ -120,39 +98,16 @@ type Artifact struct {
 	stopped bool
 }
 
-// ArtifactOption configures an Artifact surface.
-type ArtifactOption func(*artifactConfig)
-
-type artifactConfig struct {
-	mode ArtifactMode
-}
-
-// WithReview puts the surface in review mode: the reader plus a comment compose.
-// Without it the surface is a plain reader.
-func WithReview() ArtifactOption {
-	return func(c *artifactConfig) { c.mode = ModeReview }
-}
-
 // NewArtifact builds an artifact surface for the named artifact. Pass a context
-// that lives as long as the surface, the resolved theme/keymap, and any options
-// (WithReview for review mode).
-func NewArtifact(ctx context.Context, client *sextant.Client, name string, th theme.Theme, keys theme.Keymap, opts ...ArtifactOption) *Artifact {
-	var cfg artifactConfig
-	for _, o := range opts {
-		o(&cfg)
-	}
-	in := widget.NewCompose()
-	in.SetPlaceholder("leave a comment…")
-	in.SetWidth(1) // will be resized by SetSize
+// that lives as long as the surface and the resolved theme/keymap.
+func NewArtifact(ctx context.Context, client *sextant.Client, name string, th theme.Theme, keys theme.Keymap) *Artifact {
 	return &Artifact{
 		client:  client,
 		ctx:     ctx,
 		name:    name,
 		theme:   th,
 		keys:    keys,
-		mode:    cfg.mode,
 		detail:  widget.NewDetail(keys),
-		input:   in,
 		changes: make(chan sextant.ArtifactChange, watchBuffer),
 	}
 }
@@ -176,26 +131,17 @@ func (a *Artifact) Title() string {
 	return "Artifact"
 }
 
-// SetSize sizes the inner reader area. The compose width is set to w so it
-// wraps at the pane's inner width; height is dynamic (compose height is
-// subtracted in relayout). It re-renders the body to the new width.
+// SetSize sizes the inner reader area and re-renders the body to the new width.
 func (a *Artifact) SetSize(w, h int) {
 	a.w, a.h = w, h
-	if a.mode == ModeReview && w > 0 {
-		a.input.SetWidth(w)
-	}
 	a.relayout()
 	a.rerender()
 }
 
-// relayout sizes the reader to the inner area minus the compose's current
-// height (review mode — the compose grows as the operator types, so the reader
-// shrinks to match) and the error-footer row (when an error is showing).
+// relayout sizes the reader to the inner area minus the error-footer row (when
+// an error is showing).
 func (a *Artifact) relayout() {
 	readerH := a.h
-	if a.mode == ModeReview {
-		readerH -= a.input.Height()
-	}
 	if a.err != nil {
 		readerH--
 	}
@@ -215,25 +161,15 @@ func (a *Artifact) SetTheme(th theme.Theme) {
 	a.rerender()
 }
 
-// SetFocus sets the three-state focus; in review mode, active focuses the
-// comment input.
+// SetFocus sets the three-state focus.
 func (a *Artifact) SetFocus(f widget.Focus) {
 	a.focus = f
-	if a.mode != ModeReview {
-		return
-	}
-	if f == widget.FocusActive {
-		_ = a.input.Focus() // returns a cursor-blink cmd; irrelevant for surface routing
-	} else {
-		a.input.Blur()
-	}
 }
 
-// CapturingText reports whether the review comment input is live (review mode
-// and focused — the surface is the focused pane), so a host delivers printable
-// keys here instead of acting on them as shortcuts.
+// CapturingText reports whether the surface is capturing typed text. The reader
+// has no text input, so it never captures.
 func (a *Artifact) CapturingText() bool {
-	return a.mode == ModeReview && a.input.Focused()
+	return false
 }
 
 // Init opens a live watch on the artifact. WatchArtifact delivers the current
@@ -298,9 +234,8 @@ func (a *Artifact) nextChange() tea.Cmd {
 	}
 }
 
-// Update handles the loaded document, the error case, and — in review mode while
-// active — comment composition (Enter publishes a chat.message). Reader
-// scrolling runs on up/down while active.
+// Update handles the loaded document and the error case. Reader scrolling runs
+// on up/down while active.
 func (a *Artifact) Update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case ArtifactLoadedMsg:
@@ -330,74 +265,33 @@ func (a *Artifact) Update(msg tea.Msg) tea.Cmd {
 		a.err = msg.err
 		a.relayout()
 		return nil
-	case publishedMsg:
-		// Broadcast to every surface: claim only this pane's own comment result.
-		if !msg.ownedBy(a) {
-			return nil
-		}
-		// A failed comment publish surfaces in the footer; a success clears it.
-		a.err = msg.err
-		a.relayout()
-		return nil
 	case tea.KeyMsg:
 		return a.handleKey(msg)
 	}
 	return nil
 }
 
-// handleKey routes a key while active: scroll the reader, and in review mode
-// edit/submit the comment. The bindings come from the keymap (keys are data),
-// not literal strings, so a rebind is honoured here as it is in the chrome and
-// the detail widget. Back is a no-op — the reader is a single level
-// (ADR-0026); a hosting browser consumes Esc to pop it.
-//
-// While the comment input is capturing, every printable key is TEXT before it
-// is a binding: j/k share the scroll bindings (and q is the host's quit key),
-// so a text key routes straight to the input — only control keys (arrows,
-// Enter) can match bindings mid-comment.
+// handleKey routes a key while active: scroll the reader on up/down. The
+// bindings come from the keymap (keys are data), not literal strings, so a
+// rebind is honoured here as it is in the chrome and the detail widget. Back is
+// a no-op — the reader is a single level (ADR-0026); a hosting browser consumes
+// Esc to pop it.
 func (a *Artifact) handleKey(msg tea.KeyMsg) tea.Cmd {
 	if a.focus != widget.FocusActive {
 		return nil
-	}
-	if a.CapturingText() && isTextKey(msg) {
-		var cmd tea.Cmd
-		a.input, cmd = a.input.Update(msg)
-		a.relayout() // compose may have grown or shrunk
-		return cmd
 	}
 	switch {
 	case key.Matches(msg, a.keys.Up), key.Matches(msg, a.keys.Down):
 		a.detail, _ = a.detail.Update(msg)
 		return nil
-	case key.Matches(msg, a.keys.Enter):
-		if a.mode != ModeReview {
-			return nil
-		}
-		text := strings.TrimSpace(a.input.Value())
-		if text == "" {
-			return nil
-		}
-		a.input.SetValue("")
-		a.relayout() // compose shrank back to 1 row on clear
-		return a.comment(text)
-	}
-	if a.mode == ModeReview {
-		var cmd tea.Cmd
-		a.input, cmd = a.input.Update(msg)
-		a.relayout() // compose may have grown or shrunk
-		return cmd
 	}
 	return nil
 }
 
-// View renders the reader, the comment line below it in review mode, and an
-// error footer below that when a fetch or comment publish failed — kept visible
-// rather than swallowed (fail-loud).
+// View renders the reader and an error footer below it when a fetch failed —
+// kept visible rather than swallowed (fail-loud).
 func (a *Artifact) View() string {
 	parts := []string{a.detail.View(a.theme, a.focus)}
-	if a.mode == ModeReview {
-		parts = append(parts, a.commentLine())
-	}
 	if a.err != nil {
 		parts = append(parts, errorFooter(a.theme, a.err, a.w))
 	}
@@ -427,13 +321,6 @@ func (a *Artifact) Stop() {
 	close(a.changes)
 }
 
-// commentLine renders the compose input used for review comments. The Compose
-// widget handles both the live input (active focus) and the dim placeholder
-// (unfocused), so this is a straight delegation. Height is dynamic.
-func (a *Artifact) commentLine() string {
-	return a.input.View(a.theme, a.focus)
-}
-
 // applyChange applies one watch change: a write renders the new value (and clears
 // any not-found footer the absent-at-launch case left), a delete shows a removed
 // state so the reader sees the artifact go rather than freezing on the last value.
@@ -443,26 +330,6 @@ func (a *Artifact) applyChange(ch sextant.ArtifactChange) {
 		return
 	}
 	a.applyArtifact(ch.Artifact)
-}
-
-// comment publishes a review comment as a chat.message referencing the artifact:
-// replyTo is the artifact name, published to the artifact's comment subject. This
-// reuses the chat.message primitive rather than inventing a review record type.
-func (a *Artifact) comment(text string) tea.Cmd {
-	subject := artifactCommentSubject(a.name)
-	name := a.name
-	return func() tea.Msg {
-		record, err := marshalChatMessage(text, name)
-		if err != nil {
-			return publishedMsg{owner: a, err: err}
-		}
-		ctx, cancel := context.WithTimeout(a.ctx, 5*time.Second)
-		defer cancel()
-		if err := a.client.Publish(ctx, subject, record); err != nil {
-			return publishedMsg{owner: a, err: err}
-		}
-		return publishedMsg{owner: a}
-	}
 }
 
 // applyArtifact stores a fetched artifact and re-renders its body. A successful
@@ -559,13 +426,4 @@ func renderMarkdown(md string, width int, variant theme.Variant) string {
 		return md
 	}
 	return strings.Trim(out, "\n")
-}
-
-// artifactCommentSubject is the subject a review comment publishes to: the
-// artifact's topic, msg.topic.artifact.<name>, built through sx.TopicSubject so
-// the subject convention has one source of truth. It is a naming convention over
-// the messages space (ADR-0023), not a bus construct — a reviewer subscribes to
-// it to see comments on an artifact.
-func artifactCommentSubject(name string) string {
-	return sx.TopicSubject("artifact." + name)
 }

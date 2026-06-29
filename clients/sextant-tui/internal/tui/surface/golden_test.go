@@ -190,30 +190,6 @@ func TestArtifactReaderGolden(t *testing.T) {
 	}
 }
 
-func TestArtifactReviewGolden(t *testing.T) {
-	th := fixedDark()
-	for _, tc := range []struct {
-		name  string
-		focus widget.Focus
-	}{
-		{"review_selected", widget.FocusSelected},
-		{"review_active", widget.FocusActive},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			a := surface.NewArtifact(context.Background(), nil, "dash-plan", th, theme.DefaultKeymap(), surface.WithReview())
-			iw, ih := innerOf(48, 14)
-			a.SetSize(iw, ih)
-			a.Update(surface.ArtifactLoadedMsg{Artifact: sampleDocument()})
-			a.SetFocus(tc.focus)
-			if tc.focus == widget.FocusActive {
-				typeIntoArtifact(a, "tighten the intro")
-			}
-			out := widget.Box(th, tc.focus, a.Title(), th.KindHue(theme.KindArtifactUpdate), a.View(), 48, 14)
-			teatest.RequireEqualOutput(t, []byte(out))
-		})
-	}
-}
-
 // --- error footers (fail-loud: a captured error must render, never swallow) ---
 
 // TestErrorFootersGolden pins that each surface renders its captured error in a
@@ -315,11 +291,5 @@ func TestBrowserErrorFooterFullListGolden(t *testing.T) {
 func typeInto(s *surface.Stream, text string) {
 	for _, r := range text {
 		s.Update(keyRune(r))
-	}
-}
-
-func typeIntoArtifact(a *surface.Artifact, text string) {
-	for _, r := range text {
-		a.Update(keyRune(r))
 	}
 }
