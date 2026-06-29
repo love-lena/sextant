@@ -139,3 +139,37 @@ func TestIsTerminalRun(t *testing.T) {
 		}
 	}
 }
+
+// TestDeclaredProofArtifacts guards the fabricated-proof stop gate (TASK-243): the
+// extractor must pull artifact names a brief claims as proof from the recognized
+// shapes, and pull NOTHING when the brief makes no artifact claim (so an honest
+// brief that names no deliverable isn't spuriously gated).
+func TestDeclaredProofArtifacts(t *testing.T) {
+	eq := func(a, b []string) bool {
+		if len(a) != len(b) {
+			return false
+		}
+		for i := range a {
+			if a[i] != b[i] {
+				return false
+			}
+		}
+		return true
+	}
+	cases := []struct {
+		name string
+		rec  string
+		want []string
+	}{
+		{"01KW8J2N shape (proof_of_completion + artifacts_to_report, deduped)", `{"$type":"brief","proof_of_completion":{"artifact":"poem-x"},"artifacts_to_report":[{"name":"poem-x"},{"name":"chart-y"}]}`, []string{"poem-x", "chart-y"}},
+		{"canonical proof_artifacts", `{"$type":"brief","proof_artifacts":["a","b"]}`, []string{"a", "b"}},
+		{"no artifact claim", `{"$type":"brief","outcome":"done","note":"work complete"}`, nil},
+		{"string proof, not an artifact ref", `{"$type":"brief","proof":"pi --version ok"}`, nil},
+		{"malformed", `not json`, nil},
+	}
+	for _, c := range cases {
+		if got := DeclaredProofArtifacts(json.RawMessage(c.rec)); !eq(got, c.want) {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}

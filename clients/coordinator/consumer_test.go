@@ -92,12 +92,16 @@ func cooperatingDispatcher(t *testing.T, ctx context.Context, d *sextant.Client,
 		ev := workflow.RunEvent{Step: stepID, Status: workflow.StepDone}
 		if strings.Contains(req.Prompt, "stopping brief") {
 			ev.Outcome = workflow.RunDone
-			// A real model picks the kind freely; across identical live runs haiku
-			// wrote "brief", "brief.stopping", and "stopping" (the last blocked the
-			// run under the old kind-exact gate). The fake uses a NON-brief kind so
-			// the test proves the gate keys on the step boundary (an artifact was
-			// produced), not the model's arbitrary kind label.
-			ev.Artifacts = []workflow.ProducedArtifact{{Name: "brief.stopping." + req.Job, Kind: "stopping", Version: 1}}
+			// The real pi worker actually PUTS the brief artifact; the fake must too,
+			// or the coordinator's existence-gate (it confirms every declared artifact
+			// exists) would correctly block. This clean brief claims no proof artifact.
+			// A NON-brief kind ("stopping") proves the gate keys on the step boundary +
+			// existence, not the model's arbitrary kind label.
+			name := "brief.stopping." + req.Job
+			if _, err := d.CreateArtifact(ctx, name, json.RawMessage(`{"$type":"brief","outcome":"done","note":"work complete"}`)); err != nil {
+				return
+			}
+			ev.Artifacts = []workflow.ProducedArtifact{{Name: name, Kind: "stopping", Version: 1}}
 		}
 		go func() {
 			if delay > 0 {
@@ -199,6 +203,74 @@ func TestRun_AdvancesToBrief(t *testing.T) {
 	}
 	if len(got.Activity) < 2 {
 		t.Errorf("want ≥2 activity entries (step done + terminal), got %d", len(got.Activity))
+	}
+}
+
+// TestRun_BlocksOnFabricatedProof is the TASK-243 stop-gate property: a brief that
+// CLAIMS a proof artifact which was never created must NOT reach done — the run
+// blocks. Proves the coordinator verifies declared deliverables INDEPENDENTLY (it
+// fetches them from the bus) instead of trusting the worker's say-so. This is the
+// live 01KW8J2N fabrication reproduced deterministically.
+func TestRun_BlocksOnFabricatedProof(t *testing.T) {
+	b, err := bus.Start(t.Context(), bus.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("bus.Start: %v", err)
+	}
+	t.Cleanup(b.Shutdown)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	consumer := dialBusClient(t, b, "consumer")
+	requester := dialBusClient(t, b, "requester")
+	dispatcher := dialBusClient(t, b, "dispatcher")
+	spawnSubj := "msg.topic.spawn"
+
+	// The brief worker CREATES a real brief artifact, but the brief CLAIMS a proof
+	// artifact (phantom-<job>) it never produces — exactly the 01KW8J2N shape.
+	_, err = dispatcher.Subscribe(ctx, spawnSubj, func(m sextant.Message) {
+		var req struct {
+			Type   string `json:"$type"`
+			Job    string `json:"job,omitempty"`
+			Prompt string `json:"prompt,omitempty"`
+		}
+		if err := json.Unmarshal(m.Frame.Record, &req); err != nil || req.Type != workflow.TypeSpawnRequest {
+			return
+		}
+		ack := workflow.SpawnAck{Type: workflow.TypeSpawnAck, ID: "agent-" + m.Frame.ID[:8], RequestID: m.Frame.ID, Status: workflow.StatusOK}
+		ackBytes, _ := json.Marshal(ack)
+		_ = dispatcher.Publish(ctx, spawnSubj, json.RawMessage(ackBytes))
+		stepID := parseDirective(req.Prompt, "RUN_STEP")
+		ev := workflow.RunEvent{Step: stepID, Status: workflow.StepDone}
+		if strings.Contains(req.Prompt, "stopping brief") {
+			ev.Outcome = workflow.RunDone
+			name := "brief.fab." + req.Job
+			rec := json.RawMessage(`{"$type":"brief","outcome":"done","proof_of_completion":{"artifact":"phantom-` + req.Job + `"}}`)
+			if _, err := dispatcher.CreateArtifact(ctx, name, rec); err != nil {
+				return
+			}
+			ev.Artifacts = []workflow.ProducedArtifact{{Name: name, Kind: "brief", Version: 1}}
+		}
+		_ = dispatcher.Publish(ctx, workflow.RunEventsSubject(req.Job), ev.Marshal())
+	})
+	if err != nil {
+		t.Fatalf("subscribe dispatcher: %v", err)
+	}
+	startListenConsumer(t, ctx, consumer, spawnSubj, 10*time.Second)
+
+	run := workflow.Run{
+		ID: "01FABPROOF0000000000000000", Status: workflow.RunRunning, Objective: "write a poem",
+		Steps: []workflow.RunStep{
+			{ID: "s1", Label: "investigate", Kind: workflow.KindWork, Status: workflow.StepRunning},
+			{ID: "brief", Label: "stopping brief", Kind: workflow.KindBrief, Status: workflow.StepUpcoming},
+		},
+	}
+	writeRunAndStart(t, ctx, requester, run, "")
+
+	got := pollRun(t, ctx, requester, run.ID, 15*time.Second, func(r workflow.Run) bool {
+		return workflow.IsTerminalRun(r.Status)
+	})
+	if got.Status != workflow.RunBlocked {
+		t.Errorf("a brief claiming a non-existent proof artifact must BLOCK; got status %q", got.Status)
 	}
 }
 

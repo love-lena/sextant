@@ -380,14 +380,21 @@ func (co *coordinator) runBrief(step *workflow.RunStep) (string, error) {
 		return "", fmt.Errorf("brief agent never reported done within %s", co.stepTimeout)
 	}
 	co.attachArtifacts(ev.Artifacts)
-	// Stop gate: the brief step must have PRODUCED an artifact. We key on the step
-	// boundary (the brief worker reported done WITH ≥1 produced artifact), NOT on the
-	// artifact's kind/name — a worker is a model and its kind label is arbitrary
-	// (observed live: "brief", "brief.stopping", and "stopping" across identical
-	// runs). The brief step's sole job is to write the brief, so any artifact it
-	// produces IS the brief; an empty event means no brief was written → block.
+	// Stop gate, two parts:
+	// (1) The brief step must have PRODUCED an artifact. Keyed on the step boundary,
+	//     NOT the artifact's kind/name — a worker is a model and its kind label is
+	//     arbitrary (observed live: "brief", "brief.stopping", "stopping").
 	if len(ev.Artifacts) == 0 {
 		return "", fmt.Errorf("brief step reported done but produced no artifact (stop gate)")
+	}
+	// (2) Every artifact the brief DECLARES must actually EXIST on the bus — each one
+	//     it produced, and each one it claims as proof. The coordinator confirms the
+	//     deliverables INDEPENDENTLY (it is deterministic code, not the AI worker)
+	//     instead of trusting the worker's say-so, so a run cannot reach `done` on a
+	//     fabricated proof (TASK-243: a brief certified done against a poem artifact
+	//     that never existed).
+	if err := co.verifyDeclaredProof(ev.Artifacts); err != nil {
+		return "", err
 	}
 	step.Status = workflow.StepDone
 	if err := co.checkpoint(); err != nil {
@@ -399,11 +406,34 @@ func (co *coordinator) runBrief(step *workflow.RunStep) (string, error) {
 	return workflow.RunDone, nil // default success — a posted brief with no explicit blocked
 }
 
+// verifyDeclaredProof is the independent stop-gate check: for every artifact the
+// brief step declared in its run.event, the coordinator fetches it from the bus and
+// confirms it EXISTS, and for each artifact a brief claims as proof
+// (workflow.DeclaredProofArtifacts), confirms that exists too. A missing one means
+// the worker certified `done` against work it did not actually produce — the run
+// blocks. The coordinator is a deterministic process separate from the AI worker, so
+// this is genuine external verification, not the system self-reporting success.
+func (co *coordinator) verifyDeclaredProof(arts []workflow.ProducedArtifact) error {
+	for _, a := range arts {
+		art, err := co.c.GetArtifact(co.ctx, a.Name)
+		if err != nil {
+			return fmt.Errorf("brief declared artifact %q but it does not exist on the bus (fabricated proof, stop gate): %w", a.Name, err)
+		}
+		for _, ref := range workflow.DeclaredProofArtifacts(art.Record) {
+			if _, err := co.c.GetArtifact(co.ctx, ref); err != nil {
+				return fmt.Errorf("brief %q claims proof artifact %q that does not exist on the bus (fabricated proof, stop gate): %w", a.Name, ref, err)
+			}
+		}
+	}
+	return nil
+}
+
 // briefPrompt hands the agent the run's stop conditions so it writes a brief that
 // justifies the stop, plus the reporting directive.
 func (co *coordinator) briefPrompt(step *workflow.RunStep) string {
 	return fmt.Sprintf(
-		"Write the stopping brief for this run as an artifact of kind \"brief\".\nObjective: %s\nStop when ANY of these is met (pick the one that holds and justify it):\n- %s\n\nReport done with the brief artifact in `artifacts` and `outcome` = done or blocked.\nRUN_EVENTS=%s RUN_STEP=%s",
+		"Write the stopping brief for this run as an artifact of kind \"brief\".\nObjective: %s\nStop when ANY of these is met (pick the one that holds and justify it):\n- %s\n\nReport done with the brief artifact in `artifacts` and `outcome` = done or blocked.\n"+
+			"PROOF MUST BE REAL: if you cite any artifact as proof of completion, you MUST have actually created it (via sextant_artifact_put). List every such artifact by name in a `proof_artifacts` array in the brief. The run is GATED — any proof artifact you name that does not exist on the bus will BLOCK the run. Never claim an artifact you did not produce.\nRUN_EVENTS=%s RUN_STEP=%s",
 		co.run.Objective, joinStops(co.run.Stop),
 		workflow.RunEventsSubject(co.run.ID), step.ID,
 	)
