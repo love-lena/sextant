@@ -75,12 +75,20 @@ type Run struct {
 // RunStep is one unit of work. Kind work → dispatch an agent; checkpoint → pause for
 // the operator; brief → write the terminal stopping brief. Agent is filled from the
 // spawn.ack for work/brief steps.
+//
+// Produced holds the artifact REFS (name/kind/version — never content) the step's
+// worker reported in its run.event. It is the per-step deliverable record: AC#2 (each
+// work step attaches >=1 distinct artifact) is checked against it, and AC#1 (piping)
+// threads a later step's prompt against the refs prior steps produced. The coordinator
+// stores and forwards these refs only; it never reads their content to thread them
+// (content-opacity, AC#3) — the downstream worker dereferences the ref itself.
 type RunStep struct {
-	ID     string `json:"id"`
-	Label  string `json:"label,omitempty"`
-	Kind   string `json:"kind"`
-	Status string `json:"status"`
-	Agent  string `json:"agent,omitempty"`
+	ID       string             `json:"id"`
+	Label    string             `json:"label,omitempty"`
+	Kind     string             `json:"kind"`
+	Status   string             `json:"status"`
+	Agent    string             `json:"agent,omitempty"`
+	Produced []ProducedArtifact `json:"produced,omitempty"`
 }
 
 // RelatesLink binds a run to a goal/criterion (ADR-0035 relates, ADR-0048 toward).

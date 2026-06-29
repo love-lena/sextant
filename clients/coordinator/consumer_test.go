@@ -102,6 +102,15 @@ func cooperatingDispatcher(t *testing.T, ctx context.Context, d *sextant.Client,
 				return
 			}
 			ev.Artifacts = []workflow.ProducedArtifact{{Name: name, Kind: "stopping", Version: 1}}
+		} else {
+			// A WORK step's worker PRODUCES a durable deliverable (TASK-244 AC#2: a work
+			// step that captures no artifact is the 01KW8J2N hollow case and blocks the
+			// run). Name it per step so distinct steps yield distinct artifacts.
+			name := "deliverable." + req.Job + "." + stepID
+			if _, err := d.CreateArtifact(ctx, name, json.RawMessage(`{"$type":"work","step":"`+stepID+`"}`)); err != nil {
+				return
+			}
+			ev.Artifacts = []workflow.ProducedArtifact{{Name: name, Kind: "work", Version: 1}}
 		}
 		go func() {
 			if delay > 0 {
