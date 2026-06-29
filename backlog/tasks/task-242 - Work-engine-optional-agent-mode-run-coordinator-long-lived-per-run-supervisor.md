@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-27 01:12'
-updated_date: '2026-06-29 21:07'
+updated_date: '2026-06-29 21:16'
 labels:
   - feature
   - workflow
@@ -49,4 +49,6 @@ Layer on the base executor (TASK-236): add an agent-mode flag on the template/ru
 Decided with Lena 2026-06-26 during the run-executor design. Continuity choice = long-lived agent per run (not per-step-boundary dispatch). Authority = flat step model v1 (gate/redo/edit/stop; defer DAG/branching). Base executor [[feat-run-executor-workflow-run-v1]] (TASK-236) ships first (programmatic, output-gated). Rest/liveness signal from [[feat-pi-rpc-work-stream-to-bus]] (TASK-235) agent.activity turn_end. First consumer = [[task-98]] agentic dev workflow (reframe as 'the first agent-mode workflow'). Cross-link [[feat-run-checkpoint-resume]] (TASK-225), [[feat-run-cancel-stop]] (TASK-226).
 
 Design decision 2026-06-29 (operator): edit-then-advance is UNBOUNDED — the coordinator may freely edit any deliverable handed to it and uses redo-with-feedback at its own judgment. Supersedes the 'edits bounded to fix-ups, never authoring' framing in the description. Single-writer applies to the run ENVELOPE only, not deliverable artifacts.
+
+Content-opacity boundary (operator clarification 2026-06-29): 'decide from metadata, never parse the brief body' binds the PROGRAMMATIC/deterministic coordinator ONLY — the proof-gate + run-envelope single-writer, which must use typed run.event metadata and never read artifact content. The opt-in AGENT-MODE coordinator (TASK-242) is a convention CLIENT acting as an agent and DOES read produced content — judging acceptance / edit-vs-redo IS reading the deliverable. So TASK-243 AC2 constrains the deterministic gate, NOT the agent reviewer; PROBE B (content wrong but artifact exists) is the agent reviewer's job (TASK-242), not a deterministic-gate defect.
 <!-- SECTION:NOTES:END -->
