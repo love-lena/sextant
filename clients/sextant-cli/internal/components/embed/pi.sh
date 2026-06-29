@@ -217,6 +217,7 @@ else
   # the scope + the session dir (sibling of the store) + the scoped pi config dir.
   # Extra sensitive paths can be appended via SX_PI_SRT_DENY_READ (space-separated).
   SX_SRT_CREDS_DIR="$(dirname "$SEXTANT_CREDS")" SX_SRT_EXTRA_DENY="${SX_PI_SRT_DENY_READ:-}" \
+  SX_SRT_STORE="$SEXTANT_STORE" SX_SRT_BUSJSON_DIR="$(dirname "$SEXTANT_BUS_JSON")" \
   SX_SRT_WORKDIR="$WORKDIR" SX_SRT_SESSIONDIR="$SESSION_DIR" SX_SRT_PICFG="$PI_WORKER_AGENT_DIR" \
   SX_SRT_HOME="$HOME" SX_SRT_DOMAIN="$SX_PI_MODEL_DOMAIN" \
     node -e '
@@ -239,9 +240,17 @@ else
       ];
       for (const p of (process.env.SX_SRT_EXTRA_DENY || "").split(/\s+/).filter(Boolean)) denyRead.push(p);
       // The worker MUST read its own dirs even if under a denied tree (allowRead
-      // overrides denyRead for these exact subtrees).
+      // overrides denyRead for these exact subtrees): its scope, session dir,
+      // scoped pi config, its bus creds, AND the bus STORE + bus.json dir (the
+      // client discovers the bus URL by reading $SEXTANT_STORE/bus.json — if the
+      // store lives under a denied tree, denying it bricks the bus connect before
+      // any TCP). On a loopback bus this read is the only thing standing between
+      // the worker and the bus, so it is load-bearing.
       const allowRead = [];
-      for (const p of [process.env.SX_SRT_WORKDIR, process.env.SX_SRT_SESSIONDIR, process.env.SX_SRT_PICFG, process.env.SX_SRT_CREDS_DIR]) {
+      for (const p of [
+        process.env.SX_SRT_WORKDIR, process.env.SX_SRT_SESSIONDIR, process.env.SX_SRT_PICFG,
+        process.env.SX_SRT_CREDS_DIR, process.env.SX_SRT_STORE, process.env.SX_SRT_BUSJSON_DIR,
+      ]) {
         if (p && !allowRead.includes(p)) allowRead.push(p);
       }
       const settings = {
