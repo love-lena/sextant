@@ -131,6 +131,14 @@ type coordinator struct {
 	run workflow.Run
 	rev uint64 // current revision of the state artifact (for CAS)
 
+	// getArtifact is the coordinator's ONLY artifact-read seam (defaults to the SDK
+	// client's GetArtifact). Routing every read through one named function lets a test
+	// observe exactly which artifacts the coordinator opens — the content-opacity proof
+	// (AC#3): the work/thread path must read NO step-output artifact. The brief stop-gate
+	// reads declared proof refs through here too (deliberately, and only on the brief
+	// path); the work path never does.
+	getArtifact func(ctx context.Context, name string) (sextant.Artifact, error)
+
 	mu         sync.Mutex
 	acks       map[string]workflow.SpawnAck // spawn.request frame id -> ack
 	doneEvents map[string]workflow.RunEvent // step id -> a non-self step-done event
@@ -142,18 +150,27 @@ type coordinator struct {
 }
 
 func newCoordinator(ctx context.Context, c *sextant.Client, spawnSubject string, stepTimeout time.Duration) *coordinator {
-	return &coordinator{
+	co := &coordinator{
 		ctx: ctx, c: c, spawnSubject: spawnSubject, stepTimeout: stepTimeout,
 		acks: map[string]workflow.SpawnAck{}, doneEvents: map[string]workflow.RunEvent{},
 		ackCh: make(chan struct{}, 1), evCh: make(chan struct{}, 1), ctlCh: make(chan struct{}, 1),
 	}
+	co.getArtifact = c.GetArtifact
+	if newCoordinatorHook != nil {
+		newCoordinatorHook(co)
+	}
+	return co
 }
+
+// newCoordinatorHook, when set (tests only, via export_test.go), runs on every freshly
+// built coordinator — the seam a test uses to observe its artifact reads. nil in prod.
+var newCoordinatorHook func(*coordinator)
 
 // adopt reads the run artifact the dash wrote (single-writer handoff: the dash
 // created it at spawn; the coordinator owns it from here), (re)owns it, and resets a
 // non-terminal run to running. Idempotent on resume: a terminal run is a no-op.
 func (co *coordinator) adopt(ctx context.Context, runID string) error {
-	art, err := co.c.GetArtifact(ctx, workflow.RunStateName(runID))
+	art, err := co.getArtifact(ctx, workflow.RunStateName(runID))
 	if err != nil {
 		return fmt.Errorf("adopt %s: %w", runID, err)
 	}
@@ -282,16 +299,85 @@ func (co *coordinator) runDispatch(step *workflow.RunStep, prompt string) error 
 	if !ok {
 		return fmt.Errorf("agent %s never reported step %q done within %s", short(ack.ID), step.ID, co.stepTimeout)
 	}
+	// AC#2 — a work step's deliverable must be a durable artifact. A step that reports
+	// done but attaches no artifact is the 01KW8J2N hollow case (its output lived only
+	// in agent.activity and was lost); that is a step FAILURE → the run blocks, never a
+	// silent advance to done. The coordinator keys this on the step boundary, not on the
+	// artifact's kind/name (a worker is a model; its label is arbitrary).
+	if len(ev.Artifacts) == 0 {
+		return fmt.Errorf("work step %q reported done but produced no artifact (output not captured; AC#2 gate)", step.ID)
+	}
+	// Record the refs (name/kind/version only) on the step — the per-step deliverable
+	// the next step pipes against (AC#1) and the distinct-artifact-per-step ledger
+	// (AC#2). Refs only: never the content (AC#3).
+	step.Produced = append(step.Produced, ev.Artifacts...)
 	co.attachArtifacts(ev.Artifacts)
 	return nil
 }
 
-// workPrompt augments a work step's task with the reporting directive the agent uses
-// to signal completion on the run's event stream.
+// workPrompt augments a work step's task with (a) REFERENCES to the artifacts prior
+// steps produced — so step N operates on step N-1's real deliverable instead of redoing
+// it from scratch (AC#1, the 01KW8J2N piping bug) — and (b) the reporting directive the
+// agent uses to signal completion on the run's event stream.
+//
+// Content-opacity (AC#3): the coordinator threads only the artifact NAMES it already
+// holds in run state (from each step's run.event). It does NOT read the upstream
+// artifacts' content to summarise or inline them — the downstream worker dereferences
+// the named artifact itself (sextant_artifact_get). The coordinator issues no
+// artifact_get on this path.
 func (co *coordinator) workPrompt(step *workflow.RunStep) string {
-	return fmt.Sprintf("%s\n\n%s\nRUN_EVENTS=%s RUN_STEP=%s",
-		co.run.Objective, step.Label,
+	prompt := fmt.Sprintf("%s\n\n%s", co.run.Objective, step.Label)
+	if inputs := co.upstreamArtifacts(step); len(inputs) > 0 {
+		prompt += "\n\nINPUT ARTIFACTS (produced by prior steps of this run — fetch each with sextant_artifact_get and build on its content; do NOT start from scratch):"
+		for _, a := range inputs {
+			prompt += "\n- " + artifactRef(a)
+		}
+	}
+	prompt += fmt.Sprintf("\nRUN_EVENTS=%s RUN_STEP=%s",
 		workflow.RunEventsSubject(co.run.ID), step.ID)
+	return prompt
+}
+
+// upstreamArtifacts gathers the artifact refs produced by the work steps that ran BEFORE
+// step (in step order, up to but excluding it), de-duped by name with the latest-seen
+// ref winning. Refs only — the coordinator never opens the artifacts (AC#3).
+func (co *coordinator) upstreamArtifacts(step *workflow.RunStep) []workflow.ProducedArtifact {
+	var out []workflow.ProducedArtifact
+	at := map[string]int{} // name -> index in out
+	for i := range co.run.Steps {
+		s := &co.run.Steps[i]
+		if s.ID == step.ID {
+			break // only steps strictly before this one feed it
+		}
+		if s.Kind != workflow.KindWork {
+			continue
+		}
+		for _, a := range s.Produced {
+			if j, seen := at[a.Name]; seen {
+				out[j] = a
+				continue
+			}
+			at[a.Name] = len(out)
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// artifactRef renders an artifact reference (name + optional kind/version) — metadata
+// only, never content. The single source for how a ref appears in a worker prompt.
+func artifactRef(a workflow.ProducedArtifact) string {
+	ref := a.Name
+	if a.Kind != "" {
+		ref += " (kind " + a.Kind
+		if a.Version > 0 {
+			ref += fmt.Sprintf(", v%d", a.Version)
+		}
+		ref += ")"
+	} else if a.Version > 0 {
+		ref += fmt.Sprintf(" (v%d)", a.Version)
+	}
+	return ref
 }
 
 // attachArtifacts records artifacts an agent reported in its done event onto the run
@@ -415,12 +501,12 @@ func (co *coordinator) runBrief(step *workflow.RunStep) (string, error) {
 // this is genuine external verification, not the system self-reporting success.
 func (co *coordinator) verifyDeclaredProof(arts []workflow.ProducedArtifact) error {
 	for _, a := range arts {
-		art, err := co.c.GetArtifact(co.ctx, a.Name)
+		art, err := co.getArtifact(co.ctx, a.Name)
 		if err != nil {
 			return fmt.Errorf("brief declared artifact %q but it does not exist on the bus (fabricated proof, stop gate): %w", a.Name, err)
 		}
 		for _, ref := range workflow.DeclaredProofArtifacts(art.Record) {
-			if _, err := co.c.GetArtifact(co.ctx, ref); err != nil {
+			if _, err := co.getArtifact(co.ctx, ref); err != nil {
 				return fmt.Errorf("brief %q claims proof artifact %q that does not exist on the bus (fabricated proof, stop gate): %w", a.Name, ref, err)
 			}
 		}
