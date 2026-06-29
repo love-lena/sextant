@@ -1,0 +1,42 @@
+{
+  "epoch": 1,
+  "convention": "workflow",
+  "verb": "emitRunEvent",
+  "description": "workflow run/v1: a dispatched agent signals step progress — a single message.publish of a run.event on msg.workflow.run.\u003cid\u003e.events. The run id names the subject; empty optionals are omitted.",
+  "input": {
+    "runId": "01HRUN",
+    "event": {
+      "step": "s1",
+      "status": "done",
+      "by": "01AGENT",
+      "outcome": "done",
+      "artifacts": [
+        {
+          "name": "findings",
+          "kind": "brief",
+          "status": "review"
+        }
+      ]
+    }
+  },
+  "operations": [
+    {
+      "op": "message.publish",
+      "subject": "msg.workflow.run.01HRUN.events",
+      "payload": {
+        "$type": "run.event",
+        "step": "s1",
+        "status": "done",
+        "by": "01AGENT",
+        "outcome": "done",
+        "artifacts": [
+          {
+            "name": "findings",
+            "kind": "brief",
+            "status": "review"
+          }
+        ]
+      }
+    }
+  ]
+}

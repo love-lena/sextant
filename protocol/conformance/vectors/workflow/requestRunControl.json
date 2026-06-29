@@ -1,0 +1,22 @@
+{
+  "epoch": 1,
+  "convention": "workflow",
+  "verb": "requestRunControl",
+  "description": "workflow run/v1: the operator cooperatively controls a run — a single message.publish of a run.control on msg.workflow.run.\u003cid\u003e.control. The run id names the subject.",
+  "input": {
+    "runId": "01HRUN",
+    "control": {
+      "verb": "approve"
+    }
+  },
+  "operations": [
+    {
+      "op": "message.publish",
+      "subject": "msg.workflow.run.01HRUN.control",
+      "payload": {
+        "$type": "run.control",
+        "verb": "approve"
+      }
+    }
+  ]
+}

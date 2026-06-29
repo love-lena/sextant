@@ -300,3 +300,27 @@ func RequestRunStart(ctx context.Context, ops Ops, req RunStartRequest) error {
 	}
 	return nil
 }
+
+// EmitRunEvent publishes a run.event on RunEventsSubject(runID) — the bus operation a
+// dispatched agent issues to signal step progress to the coordinator (the single
+// source of the run.event wire shape; the Go verb and the TS peer emit byte-identical
+// bytes). runID names the run whose events subject the event rides.
+func EmitRunEvent(ctx context.Context, ops Ops, runID string, ev RunEvent) error {
+	subject := RunEventsSubject(runID)
+	if err := ops.Publish(ctx, subject, ev.Marshal()); err != nil {
+		return fmt.Errorf("workflow: publish run.event on %s: %w", subject, err)
+	}
+	return nil
+}
+
+// RequestRunControl publishes a run.control on RunControlSubject(runID) — the bus
+// operation the operator (the dash) issues to cooperatively pause/resume/cancel/approve
+// a run (the single source of the run.control wire shape; the Go verb and the TS peer
+// emit byte-identical bytes). runID names the run whose control subject it rides.
+func RequestRunControl(ctx context.Context, ops Ops, runID string, ctl RunControl) error {
+	subject := RunControlSubject(runID)
+	if err := ops.Publish(ctx, subject, ctl.Marshal()); err != nil {
+		return fmt.Errorf("workflow: publish run.control on %s: %w", subject, err)
+	}
+	return nil
+}

@@ -1,0 +1,21 @@
+{
+  "epoch": 1,
+  "convention": "workflow",
+  "verb": "requestRunStart",
+  "description": "workflow run/v1: request the coordinator to adopt a run — a single message.publish of a run.start on msg.topic.run.start. The dash's nonce is echoed in the coordinator's ack; the empty optionals are omitted.",
+  "input": {
+    "id": "01HRUN",
+    "nonce": "01NONCE"
+  },
+  "operations": [
+    {
+      "op": "message.publish",
+      "subject": "msg.topic.run.start",
+      "payload": {
+        "$type": "run.start",
+        "id": "01HRUN",
+        "nonce": "01NONCE"
+      }
+    }
+  ]
+}
