@@ -93,31 +93,38 @@ export SEXTANT_PI_CREDS="$SEXTANT_CREDS"
 export SEXTANT_BUS_JSON="${SEXTANT_BUS_JSON:-${SEXTANT_STORE}/bus.json}"
 
 # ---------------------------------------------------------------------------
-# WORKER SANDBOX (TASK-118, pi-auto). pi is the work engine's SOLE harness
-# (ADR-0052), so EVERY dispatched worker is a coding agent with full file + Bash
-# tools. Unscoped it ran under launchd in launchd's CWD (/), roamed the operator's
-# filesystem (recurring macOS TCC popups), and could reach the GUI/system (the
-# Firefox-close scare). The operator's directive: workers run under pi-auto
-# (github.com/yonilerner/pi-auto) with the operator's settings VERBATIM — its
-# OS sandbox (@foxfirecodes/sandbox-runtime via sandbox-exec) confines bash, and
-# its codex-verbatim reviewer gates the rest. We do NOT hand-roll a sandbox.
+# WORKER SANDBOX (TASK-118). pi is the work engine's SOLE harness (ADR-0052), so
+# EVERY dispatched worker is a coding agent with full file + Bash tools. Unscoped
+# it ran under launchd in launchd's CWD (/), roamed the operator's filesystem
+# (recurring macOS TCC popups), and could reach the GUI/system (the Firefox-close
+# scare). One operator-facing flag picks the enforcement posture:
 #
-# Two recipe responsibilities, both fail-loud (never an unsandboxed worker):
-#   1. A per-run SCOPED WORKING DIR, set as the worker's CWD, so pi-auto's
-#      allowWrite ["."] (the operator's config) means THIS dir and the worker's
-#      file tools default here — not the operator's home.
-#   2. LOAD pi-auto explicitly. The worker launches with `-ne` (discovery off, so
-#      it can't pull arbitrary extensions), so pi-auto — which the operator's
-#      interactive pi loads via settings.json `packages` discovery — must be named
-#      with its own `-e`, alongside the @sextant/pi-bus extension.
+#   SX_PI_SANDBOX_MODE = sandbox  (DEFAULT) — the HARD WALL. The whole pi worker
+#     runs inside @foxfirecodes/sandbox-runtime (`srt`) with a scoped profile and
+#     NO pi-auto in the path: there is no reviewer, so there is no escape. An
+#     instructed out-of-scope write / protected read / external egress / GUI or
+#     system command is DENIED at the OS layer.
+#   SX_PI_SANDBOX_MODE = automode — REGULAR pi-auto. Loads pi-auto with the
+#     operator's settings VERBATIM (escape-only + codex-verbatim reviewer): the
+#     reviewer-adjudicated, ESCAPABLE mode the operator opts into. Its softer
+#     guarantee is intended (it behaves as the operator's interactive pi).
 #
-# pi-auto reads the operator's ~/.pi/agent/extensions/pi-auto.json itself (it
-# resolves $PI_AGENT_DIR or ~/.pi/agent), so we pass NO sandbox settings here —
-# the operator's file is the single source of truth, verbatim.
+# BOTH modes confine the worker's CWD to a per-run scoped dir and FAIL LOUD rather
+# than ever spawn an unconfined worker.
 
-# The scoped working dir (the worker's CWD). Override with SEXTANT_PI_WORKDIR /
-# SX_PI_WORKDIR (an operator pinning a real worktree); else a per-child dir, a
-# SIBLING of the bus store (never inside it — the store is JetStream's data dir).
+SANDBOX_MODE="${SX_PI_SANDBOX_MODE:-sandbox}"
+case "$SANDBOX_MODE" in
+  sandbox | automode) ;;
+  *)
+    echo "pi.sh: refusing to spawn — unknown SX_PI_SANDBOX_MODE='$SANDBOX_MODE' (want 'sandbox' or 'automode') (TASK-118 fail-loud)" >&2
+    exit 78 # EX_CONFIG
+    ;;
+esac
+
+# The scoped working dir (the worker's CWD), shared by both modes. Override with
+# SEXTANT_PI_WORKDIR / SX_PI_WORKDIR (an operator pinning a real worktree); else a
+# per-child dir, a SIBLING of the bus store (never inside it — the store is
+# JetStream's data dir).
 WORKDIR="${SEXTANT_PI_WORKDIR:-${SX_PI_WORKDIR:-$(dirname "$SEXTANT_STORE")/pi-work/${CHILD_ID}}}"
 if [ -z "$WORKDIR" ] || [ "$WORKDIR" = "/" ]; then
   echo "pi.sh: refusing to spawn an UNSCOPED worker — working dir is empty or '/' (TASK-118 fail-loud)" >&2
@@ -129,31 +136,134 @@ if ! mkdir -p "$WORKDIR" 2>/dev/null; then
 fi
 export SEXTANT_PI_WORKDIR="$WORKDIR"
 
-# Resolve the pi-auto entry the worker loads. Default to the operator's installed
-# copy under the pi agent dir. FAIL LOUD if it is missing — a worker must not run
-# without its sandbox/reviewer (never silently unsandboxed).
-#
 # HOME must resolve (to the operator's home, inherited from the launchd-managed
-# dispatcher): pi-auto reads the operator's ~/.pi/agent/extensions/pi-auto.json
-# from it AND the reviewer borrows the operator's OpenAI key from pi's auth.json
-# via the model registry, both rooted at HOME/.pi/agent. An empty HOME would
-# silently mis-resolve the config + drop the reviewer — refuse instead.
-: "${HOME:?HOME must be set so pi-auto resolves the operators pi-auto.json + reviewer creds (TASK-118)}"
+# dispatcher): the worker's model creds live under it, and in automode pi-auto
+# reads the operator's ~/.pi/agent/extensions/pi-auto.json + borrows the OpenAI
+# reviewer key from pi's auth.json via the model registry, both rooted at
+# HOME/.pi/agent. An empty HOME would silently mis-resolve — refuse instead.
+: "${HOME:?HOME must be set so the worker resolves its model creds (and pi-auto config in automode) (TASK-118)}"
 PI_AGENT_DIR="${PI_AGENT_DIR:-${HOME}/.pi/agent}"
-PI_AUTO_ENTRY="${SX_PI_AUTO_ENTRY:-${PI_AGENT_DIR}/git/github.com/yonilerner/pi-auto/extensions/pi-auto.ts}"
-if [ ! -f "$PI_AUTO_ENTRY" ]; then
-  echo "pi.sh: refusing to spawn — pi-auto extension entry not found at '$PI_AUTO_ENTRY' (TASK-118 fail-loud: the worker sandbox is configured but unavailable). Install pi-auto (pi package git:github.com/yonilerner/pi-auto) or set SX_PI_AUTO_ENTRY." >&2
-  exit 78
-fi
-# The OS sandbox needs sandbox-exec on macOS (ASRT wraps it). If pi-auto's sandbox
-# is configured (the operator's pi-auto.json sets mode escape-only) but the OS
-# primitive is missing, refuse rather than run an unsandboxed worker. We check the
-# macOS primitive here; pi-auto's own checkSandboxAvailability is the in-process
-# backstop, and its rpc/no-UI fallback fails CLOSED (blocks) if the sandbox can't
-# wrap a command — so a configured-but-unavailable sandbox can never silently pass.
-if [ "$(uname -s)" = "Darwin" ] && ! command -v sandbox-exec >/dev/null 2>&1; then
-  echo "pi.sh: refusing to spawn — sandbox-exec not found but pi-auto's sandbox is configured (TASK-118 fail-loud: configured-but-unavailable)." >&2
-  exit 78
+
+if [ "$SANDBOX_MODE" = "automode" ]; then
+  # AUTOMODE: load pi-auto explicitly. The worker launches with `-ne` (discovery
+  # off, so it can't pull arbitrary extensions), so pi-auto — which the operator's
+  # interactive pi loads via settings.json `packages` discovery — is named with
+  # its own `-e` alongside @sextant/pi-bus. pi-auto reads the operator's
+  # pi-auto.json itself; we pass NO sandbox settings. FAIL LOUD if the entry is
+  # missing or sandbox-exec is absent (never a silently-unsandboxed automode worker).
+  PI_AUTO_ENTRY="${SX_PI_AUTO_ENTRY:-${PI_AGENT_DIR}/git/github.com/yonilerner/pi-auto/extensions/pi-auto.ts}"
+  if [ ! -f "$PI_AUTO_ENTRY" ]; then
+    echo "pi.sh: refusing to spawn (automode) — pi-auto entry not found at '$PI_AUTO_ENTRY' (TASK-118 fail-loud). Install pi-auto (pi package git:github.com/yonilerner/pi-auto) or set SX_PI_AUTO_ENTRY." >&2
+    exit 78
+  fi
+  if [ "$(uname -s)" = "Darwin" ] && ! command -v sandbox-exec >/dev/null 2>&1; then
+    echo "pi.sh: refusing to spawn (automode) — sandbox-exec not found but pi-auto's sandbox is configured (TASK-118 fail-loud: configured-but-unavailable)." >&2
+    exit 78
+  fi
+else
+  # SANDBOX (DEFAULT): wrap the whole worker in `srt`. Resolve the srt CLI (ships
+  # inside pi-auto's node_modules; override with SX_PI_SRT_CLI). FAIL LOUD if the
+  # runtime is unavailable — never run an unconfined worker.
+  SRT_CLI="${SX_PI_SRT_CLI:-${PI_AGENT_DIR}/git/github.com/yonilerner/pi-auto/node_modules/@foxfirecodes/sandbox-runtime/dist/cli.js}"
+  if [ ! -f "$SRT_CLI" ]; then
+    echo "pi.sh: refusing to spawn (sandbox) — srt runtime not found at '$SRT_CLI' (TASK-118 fail-loud: sandbox runtime unavailable). Install pi-auto (which vendors @foxfirecodes/sandbox-runtime) or set SX_PI_SRT_CLI, or run with SX_PI_SANDBOX_MODE=automode." >&2
+    exit 78
+  fi
+  if [ "$(uname -s)" = "Darwin" ] && ! command -v sandbox-exec >/dev/null 2>&1; then
+    echo "pi.sh: refusing to spawn (sandbox) — sandbox-exec not found but the OS sandbox is required (TASK-118 fail-loud: sandbox runtime unavailable)." >&2
+    exit 78
+  fi
+
+  # Build the srt profile. The hard wall via srt's settings schema:
+  #   filesystem.allowWrite = the scope + the session dir (the worker's JSONL lives
+  #     OUTSIDE the scope, a sibling of the store) → everything else write-DENIED.
+  #   filesystem.denyRead   = the operator's sensitive paths AND the GUI/system
+  #     command binaries — reads default-allow, so we DENYLIST the protected paths
+  #     (a worker can't read ~/.ssh etc.) and the dangerous binaries (it can't exec
+  #     osascript/killall/open/shutdown/sudo if it can't read them).
+  #   network.allowedDomains = the model API only (api.anthropic.com); the egress
+  #     allow-list runs through srt's CONNECT proxy (no MITM CA needed). Everything
+  #     else is denied.
+  #   network.allowLocalBinding = true → permits the LOOPBACK NATS bus connection
+  #     (raw TCP, not proxyable) while keeping external egress denied. NOTE: this
+  #     covers a loopback bus (the operator's setup). A REMOTE/LAN bus host is NOT
+  #     reachable under this profile (raw TCP, non-loopback) — front it with a
+  #     loopback forwarder, or use automode, if a remote bus is ever needed.
+  #   allowAppleEvents=false (capability-layer GUI denial, defense in depth beyond
+  #     the binary denylist) — a worker cannot drive apps via AppleEvents.
+  : "${SX_PI_MODEL_DOMAIN:=api.anthropic.com}"
+  SRT_PROFILE="${WORKDIR}/.sx-srt-settings.json"
+  # pi keeps a lock + session + cache state in its agent config dir; the operator's
+  # ~/.pi/agent is NOT writable under the jail (and holds the operator's auth.json
+  # keys we must not expose), so we point pi at a SCOPED per-worker config dir
+  # inside the scope and DENY-READ the operator's auth.json. In sandbox mode the
+  # worker uses its OWN model credential from ANTHROPIC_API_KEY (env) — there is no
+  # pi-auto reviewer needing the operator's OpenAI key — so the scoped config dir
+  # is self-sufficient and the worker never touches the operator's pi state.
+  PI_WORKER_AGENT_DIR="${WORKDIR}/.pi-agent"
+  mkdir -p "$PI_WORKER_AGENT_DIR" 2>/dev/null || {
+    echo "pi.sh: refusing to spawn (sandbox) — cannot create scoped pi config dir '$PI_WORKER_AGENT_DIR' (TASK-118 fail-loud)" >&2
+    exit 78
+  }
+  export PI_CODING_AGENT_DIR="$PI_WORKER_AGENT_DIR"
+
+  # The srt profile (the hard wall). srt reads default-ALLOW, so we DENYLIST the
+  # operator's sensitive paths — the shell rc/dotfiles, credential stores, the
+  # private user dirs, pi's own auth.json (the operator API keys) — plus the GUI/
+  # system command binaries (a worker can't exec a binary it can't read). We
+  # deny-read these specific trees rather than the WHOLE home, because the worker's
+  # toolchain (node/pi + the @sextant/pi-bus extension's deps) and its own bus
+  # creds/session live under paths that a blanket home-deny starves. allowWrite =
+  # the scope + the session dir (sibling of the store) + the scoped pi config dir.
+  # Extra sensitive paths can be appended via SX_PI_SRT_DENY_READ (space-separated).
+  SX_SRT_CREDS_DIR="$(dirname "$SEXTANT_CREDS")" SX_SRT_EXTRA_DENY="${SX_PI_SRT_DENY_READ:-}" \
+  SX_SRT_WORKDIR="$WORKDIR" SX_SRT_SESSIONDIR="$SESSION_DIR" SX_SRT_PICFG="$PI_WORKER_AGENT_DIR" \
+  SX_SRT_HOME="$HOME" SX_SRT_DOMAIN="$SX_PI_MODEL_DOMAIN" \
+    node -e '
+      const j = (o) => JSON.stringify(o);
+      const home = process.env.SX_SRT_HOME;
+      // Sensitive home paths a dispatched worker must never read. Shell rc/dotfiles
+      // (they can carry tokens + reveal the environment), credential stores, the
+      // private user dirs, and pi/cloud config holding keys.
+      const denyRead = [
+        home + "/.zshrc", home + "/.zshenv", home + "/.zprofile", home + "/.bashrc",
+        home + "/.bash_profile", home + "/.profile", home + "/.bash_history", home + "/.zsh_history",
+        home + "/.ssh", home + "/.aws", home + "/.gnupg", home + "/.kube", home + "/.docker",
+        home + "/.config", home + "/.gitconfig", home + "/.git-credentials",
+        home + "/.netrc", home + "/.npmrc", home + "/.pypirc",
+        home + "/.pi/agent/auth.json", // the operator OpenAI/Anthropic keys — never exposed
+        home + "/Documents", home + "/Desktop", home + "/Downloads", home + "/Movies",
+        home + "/Pictures", home + "/Library/Keychains", home + "/Library/Application Support",
+        "/usr/bin/osascript", "/usr/bin/killall", "/usr/bin/pkill", "/usr/bin/open",
+        "/sbin/shutdown", "/sbin/reboot", "/usr/bin/sudo", "/bin/launchctl", "/usr/bin/automator",
+      ];
+      for (const p of (process.env.SX_SRT_EXTRA_DENY || "").split(/\s+/).filter(Boolean)) denyRead.push(p);
+      // The worker MUST read its own dirs even if under a denied tree (allowRead
+      // overrides denyRead for these exact subtrees).
+      const allowRead = [];
+      for (const p of [process.env.SX_SRT_WORKDIR, process.env.SX_SRT_SESSIONDIR, process.env.SX_SRT_PICFG, process.env.SX_SRT_CREDS_DIR]) {
+        if (p && !allowRead.includes(p)) allowRead.push(p);
+      }
+      const settings = {
+        filesystem: {
+          allowRead,
+          allowWrite: [process.env.SX_SRT_WORKDIR, process.env.SX_SRT_SESSIONDIR, process.env.SX_SRT_PICFG],
+          denyRead,
+          denyWrite: [],
+        },
+        network: {
+          allowedDomains: [process.env.SX_SRT_DOMAIN],
+          deniedDomains: [],
+          strictAllowlist: true,
+          allowLocalBinding: true, // raw-TCP LOOPBACK egress for the NATS bus (proxy is HTTP-only)
+          allowAppleEvents: false, // capability-layer GUI denial (no AppleScript-driven apps)
+        },
+      };
+      process.stdout.write(j(settings));
+    ' > "$SRT_PROFILE" || {
+    echo "pi.sh: refusing to spawn (sandbox) — could not write srt profile to '$SRT_PROFILE' (TASK-118 fail-loud)" >&2
+    exit 78
+  }
 fi
 # ---------------------------------------------------------------------------
 
@@ -220,18 +330,34 @@ fi
 # Resume an existing session by PATH (cwd-independent); else create by id + dir. Built
 # with `set --` so a session path containing spaces (e.g. ".../Application Support/...")
 # stays a single argument.
+# Build pi's argv in $@. The session args come first (resume by PATH when one
+# exists — cwd-independent; else create by id + dir).
 if [ -n "$EXISTING_SESSION" ]; then
   set -- --session "$EXISTING_SESSION"
 else
   set -- --session-id "$SESSION_ID" --session-dir "$SESSION_DIR"
 fi
-# Load BOTH extensions explicitly with `-ne` (discovery off): the @sextant/pi-bus
-# extension (bus identity + wake) AND pi-auto (the worker sandbox + reviewer,
-# TASK-118). pi-auto reads the operator's ~/.pi/agent/extensions/pi-auto.json
-# itself; we only name its entry. `-ne` keeps the worker from pulling any OTHER
-# discovered extension.
-exec "$PI_BIN" --mode rpc \
-  --provider anthropic --model "$MODEL" \
-  "$@" \
-  -ne -e "$SEXTANT_PI_EXTENSION" -e "$PI_AUTO_ENTRY" \
-  --append-system-prompt "$SYS_PROMPT" <&3
+# Common pi flags. -ne disables extension DISCOVERY so the worker loads ONLY the
+# extensions we name with -e (never an arbitrary discovered one). The @sextant/
+# pi-bus extension (bus identity + wake) is always loaded.
+set -- --mode rpc --provider anthropic --model "$MODEL" "$@" -ne -e "$SEXTANT_PI_EXTENSION"
+# AUTOMODE additionally loads pi-auto (its sandbox + reviewer, the escapable mode).
+# SANDBOX mode does NOT load pi-auto — the hard OS wall (srt, below) is the whole
+# enforcement, with no reviewer to escape.
+if [ "$SANDBOX_MODE" = "automode" ]; then
+  set -- "$@" -e "$PI_AUTO_ENTRY"
+fi
+set -- "$@" --append-system-prompt "$SYS_PROMPT"
+
+# Launch. We `exec` (replacing this shell) so the worker IS the dispatcher's
+# tracked process and is reaped cleanly on shutdown — no orphan.
+if [ "$SANDBOX_MODE" = "sandbox" ]; then
+  # SANDBOX (DEFAULT): run the WHOLE worker inside srt with the scoped profile.
+  # srt applies a sandbox-exec jail to pi AND every descendant, so there is no
+  # reviewer and no escape: an instructed out-of-scope op is OS-denied. srt passes
+  # stdin/stdout/stderr through, so the FIFO-on-stdin RPC framing is preserved.
+  exec node "$SRT_CLI" -s "$SRT_PROFILE" -- "$PI_BIN" "$@" <&3
+else
+  # AUTOMODE: bare pi with pi-auto loaded (reviewer-adjudicated, escapable).
+  exec "$PI_BIN" "$@" <&3
+fi
