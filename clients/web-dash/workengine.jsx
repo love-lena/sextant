@@ -230,6 +230,12 @@
   /* ============================ C.1 — the list ============================ */
   function WorkEngineList({ templates, runs, onSpawn, onNewWorkflow, onOpenTemplate, onEditTemplate, onOpenRun }) {
     const active = runs.filter((r) => isActive(r.status));
+    // Terminal runs (done/blocked/cancelled) stay REACHABLE — without this they
+    // drop out of the list entirely and the operator can't reopen a finished run
+    // to read its brief or see why it blocked. Most-recent first, capped.
+    const recent = runs.filter((r) => !isActive(r.status))
+      .sort((a, b) => (b.created || 0) - (a.created || 0))
+      .slice(0, 12);
     return (
       <div className="fx-scroll"><div className="fx-col sx-conv-light">
         <div className="we-head fx-in">
@@ -324,6 +330,38 @@
             )}
           </div>
         </div>
+
+        {/* ---- Recent runs (terminal: done/blocked/cancelled) ---- */}
+        {recent.length > 0 && (
+          <div className="we-section fx-in" style={{ animationDelay: ".09s" }}>
+            <div className="we-sec-head">
+              <h2 className="we-sec-title">Recent runs</h2>
+              <span className="we-sec-sub">Finished runs — open one to read its stopping brief or see why it blocked.</span>
+            </div>
+            <div className="we-rows">
+              {recent.map((r) => {
+                const st = RUN_STATUS[r.status] || RUN_STATUS.running;
+                return (
+                  <div className="we-run-row" key={r.id} onClick={() => onOpenRun(r)} role="button" tabIndex={0}
+                    onKeyDown={(e) => { if (e.key === "Enter") onOpenRun(r); }}>
+                    <Pulse status={r.status} />
+                    <div className="we-run-main">
+                      <div className="we-run-top">
+                        <span className="we-run-label">{r.label}</span>
+                      </div>
+                      <div className="we-run-meta">
+                        <span className="we-ulid mono">{shortUlid(r.id)}</span>
+                        <span className="we-run-via">· {r.template ? "via " + r.template : "ad-hoc"}</span>
+                        <span className="we-run-goal">· {st.label}</span>
+                      </div>
+                    </div>
+                    <span className="we-run-watch">open ▸</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div></div>
     );
   }

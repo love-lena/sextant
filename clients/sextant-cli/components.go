@@ -157,8 +157,9 @@ func componentsAction(args []string, action string) {
 }
 
 // startComponent is the install-side of a component: ensure first-run identity,
-// resolve the launchd env (fail loud if a dispatcher's claude is missing),
-// materialize the recipe, and write+bootstrap+kickstart+health-check the plist.
+// resolve the launchd env (fail loud if a dispatcher's pi/node is missing),
+// materialize the recipe + pi-bus extension, and
+// write+bootstrap+kickstart+health-check the plist.
 func startComponent(c components.Component, mgr *components.Manager, store string) error {
 	if _, err := exec.LookPath(c.Binary); err != nil {
 		return fmt.Errorf("%s not found on PATH — install sextant's binaries first (%w)", c.Binary, err)
@@ -178,14 +179,23 @@ func startComponent(c components.Component, mgr *components.Manager, store strin
 		return err
 	}
 	// Resolve the launchd env at start time (where the interactive PATH exists);
-	// a dispatcher with no `claude` on PATH fails loud rather than writing a plist
-	// that cannot spawn.
-	env, err := components.ResolveEnv(mgr.Self, exec.LookPath, c.NeedsClaude)
+	// a dispatcher with no `pi`/`node` on PATH fails loud rather than writing a
+	// plist that cannot launch a worker.
+	env, err := components.ResolveEnv(mgr.Self, exec.LookPath, c.NeedsPi)
 	if err != nil {
 		return err
 	}
 	if c.NeedsRecipe {
 		if _, err := components.WriteRecipe(); err != nil {
+			return err
+		}
+	}
+	// The dispatcher's pi recipe loads the pi-bus extension from
+	// SEXTANT_PI_EXTENSION (baked into env above); materialize the embedded
+	// bundle to that path, same shape as the recipe (a brew install ships no
+	// node_modules, so the extension travels in the binary).
+	if c.NeedsPi {
+		if _, err := components.WritePiBus(); err != nil {
 			return err
 		}
 	}
@@ -264,12 +274,13 @@ func componentsExec(args []string) {
 	if err != nil {
 		fatal("resolve self: %v", err)
 	}
-	env, err := components.ResolveEnv(self, exec.LookPath, c.NeedsClaude)
+	env, err := components.ResolveEnv(self, exec.LookPath, c.NeedsPi)
 	if err != nil {
 		fatal("%v", err)
 	}
 	// Apply the resolved env onto our own environment so the re-exec'd runtime
-	// (and any `claude` it spawns) inherits the full PATH + SEXTANT_MCP_BIN.
+	// (and any `pi` worker it spawns) inherits the full PATH + SEXTANT_MCP_BIN +
+	// SEXTANT_PI_EXTENSION.
 	for k, v := range env.Map() {
 		_ = os.Setenv(k, v)
 	}
@@ -294,6 +305,13 @@ func componentsExec(args []string) {
 		// Re-materialize on exec too, so a fresh launchd start always has the recipe
 		// even if the components dir was cleared between install and run.
 		if recipe, err = components.WriteRecipe(); err != nil {
+			fatal("%v", err)
+		}
+	}
+	if c.NeedsPi {
+		// Re-materialize the pi-bus extension bundle too (the recipe loads it from
+		// SEXTANT_PI_EXTENSION, set in env above).
+		if _, err = components.WritePiBus(); err != nil {
 			fatal("%v", err)
 		}
 	}

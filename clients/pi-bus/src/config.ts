@@ -72,13 +72,14 @@ export interface Config {
   // interactive `pi -e` session stays resident; the dispatcher recipe (pi.sh) opts in
   // by setting SEXTANT_PI_DRAIN_WHEN_IDLE=1.
   drainWhenIdle: boolean;
-  // wfEventsSubject + wfStep wire the worker into a workflow STEP (ADR-0011). When the
-  // coordinator dispatches a step it appends "WF_EVENTS=<subject> WF_STEP=<id>" to the
-  // brief; the recipe (pi.sh) lifts them into these env vars so the extension emits the
-  // step-done workflow.event deterministically when the run finishes (agent_end), the
-  // signal the coordinator waits on. Empty for a plain mobilize or a revive.
-  wfEventsSubject: string;
-  wfStep: string;
+  // runEventsSubject + runStep wire the worker into a workflow RUN step (ADR-0048). When
+  // the coordinator dispatches a step it appends "RUN_EVENTS=<subject> RUN_STEP=<id>" to
+  // the brief; the recipe (pi.sh) lifts them into these env vars so the extension emits
+  // the step-done run.event deterministically when the run finishes (agent_end) — the
+  // signal the coordinator waits on, carrying any artifacts the agent produced. Empty for
+  // a plain mobilize or a revive.
+  runEventsSubject: string;
+  runStep: string;
 }
 
 // resolveConfig reads the environment into a Config, applying the defaults above.
@@ -98,8 +99,8 @@ export function resolveConfig(env: NodeJS.ProcessEnv): Config {
     gateDestructiveHeadless: !isOff(env["SEXTANT_PI_GATE_HEADLESS"]),
     handoffTopic: env["SEXTANT_PI_HANDOFF_TOPIC"] || DEFAULT_HANDOFF_TOPIC,
     drainWhenIdle: isOn(env["SEXTANT_PI_DRAIN_WHEN_IDLE"]),
-    wfEventsSubject: env["SEXTANT_PI_WF_EVENTS"] ?? "",
-    wfStep: env["SEXTANT_PI_WF_STEP"] ?? "",
+    runEventsSubject: env["SEXTANT_PI_RUN_EVENTS"] ?? "",
+    runStep: env["SEXTANT_PI_RUN_STEP"] ?? "",
   };
 }
 

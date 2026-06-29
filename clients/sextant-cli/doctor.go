@@ -179,7 +179,7 @@ func reportDoctorComponent(w io.Writer, c components.Component, mgr *components.
 	case !st.Loaded:
 		_, _ = fmt.Fprintf(w, "    %-12s binary: %s  service: NOT running — run `sextant components start %s`\n", c.Name, binPath, c.Name)
 		if c.NeedsKey {
-			_, _ = fmt.Fprintf(w, "      if violet has no key: run `sextant secret set anthropic` first\n")
+			_, _ = fmt.Fprintf(w, "      if it has no API key: run `sextant secret set anthropic` first\n")
 		}
 	case st.Running:
 		line := fmt.Sprintf("    %-12s binary: %s  service: loaded + RUNNING", c.Name, binPath)
@@ -196,13 +196,14 @@ func reportDoctorComponent(w io.Writer, c components.Component, mgr *components.
 	default:
 		_, _ = fmt.Fprintf(w, "    %-12s binary: %s  service: loaded but NOT running (state=%q) — run `sextant components restart %s`\n",
 			c.Name, binPath, st.Raw, c.Name)
-		// For dispatcher specifically, NeedsClaude is a common start-failure reason.
-		if c.NeedsClaude {
-			_, _ = fmt.Fprintf(w, "      if the dispatcher never started: check `claude` is on PATH\n")
+		// For the dispatcher specifically, a missing pi/node is a common
+		// start-failure reason (it spawns headless pi workers).
+		if c.NeedsPi {
+			_, _ = fmt.Fprintf(w, "      if the dispatcher never started: check `pi` and `node` are on PATH\n")
 		}
-		// For key-bearing components (violet), a crash-loop may mean the key is missing.
+		// For key-bearing components, a crash-loop may mean the API key is missing.
 		if c.NeedsKey {
-			_, _ = fmt.Fprintf(w, "      if violet is crash-looping: run `sextant secret set anthropic`\n")
+			_, _ = fmt.Fprintf(w, "      if it is crash-looping: run `sextant secret set anthropic`\n")
 		}
 	}
 }

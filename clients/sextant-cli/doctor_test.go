@@ -219,9 +219,9 @@ func TestDoctorComponentsLoadedNotRunning(t *testing.T) {
 	if !strings.Contains(s, "sextant components restart") {
 		t.Errorf("loaded-but-not-running should hint at restart; got:\n%s", s)
 	}
-	// The dispatcher NeedsClaude=true so the claude hint should appear.
-	if !strings.Contains(s, "claude") {
-		t.Errorf("dispatcher loaded-not-running should mention claude hint; got:\n%s", s)
+	// The dispatcher NeedsPi=true so the pi/node hint should appear.
+	if !strings.Contains(s, "pi") || !strings.Contains(s, "node") {
+		t.Errorf("dispatcher loaded-not-running should mention the pi/node hint; got:\n%s", s)
 	}
 }
 

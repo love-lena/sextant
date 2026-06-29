@@ -31,6 +31,21 @@ export interface ToolDeps {
   // subscriptions tracks runtime subscriptions by topic so unsubscribe can find
   // and stop one, and session_shutdown can stop them all. Owned by the extension.
   subscriptions: Map<string, Subscription>;
+  // onArtifactProduced records an artifact the agent created/updated this session, so
+  // the extension can report produced artifacts on a workflow-run step-done (the run.event
+  // the coordinator gates the brief step on, ADR-0048). Optional — absent off a run.
+  onArtifactProduced?: (a: { name: string; kind: string; version: number }) => void;
+}
+
+// recordKind derives a produced artifact's kind from its opaque record — the `kind`
+// field if present (the run/brief convention), else the `$type` discriminator, else "".
+function recordKind(rec: unknown): string {
+  if (rec && typeof rec === "object") {
+    const r = rec as Record<string, unknown>;
+    if (typeof r["kind"] === "string") return r["kind"];
+    if (typeof r["$type"] === "string") return r["$type"];
+  }
+  return "";
 }
 
 // JSON_RECORD is the opaque record shape the publish/artifact tools accept. Any
@@ -215,9 +230,11 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
       try {
         if (params.expectedRev === undefined) {
           const rev = await c.createArtifact(params.name, params.record as JSONValue);
+          deps.onArtifactProduced?.({ name: params.name, kind: recordKind(params.record), version: rev });
           return ok(`created ${params.name} at revision ${rev}`);
         }
         const rev = await c.updateArtifact(params.name, params.record as JSONValue, params.expectedRev);
+        deps.onArtifactProduced?.({ name: params.name, kind: recordKind(params.record), version: rev });
         return ok(`updated ${params.name} to revision ${rev}`);
       } catch (e) {
         return err(`put artifact failed: ${(e as Error).message}`);

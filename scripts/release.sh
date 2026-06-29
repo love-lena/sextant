@@ -21,6 +21,12 @@ ldflags="-s -w -X github.com/love-lena/sextant/shared/go/version.Version=${tag}"
 # cross-compile below. Platform-independent JS, so build once up front.
 bash scripts/build-dash-ui.sh
 
+# Generate the pi-bus extension bundle (ADR-0052): a single self-contained ESM
+# file the sextant binary go:embeds, so the managed dispatcher's pi worker loads
+# it with no node_modules on a brew install. Generated, not committed, so it must
+# be present before the cross-compile below. Platform-independent, built once.
+bash scripts/build-pi-bus.sh
+
 rm -rf dist
 for p in "${platforms[@]}"; do
   os="${p%/*}" arch="${p#*/}"
