@@ -47,6 +47,14 @@
 #                         pi-<child-id>); set by an operator-driven re-spawn that
 #                         resumes a specific persisted session
 #   ANTHROPIC_API_KEY     the model credential (the worker runs a real model)
+#   SX_PI_AUTO_ENTRY      path to the pi-auto extension entry the worker loads for
+#                         its sandbox + reviewer (TASK-118). Default:
+#                         ~/.pi/agent/git/github.com/yonilerner/pi-auto/extensions/pi-auto.ts
+#                         (the operator's installed pi-auto). pi-auto reads the
+#                         operator's ~/.pi/agent/extensions/pi-auto.json verbatim.
+#   SX_PI_WORKDIR / SEXTANT_PI_WORKDIR  the worker's scoped working dir (its CWD).
+#                         Default: a per-child dir under the store. pi-auto's
+#                         sandbox confines bash writes to this CWD (allowWrite ["."]).
 set -eu
 
 : "${SEXTANT_CREDS:?the dispatcher must set SEXTANT_CREDS to the childs own creds}"
@@ -83,6 +91,71 @@ EXISTING_SESSION=$(ls -t "$SESSION_DIR"/*_"$SESSION_ID".jsonl 2>/dev/null | head
 # the one required value; the bus is discovered from the store's bus.json.
 export SEXTANT_PI_CREDS="$SEXTANT_CREDS"
 export SEXTANT_BUS_JSON="${SEXTANT_BUS_JSON:-${SEXTANT_STORE}/bus.json}"
+
+# ---------------------------------------------------------------------------
+# WORKER SANDBOX (TASK-118, pi-auto). pi is the work engine's SOLE harness
+# (ADR-0052), so EVERY dispatched worker is a coding agent with full file + Bash
+# tools. Unscoped it ran under launchd in launchd's CWD (/), roamed the operator's
+# filesystem (recurring macOS TCC popups), and could reach the GUI/system (the
+# Firefox-close scare). The operator's directive: workers run under pi-auto
+# (github.com/yonilerner/pi-auto) with the operator's settings VERBATIM — its
+# OS sandbox (@foxfirecodes/sandbox-runtime via sandbox-exec) confines bash, and
+# its codex-verbatim reviewer gates the rest. We do NOT hand-roll a sandbox.
+#
+# Two recipe responsibilities, both fail-loud (never an unsandboxed worker):
+#   1. A per-run SCOPED WORKING DIR, set as the worker's CWD, so pi-auto's
+#      allowWrite ["."] (the operator's config) means THIS dir and the worker's
+#      file tools default here — not the operator's home.
+#   2. LOAD pi-auto explicitly. The worker launches with `-ne` (discovery off, so
+#      it can't pull arbitrary extensions), so pi-auto — which the operator's
+#      interactive pi loads via settings.json `packages` discovery — must be named
+#      with its own `-e`, alongside the @sextant/pi-bus extension.
+#
+# pi-auto reads the operator's ~/.pi/agent/extensions/pi-auto.json itself (it
+# resolves $PI_AGENT_DIR or ~/.pi/agent), so we pass NO sandbox settings here —
+# the operator's file is the single source of truth, verbatim.
+
+# The scoped working dir (the worker's CWD). Override with SEXTANT_PI_WORKDIR /
+# SX_PI_WORKDIR (an operator pinning a real worktree); else a per-child dir, a
+# SIBLING of the bus store (never inside it — the store is JetStream's data dir).
+WORKDIR="${SEXTANT_PI_WORKDIR:-${SX_PI_WORKDIR:-$(dirname "$SEXTANT_STORE")/pi-work/${CHILD_ID}}}"
+if [ -z "$WORKDIR" ] || [ "$WORKDIR" = "/" ]; then
+  echo "pi.sh: refusing to spawn an UNSCOPED worker — working dir is empty or '/' (TASK-118 fail-loud)" >&2
+  exit 78 # EX_CONFIG
+fi
+if ! mkdir -p "$WORKDIR" 2>/dev/null; then
+  echo "pi.sh: refusing to spawn — cannot create scoped working dir '$WORKDIR' (TASK-118 fail-loud)" >&2
+  exit 78
+fi
+export SEXTANT_PI_WORKDIR="$WORKDIR"
+
+# Resolve the pi-auto entry the worker loads. Default to the operator's installed
+# copy under the pi agent dir. FAIL LOUD if it is missing — a worker must not run
+# without its sandbox/reviewer (never silently unsandboxed).
+#
+# HOME must resolve (to the operator's home, inherited from the launchd-managed
+# dispatcher): pi-auto reads the operator's ~/.pi/agent/extensions/pi-auto.json
+# from it AND the reviewer borrows the operator's OpenAI key from pi's auth.json
+# via the model registry, both rooted at HOME/.pi/agent. An empty HOME would
+# silently mis-resolve the config + drop the reviewer — refuse instead.
+: "${HOME:?HOME must be set so pi-auto resolves the operators pi-auto.json + reviewer creds (TASK-118)}"
+PI_AGENT_DIR="${PI_AGENT_DIR:-${HOME}/.pi/agent}"
+PI_AUTO_ENTRY="${SX_PI_AUTO_ENTRY:-${PI_AGENT_DIR}/git/github.com/yonilerner/pi-auto/extensions/pi-auto.ts}"
+if [ ! -f "$PI_AUTO_ENTRY" ]; then
+  echo "pi.sh: refusing to spawn — pi-auto extension entry not found at '$PI_AUTO_ENTRY' (TASK-118 fail-loud: the worker sandbox is configured but unavailable). Install pi-auto (pi package git:github.com/yonilerner/pi-auto) or set SX_PI_AUTO_ENTRY." >&2
+  exit 78
+fi
+# The OS sandbox needs sandbox-exec on macOS (ASRT wraps it). If pi-auto's sandbox
+# is configured (the operator's pi-auto.json sets mode escape-only) but the OS
+# primitive is missing, refuse rather than run an unsandboxed worker. We check the
+# macOS primitive here; pi-auto's own checkSandboxAvailability is the in-process
+# backstop, and its rpc/no-UI fallback fails CLOSED (blocks) if the sandbox can't
+# wrap a command — so a configured-but-unavailable sandbox can never silently pass.
+if [ "$(uname -s)" = "Darwin" ] && ! command -v sandbox-exec >/dev/null 2>&1; then
+  echo "pi.sh: refusing to spawn — sandbox-exec not found but pi-auto's sandbox is configured (TASK-118 fail-loud: configured-but-unavailable)." >&2
+  exit 78
+fi
+# ---------------------------------------------------------------------------
 
 # DRAIN-AND-REVIVE (ADR-0045). A dispatcher-spawned worker is a resumable one-shot,
 # not a resident process: it does its task, reports, and EXITS once idle, and the
@@ -128,6 +201,14 @@ SYS_PROMPT="You are \"${SX_CHILD_NICK:-pi-worker}\", a headless crew member on a
 #
 # We `exec` pi (replacing this shell) so pi IS the dispatcher's tracked process and
 # is reaped cleanly on shutdown -- no orphan.
+
+# CONFINE the worker to its scoped dir: cd here BEFORE exec so pi's tools (and
+# pi-auto's sandbox, allowWrite ["."]) default to the scope, never launchd's CWD.
+# FAIL LOUD — a worker that cannot enter its scope must not run unscoped.
+cd "$WORKDIR" || {
+  echo "pi.sh: refusing to spawn — cannot cd into scoped working dir '$WORKDIR' (TASK-118 fail-loud)" >&2
+  exit 78
+}
 FIFO="$(mktemp -u "${TMPDIR:-/tmp}/pi-stdin-XXXXXX")"
 mkfifo "$FIFO"
 exec 3<>"$FIFO"   # keep a writer open forever so the reader never sees EOF
@@ -144,8 +225,13 @@ if [ -n "$EXISTING_SESSION" ]; then
 else
   set -- --session-id "$SESSION_ID" --session-dir "$SESSION_DIR"
 fi
+# Load BOTH extensions explicitly with `-ne` (discovery off): the @sextant/pi-bus
+# extension (bus identity + wake) AND pi-auto (the worker sandbox + reviewer,
+# TASK-118). pi-auto reads the operator's ~/.pi/agent/extensions/pi-auto.json
+# itself; we only name its entry. `-ne` keeps the worker from pulling any OTHER
+# discovered extension.
 exec "$PI_BIN" --mode rpc \
   --provider anthropic --model "$MODEL" \
   "$@" \
-  -ne -e "$SEXTANT_PI_EXTENSION" \
+  -ne -e "$SEXTANT_PI_EXTENSION" -e "$PI_AUTO_ENTRY" \
   --append-system-prompt "$SYS_PROMPT" <&3
