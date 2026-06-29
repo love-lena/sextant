@@ -6,7 +6,7 @@ title: >-
 status: In Progress
 assignee: []
 created_date: '2026-06-15 01:32'
-updated_date: '2026-06-27 01:13'
+updated_date: '2026-06-29 23:43'
 labels:
   - feature
   - orchestration
@@ -36,6 +36,7 @@ lena's flagship use of the orchestration: a single LLM orchestrator AGENT (not a
 - [ ] #7 The live run is operator-driven (lena): the safety classifier blocks an unattended session from launching autonomous editing agents; a one-command harness lets her drive it on the real bus
 - [ ] #8 sextant workflow run <name> reads a sextant.workflow.def/v1 artifact (task/base/models) and launches the orchestrator under the operator's authority; no env vars
 - [ ] #9 Operator update (after the next release): cut a sextant release so the brew CLI has the workflow verb (sextant update + brew upgrade); until then run via the branch build (go run ./cmd/sextant workflow run <name>)
+- [ ] #10 END-TO-END CAPSTONE (operator, 2026-06-29): the work-engine, given a single TASK-xxx ticket id as input, autonomously produces (a) a real GitHub PR against the repo whose diff implements the ticket AND (b) a brief artifact summarizing the work — via the plan -> build -> review -> PR workflow, on the LIVE setup. Proof: start the work-engine on a real small TASK ticket; observe a PR opened (link) whose diff actually addresses the ticket + a brief artifact; the operator confirms both. Flipper: operator (live). Fake-pass guard: a run reaching done WITHOUT a real PR opened — or a PR that does not address the ticket, or a brief that merely CLAIMS a PR — FAILS; the proof is the real PR link + diff, NEVER the run's self-reported done (ties to TASK-243's existence gate). Implementation note: the worker opening a PR needs github.com egress — reconcile with TASK-118 (sandbox-mode egress allowlist is api.anthropic.com + loopback bus only; github.com is denied) — either run this workflow in automode, widen the dev-workflow sandbox egress to github.com, or open the PR from the worker's committed branch via a path that has egress.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -54,4 +55,6 @@ Trigger redesigned per lena (2026-06-14): workflow-as-artifact + 'sextant workfl
 Near-duplicate of task-108 (same agentic-dev-workflow slug). Reconcile - don't grab both.
 
 Reframe (Lena, 2026-06-26): TASK-98 is 'the first AGENT-MODE workflow' — it runs under the long-lived per-run coordinator agent defined by [[feat-agent-mode-run-coordinator]] (TASK-242), layered on the programmatic base executor [[feat-run-executor-workflow-run-v1]] (TASK-236). The LLM orchestration this ticket wants = agent mode applied to the plan->implement->review->fix->brief->gate dev workflow.
+
+Operator 2026-06-29: this is the work-engine GRADUATION CAPSTONE — the end-to-end proof that the engine does its job (TASK-xxx -> PR + brief via plan->build->review->PR). Depends on the whole stack: TASK-236 executor + TASK-244 pipe/capture + TASK-243 proof-gate + TASK-245 model routing + TASK-242 agent-mode (plan/build/review verbs) + TASK-118 sandbox + a plan->build->review->PR template. KEY OPEN: PR-push needs github.com egress, which sandbox mode denies — design the egress/mode for this workflow. Belongs in the batched live-verify as the capstone criterion.
 <!-- SECTION:NOTES:END -->
