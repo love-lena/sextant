@@ -121,6 +121,49 @@ type RunEvent struct {
 	Artifacts []ProducedArtifact `json:"artifacts,omitempty"`
 }
 
+// DeclaredProofArtifacts extracts the artifact NAMES a brief record claims as its
+// proof / deliverables, from the convention-recognized fields: the canonical
+// `proof_artifacts` array, plus the two shapes models reach for unprompted
+// (`proof_of_completion.artifact` and `artifacts_to_report[].name`). The
+// coordinator existence-checks each before letting a run go `done`, so a brief
+// cannot certify completion against an artifact that was never produced — the
+// fabricated-proof stop gate (TASK-243; a run literally did this for a poem that
+// did not exist). It is best-effort over a free-form brief body: an unrecognized
+// shape yields nothing, so the gate then only checks the declared produced
+// artifacts. The coordinator (a deterministic client, not the AI worker) reading
+// the brief it manages is ordinary convention logic — content-opacity constrains
+// the core/bus, not a convention interpreting its own records.
+func DeclaredProofArtifacts(record json.RawMessage) []string {
+	var b struct {
+		ProofArtifacts    []string `json:"proof_artifacts"`
+		ProofOfCompletion struct {
+			Artifact string `json:"artifact"`
+		} `json:"proof_of_completion"`
+		ArtifactsToReport []struct {
+			Name string `json:"name"`
+		} `json:"artifacts_to_report"`
+	}
+	if err := json.Unmarshal(record, &b); err != nil {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	add := func(n string) {
+		if n != "" && !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	for _, n := range b.ProofArtifacts {
+		add(n)
+	}
+	add(b.ProofOfCompletion.Artifact)
+	for _, a := range b.ArtifactsToReport {
+		add(a.Name)
+	}
+	return out
+}
+
 // RunControl is a cooperative control message on RunControlSubject(id).
 type RunControl struct {
 	Type string `json:"$type"`
