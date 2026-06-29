@@ -131,13 +131,21 @@ type coordinator struct {
 	run workflow.Run
 	rev uint64 // current revision of the state artifact (for CAS)
 
-	// getArtifact is the coordinator's ONLY artifact-read seam (defaults to the SDK
-	// client's GetArtifact). Routing every read through one named function lets a test
-	// observe exactly which artifacts the coordinator opens — the content-opacity proof
-	// (AC#3): the work/thread path must read NO step-output artifact. The brief stop-gate
-	// reads declared proof refs through here too (deliberately, and only on the brief
-	// path); the work path never does.
+	// getArtifact is the coordinator's CONTENT-read seam — it returns an artifact's body
+	// (defaults to the SDK client's GetArtifact). Routing every content read through one
+	// named function lets a test observe exactly which artifacts the coordinator OPENS:
+	// the content-opacity proof (AC#3) asserts the work/thread path reads NO step-output
+	// artifact's content. The only content read is `adopt` reading the run-state envelope
+	// (the coordinator's own single-writer artifact), never a worker's deliverable.
 	getArtifact func(ctx context.Context, name string) (sextant.Artifact, error)
+
+	// existsArtifact is the coordinator's EXISTENCE-PROBE seam — it confirms an artifact
+	// is present on the bus and DISCARDS the body (defaults to a GetArtifact wrapper that
+	// keeps only the error). It is deliberately DISTINCT from getArtifact: the proof gate
+	// (TASK-243) existence-checks every step's reported artifacts through here without ever
+	// inspecting their content, so the content-opacity proof (AC#3) can tell a content read
+	// apart from an existence probe — probing existence is metadata, not a content read.
+	existsArtifact func(ctx context.Context, name string) error
 
 	mu         sync.Mutex
 	acks       map[string]workflow.SpawnAck // spawn.request frame id -> ack
@@ -156,6 +164,10 @@ func newCoordinator(ctx context.Context, c *sextant.Client, spawnSubject string,
 		ackCh: make(chan struct{}, 1), evCh: make(chan struct{}, 1), ctlCh: make(chan struct{}, 1),
 	}
 	co.getArtifact = c.GetArtifact
+	co.existsArtifact = func(ctx context.Context, name string) error {
+		_, err := c.GetArtifact(ctx, name) // existence probe: keep only the error, discard the body
+		return err
+	}
 	if newCoordinatorHook != nil {
 		newCoordinatorHook(co)
 	}
@@ -306,6 +318,14 @@ func (co *coordinator) runDispatch(step *workflow.RunStep, prompt string) error 
 	// artifact's kind/name (a worker is a model; its label is arbitrary).
 	if len(ev.Artifacts) == 0 {
 		return fmt.Errorf("work step %q reported done but produced no artifact (output not captured; AC#2 gate)", step.ID)
+	}
+	// EXISTENCE gate (TASK-243): the count gate above only proves the worker NAMED an
+	// artifact — not that it created one. Independently confirm every reported ref exists
+	// on the bus before recording/threading it, so a work step cannot certify done against
+	// a phantom deliverable (the 01KW8J2N fabrication class, relocatable to ANY step — not
+	// only the brief). The brief step (runBrief) applies the same check; both gates required.
+	if err := co.verifyReportedArtifactsExist(ev.Artifacts); err != nil {
+		return err
 	}
 	// Record the refs (name/kind/version only) on the step — the per-step deliverable
 	// the next step pipes against (AC#1) and the distinct-artifact-per-step ledger
@@ -473,13 +493,13 @@ func (co *coordinator) runBrief(step *workflow.RunStep) (string, error) {
 	if len(ev.Artifacts) == 0 {
 		return "", fmt.Errorf("brief step reported done but produced no artifact (stop gate)")
 	}
-	// (2) Every artifact the brief DECLARES must actually EXIST on the bus — each one
-	//     it produced, and each one it claims as proof. The coordinator confirms the
-	//     deliverables INDEPENDENTLY (it is deterministic code, not the AI worker)
-	//     instead of trusting the worker's say-so, so a run cannot reach `done` on a
-	//     fabricated proof (TASK-243: a brief certified done against a poem artifact
-	//     that never existed).
-	if err := co.verifyDeclaredProof(ev.Artifacts); err != nil {
+	// (2) Every artifact the brief step's worker REPORTED producing must actually EXIST
+	//     on the bus. The coordinator confirms the deliverables INDEPENDENTLY (it is
+	//     deterministic code, not the AI worker) instead of trusting the worker's
+	//     say-so, so a run cannot reach `done` on a fabricated proof (TASK-243: a brief
+	//     certified done against a poem artifact that never existed). The SAME existence
+	//     check runs on every work step (runDispatch) — a phantom blocks at any step.
+	if err := co.verifyReportedArtifactsExist(ev.Artifacts); err != nil {
 		return "", err
 	}
 	step.Status = workflow.StepDone
@@ -492,23 +512,29 @@ func (co *coordinator) runBrief(step *workflow.RunStep) (string, error) {
 	return workflow.RunDone, nil // default success — a posted brief with no explicit blocked
 }
 
-// verifyDeclaredProof is the independent stop-gate check: for every artifact the
-// brief step declared in its run.event, the coordinator fetches it from the bus and
-// confirms it EXISTS, and for each artifact a brief claims as proof
-// (workflow.DeclaredProofArtifacts), confirms that exists too. A missing one means
-// the worker certified `done` against work it did not actually produce — the run
-// blocks. The coordinator is a deterministic process separate from the AI worker, so
-// this is genuine external verification, not the system self-reporting success.
-func (co *coordinator) verifyDeclaredProof(arts []workflow.ProducedArtifact) error {
+// verifyReportedArtifactsExist is the independent, shape-independent stop-gate check
+// applied to EVERY step: for each artifact a step's worker REPORTED producing in its
+// run.event (the typed Artifacts metadata — collected mechanically by the worker's
+// runtime, not parsed from any content), the coordinator fetches it from the bus and
+// confirms it EXISTS. A missing one means the worker certified the step done against an
+// artifact it did not actually produce — the run blocks (TASK-243). The coordinator is a
+// deterministic process separate from the AI worker, so this is genuine external
+// verification, not the system self-reporting success.
+//
+// It decides SOLELY from this typed metadata and never opens or parses any artifact's
+// content (AC2/AC4): the gate carries no notion of which brief-body keys name proof, so
+// it cannot be evaded by a brief that declares its deliverable under a novel key — there
+// is no key set to drift from. Whether a brief's prose accurately describes its
+// deliverable is content, judged by the opt-in agent-mode reviewer (TASK-242), not here.
+//
+// Applied to BOTH work steps (runDispatch) and the brief step (runBrief): a phantom
+// reported ref blocks at ANY step, not only the brief. The hollow-step COUNT gate
+// (len==0) and this EXISTENCE gate are distinct and both required — a worker that
+// reports a nonexistent name passes the count but fails existence.
+func (co *coordinator) verifyReportedArtifactsExist(arts []workflow.ProducedArtifact) error {
 	for _, a := range arts {
-		art, err := co.getArtifact(co.ctx, a.Name)
-		if err != nil {
-			return fmt.Errorf("brief declared artifact %q but it does not exist on the bus (fabricated proof, stop gate): %w", a.Name, err)
-		}
-		for _, ref := range workflow.DeclaredProofArtifacts(art.Record) {
-			if _, err := co.getArtifact(co.ctx, ref); err != nil {
-				return fmt.Errorf("brief %q claims proof artifact %q that does not exist on the bus (fabricated proof, stop gate): %w", a.Name, ref, err)
-			}
+		if err := co.existsArtifact(co.ctx, a.Name); err != nil {
+			return fmt.Errorf("worker reported producing artifact %q but it does not exist on the bus (fabricated proof, stop gate): %w", a.Name, err)
 		}
 	}
 	return nil
@@ -519,7 +545,7 @@ func (co *coordinator) verifyDeclaredProof(arts []workflow.ProducedArtifact) err
 func (co *coordinator) briefPrompt(step *workflow.RunStep) string {
 	return fmt.Sprintf(
 		"Write the stopping brief for this run as an artifact of kind \"brief\".\nObjective: %s\nStop when ANY of these is met (pick the one that holds and justify it):\n- %s\n\nReport done with the brief artifact in `artifacts` and `outcome` = done or blocked.\n"+
-			"PROOF MUST BE REAL: if you cite any artifact as proof of completion, you MUST have actually created it (via sextant_artifact_put). List every such artifact by name in a `proof_artifacts` array in the brief. The run is GATED — any proof artifact you name that does not exist on the bus will BLOCK the run. Never claim an artifact you did not produce.\nRUN_EVENTS=%s RUN_STEP=%s",
+			"PROOF MUST BE REAL: any deliverable you cite as proof of completion MUST be a durable artifact you actually CREATED (via sextant_artifact_put) — not text that lives only inside this brief. The run is GATED on the artifacts you report producing: each one is existence-checked on the bus, and any that does not exist will BLOCK the run. Never report producing an artifact you did not create.\nRUN_EVENTS=%s RUN_STEP=%s",
 		co.run.Objective, joinStops(co.run.Stop),
 		workflow.RunEventsSubject(co.run.ID), step.ID,
 	)

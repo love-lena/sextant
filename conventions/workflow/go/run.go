@@ -119,6 +119,15 @@ type ProducedArtifact struct {
 // RunEvent is the agent→coordinator step-done signal on RunEventsSubject(id). A
 // dispatched agent emits {step, status:"done", by, outcome?, artifacts?}; the
 // coordinator reads it, attaches artifacts, appends activity, and advances.
+//
+// Artifacts is the TYPED proof channel (TASK-243/244): the refs the worker reports it
+// PRODUCED this step, collected mechanically by the worker's runtime on every
+// artifact create/update — not free text it self-asserts. It is the ONLY thing the
+// deterministic stop-gate decides from. The gate existence-checks each ref and never
+// reads/parses the brief's body (AC2/AC4): proof is declared in this typed metadata,
+// not in brief prose, so the gate is independent of whatever shape a brief happens to
+// use. Whether the brief's prose accurately DESCRIBES the deliverable is content — the
+// opt-in agent-mode reviewer's job (TASK-242), never the deterministic gate's.
 type RunEvent struct {
 	Type      string             `json:"$type"`
 	Step      string             `json:"step,omitempty"`
@@ -127,49 +136,6 @@ type RunEvent struct {
 	Note      string             `json:"note,omitempty"`
 	Outcome   string             `json:"outcome,omitempty"` // brief step: "done" | "blocked"
 	Artifacts []ProducedArtifact `json:"artifacts,omitempty"`
-}
-
-// DeclaredProofArtifacts extracts the artifact NAMES a brief record claims as its
-// proof / deliverables, from the convention-recognized fields: the canonical
-// `proof_artifacts` array, plus the two shapes models reach for unprompted
-// (`proof_of_completion.artifact` and `artifacts_to_report[].name`). The
-// coordinator existence-checks each before letting a run go `done`, so a brief
-// cannot certify completion against an artifact that was never produced — the
-// fabricated-proof stop gate (TASK-243; a run literally did this for a poem that
-// did not exist). It is best-effort over a free-form brief body: an unrecognized
-// shape yields nothing, so the gate then only checks the declared produced
-// artifacts. The coordinator (a deterministic client, not the AI worker) reading
-// the brief it manages is ordinary convention logic — content-opacity constrains
-// the core/bus, not a convention interpreting its own records.
-func DeclaredProofArtifacts(record json.RawMessage) []string {
-	var b struct {
-		ProofArtifacts    []string `json:"proof_artifacts"`
-		ProofOfCompletion struct {
-			Artifact string `json:"artifact"`
-		} `json:"proof_of_completion"`
-		ArtifactsToReport []struct {
-			Name string `json:"name"`
-		} `json:"artifacts_to_report"`
-	}
-	if err := json.Unmarshal(record, &b); err != nil {
-		return nil
-	}
-	var out []string
-	seen := map[string]bool{}
-	add := func(n string) {
-		if n != "" && !seen[n] {
-			seen[n] = true
-			out = append(out, n)
-		}
-	}
-	for _, n := range b.ProofArtifacts {
-		add(n)
-	}
-	add(b.ProofOfCompletion.Artifact)
-	for _, a := range b.ArtifactsToReport {
-		add(a.Name)
-	}
-	return out
 }
 
 // RunControl is a cooperative control message on RunControlSubject(id).

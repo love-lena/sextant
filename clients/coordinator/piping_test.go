@@ -336,12 +336,15 @@ func TestRun_DistinctArtifactPerWorkStep(t *testing.T) {
 }
 
 // TestRun_CoordinatorNeverReadsStepOutput is the AC#3 content-opacity proof. It installs
-// a recorder on every coordinator's artifact-read seam and runs the same produce→rewrite
+// a recorder on every coordinator's artifact seams and runs the same produce→rewrite
 // piping run. The coordinator's job is to THREAD the ref (name) into step 2's prompt; the
 // WORKER dereferences it. So across the whole run the coordinator must NEVER read a work
-// step's produced artifact's content — asserted directly against the read log. (The
-// brief stop-gate may read the brief's declared proof refs; that is a separate path and
-// not a work-step deliverable.)
+// step's produced artifact's CONTENT — asserted directly against the content-read log.
+//
+// The proof gate (TASK-243) existence-PROBES every step's reported artifacts; that is
+// metadata (it discards the body), recorded on a separate seam, and explicitly allowed —
+// the test asserts the work-step deliverables WERE existence-probed but their content was
+// NOT read, drawing the content-opacity line exactly where it belongs.
 func TestRun_CoordinatorNeverReadsStepOutput(t *testing.T) {
 	log, restore := ArtifactReadRecorder()
 	t.Cleanup(restore)
@@ -389,7 +392,13 @@ func TestRun_CoordinatorNeverReadsStepOutput(t *testing.T) {
 	}
 	for _, a := range append(produceArt, rewriteArt...) {
 		if log.Read(a.Name) {
-			t.Errorf("coordinator READ work-step output artifact %q — content-opacity violated (AC#3). It must thread the ref only and let the worker dereference it.\n  all reads: %v", a.Name, log.Names())
+			t.Errorf("coordinator READ work-step output artifact %q's CONTENT — content-opacity violated (AC#3). It must thread the ref only and let the worker dereference it.\n  content reads: %v", a.Name, log.Names())
+		}
+		// The proof gate must have existence-PROBED the deliverable (metadata, body
+		// discarded) — proving every step's reported artifacts are verified to exist
+		// (TASK-243) without reading their content.
+		if !log.ExistsProbed(a.Name) {
+			t.Errorf("coordinator did not existence-probe work-step artifact %q — the TASK-243 per-step existence gate did not run on it", a.Name)
 		}
 	}
 }
