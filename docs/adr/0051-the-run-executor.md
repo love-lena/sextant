@@ -43,5 +43,8 @@ blocking wait is deadline-bounded and fails loud. The new records (`run.start`,
 `run.event`, `run.control`, the run/template envelopes) are conventions over Messages
 + Artifacts, co-equal in Go and TS, evolving by `$type` version — no epoch bump.
 
-The old `sextant.workflow/v1` path is retired in a following pass (TASK-234 engine
-half); until then it remains compiled-but-unused so the change lands additively.
+The old `sextant.workflow/v1` path landed additively (compiled-but-unused) and was
+then retired in full by TASK-234: the legacy envelope/event/control + the
+`workflow.start` verb, their lexicons and the lone conformance vector, violet's dead
+mobilize-workflow capability, and the old dash `workflow.jsx` view are all removed;
+`run/v1` is the sole workflow contract.

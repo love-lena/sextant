@@ -13,7 +13,6 @@
 import { browserConnect, identityFromCreds } from "@sextant/sdk/browser";
 import { project, setCriterion, GoalsSubject } from "@sextant/conv-goals";
 import { setReview, REVIEW_STATES } from "@sextant/conv-review";
-import { workflowStartRecord, parseWorkflow } from "@sextant/conv-workflow";
 import { spawnRequestRecord } from "@sextant/conv-spawn";
 
 globalThis.SextantBus = {
@@ -26,10 +25,6 @@ globalThis.SextantBus = {
   // review: persist the operator's verdict (read-merge-CAS + approve→met loop).
   setReview,
   REVIEW_STATES,
-  // workflow: build a workflow.start request + parse the state envelope for render
-  // (the dash drives workflows over the convention, not hand-rolled records).
-  workflowStartRecord,
-  parseWorkflow,
   // spawn: build a spawn.request (the dash + mobilize panel publish it).
   spawnRequestRecord,
 };

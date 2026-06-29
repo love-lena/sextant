@@ -151,19 +151,20 @@ jobs:
 
       # --- the TS workflow convention (TASK-239) ---
       # @sextant/conv-workflow is the co-equal peer of conventions/workflow/go: the
-      # record types + parse/marshal helpers and the requestWorkflowStart verb the
-      # browser dash drives. It depends on @sextant/sdk via a file: link (built above).
+      # run/v1 record types + parse/marshal helpers (run.start/run.event/run.control)
+      # the browser dash drives. It depends on @sextant/sdk via a file: link (built above).
       - name: npm ci (conv/workflow)
         working-directory: conventions/workflow/ts
         run: npm ci
       - name: build (conv/workflow, tsc)
         working-directory: conventions/workflow/ts
         run: npm run build
-      # Records unit tests + op-transcript conformance: replays the SAME
-      # protocol/conformance/vectors/workflow/*.json the Go suite passes (AC#7/AC#9).
-      - name: workflow conformance + unit (conv/workflow)
+      # Records unit tests for the run/v1 contract. (The legacy sextant.workflow/v1
+      # op-transcript conformance suite was retired with that path in TASK-234; run/v1
+      # has no conformance vector yet — a follow-up if cross-language drift needs pinning.)
+      - name: workflow unit (conv/workflow)
         working-directory: conventions/workflow/ts
-        run: node --test dist/test/records.test.js dist/test/conformance.test.js
+        run: node --test dist/test/records.test.js
 
       # --- the TS spawn convention (TASK-239) ---
       # @sextant/conv-spawn is the co-equal peer of conventions/spawn/go: the

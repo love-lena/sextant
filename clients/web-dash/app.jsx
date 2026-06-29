@@ -1061,7 +1061,7 @@
     }
     // STAGE_LABEL: the human label for a back-to-origin target. Falls back to a
     // title-cased mode for any surface not in the table.
-    const STAGE_LABEL = { home:"Home", goals:"Goals", workengine:"Work engine", artifacts:"Artifacts", bus:"Bus", workflow:"Workflow", conversation:"Conversations", compose:"Composer", criteria:"Criteria", brief:"Inbox", consequence:"Review", link:"Link work" };
+    const STAGE_LABEL = { home:"Home", goals:"Goals", workengine:"Work engine", artifacts:"Artifacts", bus:"Bus", conversation:"Conversations", compose:"Composer", criteria:"Criteria", brief:"Inbox", consequence:"Review", link:"Link work" };
     function originLabel(){ return (origin && STAGE_LABEL[origin.mode]) || "Back"; }
     // goBack: return to the exact originating surface (S1.7). A goal deep-link
     // carries its goalId back so Goals re-opens that detail.
@@ -1243,17 +1243,14 @@
       goalsShown.forEach(g=>items.push({ key:"goal:"+g.id, type:"Goal", label:g.name,
         sub:(g.northstar||"goal"), kw:(g.name+" "+(g.northstar||"")+" goal").toLowerCase(),
         go:()=>onNav("goals", g.id) }));
-      // WORKFLOWS + RUNS — derived from the loaded artifact records. A workflow.<id>
-      // record is a workflow; its run-state (status/done/total) makes it a Run row.
-      // Absent backing data (no such records) → these simply contribute nothing.
+      // RUNS — derived from the loaded artifact records. A workflow.run.<id> record
+      // (sextant.workflow.run/v1, ADR-0048) is one live run; its status/step counts
+      // make a Run row. Absent backing data → contributes nothing.
       Object.keys(records).forEach(name=>{
-        if(name.startsWith("workflow.")){
-          const rec=records[name]||{}; const id=name.slice("workflow.".length);
-          items.push({ key:"wf:"+name, type:"Workflow", label:(rec.title||id),
-            sub:"workflow", kw:(name+" "+(rec.title||"")+" workflow").toLowerCase(),
-            go:()=>onNav("workengine") });
+        if(name.startsWith("workflow.run.")){
+          const rec=records[name]||{}; const id=name.slice("workflow.run.".length);
           const st=rec.status||rec.state; const total=rec.total, done=rec.done;
-          if(st || total!=null) items.push({ key:"run:"+name, type:"Run", label:(rec.title||id),
+          items.push({ key:"run:"+name, type:"Run", label:(rec.label||rec.title||id),
             sub:(st?st:"run")+(total!=null?(" · "+(done||0)+"/"+total):""),
             kw:(name+" "+(st||"")+" run").toLowerCase(), go:()=>onNav("workengine") });
         }
@@ -1266,7 +1263,7 @@
       // No-personas (TASK-194): the Agents roster was retired, so there is no
       // "Agents" surface row and no per-agent ("agent:<id>") palette rows — a run is
       // reached via its goal/run topic or its conversation, never a named-crew jump.
-      [["Home","home"],["Goals","goals"],["Work engine","workengine"],["Artifacts","artifacts"],["Bus","bus"],["Workflow","workflow"]]
+      [["Home","home"],["Goals","goals"],["Work engine","workengine"],["Artifacts","artifacts"],["Bus","bus"]]
         .forEach(([label,key])=>items.push({ key:"nav:"+key, type:"Surface", label,
           sub:"workspace", kw:("go to surface "+label+" "+key).toLowerCase(), go:()=>onNav(key) }));
       convList.forEach(c=>items.push({ key:"conv:"+c.key, type:"Channel",
@@ -1327,8 +1324,6 @@
                 <span className="sx-crumb-topic">Work engine</span>
               ) : stageMode==="bus" ? (
                 <span className="sx-crumb-topic">Bus</span>
-              ) : stageMode==="workflow" ? (
-                <span className="sx-crumb-topic">Workflow</span>
               ) : stageMode==="compose" ? (
                 <React.Fragment><span className="sx-crumb-topic">Artifacts</span><span className="sx-crumb-sep">/</span><span className="sx-crumb-art">Composer</span></React.Fragment>
               ) : stageMode==="criteria" ? (
@@ -1413,7 +1408,7 @@
                 criterion={linkCriterion}
                 candidates={linkCandidates}
                 onToggleLink={(id,linked)=>{ /* relates write owned by the goals convention; reflected on reload */ }}
-                onBuildWorkflow={()=>onNav("workflow")}
+                onBuildWorkflow={()=>onNav("workengine")}
                 onBack={goBack} /></div>
             </div>
           ) : stageMode==="goals" ? (
@@ -1431,10 +1426,6 @@
               <div className="sx-page sx-page--doc">
                 <BusInspector />
               </div>
-            </div>
-          ) : stageMode==="workflow" ? (
-            <div className="sx-canvas sx-canvas--list">
-              <div className="sx-page sx-page--doc"><WorkflowView /></div>
             </div>
           ) : stageMode==="artifact" && artMissing ? (
             <div className="sx-canvas sx-canvas--list">

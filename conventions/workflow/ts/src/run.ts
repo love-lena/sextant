@@ -5,8 +5,7 @@
 // coordinator), control/events ride msg.* subjects. The browser dash parses the run
 // envelope to render progress and emits run.start / run.control over its own client.
 //
-// Additive alongside records.ts's older sextant.workflow/v1 contract: it lands the
-// ADR-0048 shapes ahead of the coordinator retarget that consumes them.
+// The step statuses and ack statuses it reuses are shared from records.ts.
 
 import type { JSONValue } from "@sextant/sdk";
 import { StepDone } from "./records.js";

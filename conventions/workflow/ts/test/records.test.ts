@@ -1,118 +1,120 @@
-// Unit tests for the workflow convention records + start verb (the peers of
-// conventions/workflow/go's records_test.go + verb_test.go): the state envelope
-// round-trips, nextPending skips done steps, isTerminal pins the resume guard, the
-// start-record builder omits empty optionals (byte-parity with Go), and
-// requestWorkflowStart emits exactly one publish.
+// Unit tests for the workflow convention records (the peer of
+// conventions/workflow/go's run_test.go): the run state envelope round-trips
+// stamping the versioned $type, nextPendingRun skips done steps, isTerminalRun pins
+// the resume guard, the run.start record builder stamps its $type, and the
+// event/control/start parsers reject foreign records.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { JSONValue } from "@sextant/sdk";
 import {
-  marshalWorkflow,
-  parseWorkflow,
-  parseWorkflowEvent,
-  nextPending,
-  isTerminal,
-  workflowStartRecord,
-  requestWorkflowStart,
-  parseWorkflowStartAck,
-  StartSubject,
-  KindWorkflow,
-  WfRunning,
-  WfDone,
-  WfPaused,
-  WfCancelled,
-  WfFailed,
-  StepPending,
+  marshalRun,
+  parseRun,
+  marshalRunEvent,
+  parseRunEvent,
+  parseRunControl,
+  nextPendingRun,
+  isTerminalRun,
+  runStartRecord,
+  runStateName,
+  runEventsSubject,
+  runControlSubject,
+  KindRun,
+  RunRunning,
+  RunDone,
+  RunBlocked,
+  RunCancelled,
+  RunWaiting,
+  StepUpcoming,
   StepDone,
   StepRunning,
-  StepFailed,
-  type Workflow,
-  type Ops,
+  KindWork,
+  KindBrief,
+  type Run,
 } from "../src/index.js";
 
 function obj(v: JSONValue): { [k: string]: JSONValue } {
   return v as { [k: string]: JSONValue };
 }
 
-test("the workflow state envelope round-trips, stamping the versioned $type", () => {
-  const wf: Workflow = {
-    id: "01WF",
-    status: WfRunning,
-    owner: "01OWNER",
+test("the run state envelope round-trips, stamping the versioned $type", () => {
+  const run: Run = {
+    id: "01HRUN",
+    template: null,
+    label: "do the thing",
+    objective: "do the whole thing",
+    status: RunRunning,
     steps: [
-      { id: "review", kind: "dispatch", nickname: "reviewer", prompt: "review it", status: StepDone, agent: "01AGENT" },
-      { id: "merge", kind: "dispatch", status: StepPending },
+      { id: "s1", label: "investigate", kind: KindWork, status: StepRunning },
+      { id: "brief", label: "stopping brief", kind: KindBrief, status: StepUpcoming },
     ],
+    relates: [{ goal: "g1", crit: "c1", kind: "toward" }],
+    activity: [{ id: "a1", glyph: "•", text: "spawned", src: "01HRUN", at: 123 }],
+    artifacts: [],
   };
-  const got = parseWorkflow(marshalWorkflow(wf));
-  assert.ok(got, "parseWorkflow returned null for a valid record");
-  assert.equal(obj(marshalWorkflow(wf))["$type"], KindWorkflow);
-  assert.equal(got!.id, "01WF");
+  const got = parseRun(marshalRun(run));
+  assert.ok(got, "parseRun returned null for a valid record");
+  assert.equal(obj(marshalRun(run))["$type"], KindRun);
+  assert.equal(got!.id, "01HRUN");
   assert.equal(got!.steps.length, 2);
-  assert.equal(got!.steps[0]!.agent, "01AGENT");
-  assert.equal(got!.steps[1]!.status, StepPending);
+  assert.equal(got!.steps[1]!.kind, KindBrief);
 });
 
-test("parseWorkflow rejects a non-workflow record", () => {
-  assert.equal(parseWorkflow({ $type: "chat.message", text: "hi" }), null);
-  assert.equal(parseWorkflow(null), null);
-  assert.equal(parseWorkflow([1, 2]), null);
+test("parseRun rejects the OLD sextant.workflow/v1 type and non-objects", () => {
+  assert.equal(parseRun({ $type: "sextant.workflow/v1", id: "x" }), null);
+  assert.equal(parseRun({ $type: "chat.message", text: "hi" }), null);
+  assert.equal(parseRun(null), null);
+  assert.equal(parseRun([1, 2]), null);
 });
 
-test("nextPending returns the first not-done step", () => {
+test("nextPendingRun returns the first not-done step", () => {
   const cases: Array<{ steps: Array<{ status: string }>; want: number }> = [
-    { steps: [{ status: StepPending }, { status: StepPending }], want: 0 },
-    { steps: [{ status: StepDone }, { status: StepPending }], want: 1 },
+    { steps: [{ status: StepUpcoming }, { status: StepUpcoming }], want: 0 },
+    { steps: [{ status: StepDone }, { status: StepUpcoming }], want: 1 },
     { steps: [{ status: StepDone }, { status: StepRunning }], want: 1 },
-    { steps: [{ status: StepDone }, { status: StepFailed }], want: 1 },
     { steps: [{ status: StepDone }, { status: StepDone }], want: -1 },
     { steps: [], want: -1 },
   ];
   for (const c of cases) {
-    const w: Workflow = { id: "x", status: WfRunning, owner: "o", steps: c.steps.map((s) => ({ id: "s", kind: "k", status: s.status })) };
-    assert.equal(nextPending(w), c.want, JSON.stringify(c.steps));
+    const r: Run = {
+      id: "x",
+      template: null,
+      status: RunRunning,
+      steps: c.steps.map((s, i) => ({ id: "s" + i, kind: KindWork, status: s.status })),
+      relates: [],
+      activity: [],
+      artifacts: [],
+    };
+    assert.equal(nextPendingRun(r), c.want, JSON.stringify(c.steps));
   }
 });
 
-test("isTerminal pins the resume guard", () => {
-  for (const s of [WfDone, WfCancelled, WfFailed]) assert.equal(isTerminal(s), true, s);
-  for (const s of [WfRunning, WfPaused, StepPending, ""]) assert.equal(isTerminal(s), false, s);
+test("isTerminalRun pins the resume guard", () => {
+  for (const s of [RunDone, RunBlocked, RunCancelled]) assert.equal(isTerminalRun(s), true, s);
+  for (const s of [RunRunning, RunWaiting]) assert.equal(isTerminalRun(s), false, s);
 });
 
-test("parseWorkflowEvent accepts an event and rejects other records", () => {
-  const ev = parseWorkflowEvent({ $type: "workflow.event", step: "review", status: StepDone, by: "01AGENT" });
+test("parseRunEvent accepts an event and rejects other records", () => {
+  const ev = parseRunEvent(marshalRunEvent({ step: "s1", status: StepDone, by: "01AGENT", outcome: "done" }));
   assert.ok(ev);
-  assert.equal(ev!.step, "review");
-  assert.equal(parseWorkflowEvent({ $type: "workflow.control", verb: "pause" }), null);
+  assert.equal(ev!.step, "s1");
+  assert.equal(ev!.outcome, "done");
+  assert.equal(parseRunEvent({ $type: "chat.message", text: "hi" }), null);
 });
 
-test("workflowStartRecord stamps $type and omits empty optionals", () => {
-  const rec = obj(workflowStartRecord({ prompt: "x" }));
-  assert.equal(rec["$type"], "workflow.start");
-  assert.equal(rec["prompt"], "x");
-  for (const absent of ["nonce", "nickname", "target", "by"]) {
-    assert.equal(absent in rec, false, `empty ${absent} omitted`);
-  }
+test("parseRunControl accepts a control and rejects other records", () => {
+  const ctl = parseRunControl({ $type: "run.control", verb: "approve" });
+  assert.ok(ctl);
+  assert.equal(ctl!.verb, "approve");
+  assert.equal(parseRunControl({ $type: "run.event", status: "done" }), null);
 });
 
-test("requestWorkflowStart emits exactly one publish on StartSubject", async () => {
-  const calls: { subject: string; record: JSONValue }[] = [];
-  const ops: Ops = {
-    async publish(subject, record) {
-      calls.push({ subject, record });
-    },
-  };
-  await requestWorkflowStart(ops, { prompt: "review and merge", nonce: "n1", nickname: "reviewer" });
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0]!.subject, StartSubject);
-  assert.equal(obj(calls[0]!.record)["nonce"], "n1");
-});
-
-test("parseWorkflowStartAck correlates the coordinator's reply", () => {
-  const ack = parseWorkflowStartAck({ $type: "workflow.start.ack", nonce: "n1", requestId: "01REQ", workflowId: "01WF", status: "ok" });
-  assert.ok(ack);
-  assert.equal(ack!.nonce, "n1");
-  assert.equal(ack!.workflowId, "01WF");
-  assert.equal(parseWorkflowStartAck({ $type: "workflow.start", prompt: "x" }), null);
+test("runStartRecord stamps the run.start $type and the subjects are well-formed", () => {
+  const rec = obj(runStartRecord({ id: "01HRUN", nonce: "n1" }));
+  assert.equal(rec["$type"], "run.start");
+  assert.equal(rec["id"], "01HRUN");
+  assert.equal(rec["nonce"], "n1");
+  assert.equal(runStateName("01H"), "workflow.run.01H");
+  assert.equal(runEventsSubject("01H"), "msg.workflow.run.01H.events");
+  assert.equal(runControlSubject("01H"), "msg.workflow.run.01H.control");
 });

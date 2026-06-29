@@ -13,12 +13,9 @@ import (
 // (CAS-checkpointed, single-writer = the coordinator that drives it); control and
 // events ride msg.* subjects.
 //
-// This file is ADDITIVE alongside the older sextant.workflow/v1 contract in
-// records.go: it lands the ADR-0048 shapes as code (records, subjects, the
-// run.start verb) ahead of the coordinator retarget that consumes them. The old
-// path is retired (coordinator retarget + deletion) as a following pass (TASK-234
-// engine half) — until then both contracts compile, the new one unused by the
-// coordinator.
+// This is the live work-engine contract (ADR-0048), driven by clients/coordinator.
+// The step statuses, control verbs, and the spawn lexicon it composes are shared
+// from records.go.
 const (
 	KindRun         = "sextant.workflow.run/v1"
 	KindTemplate    = "sextant.workflow.template/v1"
@@ -37,8 +34,8 @@ const (
 	RunCancelled = "cancelled"
 )
 
-// Step statuses unique to the run contract. StepRunning/StepDone are shared with
-// the older contract (records.go) and reused. Kinds (ADR-0048) are run-specific.
+// Step statuses unique to the run contract. StepRunning/StepDone are shared from
+// records.go and reused. Kinds (ADR-0048) are run-specific.
 const (
 	StepUpcoming = "upcoming"
 	StepWaiting  = "waiting"

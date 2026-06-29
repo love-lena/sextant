@@ -62,8 +62,8 @@ func sampleStream() []string {
 		"lena            chat            let's get the dash building",
 		"coordinator-1   spawn.request   agent-alpha: theme toolkit",
 		"agent-alpha     spawn.ack       accepted, starting",
-		"agent-alpha     workflow.event  step 1/3 palette resolved",
-		"agent-alpha     workflow.event  step 2/3 widgets compiling",
+		"agent-alpha     run.event       step 1/3 palette resolved",
+		"agent-alpha     run.event       step 2/3 widgets compiling",
 		"agent-alpha     artifact.update theme.go +210",
 		"agent-beta      drain           going offline for redeploy",
 		"coordinator-1   chat            nice — eyeball the gallery",
@@ -138,7 +138,7 @@ func TestStreamGolden(t *testing.T) {
 			iw, ih := innerOf(tc.w, tc.h)
 			s.SetSize(iw, ih)
 			s.SetLines(sampleStream())
-			out := widget.Box(th, tc.focus, "stream", th.KindHue(theme.KindWorkflowEvent), s.View(th, tc.focus), tc.w, tc.h)
+			out := widget.Box(th, tc.focus, "stream", th.KindHue(theme.KindRunEvent), s.View(th, tc.focus), tc.w, tc.h)
 			teatest.RequireEqualOutput(t, []byte(out))
 		})
 	}
@@ -153,7 +153,7 @@ func TestStreamScrolledGolden(t *testing.T) {
 	// Scroll up off the tail: both ↑ and ↓ overflow cues should show.
 	s.ScrollUp()
 	s.ScrollUp()
-	out := widget.Box(th, widget.FocusActive, "stream", th.KindHue(theme.KindWorkflowEvent), s.View(th, widget.FocusActive), 54, 8)
+	out := widget.Box(th, widget.FocusActive, "stream", th.KindHue(theme.KindRunEvent), s.View(th, widget.FocusActive), 54, 8)
 	teatest.RequireEqualOutput(t, []byte(out))
 }
 
@@ -162,7 +162,7 @@ func TestStreamEmptyGolden(t *testing.T) {
 	s := widget.NewStream(theme.DefaultKeymap())
 	iw, ih := innerOf(54, 8)
 	s.SetSize(iw, ih)
-	out := widget.Box(th, widget.FocusSelected, "stream", th.KindHue(theme.KindWorkflowEvent), s.View(th, widget.FocusSelected), 54, 8)
+	out := widget.Box(th, widget.FocusSelected, "stream", th.KindHue(theme.KindRunEvent), s.View(th, widget.FocusSelected), 54, 8)
 	teatest.RequireEqualOutput(t, []byte(out))
 }
 

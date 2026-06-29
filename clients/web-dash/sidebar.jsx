@@ -441,12 +441,12 @@
   function Sidebar({ ctx, busName, navMode, sideWidth, sideCollapsed, onSideWidth, onToggleSide }) {
     // Map the open stage to the primary nav row it lives under, so the active row
     // is marked (S1.2). An artifact opened from Goals still marks Artifacts (it's
-    // the artifact stage); a goal/conversation/agents/workflow stage maps to no
-    // primary row when it isn't one of the five.
+    // the artifact stage); a goal/conversation stage maps to no primary row when
+    // it isn't one of the five.
     const section = ctx.stageMode === "conversation" ? "convo"
       : ctx.stageMode === "artifact" ? "artifacts"
       : (ctx.stageMode === "compose" || ctx.stageMode === "criteria" || ctx.stageMode === "brief" || ctx.stageMode === "consequence") ? "artifacts"
-      : ctx.stageMode; // home | goals | workengine | artifacts | bus | agents | workflow
+      : ctx.stageMode; // home | goals | workengine | artifacts | bus
     const meName = (ctx.self && ctx.self.display_name) || "you";
 
     // right-edge drag to resize — same shape as review.jsx's onHandleDown.

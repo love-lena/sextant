@@ -117,8 +117,8 @@ var Registry = []Component{
 		Binary: "sextant-workflow",
 		Kind:   "workflow",
 		Args: func(creds, store, recipe string) []string {
-			// Listen mode (no --plan/--id): subscribe to workflow.start and run one
-			// coordinator per request (the dash's "start a workflow" path).
+			// Listen mode (no --id): subscribe to run.start and adopt one run per
+			// request (the dash's "start a run" path; ADR-0048, TASK-236).
 			return []string{"--creds", creds, "--store", store}
 		},
 	},

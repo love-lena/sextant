@@ -20,7 +20,7 @@ const (
 	KindChat           = "chat"
 	KindSpawnRequest   = "spawn.request"
 	KindSpawnAck       = "spawn.ack"
-	KindWorkflowEvent  = "workflow.event"
+	KindRunEvent       = "run.event"
 	KindArtifactUpdate = "artifact.update"
 	KindDrain          = "drain"
 )
@@ -46,7 +46,7 @@ func (t Theme) RoleHue(role string) lipgloss.Color {
 }
 
 // KindHue tints a message kind (the verb), distinct from the sender's role:
-// chat=foreground, spawn.request=orange, spawn.ack=brown, workflow.event=teal,
+// chat=foreground, spawn.request=orange, spawn.ack=brown, run.event=teal,
 // artifact.update=amber, drain=red. An unknown kind returns a muted foreground
 // (base04).
 func (t Theme) KindHue(kind string) lipgloss.Color {
@@ -57,7 +57,7 @@ func (t Theme) KindHue(kind string) lipgloss.Color {
 		return lipgloss.Color(t.Palette.Base09)
 	case KindSpawnAck:
 		return lipgloss.Color(t.Palette.Base0F)
-	case KindWorkflowEvent:
+	case KindRunEvent:
 		return lipgloss.Color(t.Palette.Base0C)
 	case KindArtifactUpdate:
 		return lipgloss.Color(t.Palette.Base0A)

@@ -20,7 +20,7 @@ mkdir -p "$OUT/vendor"
 
 # 1. Transpile the JSX components to plain JS (classic transform → global React),
 # so the served app needs no in-browser Babel and no runtime CDN.
-for f in tweaks-panel status assistant-brain artifact home sidebar artifacts review conversations goals bus mobilize workflow composer review-author workengine app; do
+for f in tweaks-panel status assistant-brain artifact home sidebar artifacts review conversations goals bus mobilize composer review-author workengine app; do
   "${ESBUILD[@]}" "$SRC/$f.jsx" \
     --jsx=transform \
     --jsx-factory=React.createElement --jsx-fragment=React.Fragment \
