@@ -84,6 +84,149 @@ EXISTING_SESSION=$(ls -t "$SESSION_DIR"/*_"$SESSION_ID".jsonl 2>/dev/null | head
 export SEXTANT_PI_CREDS="$SEXTANT_CREDS"
 export SEXTANT_BUS_JSON="${SEXTANT_BUS_JSON:-${SEXTANT_STORE}/bus.json}"
 
+# ---------------------------------------------------------------------------
+# WORKER SANDBOX (TASK-118). pi is the work engine's SOLE harness, so EVERY
+# dispatched worker is a coding agent with full file + Bash tools. Left
+# unscoped it launches under launchd in launchd's CWD (/), roams the operator's
+# filesystem (the recurring macOS TCC popups), and can reach the GUI/system (the
+# Firefox-close scare). We confine the worker before it ever runs a tool:
+#
+#   1. A per-run SCOPED WORKING DIR under the store, set as the worker's CWD, so
+#      its file tools default there and never the operator's home. FAIL LOUD if
+#      it cannot be resolved/created — never an unscoped worker (AC#1, AC#5).
+#   2. A SHELL-LEVEL command guard: a bin dir of wrapper scripts, prepended to
+#      PATH, that REFUSE the destructive/GUI/system command classes (killall,
+#      pkill, osascript, open, brew/npm/pip installs, shutdown, git force-push)
+#      with a clear error. This mirrors the wf-release-pr wrapper: enforcement
+#      at the shell, so a worker TOLD to run them still cannot (AC#2). It is
+#      defense in depth for `sh -c` subshells the in-process gate cannot parse;
+#      the pi-bus tool_call gate (gate.ts) is the primary, path-aware layer.
+#
+# This is the floor, not the whole defense — the real isolation for an untrusted
+# unattended agent is the OS boundary (a container/VM). The scope raises the
+# floor so the default path is least-privilege.
+
+# The scoped working dir. Override with SEXTANT_PI_WORKDIR (an operator pinning a
+# real worktree for an agentic-dev run); otherwise a per-child dir, a SIBLING of
+# the bus store (never inside it — the store is JetStream's data dir). Keyed to
+# the child id so each worker gets its own scratch and a re-spawn reuses it.
+WORKDIR="${SEXTANT_PI_WORKDIR:-$(dirname "$SEXTANT_STORE")/pi-work/${CHILD_ID}}"
+# FAIL LOUD: an empty scope (e.g. CHILD_ID unset AND no override resolving to a
+# real path) must never yield an unscoped worker. We refuse to spawn.
+if [ -z "$WORKDIR" ] || [ "$WORKDIR" = "/" ]; then
+  echo "pi.sh: refusing to spawn an UNSCOPED worker — SEXTANT_PI_WORKDIR is empty (TASK-118 fail-loud)" >&2
+  exit 78 # EX_CONFIG
+fi
+if ! mkdir -p "$WORKDIR" 2>/dev/null; then
+  echo "pi.sh: refusing to spawn — cannot create scoped working dir '$WORKDIR' (TASK-118 fail-loud)" >&2
+  exit 78
+fi
+# The confinement ROOT the in-process gate enforces file tools against; the dir
+# the worker is CONFINED to is its CWD below. Exported so gate.ts reads it.
+export SEXTANT_PI_WORKDIR="$WORKDIR"
+
+# Install the shell-level command guard: a bin dir of refuse-wrappers prepended
+# to PATH. Each wrapper exits non-zero with a clear message, so a worker that
+# shells out to a denied class is blocked at the shell (not by playbook), even
+# inside a `sh -c` subshell. A real `git` still works; only `git push --force`
+# (without --force-with-lease) is refused, mirroring gate.ts.
+GUARD_BIN="${WORKDIR}/.sx-guard-bin"
+if ! mkdir -p "$GUARD_BIN" 2>/dev/null; then
+  echo "pi.sh: refusing to spawn — cannot install command guard at '$GUARD_BIN' (TASK-118 fail-loud)" >&2
+  exit 78
+fi
+# _SX_REAL_FN is the body of a _sx_real shell function, inlined into each
+# passthrough wrapper. It resolves the REAL binary for a name by scanning PATH
+# with the guard dir removed (a plain `command -v` would re-find the wrapper,
+# since the guard dir is first on PATH). Defined once here, embedded literally.
+_SX_REAL_FN='_sx_real() {
+  _n="$1"; _oldifs="$IFS"; IFS=:
+  for _d in $PATH; do
+    [ "$_d" = "$GUARD_BIN" ] && continue
+    if [ -x "$_d/$_n" ]; then IFS="$_oldifs"; printf "%s\\n" "$_d/$_n"; return 0; fi
+  done
+  IFS="$_oldifs"; return 1
+}'
+
+# A plain refuse-wrapper for a whole-command class. $0 is the wrapper's name so
+# one body serves every name we symlink/copy it under.
+_sx_refuse() {
+  cat > "$GUARD_BIN/$1" <<'GUARD'
+#!/usr/bin/env sh
+echo "sextant worker sandbox (TASK-118): '$(basename "$0")' is DENIED for dispatched workers (destructive/GUI/system command class). This is a shell-level guard; it cannot be bypassed by the worker." >&2
+exit 126
+GUARD
+  chmod +x "$GUARD_BIN/$1"
+}
+for _cmd in killall pkill osascript shutdown halt reboot launchctl; do
+  _sx_refuse "$_cmd"
+done
+# `open` (macOS app/file launcher — the Firefox-close vector) and package
+# installers get their own refuse-wrappers too. A bare `open`/`brew`/etc. is the
+# GUI/install class; refuse the binary outright (a worker has no business
+# launching apps or installing software).
+for _cmd in open brew port; do
+  _sx_refuse "$_cmd"
+done
+# Package managers: refuse only the INSTALL subcommands so a worker can still
+# `npm test` / `pip --version` in its tree but cannot install software. The
+# passthrough re-execs the REAL binary, found by resolving the command against a
+# PATH with the guard dir REMOVED — `command -v` honours PATH order, so a plain
+# lookup would just find this wrapper again and loop. _sx_real (defined once,
+# inlined into each wrapper) does the guard-stripped lookup.
+_sx_refuse_subcmd() {
+  # $1 = command, rest = denied first-arg subcommands
+  _name="$1"; shift
+  _deny="$*"
+  cat > "$GUARD_BIN/$_name" <<GUARD
+#!/usr/bin/env sh
+GUARD_BIN="$GUARD_BIN"
+$_SX_REAL_FN
+for d in $_deny; do
+  if [ "\$1" = "\$d" ]; then
+    echo "sextant worker sandbox (TASK-118): '$_name \$1' is DENIED for dispatched workers (package install). Shell-level guard." >&2
+    exit 126
+  fi
+done
+exec "\$(_sx_real "$_name")" "\$@"
+GUARD
+  chmod +x "$GUARD_BIN/$_name"
+}
+_sx_refuse_subcmd npm install i add ci
+_sx_refuse_subcmd pip install
+_sx_refuse_subcmd pip3 install
+_sx_refuse_subcmd gem install
+_sx_refuse_subcmd cargo install
+# git: allow everything EXCEPT a force-push without --force-with-lease (the
+# history-clobbering class, mirroring gate.ts). Re-exec the real git otherwise.
+cat > "$GUARD_BIN/git" <<GUARD
+#!/usr/bin/env sh
+GUARD_BIN="$GUARD_BIN"
+$_SX_REAL_FN
+_real_git="\$(_sx_real git)"
+if [ "\$1" = "push" ]; then
+  for a in "\$@"; do
+    case "\$a" in
+      --force-with-lease*) exec "\$_real_git" "\$@" ;;
+      --force|-f|--force=*) echo "sextant worker sandbox (TASK-118): 'git push --force' is DENIED (use --force-with-lease). Shell-level guard." >&2; exit 126 ;;
+    esac
+  done
+fi
+exec "\$_real_git" "\$@"
+GUARD
+chmod +x "$GUARD_BIN/git"
+export PATH="$GUARD_BIN:$PATH"
+
+# CONFINE the worker's CWD to the scoped dir: pi's file tools (read/bash/edit)
+# default to the launch CWD, so launching here is the first half of confinement
+# (the gate.ts path check is the enforced half). cd FAILS LOUD — a worker that
+# cannot enter its scope must not run from wherever launchd left us.
+cd "$WORKDIR" || {
+  echo "pi.sh: refusing to spawn — cannot cd into scoped working dir '$WORKDIR' (TASK-118 fail-loud)" >&2
+  exit 78
+}
+# ---------------------------------------------------------------------------
+
 # DRAIN-AND-REVIVE (ADR-0045). A dispatcher-spawned worker is a resumable one-shot,
 # not a resident process: it does its task, reports, and EXITS once idle, and the
 # dispatcher re-spawns it (resuming this same session id) on the next message. The

@@ -317,6 +317,7 @@ export default function sextantPiBus(pi: ExtensionAPI): void {
 
   registerGate(pi, {
     enabled: cfg.gateDestructiveHeadless,
+    workdir: cfg.workdir,
     onBlock: (toolName, reason) => {
       // Surface the block on the activity bridge so the dash sees a blocked
       // action rather than a silent no-op.

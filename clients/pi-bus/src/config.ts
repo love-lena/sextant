@@ -58,6 +58,12 @@ export interface Config {
   // set SEXTANT_PI_GATE_HEADLESS=off to run a trusted unattended worker without
   // it (e.g. inside a container/VM, the real isolation boundary).
   gateDestructiveHeadless: boolean;
+  // workdir is the worker's scoped working directory (SEXTANT_PI_WORKDIR, set by
+  // pi.sh for every dispatched worker, TASK-118). When set, the tool gate CONFINES
+  // the worker's file + bash tools to it — a read/edit/write/bash reaching outside
+  // is blocked, enforced regardless of the destructive toggle. Empty (a bare
+  // interactive `pi -e` session) means no confinement: there is no scope to hold.
+  workdir: string;
   // handoffTopic is the topic the managed close-and-resume handoff (TASK-178)
   // announces relinquished/acquired on, so the dash + the dispatcher see the
   // ownership transfer. A drain REQUEST always arrives on the worker's inbox (a
@@ -97,6 +103,7 @@ export function resolveConfig(env: NodeJS.ProcessEnv): Config {
     coalesceWindowMs: nonNegInt(env["SEXTANT_PI_COALESCE_MS"], DEFAULT_COALESCE_WINDOW_MS),
     previewMax: posInt(env["SEXTANT_PI_PREVIEW_MAX"], DEFAULT_PREVIEW_MAX),
     gateDestructiveHeadless: !isOff(env["SEXTANT_PI_GATE_HEADLESS"]),
+    workdir: env["SEXTANT_PI_WORKDIR"] ?? "",
     handoffTopic: env["SEXTANT_PI_HANDOFF_TOPIC"] || DEFAULT_HANDOFF_TOPIC,
     drainWhenIdle: isOn(env["SEXTANT_PI_DRAIN_WHEN_IDLE"]),
     runEventsSubject: env["SEXTANT_PI_RUN_EVENTS"] ?? "",
