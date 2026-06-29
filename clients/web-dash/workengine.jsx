@@ -367,15 +367,23 @@
   }
 
   /* ============================ C.2 — Spawn work ============================ */
-  function SpawnWork({ templates, goals, onCancel, onSpawned, onNewWorkflow }) {
-    const [tplName, setTplName] = useState(templates[0] ? templates[0].name : "");
+  function SpawnWork({ templates, goals, initial, onCancel, onSpawned, onNewWorkflow }) {
+    // Hold the picked template as an OBJECT, frozen at click — NOT a name re-resolved
+    // against `templates` at spawn time. The 4s poll rebuilds the templates array from
+    // scratch every tick (each template re-fetched), so a name lookup can transiently
+    // miss and the old `|| templates[0]` fallback would then SILENTLY spawn the base
+    // workflow instead of the one the operator chose (TASK-248). `initial` pre-selects
+    // a template handed in from its detail view.
+    const [picked, setPicked] = useState(initial || templates[0] || null);
     const [objective, setObjective] = useState("");
     const [goalId, setGoalId] = useState(""); // "" = no goal yet
     const [critId, setCritId] = useState("");
     const [phase, setPhase] = useState("idle"); // idle | spawning | error
     const [err, setErr] = useState("");
 
-    const tpl = templates.find((t) => t.name === tplName) || templates[0] || null;
+    // Prefer the fresh-by-name template (newest steps) but fall back to the FROZEN
+    // pick — never silently to base — when the poll has momentarily dropped it.
+    const tpl = (picked && templates.find((t) => t.name === picked.name)) || picked || null;
     const goal = goals.find((g) => g.id === goalId) || null;
     const crit = goal ? (goal.criteria || []).find((c) => c.id === critId) : null;
     const pauses = tpl ? (tpl.steps || []).some((s) => s.kind === "checkpoint") : false;
@@ -433,7 +441,7 @@
           <div className="we-step-h"><span className="we-step-n">1</span> How — pick a workflow</div>
           <div className="we-tpl-grid">
             {templates.map((t) => (
-              <button key={t.name} className={"we-tpl-opt" + (t.name === tplName ? " is-on" : "")} onClick={() => setTplName(t.name)}>
+              <button key={t.name} className={"we-tpl-opt" + (picked && t.name === picked.name ? " is-on" : "")} onClick={() => setPicked(t)}>
                 <div className="we-tpl-opt-name">{t.name}{t.base && <span className="we-chip we-chip-base">base</span>}</div>
                 <div className="we-tpl-opt-steps">{stepLine(t.steps)}</div>
               </button>
@@ -937,7 +945,7 @@
     const goList = () => { reload(); setView({ name: "list" }); };
 
     if (view.name === "spawn") {
-      return <SpawnWork templates={templates} goals={goals || []}
+      return <SpawnWork templates={templates} goals={goals || []} initial={view.payload}
         onCancel={goList} onNewWorkflow={() => setView({ name: "builder" })}
         onSpawned={(run) => { setLocalRun(run); reload(); setView({ name: "run", payload: run }); }} />;
     }
