@@ -380,8 +380,14 @@ func (co *coordinator) runBrief(step *workflow.RunStep) (string, error) {
 		return "", fmt.Errorf("brief agent never reported done within %s", co.stepTimeout)
 	}
 	co.attachArtifacts(ev.Artifacts)
-	if !co.hasBrief() {
-		return "", fmt.Errorf("brief step done but no brief artifact attached (stop gate)")
+	// Stop gate: the brief step must have PRODUCED an artifact. We key on the step
+	// boundary (the brief worker reported done WITH ≥1 produced artifact), NOT on the
+	// artifact's kind/name — a worker is a model and its kind label is arbitrary
+	// (observed live: "brief", "brief.stopping", and "stopping" across identical
+	// runs). The brief step's sole job is to write the brief, so any artifact it
+	// produces IS the brief; an empty event means no brief was written → block.
+	if len(ev.Artifacts) == 0 {
+		return "", fmt.Errorf("brief step reported done but produced no artifact (stop gate)")
 	}
 	step.Status = workflow.StepDone
 	if err := co.checkpoint(); err != nil {
@@ -391,15 +397,6 @@ func (co *coordinator) runBrief(step *workflow.RunStep) (string, error) {
 		return workflow.RunBlocked, nil
 	}
 	return workflow.RunDone, nil // default success — a posted brief with no explicit blocked
-}
-
-func (co *coordinator) hasBrief() bool {
-	for _, a := range co.run.Artifacts {
-		if a.Kind == "brief" {
-			return true
-		}
-	}
-	return false
 }
 
 // briefPrompt hands the agent the run's stop conditions so it writes a brief that

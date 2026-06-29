@@ -92,7 +92,12 @@ func cooperatingDispatcher(t *testing.T, ctx context.Context, d *sextant.Client,
 		ev := workflow.RunEvent{Step: stepID, Status: workflow.StepDone}
 		if strings.Contains(req.Prompt, "stopping brief") {
 			ev.Outcome = workflow.RunDone
-			ev.Artifacts = []workflow.ProducedArtifact{{Name: "brief-" + req.Job, Kind: "brief", Version: 1}}
+			// A real model picks the kind freely; across identical live runs haiku
+			// wrote "brief", "brief.stopping", and "stopping" (the last blocked the
+			// run under the old kind-exact gate). The fake uses a NON-brief kind so
+			// the test proves the gate keys on the step boundary (an artifact was
+			// produced), not the model's arbitrary kind label.
+			ev.Artifacts = []workflow.ProducedArtifact{{Name: "brief.stopping." + req.Job, Kind: "stopping", Version: 1}}
 		}
 		go func() {
 			if delay > 0 {
@@ -189,14 +194,8 @@ func TestRun_AdvancesToBrief(t *testing.T) {
 	if got.Steps[0].Status != workflow.StepDone {
 		t.Errorf("s1 status = %q, want done", got.Steps[0].Status)
 	}
-	hasBrief := false
-	for _, a := range got.Artifacts {
-		if a.Kind == "brief" {
-			hasBrief = true
-		}
-	}
-	if !hasBrief {
-		t.Errorf("no brief artifact attached; artifacts=%+v", got.Artifacts)
+	if len(got.Artifacts) == 0 {
+		t.Errorf("no artifact attached from the brief step; artifacts=%+v", got.Artifacts)
 	}
 	if len(got.Activity) < 2 {
 		t.Errorf("want ≥2 activity entries (step done + terminal), got %d", len(got.Activity))
