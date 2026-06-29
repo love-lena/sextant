@@ -10,6 +10,16 @@
 import type { JSONValue } from "@sextant/sdk";
 import { StepDone } from "./records.js";
 
+// Ops is the primitive bus surface the run/v1 publish verbs are written against: a
+// single message.publish (run.start / run.event / run.control are each one
+// fire-and-forget message). Declared minimally and where it is consumed, so the SDK
+// Client, a fake, and the dash's publish shim each satisfy it — the peer of Go's
+// workflow.Ops. The op-transcript conformance vectors pin each verb to exactly one
+// message.publish; the Go peers emit the identical records.
+export interface Ops {
+  publish(subject: string, record: JSONValue): Promise<void>;
+}
+
 export const KindRun = "sextant.workflow.run/v1";
 export const KindTemplate = "sextant.workflow.template/v1";
 export const TypeRunEvent = "run.event";
@@ -175,4 +185,33 @@ export const RunStartSubject = "msg.topic.run.start";
 // of Go's RunStartRecord; both emit byte-identical bytes).
 export function runStartRecord(req: RunStartRequest): JSONValue {
   return { ...req, $type: TypeRunStart } as unknown as JSONValue;
+}
+
+// requestRunStart publishes a run.start on RunStartSubject — the one bus operation a
+// requester (the dash) issues to ask the coordinator to adopt a run it just wrote.
+// The peer of Go's RequestRunStart; the op-transcript vector pins it to exactly one
+// message.publish.
+export async function requestRunStart(ops: Ops, req: RunStartRequest): Promise<void> {
+  await ops.publish(RunStartSubject, runStartRecord(req));
+}
+
+// emitRunEvent publishes a run.event on runEventsSubject(runId) — the bus operation a
+// dispatched agent issues to signal step progress to the coordinator. The peer of Go's
+// EmitRunEvent; marshalRunEvent is the single source of the run.event wire shape.
+export async function emitRunEvent(ops: Ops, runId: string, ev: RunEvent): Promise<void> {
+  await ops.publish(runEventsSubject(runId), marshalRunEvent(ev));
+}
+
+// requestRunControl publishes a run.control on runControlSubject(runId) — the bus
+// operation the operator (the dash) issues to cooperatively pause/resume/cancel/approve
+// a run. The peer of Go's RequestRunControl; marshalRunControl is the single source of
+// the run.control wire shape.
+export async function requestRunControl(ops: Ops, runId: string, ctl: RunControl): Promise<void> {
+  await ops.publish(runControlSubject(runId), marshalRunControl(ctl));
+}
+
+// marshalRunControl renders a run.control as a canonical record payload (the peer of
+// Go's RunControl.Marshal; both stamp the $type and emit byte-identical bytes).
+export function marshalRunControl(c: RunControl): JSONValue {
+  return { ...c, $type: TypeRunControl } as unknown as JSONValue;
 }

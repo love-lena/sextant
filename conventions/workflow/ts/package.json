@@ -22,7 +22,8 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node --test dist/test/records.test.js"
+    "test": "npm run build && node --test dist/test/records.test.js dist/test/conformance.test.js",
+    "test:conformance": "npm run build && node --test dist/test/conformance.test.js"
   },
   "license": "MIT",
   "dependencies": {

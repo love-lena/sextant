@@ -159,12 +159,13 @@ jobs:
       - name: build (conv/workflow, tsc)
         working-directory: conventions/workflow/ts
         run: npm run build
-      # Records unit tests for the run/v1 contract. (The legacy sextant.workflow/v1
-      # op-transcript conformance suite was retired with that path in TASK-234; run/v1
-      # has no conformance vector yet — a follow-up if cross-language drift needs pinning.)
-      - name: workflow unit (conv/workflow)
+      # Records unit tests + op-transcript conformance for the run/v1 contract: the
+      # conformance suite replays the SAME protocol/conformance/vectors/workflow/*.json
+      # (run.start / run.event / run.control) the Go suite passes, so Go/TS byte-identical
+      # drift on run/v1 is pinned cross-language (TASK-247). Needs no bus.
+      - name: workflow unit + conformance (conv/workflow)
         working-directory: conventions/workflow/ts
-        run: node --test dist/test/records.test.js
+        run: node --test dist/test/records.test.js dist/test/conformance.test.js
 
       # --- the TS spawn convention (TASK-239) ---
       # @sextant/conv-spawn is the co-equal peer of conventions/spawn/go: the

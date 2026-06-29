@@ -11,6 +11,7 @@ export { StepRunning, StepDone, StatusOK, StatusError } from "./records.js";
 // The run contract (ADR-0048): the run/template/event/control/start shapes + the
 // run.start verb, the co-equal peer of conventions/workflow/go/run.go.
 export {
+  type Ops,
   type RunStep,
   type RelatesLink,
   type ActivityEntry,
@@ -45,8 +46,12 @@ export {
   marshalRunEvent,
   parseRunEvent,
   parseRunControl,
+  marshalRunControl,
   runStateName,
   runEventsSubject,
   runControlSubject,
   runStartRecord,
+  requestRunStart,
+  emitRunEvent,
+  requestRunControl,
 } from "./run.js";
