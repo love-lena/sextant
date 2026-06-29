@@ -77,7 +77,11 @@ SESSION_ID="${SX_PI_RESUME_SESSION:-pi-${CHILD_ID}}"
 # session history, and the two concerns should not share a directory. Keyed to the
 # deployment (not the process), so the dispatcher and a by-hand resume look in the same
 # place. Override with SX_PI_SESSION_DIR.
-SESSION_DIR="${SX_PI_SESSION_DIR:-$(dirname "$SEXTANT_STORE")/pi-sessions}"
+# PER-CHILD session dir (under a shared pi-sessions root): each worker gets its
+# OWN dir so the sandbox profile can allow-read it WITHOUT exposing sibling
+# workers' session transcripts (a shared dir would leak them under the jail).
+# Stable per child id, so a re-spawn resumes the same session.
+SESSION_DIR="${SX_PI_SESSION_DIR:-$(dirname "$SEXTANT_STORE")/pi-sessions/${CHILD_ID}}"
 mkdir -p "$SESSION_DIR"
 
 # Resume by explicit FILE PATH when a session for this child already exists, so a
@@ -216,8 +220,9 @@ else
   # creds/session live under paths that a blanket home-deny starves. allowWrite =
   # the scope + the session dir (sibling of the store) + the scoped pi config dir.
   # Extra sensitive paths can be appended via SX_PI_SRT_DENY_READ (space-separated).
-  SX_SRT_CREDS_DIR="$(dirname "$SEXTANT_CREDS")" SX_SRT_EXTRA_DENY="${SX_PI_SRT_DENY_READ:-}" \
-  SX_SRT_STORE="$SEXTANT_STORE" SX_SRT_BUSJSON_DIR="$(dirname "$SEXTANT_BUS_JSON")" \
+  SX_SRT_CREDS_FILE="$SEXTANT_CREDS" SX_SRT_CREDS_DIR="$(dirname "$SEXTANT_CREDS")" \
+  SX_SRT_BUSJSON_FILE="$SEXTANT_BUS_JSON" SX_SRT_STORE="$SEXTANT_STORE" \
+  SX_SRT_EXTRA_DENY="${SX_PI_SRT_DENY_READ:-}" \
   SX_SRT_WORKDIR="$WORKDIR" SX_SRT_SESSIONDIR="$SESSION_DIR" SX_SRT_PICFG="$PI_WORKER_AGENT_DIR" \
   SX_SRT_HOME="$HOME" SX_SRT_DOMAIN="$SX_PI_MODEL_DOMAIN" \
     node -e '
@@ -235,21 +240,28 @@ else
         home + "/.pi/agent/auth.json", // the operator OpenAI/Anthropic keys — never exposed
         home + "/Documents", home + "/Desktop", home + "/Downloads", home + "/Movies",
         home + "/Pictures", home + "/Library/Keychains", home + "/Library/Application Support",
+        home + "/Library/Cookies", home + "/Library/Safari", home + "/Library/Messages",
+        home + "/Library/Containers", home + "/Library/Group Containers",
         "/usr/bin/osascript", "/usr/bin/killall", "/usr/bin/pkill", "/usr/bin/open",
         "/sbin/shutdown", "/sbin/reboot", "/usr/bin/sudo", "/bin/launchctl", "/usr/bin/automator",
       ];
       for (const p of (process.env.SX_SRT_EXTRA_DENY || "").split(/\s+/).filter(Boolean)) denyRead.push(p);
-      // The worker MUST read its own dirs even if under a denied tree (allowRead
-      // overrides denyRead for these exact subtrees): its scope, session dir,
-      // scoped pi config, its bus creds, AND the bus STORE + bus.json dir (the
-      // client discovers the bus URL by reading $SEXTANT_STORE/bus.json — if the
-      // store lives under a denied tree, denying it bricks the bus connect before
-      // any TCP). On a loopback bus this read is the only thing standing between
-      // the worker and the bus, so it is load-bearing.
+      // ISOLATE SIBLINGS. The dispatcher writes EVERY child creds file as
+      // <id>.creds into ONE shared workdir, and the bus store holds other agent
+      // state, so DENY-read those shared dirs and allow-read ONLY this worker OWN
+      // creds FILE + the bus.json FILE (allowRead overrides denyRead for an exact
+      // path). Without this a sandbox worker could read a sibling creds file and
+      // impersonate it. The session dir is PER-CHILD (see SESSION_DIR), so it
+      // carries no sibling transcripts and is allow-read whole.
+      denyRead.push(process.env.SX_SRT_CREDS_DIR); // shared creds dir (sibling <id>.creds)
+      denyRead.push(process.env.SX_SRT_STORE);     // the bus store (other agent state)
+      // The worker OWN readable paths (allowRead overrides the denies above):
+      // its scope, its per-child session dir, its scoped pi config, its OWN creds
+      // FILE, and the bus.json FILE (bus discovery). Files, not parent dirs.
       const allowRead = [];
       for (const p of [
         process.env.SX_SRT_WORKDIR, process.env.SX_SRT_SESSIONDIR, process.env.SX_SRT_PICFG,
-        process.env.SX_SRT_CREDS_DIR, process.env.SX_SRT_STORE, process.env.SX_SRT_BUSJSON_DIR,
+        process.env.SX_SRT_CREDS_FILE, process.env.SX_SRT_BUSJSON_FILE,
       ]) {
         if (p && !allowRead.includes(p)) allowRead.push(p);
       }
