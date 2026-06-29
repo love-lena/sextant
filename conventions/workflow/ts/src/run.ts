@@ -167,6 +167,13 @@ export function runEventsSubject(id: string): string {
 export function runControlSubject(id: string): string {
   return "msg.workflow.run." + id + ".control";
 }
+// runTopicSubject is the run's OPERATOR thread: msg.topic.run.<id>. The dash run view
+// posts an operator steer here; the coordinator subscribes it and routes the steer to
+// the active step's worker (TASK-246). Distinct from the machine channels (.events,
+// .control). Peer of Go's RunTopicSubject — both emit the identical subject.
+export function runTopicSubject(id: string): string {
+  return "msg.topic.run." + id;
+}
 
 // RunStartSubject is the well-known subject the coordinator watches for run.start.
 export const RunStartSubject = "msg.topic.run.start";

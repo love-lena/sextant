@@ -255,6 +255,36 @@ func RunStateName(id string) string      { return "workflow.run." + id }
 func RunEventsSubject(id string) string  { return "msg.workflow.run." + id + ".events" }
 func RunControlSubject(id string) string { return "msg.workflow.run." + id + ".control" }
 
+// RunTopicSubject is the run's OPERATOR thread: msg.topic.run.<id>. This is the
+// human-facing channel the dash run view posts to — distinct from the machine
+// channels (.events is the worker→coordinator step-done signal; .control is the
+// cooperative approve/cancel lexicon). An operator chat.message here STEERS the run:
+// the coordinator subscribes it and routes the steer to the active step's worker
+// (TASK-246). The dash's run-topic composer publishes here (workengine.jsx RUN_TOPIC).
+func RunTopicSubject(id string) string { return "msg.topic.run." + id }
+
+// TypeChatMessage is the opaque chat convention an operator post uses ({$type,text}).
+// It is NOT a run-record type — the run topic carries plain chat, not a new wire
+// contract — so the coordinator parses it structurally (ParseChatSteer) rather than
+// minting a steer record. Kept here so the steer path and its proof reference one name.
+const TypeChatMessage = "chat.message"
+
+// ParseChatSteer reads an operator steer off the run topic: a chat.message with
+// non-empty text. It returns the text and ok=false for anything else (a non-chat
+// record, or a chat with empty text), so the coordinator acts only on a real steer.
+// The steer rides this plain chat.message — no run-envelope write by the operator —
+// which keeps the coordinator the single writer of the run state (ADR-0048).
+func ParseChatSteer(record json.RawMessage) (string, bool) {
+	var m struct {
+		Type string `json:"$type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(record, &m); err != nil || m.Type != TypeChatMessage || m.Text == "" {
+		return "", false
+	}
+	return m.Text, true
+}
+
 // RunStartSubject is the well-known subject the coordinator watches for run.start.
 const RunStartSubject = "msg.topic.run.start"
 
