@@ -4,6 +4,7 @@ title: Spawn form ignores the chosen template — silently spawns the base workf
 status: To Do
 assignee: []
 created_date: '2026-06-29 18:28'
+updated_date: '2026-06-29 18:42'
 labels:
   - bug
   - dash
@@ -39,4 +40,6 @@ Pass view.payload into SpawnWork (the spawn view-switch drops it today) and init
 
 <!-- SECTION:NOTES:BEGIN -->
 Discovered 2026-06-29 diagnosing run 01KWA9ZJEB47QM3J2HX6Z4DBX0 on the rc. Relates to the work engine ([[feat-run-executor-workflow-run-v1]] TASK-236) + the spawn UI (TASK-212).
+
+Root-cause correction (2026-06-29): the PRIMARY cause is a race, not the payload-drop. SpawnWork re-resolved the selection BY NAME against the templates array, which useWorkEngineData rebuilds every 4s poll (each template re-fetched); a transient miss + the 'find || templates[0]' fallback silently spawned base. Confirmed: run 01KW8J2N used Brief Writer fine, 01KWA9ZJ (same template) got base — intermittent. Fixed in PR #288 by freezing the picked template OBJECT at click (never re-resolve a churning array) + removing the silent base fallback + wiring 'initial' for the detail-view pre-select. Verified live through the poll window (run 01KWAAYP carries template:Brief Writer). This defect contradicted AC4.
 <!-- SECTION:NOTES:END -->
