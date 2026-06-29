@@ -12,25 +12,38 @@ import (
 // content-opacity proof to observe exactly which artifacts a coordinator opens.
 
 // ArtifactReadRecorder installs a hook on every coordinator newCoordinator builds that
-// wraps its artifact-read seam and records each name read. It returns the recorder and
-// a restore func that clears the hook. Concurrency-safe (coordinators run reads on
-// delivery goroutines).
+// wraps BOTH artifact seams and records, separately, each name the coordinator (a) reads
+// the CONTENT of (getArtifact) and (b) merely PROBES for existence (existsArtifact). The
+// split lets the content-opacity proof (AC#3) assert the coordinator never reads a work-
+// step artifact's CONTENT, while allowing — and observing — the proof gate's existence
+// probes (TASK-243), which discard the body and are metadata, not a content read. Returns
+// the recorder and a restore func that clears the hook. Concurrency-safe (coordinators
+// run reads on delivery goroutines).
 func ArtifactReadRecorder() (*ReadLog, func()) {
 	log := &ReadLog{}
 	newCoordinatorHook = func(co *coordinator) {
-		inner := co.getArtifact
+		innerGet := co.getArtifact
 		co.getArtifact = func(ctx context.Context, name string) (sextant.Artifact, error) {
 			log.record(name)
-			return inner(ctx, name)
+			return innerGet(ctx, name)
+		}
+		innerExists := co.existsArtifact
+		co.existsArtifact = func(ctx context.Context, name string) error {
+			log.recordExists(name)
+			return innerExists(ctx, name)
 		}
 	}
 	return log, func() { newCoordinatorHook = nil }
 }
 
-// ReadLog is the ordered list of artifact names every observed coordinator read.
+// ReadLog records, separately, the artifact names the coordinator read the CONTENT of
+// (names) and the names it merely PROBED for existence (exists). Content reads are what
+// the content-opacity proof (AC#3) constrains; existence probes are metadata and tracked
+// apart so a test can tell them apart.
 type ReadLog struct {
-	mu    sync.Mutex
-	names []string
+	mu     sync.Mutex
+	names  []string
+	exists []string
 }
 
 func (l *ReadLog) record(name string) {
@@ -39,7 +52,13 @@ func (l *ReadLog) record(name string) {
 	l.mu.Unlock()
 }
 
-// Names returns a snapshot of the recorded reads.
+func (l *ReadLog) recordExists(name string) {
+	l.mu.Lock()
+	l.exists = append(l.exists, name)
+	l.mu.Unlock()
+}
+
+// Names returns a snapshot of the recorded CONTENT reads.
 func (l *ReadLog) Names() []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -48,11 +67,24 @@ func (l *ReadLog) Names() []string {
 	return out
 }
 
-// Read reports whether name was read.
+// Read reports whether name's CONTENT was read (getArtifact). It is false for an
+// existence probe, which never opens the body.
 func (l *ReadLog) Read(name string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for _, n := range l.names {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
+// ExistsProbed reports whether name was existence-probed (existsArtifact).
+func (l *ReadLog) ExistsProbed(name string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, n := range l.exists {
 		if n == name {
 			return true
 		}
