@@ -64,5 +64,5 @@ func ParseActivity(record json.RawMessage) (Activity, bool) {
 }
 
 // ActivitySubject is the per-agent activity stream: msg.agent.<id>.activity
-// (entity.id.aspect, parallels workflow.EventsSubject's msg.workflow.<id>.events).
+// (entity.id.aspect, parallels workflow.RunEventsSubject's msg.workflow.run.<id>.events).
 func ActivitySubject(id string) string { return "msg.agent." + id + ".activity" }

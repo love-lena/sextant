@@ -15,7 +15,7 @@
 //     instantly — no per-DM pre-read.
 //
 // Plus an ACTION SURFACE (Mobilizer): violet can START work (spawn a scoped
-// agent / start a workflow run) so a cold start needs no persistent crew. It can
+// agent) so a cold start needs no persistent crew. It can
 // only START work, never make the operator's decisions — signal-not-manage holds
 // for decisions; mobilizing is bounded by the type.
 //
@@ -151,9 +151,8 @@ type Config struct {
 	// bounded queue keeps memory and latency predictable. Default 64.
 	GateQueueDepth int
 
-	// SpawnSubject / WorkflowSubject are the mobilizer's request subjects.
-	SpawnSubject    string
-	WorkflowSubject string
+	// SpawnSubject is the mobilizer's spawn-request subject.
+	SpawnSubject string
 
 	// StateDir is the directory where violet persists the durable DM cursor
 	// (violet-ack.json) across restarts (AC8). If empty, the cursor is in-memory
@@ -186,9 +185,6 @@ func (c *Config) withDefaults() {
 	}
 	if c.SpawnSubject == "" {
 		c.SpawnSubject = "msg.topic.spawn"
-	}
-	if c.WorkflowSubject == "" {
-		c.WorkflowSubject = "msg.topic.workflow.start"
 	}
 	if c.Logf == nil {
 		c.Logf = log.Printf
@@ -255,12 +251,11 @@ func New(bus busClient, model *modelClient, cfg Config) *Violet {
 		pub:          v,
 		self:         v.self,
 		spawnSubject: cfg.SpawnSubject,
-		wfSubject:    cfg.WorkflowSubject,
 	}
 	return v
 }
 
-// Mobilize returns violet's action surface (start a workflow / spawn an agent).
+// Mobilize returns violet's action surface (spawn a scoped agent).
 func (v *Violet) Mobilize() Mobilizer { return v.mob }
 
 // Run wires the scoped subscriptions and starts the three role goroutines, then

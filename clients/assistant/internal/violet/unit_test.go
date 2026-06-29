@@ -259,22 +259,6 @@ func TestMobilizerSpawnRequiresPrompt(t *testing.T) {
 	}
 }
 
-func TestMobilizerStartWorkflow(t *testing.T) {
-	pub := &capturePublisher{}
-	m := &busMobilizer{pub: pub, self: "01VIOLET", wfSubject: "msg.topic.workflow.start"}
-	if _, err := m.StartWorkflow(context.Background(), WorkflowSpec{PlanRef: "plan-a", Note: "kick off"}); err != nil {
-		t.Fatal(err)
-	}
-	if pub.lastSubject != "msg.topic.workflow.start" {
-		t.Fatalf("workflow subject = %q", pub.lastSubject)
-	}
-	var rec map[string]any
-	_ = json.Unmarshal(pub.lastRecord, &rec)
-	if rec["$type"] != "workflow.start" || rec["planRef"] != "plan-a" || rec["by"] != "01VIOLET" {
-		t.Fatalf("workflow record = %v", rec)
-	}
-}
-
 func TestWarmContextSwapAndPlaceholder(t *testing.T) {
 	w := newWarmContext()
 	snap, gen := w.get()
@@ -364,6 +348,5 @@ func TestVioletMobilizeSeam(t *testing.T) {
 	// guarantee (the interface), reasserted here as documentation of intent.
 	var _ interface {
 		SpawnAgent(context.Context, SpawnSpec) (string, error)
-		StartWorkflow(context.Context, WorkflowSpec) (string, error)
 	} = v.Mobilize()
 }

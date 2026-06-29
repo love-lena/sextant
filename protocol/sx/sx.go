@@ -10,8 +10,6 @@ package sx
 const (
 	// BucketClients holds the clients registry: one record per client.
 	BucketClients = "sx_clients"
-	// BucketWorkflows holds workflow state envelopes, keyed by workflow id.
-	BucketWorkflows = "sx_workflows"
 	// BucketMeta holds public protocol metadata that clients read at connect —
 	// the protocol epoch and the principal designation. It is client-readable by
 	// design: these system data are public, so they live in a client-readable
@@ -51,15 +49,7 @@ const (
 	// is now delivered per-client over sx.deliver.<id>.drain (ADR-0019); this name
 	// remains reserved in the operator-only control space.
 	SubjectDrain = "sx.control.drain"
-	// WorkflowPrefix is the workflow convention space.
-	WorkflowPrefix = "sx.workflow."
 )
-
-// WorkflowControl is the control subject for a given workflow id.
-func WorkflowControl(id string) string { return WorkflowPrefix + id + ".control" }
-
-// WorkflowEvents is the event-stream subject for a given workflow id.
-func WorkflowEvents(id string) string { return WorkflowPrefix + id + ".events" }
 
 // The Messages convention. These subjects are user space (not reserved), but
 // the durable stream that captures them is Sextant-managed infrastructure,
@@ -111,9 +101,8 @@ func DMSubject(a, b string) string {
 // depth each keeps.
 func Buckets() []BucketSpec {
 	return []BucketSpec{
-		{Name: BucketClients, History: 1},    // registry: latest record per client
-		{Name: BucketWorkflows, History: 10}, // workflow state: a little version history
-		{Name: BucketMeta, History: 1},       // public protocol metadata (epoch)
+		{Name: BucketClients, History: 1}, // registry: latest record per client
+		{Name: BucketMeta, History: 1},    // public protocol metadata (epoch)
 	}
 }
 
