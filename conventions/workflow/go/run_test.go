@@ -84,6 +84,47 @@ func TestPROpenStepRoundTrips(t *testing.T) {
 	}
 }
 
+// TestTemplateHybridFieldsRoundTrip pins the hybrid model (TASK-245): a template
+// carries a per-step default Model and a template-level default Repo/RepoRef, all
+// optional. They round-trip, and an unset value is OMITTED (not emitted as an empty
+// key) so the spawn flow never confuses "" with "no default". Co-equal with the TS
+// mirror (conventions/workflow/ts/src/run.ts).
+func TestTemplateHybridFieldsRoundTrip(t *testing.T) {
+	tpl := Template{
+		Name: "Plan → build → PR",
+		Steps: []TemplateStep{
+			{ID: "s1", Label: "build", Kind: KindWork, Model: "claude-opus-4-8"},
+			{ID: "s2", Label: "verify", Kind: KindVerify}, // no model → inherit
+		},
+		Repo:    "/Users/you/dev/project",
+		RepoRef: "main",
+	}
+	b, _ := json.Marshal(tpl)
+	var back Template
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatalf("template with hybrid fields did not round-trip: %v", err)
+	}
+	if back.Steps[0].Model != "claude-opus-4-8" {
+		t.Errorf("step[0].Model = %q, want %q", back.Steps[0].Model, "claude-opus-4-8")
+	}
+	if back.Steps[1].Model != "" {
+		t.Errorf("step[1].Model = %q, want empty (inherit)", back.Steps[1].Model)
+	}
+	if back.Repo != tpl.Repo || back.RepoRef != tpl.RepoRef {
+		t.Errorf("repo/repo_ref not preserved: repo=%q repo_ref=%q", back.Repo, back.RepoRef)
+	}
+
+	// omitempty guards: a step with no model, and a template with no repo/repo_ref,
+	// must not emit those keys at all.
+	if contains(string(b), `"model":""`) {
+		t.Errorf("inherit step emitted an explicit empty model key — must be omitted: %s", b)
+	}
+	bare, _ := json.Marshal(Template{Name: "bare", Steps: []TemplateStep{{ID: "s1", Kind: KindWork}}})
+	if contains(string(bare), `"repo"`) || contains(string(bare), `"repo_ref"`) {
+		t.Errorf("template with no repo defaults emitted a repo key — must be omitted: %s", bare)
+	}
+}
+
 // A null template marshals as explicit null (ad-hoc run) and round-trips as nil.
 func TestRunTemplateNullable(t *testing.T) {
 	r := Run{ID: "01H", Status: RunRunning}

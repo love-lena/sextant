@@ -189,13 +189,24 @@ export interface RunStartAck {
   error?: string;
 }
 
+// Template is the sextant.workflow.template/v1 reusable workflow. The hybrid model
+// (TASK-245): each step carries an optional default model, and the template a default
+// target repo/repo_ref; the spawn flow shows those defaults and lets the operator
+// override model + repo per run, binding the effective values onto the materialized Run.
+// Peer of Go's workflow.Template.
 export interface Template {
   $type?: string;
   name: string;
   description?: string;
-  steps: { id: string; label?: string; kind: string }[];
+  steps: { id: string; label?: string; kind: string; model?: string }[];
   triggers?: JSONValue[];
   stop_conditions?: string[];
+  // repo is the template's DEFAULT target repository (absolute path) the spawn flow
+  // prefills the per-run override from; the resolved value lands on Run.repo. Omitted =
+  // no default. repo_ref is the default base ref, mirrored onto Run.repo_ref at spawn
+  // (omitted = HEAD; ignored when repo is empty). Peers of Go's Template.Repo/RepoRef.
+  repo?: string;
+  repo_ref?: string;
 }
 
 // isTerminalRun reports whether a run status is final (done/blocked/cancelled).

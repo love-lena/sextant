@@ -34,6 +34,27 @@
   const RUN_CONTROL = (id) => "msg.workflow.run." + id + ".control";
   const BASE_STOP = ["done — brief w/ proof of success", "blocked — brief documenting why"];
 
+  // The models the dispatcher accepts (TASK-245). The dispatcher fails loud on anything
+  // outside this set, so the UI only ever offers these exact strings. An empty model
+  // means "inherit" — the dispatcher then defaults to haiku. A model only matters for
+  // DISPATCHED step kinds (work/verify/brief); a checkpoint/pr-open step never runs a
+  // worker, so its model is inert (but harmless to carry).
+  const SUPPORTED_MODELS = [
+    "claude-opus-4-8",
+    "claude-opus-4-5",
+    "claude-sonnet-4-6",
+    "claude-sonnet-4-5",
+    "claude-haiku-4-5",
+  ];
+  // The kinds an operator can assign a step in the builder. The terminal "brief" step is
+  // fixed (always present, never editable) so it is not offered here.
+  const STEP_KINDS = [
+    { value: "work", label: "work" },
+    { value: "verify", label: "verify" },
+    { value: "pr-open", label: "open PR" },
+    { value: "checkpoint", label: "ask operator" },
+  ];
+
   // The always-available base template (TASK-212 S7.2): Investigate → review → brief.
   // It is not a stored artifact — it is the floor every workflow list / spawn picker
   // offers so an operator can always spawn something without authoring a workflow.
@@ -53,6 +74,14 @@
   // The terminal step every workflow carries (ADR-0048): write the stopping brief.
   // Always present, always required, never removable (TASK-213 S8.3).
   const BRIEF_STEP = () => ({ id: "brief", label: "Write the stopping brief", kind: "brief" });
+
+  // A stable, reliably-UNIQUE id for a builder step. A bare Date.now() collides when two
+  // steps are created within the same millisecond (a fast add, or a generate() batch),
+  // and a duplicate id makes the by-id setLabel/setKind/setModel mutate every colliding
+  // step at once (and duplicates the React key). A module-monotonic counter guarantees
+  // uniqueness regardless of timing; the time prefix keeps ids sortable-ish for debugging.
+  let stepSeq = 0;
+  const stepId = (prefix) => prefix + Date.now() + "-" + (++stepSeq);
 
   // ---- ULID (Crockford base32, 48-bit ms time + 80-bit randomness) ----
   const ULID_ALPHA = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -149,9 +178,15 @@
     return {
       key: name, name: (rec && rec.name) || name.replace(TEMPLATE_PREFIX, ""),
       description: (rec && rec.description) || "",
+      // steps pass through verbatim, so the per-step kind + default model (TASK-245)
+      // survive the round-trip into the spawn/edit views.
       steps: (rec && Array.isArray(rec.steps)) ? rec.steps : [],
       triggers: (rec && Array.isArray(rec.triggers)) ? rec.triggers : [{ label: "Manual", manual: true }],
       stop_conditions: (rec && Array.isArray(rec.stop_conditions)) ? rec.stop_conditions : [],
+      // the template's default target repo (the spawn flow prefills its repo override
+      // from this) and base ref. Omitted on the record = empty here.
+      repo: (rec && rec.repo) || "",
+      repo_ref: (rec && rec.repo_ref) || "",
     };
   }
   function adaptRun(name, rec) {
@@ -383,6 +418,11 @@
     const [critId, setCritId] = useState("");
     const [phase, setPhase] = useState("idle"); // idle | spawning | error
     const [err, setErr] = useState("");
+    // Per-run overrides (TASK-245 hybrid model). "" model = use the template's per-step
+    // defaults; a concrete model overrides EVERY dispatched step in this run. The repo
+    // override is prefilled from the picked template's default (below) and editable.
+    const [overrideModel, setOverrideModel] = useState("");
+    const [repoOverride, setRepoOverride] = useState((initial && initial.repo) || "");
 
     // Prefer the fresh-by-name template (newest steps) but fall back to the FROZEN
     // pick — never silently to base — when the poll has momentarily dropped it.
@@ -390,7 +430,21 @@
     const goal = goals.find((g) => g.id === goalId) || null;
     const crit = goal ? (goal.criteria || []).find((c) => c.id === critId) : null;
     const pauses = tpl ? (tpl.steps || []).some((s) => s.kind === "checkpoint") : false;
-    const canSpawn = objective.trim().length > 0 && phase !== "spawning";
+
+    // Re-prefill the repo override from the picked template's default whenever the
+    // operator switches templates. Keyed on tpl.name so it tracks the selection (not
+    // every poll tick); the operator's own edits within a selection are preserved.
+    useEffect(() => { setRepoOverride((tpl && tpl.repo) || ""); }, [tpl && tpl.name]);
+
+    // pr-open needs a target repo: the coordinator commits + pushes from the run's
+    // worktree, so a pr-open step with no resolved repo can never land. Resolve the
+    // effective repo (override beats the template default) and block the spawn when a
+    // pr-open step would have nowhere to push.
+    const stepsSrc = tpl ? tpl.steps : BASE_TEMPLATE.steps;
+    const resolvedRepo = repoOverride.trim() || (tpl && tpl.repo) || "";
+    const needsRepo = (stepsSrc || []).some((s) => s.kind === "pr-open");
+    const repoMissing = needsRepo && !resolvedRepo;
+    const canSpawn = objective.trim().length > 0 && phase !== "spawning" && !repoMissing;
 
     function handleSpawn() {
       if (!canSpawn) return;
@@ -398,7 +452,15 @@
       const id = ulid();
       const name = RUN_PREFIX + id;
       const relates = (goal && crit) ? [{ goal: goal.name || goal.id, crit: crit.id, kind: "toward" }] : [];
-      const steps = (tpl ? tpl.steps : BASE_TEMPLATE.steps).map((s, i) => ({ ...s, status: i === 0 ? "running" : "upcoming" }));
+      // Materialize each step: status off its position, and the effective model =
+      // run-wide override (if any) else the template's per-step default. Only set
+      // model when non-empty so an inherit step never emits an explicit empty model.
+      const steps = stepsSrc.map((s, i) => {
+        const effectiveModel = overrideModel || s.model || "";
+        const step = { ...s, status: i === 0 ? "running" : "upcoming" };
+        if (effectiveModel) step.model = effectiveModel; else delete step.model;
+        return step;
+      });
       // stop conditions: the baseline two prompts plus the template's additions.
       const stop = BASE_STOP.concat((tpl && Array.isArray(tpl.stop_conditions)) ? tpl.stop_conditions : []);
       const record = {
@@ -415,6 +477,11 @@
         stop,
         created: Date.now(),
       };
+      // bind the run's target repo + base ref (TASK-245). repo = override else template
+      // default; repo_ref = the template's default. Omit either when empty so a repo-less
+      // run carries no repo key at all (the coordinator's no-provisioning path).
+      if (resolvedRepo) record.repo = resolvedRepo;
+      if (tpl && tpl.repo_ref) record.repo_ref = tpl.repo_ref;
       const SX = window.SX;
       SX.createArtifact(name, record).then(() => {
         // announce the spawn on the run topic so the thread has a first entry the
@@ -479,6 +546,24 @@
           )}
         </section>
 
+        {/* Step 4 — Run options: per-run model + repo overrides (TASK-245 hybrid). The
+            template supplies the per-step defaults; these override them for this run. */}
+        <section className="we-step-card fx-in" style={{ animationDelay: ".09s" }}>
+          <div className="we-step-h"><span className="we-step-n">4</span> Run options <span className="we-muted">· override the template defaults</span></div>
+          <div className="we-field-row">
+            <label className="we-field-lbl">Model</label>
+            <select className="we-input we-step-sel" value={overrideModel} onChange={(e) => setOverrideModel(e.target.value)} title="Override the model on every dispatched step in this run">
+              <option value="">(use template defaults)</option>
+              {SUPPORTED_MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </div>
+          <div className="we-field-row" style={{ marginTop: 8 }}>
+            <label className="we-field-lbl">Repo <span className="we-muted">· absolute path</span></label>
+            <input className="we-input mono" placeholder="/Users/you/dev/project" value={repoOverride} onChange={(e) => setRepoOverride(e.target.value)} />
+          </div>
+          {repoMissing && <div className="we-hint we-hint-warn">⊘ pr-open needs a target repo — set one above to spawn.</div>}
+        </section>
+
         {/* Live summary */}
         <div className="we-summary fx-in" style={{ animationDelay: ".09s" }}>
           <div className="we-summary-line">{summary}</div>
@@ -486,6 +571,10 @@
             <span>New run ULID minted on spawn</span>
             <span className="we-dot">·</span>
             <span>{pauses ? "Pauses at an operator checkpoint" : "Runs to completion (stops at the brief)"}</span>
+            <span className="we-dot">·</span>
+            <span>{overrideModel ? "all steps on " + overrideModel : "per-step template models"}</span>
+            <span className="we-dot">·</span>
+            <span className="mono">{resolvedRepo || "no repo"}</span>
           </div>
         </div>
 
@@ -495,7 +584,9 @@
           <button className="we-spawn-btn" disabled={!canSpawn} onClick={handleSpawn}>
             {phase === "spawning" ? "Spawning…" : "Spawn & watch →"}
           </button>
-          {!objective.trim() && <span className="we-hint">Enter a task objective to spawn.</span>}
+          {!objective.trim()
+            ? <span className="we-hint">Enter a task objective to spawn.</span>
+            : repoMissing && <span className="we-hint">pr-open needs a target repo.</span>}
         </div>
       </div></div>
     );
@@ -506,10 +597,15 @@
     const editing = !!(initial && initial.key);
     const [name, setName] = useState((initial && initial.name) || "");
     const [description, setDescription] = useState((initial && initial.description) || "");
-    // steps always end with the immovable brief step.
+    // The template's default target repo + base ref (TASK-245 hybrid model). The spawn
+    // flow prefills its per-run repo override from `repo`.
+    const [repo, setRepo] = useState((initial && initial.repo) || "");
+    const [repoRef, setRepoRef] = useState((initial && initial.repo_ref) || "");
+    // steps always end with the immovable brief step. Each editable step carries
+    // { id, label, kind, model } — model is the optional per-step default (TASK-245).
     const [steps, setSteps] = useState(() => {
       const base = (initial && initial.steps && initial.steps.filter((s) => s.kind !== "brief")) || [];
-      return [...base, BRIEF_STEP()];
+      return [...base.map((s) => ({ id: s.id, label: s.label, kind: s.kind, model: s.model || "" })), BRIEF_STEP()];
     });
     const [triggers, setTriggers] = useState(() => {
       const t = (initial && initial.triggers) || [];
@@ -531,7 +627,7 @@
         .map((s) => s.trim()).filter((s) => s.length > 2);
       const drafted = parts.map((p, i) => {
         const ask = /\b(ask|review|approv|confirm|check with|operator|sign[- ]?off|feedback|pause)\b/i.test(p);
-        return { id: "g" + Date.now() + i, label: p.charAt(0).toUpperCase() + p.slice(1), kind: ask ? "checkpoint" : "work" };
+        return { id: stepId("g"), label: p.charAt(0).toUpperCase() + p.slice(1), kind: ask ? "checkpoint" : "work", model: "" };
       });
       setSteps([...drafted, BRIEF_STEP()]);
     }
@@ -540,10 +636,12 @@
       setSteps((prev) => {
         const tail = prev[prev.length - 1]; // the brief
         const body = prev.slice(0, -1);
-        return [...body, { id: "n" + Date.now(), label: kind === "checkpoint" ? "Operator checkpoint" : "New step", kind }, tail];
+        return [...body, { id: stepId("n"), label: kind === "checkpoint" ? "Operator checkpoint" : "New step", kind, model: "" }, tail];
       });
     }
     function setLabel(id, label) { setSteps((prev) => prev.map((s) => s.id === id ? { ...s, label } : s)); }
+    function setKind(id, kind) { setSteps((prev) => prev.map((s) => s.id === id ? { ...s, kind } : s)); }
+    function setModel(id, model) { setSteps((prev) => prev.map((s) => s.id === id ? { ...s, model } : s)); }
     function removeStep(id) { setSteps((prev) => prev.filter((s) => s.kind === "brief" || s.id !== id)); }
     function onDragStart(i) { dragIdx.current = i; }
     function onDragOver(e, i) {
@@ -575,6 +673,8 @@
       let out = "---\n";
       out += "name: " + (name || "(unnamed workflow)") + "\n";
       out += "triggers: [" + trigOn.join(", ") + "]\n";
+      if (repo.trim()) out += "repo: " + repo.trim() + "\n";
+      if (repoRef.trim()) out += "repo_ref: " + repoRef.trim() + "\n";
       out += "---\n\n";
       out += "# " + (name || "(unnamed workflow)") + "\n\n";
       if (description.trim()) out += description.trim() + "\n\n";
@@ -582,7 +682,10 @@
       steps.forEach((s, i) => {
         let line = (i + 1) + ". " + s.label;
         if (s.kind === "checkpoint") line += "  _(ask operator)_";
-        if (s.kind === "brief") line += "  _(always required — stopping brief)_";
+        else if (s.kind === "verify") line += "  _(verify)_";
+        else if (s.kind === "pr-open") line += "  _(open PR)_";
+        else if (s.kind === "brief") line += "  _(always required — stopping brief)_";
+        if (s.model) line += "  · `" + s.model + "`";
         out += line + "\n";
       });
       out += "\n## Stop conditions\n\n";
@@ -590,17 +693,27 @@
       out += "- blocked — cannot proceed, brief documents why\n";
       stopConds.forEach((c) => { out += "- " + c + "\n"; });
       return out;
-    }, [name, description, steps, triggers, stopConds]);
+    }, [name, description, steps, triggers, stopConds, repo, repoRef]);
 
     function buildRecord() {
-      return {
+      const rec = {
         "$type": TEMPLATE_TYPE,
         name: name.trim() || "(unnamed workflow)",
         description: description.trim(),
-        steps: steps.map((s) => ({ id: s.id, label: s.label, kind: s.kind })),
+        // each step carries its kind + (when set) its default model; omit an empty
+        // model so the record never confuses "" with "no declared model" (TASK-245).
+        steps: steps.map((s) => {
+          const out = { id: s.id, label: s.label, kind: s.kind };
+          if (s.model) out.model = s.model;
+          return out;
+        }),
         triggers: triggers.filter((t) => t.on || t.manual).map((t) => t.manual ? { label: "Manual", manual: true } : { label: t.label, on: t.label.toLowerCase().replace(/\s+/g, ".") }),
         stop_conditions: stopConds,
       };
+      // template-level defaults — omit when empty (the engine treats absent as "none").
+      if (repo.trim()) rec.repo = repo.trim();
+      if (repoRef.trim()) rec.repo_ref = repoRef.trim();
+      return rec;
     }
     function save(open) {
       setPhase("saving");
@@ -629,6 +742,16 @@
               <textarea className="we-textarea" rows={3} style={{ marginTop: 8 }} placeholder="Describe the workflow in prose — connectives like 'then' and 'after that' become steps; 'review' / 'ask' language becomes operator checkpoints."
                 value={description} onChange={(e) => setDescription(e.target.value)} />
               <button className="we-mini" style={{ marginTop: 8 }} onClick={generate}>✦ Generate steps</button>
+              {/* Default target repo + base ref (TASK-245). The spawn flow prefills its
+                  per-run repo override from this; a pr-open step needs a repo to land. */}
+              <div className="we-field-row" style={{ marginTop: 12 }}>
+                <label className="we-field-lbl">Default repo <span className="we-muted">· absolute path, optional</span></label>
+                <input className="we-input mono" placeholder="/Users/you/dev/project" value={repo} onChange={(e) => setRepo(e.target.value)} />
+              </div>
+              <div className="we-field-row" style={{ marginTop: 8 }}>
+                <label className="we-field-lbl">Base ref <span className="we-muted">· branch/tag/commit, optional</span></label>
+                <input className="we-input mono" placeholder="main (defaults to HEAD)" value={repoRef} onChange={(e) => setRepoRef(e.target.value)} />
+              </div>
             </section>
 
             {/* 2 Steps */}
@@ -641,10 +764,25 @@
                     onDragStart={() => onDragStart(i)} onDragOver={(e) => onDragOver(e, i)}>
                     <span className="we-step-grip">{s.kind === "brief" ? "⊡" : "⠿"}</span>
                     <input className="we-step-input" value={s.label} disabled={s.kind === "brief"} onChange={(e) => setLabel(s.id, e.target.value)} />
-                    <StepKindTag kind={s.kind} />
-                    {s.kind === "brief"
-                      ? <span className="we-required">required</span>
-                      : <button className="we-step-x" title="Remove" onClick={() => removeStep(s.id)}>×</button>}
+                    {s.kind === "brief" ? (
+                      <>
+                        <StepKindTag kind={s.kind} />
+                        <span className="we-required">required</span>
+                      </>
+                    ) : (
+                      <>
+                        {/* per-step kind + default model (TASK-245 hybrid model). Model
+                            only bites on a dispatched kind, but it is harmless to carry. */}
+                        <select className="we-step-sel" value={s.kind} onChange={(e) => setKind(s.id, e.target.value)} title="Step kind">
+                          {STEP_KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}
+                        </select>
+                        <select className="we-step-sel we-step-model" value={s.model || ""} onChange={(e) => setModel(s.id, e.target.value)} title="Model — empty inherits the run/dispatcher default">
+                          <option value="">(default / inherit)</option>
+                          {SUPPORTED_MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                        <button className="we-step-x" title="Remove" onClick={() => removeStep(s.id)}>×</button>
+                      </>
+                    )}
                   </div>
                 ))}
               </div>
