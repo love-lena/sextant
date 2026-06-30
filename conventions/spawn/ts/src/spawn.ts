@@ -32,12 +32,16 @@ export interface Ops {
 // exactly. prompt is required; nickname/job/parent are optional lineage labels.
 // model is the optional per-step model declaration (TASK-245): when set, the
 // dispatcher runs the worker on this model (sets SX_AGENT_MODEL).
+// workdir is the worker's scoped working directory (TASK-256): when set, the
+// dispatcher exports it as SEXTANT_PI_WORKDIR so the worker runs inside it (a
+// run's per-run git worktree). The peer of Go's SpawnRequest.Workdir.
 export interface SpawnRequest {
   prompt: string;
   nickname?: string;
   job?: string;
   parent?: string;
   model?: string;
+  workdir?: string;
 }
 
 // SpawnAck is the dispatcher's acknowledgement of one spawn.request, carrying the
@@ -67,6 +71,7 @@ export function spawnRequestRecord(req: SpawnRequest): JSONValue {
   if (req.job) rec["job"] = req.job;
   if (req.parent) rec["parent"] = req.parent;
   if (req.model) rec["model"] = req.model;
+  if (req.workdir) rec["workdir"] = req.workdir;
   return rec;
 }
 

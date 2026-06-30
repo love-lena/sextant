@@ -117,6 +117,15 @@ export interface Run {
   // agent_mode opts the run into the long-lived coordinator-AGENT review loop (TASK-242).
   // Additive and opt-in; absent/false is the existing programmatic path.
   agent_mode?: boolean;
+  // repo is the absolute path to the git repository this run's work happens in
+  // (TASK-256). When set, the coordinator provisions one isolated git worktree per run
+  // (branch sxrun/<id> off repo_ref, or HEAD when unset), runs every step inside it, and
+  // tears it down on terminal. From the run/template definition, never an operator env
+  // var. The peer of Go's Run.Repo. Omitted = no provisioning (scratch-default fallback).
+  repo?: string;
+  // repo_ref is the optional base ref the per-run worktree branches from (branch/tag/
+  // commit). Omitted = the repo's current HEAD; ignored when repo is empty.
+  repo_ref?: string;
 }
 
 export interface RunEvent {

@@ -31,6 +31,12 @@ type SpawnRequest struct {
 	// SX_AGENT_MODEL for the pi recipe so the worker runs on this model instead of
 	// its default. Omitted = the dispatcher's configured default applies.
 	Model string `json:"model,omitempty"`
+	// Workdir is the worker's scoped working directory (TASK-256). When set, the
+	// dispatcher exports it as SEXTANT_PI_WORKDIR so the pi recipe runs the worker
+	// inside it — for a run, the per-run git worktree the coordinator provisioned, so
+	// every step of the run shares one isolated checkout. Omitted = the recipe falls
+	// back to its per-child scratch default (today's behaviour for repo-less runs).
+	Workdir string `json:"workdir,omitempty"`
 }
 
 // SpawnAck is the spawn.ack record: a dispatcher's acknowledgement of one

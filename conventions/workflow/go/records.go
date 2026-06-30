@@ -59,6 +59,12 @@ type SpawnRequest struct {
 	// SX_AGENT_MODEL for the pi recipe so the worker runs on this model. Omitted =
 	// the dispatcher's own default applies (currently claude-haiku-4-5).
 	Model string `json:"model,omitempty"`
+	// Workdir is the worker's scoped working directory (TASK-256). The coordinator
+	// sets it to the per-run git worktree it provisioned, so every step of the run
+	// runs inside one isolated checkout (step N sees step N-1's changes). The
+	// dispatcher exports it as SEXTANT_PI_WORKDIR for the pi recipe. Omitted = the
+	// recipe's per-child scratch default (today's behaviour for repo-less runs).
+	Workdir string `json:"workdir,omitempty"`
 }
 
 func (r SpawnRequest) Marshal() json.RawMessage {
