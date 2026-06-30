@@ -195,6 +195,7 @@ type RunEvent struct {
 	By        string             `json:"by,omitempty"`
 	Note      string             `json:"note,omitempty"`
 	Outcome   string             `json:"outcome,omitempty"` // brief step: "done" | "blocked"
+	Reason    string             `json:"reason,omitempty"`  // when outcome=blocked: a one-line why (verify step, D8)
 	Artifacts []ProducedArtifact `json:"artifacts,omitempty"`
 }
 

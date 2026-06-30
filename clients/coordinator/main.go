@@ -495,10 +495,10 @@ Do this, in order:
 1. FETCH THE REAL DELIVERABLE. For each INPUT ARTIFACT above, sextant_artifact_get it and inspect its actual content (the diff/code/output). Verify against the real work product — NEVER a prior step's self-report, status, "done", or "tests pass" claim. A proof that is the system-under-test reporting on itself does not count.
 2. BUILD AND TEST. Actually build the change and run the relevant tests/build commands for what was changed (e.g. for Go: gofumpt -l, go vet, go build ./..., go test the touched packages -race). Run them yourself; record the exact commands and their real output. If it does not build or a relevant test fails, DoD is NOT met.
 3. CHECK EACH ACCEPTANCE CRITERION AS A PROPERTY. For every AC, verify the invariant it asserts with an ADVERSARIAL / NEGATIVE check — a case the broken system would fail — not one happy instance. "It worked once" does not satisfy "it always works". An AC whose only evidence is a self-report is UNMET.
-4. REPORT HONESTLY. Produce a verdict artifact (kind "verdict") enumerating each AC as met/unmet with the external evidence you fetched and ran, plus the build/test commands and their output, and any defect found. Report this artifact in your run.event ` + "`artifacts`" + `.
-   - outcome=done ONLY IF every acceptance criterion is met AND the build and relevant tests are green, each backed by external, substance-checked proof you obtained yourself.
-   - OTHERWISE outcome=blocked, with the verdict artifact stating exactly which AC/build/test failed and why. A discovered defect invalidates every AC it contradicts.
-NEVER certify done over an unbuilt, untested, or unmet deliverable. When in doubt, block.`
+4. REPORT HONESTLY. Produce a verdict artifact (kind "verdict") enumerating each AC as met/unmet with the external evidence you fetched and ran, plus the build/test commands and their output, and any defect found. Report this artifact in your run.event ` + "`artifacts`" + ` (create it with sextant_artifact_put — the run is gated on it existing).
+   - If every acceptance criterion is met AND the build and relevant tests are green — each backed by external, substance-checked proof you obtained yourself — finish normally (the run advances). Create the verdict artifact and do nothing else.
+   - OTHERWISE you MUST call the sextant_run_block tool with a one-line reason stating exactly which AC/build/test failed (e.g. "go build ./... failed: undefined Foo"). Calling sextant_run_block is HOW you signal the run to STOP — it is the only thing that blocks the run. If you find the deliverable broken but do NOT call it, the run proceeds to done over the broken work (the failure mode you exist to prevent). Still create the verdict artifact stating exactly what failed and why. A discovered defect invalidates every AC it contradicts.
+NEVER certify done over an unbuilt, untested, or unmet deliverable. When in doubt, call sextant_run_block.`
 
 // verifyPrompt builds the prompt for a VERIFY step (D8): the run objective + the step
 // label, the prior steps' produced artifact REFS to verify (the real deliverable — names
@@ -531,10 +531,15 @@ func (co *coordinator) runVerify(step *workflow.RunStep) (string, error) {
 	ev := co.doneEvents[step.ID]
 	co.mu.Unlock()
 	if ev.Outcome == workflow.RunBlocked {
-		// The independent verifier found DoD unmet (a failed build/test or an unmet AC).
-		// Surface its verdict on the activity trail and BLOCK the run — never advance past
-		// a failed verification (D8). The verdict artifact (existence-gated above) names why.
-		co.appendActivity("✗", fmt.Sprintf("verification failed: step %q reported blocked", step.ID))
+		// The independent verifier found DoD unmet (a failed build/test or an unmet AC) and
+		// called sextant_run_block, so its run.event reported outcome=blocked. Surface its
+		// reason on the activity trail and BLOCK the run — never advance past a failed
+		// verification (D8). The verdict artifact (existence-gated above) carries the detail.
+		msg := fmt.Sprintf("verification failed: step %q reported blocked", step.ID)
+		if ev.Reason != "" {
+			msg += ": " + ev.Reason
+		}
+		co.appendActivity("✗", msg)
 		return workflow.RunBlocked, nil
 	}
 	return "", nil

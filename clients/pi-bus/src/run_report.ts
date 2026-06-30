@@ -89,6 +89,14 @@ export interface RunReporterDeps {
 // first call wins, later calls are no-ops.
 export class RunReporter {
   private reported = false;
+  // The step OUTCOME the coordinator decides terminal status from (D8). Default "done";
+  // a verifier worker latches "blocked" via markBlocked when the Definition of Done is
+  // not met, so report() emits outcome:"blocked" + the reason and the coordinator's
+  // runVerify gate BLOCKS the run instead of advancing over a broken deliverable. Before
+  // this the outcome was hard-coded "done", so the gate was dead code in production — only
+  // the coordinator's TEST fake could ever produce blocked (the gate-the-prod-adapter trap).
+  private outcome: "done" | "blocked" = "done";
+  private blockReason: string | undefined;
 
   constructor(private readonly deps: RunReporterDeps) {}
 
@@ -96,6 +104,25 @@ export class RunReporter {
   // can skip the work entirely off a plain mobilize/revive).
   isRunStep(): boolean {
     return this.deps.runEventsSubject !== "";
+  }
+
+  // markBlocked latches the step's outcome to "blocked" and records why. The latch is
+  // one-way (a found defect does not un-find itself) and FIRST-block-wins for the reason —
+  // the earliest failure is the most direct cause; later ones are usually fallout. Driven
+  // by the sextant_run_block tool, registered only on a run step.
+  markBlocked(reason: string): void {
+    if (this.outcome === "blocked") return; // first block wins; stay blocked
+    this.outcome = "blocked";
+    this.blockReason = reason;
+  }
+
+  // isBlocked / reason expose the latch (for tests and tracing).
+  isBlocked(): boolean {
+    return this.outcome === "blocked";
+  }
+
+  reason(): string | undefined {
+    return this.blockReason;
   }
 
   // hasReported reports whether the step-done has already gone out (the extension
@@ -144,16 +171,24 @@ export class RunReporter {
       }
     }
 
-    this.deps.log("run_step_done", { subject: this.deps.runEventsSubject, step: this.deps.runStep, reason, artifacts: produced.length });
+    this.deps.log("run_step_done", { subject: this.deps.runEventsSubject, step: this.deps.runStep, reason, outcome: this.outcome, artifacts: produced.length });
     try {
-      await this.deps.publish(this.deps.runEventsSubject, {
+      // status is ALWAYS "done" (the STEP finished); the OUTCOME carries done|blocked (D8).
+      // When a verifier latched blocked, the reason rides a typed `reason` field so the
+      // coordinator's activity trail can show why. This is the exact shape the coordinator's
+      // onEvent (status=="done") + runVerify (outcome=="blocked") read.
+      const record: Record<string, JSONValue> = {
         $type: "run.event",
         step: this.deps.runStep,
         status: "done",
         by: self,
-        outcome: "done",
+        outcome: this.outcome,
         artifacts: produced.map((a) => ({ name: a.name, kind: a.kind, version: a.version })),
-      } as unknown as JSONValue);
+      };
+      if (this.outcome === "blocked" && this.blockReason !== undefined) {
+        record["reason"] = this.blockReason;
+      }
+      await this.deps.publish(this.deps.runEventsSubject, record as JSONValue);
     } catch (e) {
       this.deps.log("run_event_error", { detail: (e as Error).message });
     }

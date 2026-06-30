@@ -197,3 +197,101 @@ test("captureDiff failure does not block the report (model artifacts still go ou
   assert.equal(arts.length, 1, "the model-created artifact still reports despite a diff-capture failure");
   assert.equal(arts[0].name, "build.x");
 });
+
+// --- D8: the worker can latch a BLOCKED outcome (layered onto the D7 reporter) ---
+//
+// The load-bearing D8 property: a verifier worker that finds the Definition of Done unmet
+// must emit outcome:"blocked", because the coordinator's runVerify gate keys SOLELY on
+// outcome=="blocked" to block the run. Before this the outcome was hard-coded "done", so
+// the gate was dead code in production — only the coordinator's TEST fake could ever
+// produce blocked. These tests prove the REAL reporter (the same drain-emit path D7 fixed)
+// now produces a blocked run.event with status:"done" + outcome:"blocked" + reason — and
+// that the diff-capture + complete-produced-set behaviour D7 added is UNCHANGED on this path.
+
+// blockableReporter builds a reporter over the deps seam with a recording publish.
+function blockableReporter(produced: ProducedArtifact[] = []): { reporter: RunReporter; events: { subject: string; record: Record<string, unknown> }[] } {
+  const { publish, events } = recordingPublish();
+  const reporter = new RunReporter({
+    runEventsSubject: "msg.topic.run.rBLOCK.events",
+    runStep: "verify",
+    selfId: () => "verifier-ulid",
+    publish,
+    producedSnapshot: () => [...produced],
+    log: () => {},
+  });
+  return { reporter, events };
+}
+
+test("D8 default (no block): the drain emit still carries outcome:done", async () => {
+  const { reporter, events } = blockableReporter();
+  assert.equal(reporter.isBlocked(), false);
+  await reporter.report("auto_drain_idle");
+  assert.equal(events[0].record["status"], "done");
+  assert.equal(events[0].record["outcome"], "done", "unblocked path still reports done (D7 path unchanged)");
+  assert.equal("reason" in events[0].record, false, "no reason on a clean outcome");
+});
+
+test("D8: markBlocked makes the drain emit status:done + outcome:blocked + reason (THE D8 property)", async () => {
+  const { reporter, events } = blockableReporter();
+  reporter.markBlocked("go build ./... failed: undefined Foo");
+  await reporter.report("auto_drain_idle"); // the REAL drain path, not the fake dispatcher
+
+  assert.equal(events.length, 1, "exactly one step-done");
+  // status STILL "done" (the step finished) — the OUTCOME is blocked. The exact shape the
+  // coordinator's onEvent (status=="done") + runVerify (outcome=="blocked") read; a real
+  // broken-DoD verdict now reaches the gate that was previously dead code.
+  assert.equal(events[0].record["status"], "done", "status:done — the step ran to completion");
+  assert.equal(events[0].record["outcome"], "blocked", "outcome:blocked — the coordinator blocks the run on this");
+  assert.equal(events[0].record["reason"], "go build ./... failed: undefined Foo", "the reason rides a typed field for the activity trail");
+  assert.equal(reporter.isBlocked(), true);
+  assert.equal(reporter.reason(), "go build ./... failed: undefined Foo");
+});
+
+test("D8: a blocked verifier STILL reports its produced verdict + captured diff (D7 behaviour intact)", async () => {
+  // A blocked verification does not suppress the deliverable proof channel — the verdict
+  // artifact and any worktree diff still ride along (existence-gated by the coordinator).
+  const { publish, events } = recordingPublish();
+  const reporter = new RunReporter({
+    runEventsSubject: "x",
+    runStep: "verify",
+    selfId: () => "w",
+    publish,
+    producedSnapshot: () => [{ name: "verdict.rBLOCK.verify", kind: "verdict", version: 1 }],
+    captureDiff: async () => ({ name: "work.diff.verify", kind: "work.diff", version: 1 }),
+    log: () => {},
+  });
+  reporter.markBlocked("AC#3 unmet");
+  await reporter.report("auto_drain_idle");
+  assert.equal(events[0].record["outcome"], "blocked");
+  const arts = artifactsOf(events[0].record);
+  assert.deepEqual(
+    arts.map((a) => a.name).sort(),
+    ["verdict.rBLOCK.verify", "work.diff.verify"],
+    "verdict + captured diff both reported even when blocked (proof channel + diff-capture unchanged)",
+  );
+});
+
+test("D8: markBlocked is a one-way latch, first reason wins", () => {
+  const { reporter } = blockableReporter();
+  reporter.markBlocked("first failure");
+  reporter.markBlocked("second failure");
+  // A later block (often fallout from the first) must not overwrite the earliest, most-
+  // direct cause, and the latch can never flip back to done.
+  assert.equal(reporter.reason(), "first failure", "first block wins");
+  assert.equal(reporter.isBlocked(), true, "latch stays blocked");
+});
+
+test("D8: a non-run worker that latches blocked still emits nothing", async () => {
+  const { publish, events } = recordingPublish();
+  const reporter = new RunReporter({
+    runEventsSubject: "", // not a run step
+    runStep: "",
+    selfId: () => "w",
+    publish,
+    producedSnapshot: () => [],
+    log: () => {},
+  });
+  reporter.markBlocked("irrelevant — no run to block");
+  await reporter.report("auto_drain_idle");
+  assert.equal(events.length, 0, "no run.event off a run, even with a blocked latch");
+});
