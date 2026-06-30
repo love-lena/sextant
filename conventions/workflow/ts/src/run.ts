@@ -203,6 +203,17 @@ export function isTerminalRun(status: string): boolean {
   return status === RunDone || status === RunBlocked || status === RunCancelled;
 }
 
+// isResumableRun reports whether a terminal run can be RESUMED by re-issuing it
+// (TASK-267). Only `blocked` is resumable: a step failed — including a transient cause
+// like a network interruption that drained a worker mid-step — and a transient failure
+// must not permanently block the run. Re-issuing a blocked run (re-publishing run.start)
+// re-dispatches its first non-`done` step and continues. `done`/`cancelled` are
+// terminal-final and never resumed (a completed run is never re-run; a cancelled run was
+// deliberately stopped). Peer of Go's workflow.IsResumableRun.
+export function isResumableRun(status: string): boolean {
+  return status === RunBlocked;
+}
+
 // nextPendingRun returns the index of the first step not yet done, or -1 (the peer
 // of Go's Run.NextPending).
 export function nextPendingRun(r: Run): number {

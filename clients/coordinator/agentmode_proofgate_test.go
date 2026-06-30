@@ -131,13 +131,14 @@ func TestAgentMode_ReviewerFlagsProseOnlyClaim(t *testing.T) {
 			bmu.Unlock()
 			name := "brief.proseclaim." + job
 			// Prose claims a poem that has NO typed produced ref → deterministic gate can't see it.
-			if _, err := d.CreateArtifact(ctx, name, json.RawMessage(`{"$type":"brief","outcome":"done","narrative":"I wrote the poem artifact poem-x"}`)); err != nil {
+			// Upsert: the brief is re-dispatched on a redo (same name re-produced).
+			if !putArtifact(ctx, d, name, json.RawMessage(`{"$type":"brief","outcome":"done","narrative":"I wrote the poem artifact poem-x"}`)) {
 				return nil
 			}
 			return []workflow.ProducedArtifact{{Name: name, Kind: "brief", Version: 1}}
 		}
 		name := "deliverable." + job + "." + stepID
-		if _, err := d.CreateArtifact(ctx, name, json.RawMessage(`{"$type":"work"}`)); err != nil {
+		if !putArtifact(ctx, d, name, json.RawMessage(`{"$type":"work"}`)) {
 			return nil
 		}
 		return []workflow.ProducedArtifact{{Name: name, Kind: "work", Version: 1}}

@@ -115,6 +115,23 @@ func IsTerminalRun(status string) bool {
 	return status == RunDone || status == RunBlocked || status == RunCancelled
 }
 
+// IsResumableRun reports whether a terminal run can be RESUMED by re-issuing it
+// (TASK-267). Only `blocked` is resumable: a run blocks when a step fails — including
+// a transient cause like a network interruption that drained a worker mid-step — and a
+// transient failure must not PERMANENTLY block the run (the DoD: an interrupted run
+// resumes or retries when the connection is re-established). Re-issuing a blocked run
+// re-dispatches its first non-`done` step from the prior steps' (already-attached)
+// artifacts and continues to completion.
+//
+// `done` and `cancelled` are terminal-FINAL and never resumable: a completed run is
+// never re-run (the TASK-259 idempotent-replay guard stays), and a cancelled run was
+// deliberately stopped by the operator. So a re-issued run.start resumes a `blocked`
+// run but is still a no-op for a `done`/`cancelled` one — the distinction TASK-267
+// draws between terminal-skip and resumable.
+func IsResumableRun(status string) bool {
+	return status == RunBlocked
+}
+
 // Run is the sextant.workflow.run/v1 state envelope: single-writer (the coordinator),
 // CAS-guarded, stored as an Artifact keyed RunStateName(id). Steps are a flat status
 // list (no DAG); activity is the embedded observability stream the dash polls.

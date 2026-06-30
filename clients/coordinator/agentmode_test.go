@@ -141,13 +141,15 @@ func defaultWorker(t *testing.T, ctx context.Context, d *sextant.Client, job, st
 	t.Helper()
 	if strings.Contains(prompt, "stopping brief") {
 		name := "brief.stopping." + job
-		if _, err := d.CreateArtifact(ctx, name, json.RawMessage(`{"$type":"brief","outcome":"done"}`)); err != nil {
+		// Upsert (not Create): a redo re-dispatches the SAME step, so the worker re-produces
+		// its deliverable under the same name — the real worker's idempotent artifact_put.
+		if !putArtifact(ctx, d, name, json.RawMessage(`{"$type":"brief","outcome":"done"}`)) {
 			return nil
 		}
 		return []workflow.ProducedArtifact{{Name: name, Kind: "stopping", Version: 1}}
 	}
 	name := "deliverable." + job + "." + stepID
-	if _, err := d.CreateArtifact(ctx, name, json.RawMessage(`{"$type":"work","step":"`+stepID+`"}`)); err != nil {
+	if !putArtifact(ctx, d, name, json.RawMessage(`{"$type":"work","step":"`+stepID+`"}`)) {
 		return nil
 	}
 	return []workflow.ProducedArtifact{{Name: name, Kind: "work", Version: 1}}
