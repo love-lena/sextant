@@ -213,13 +213,20 @@ else
 
   # The srt profile (the hard wall). srt reads default-ALLOW, so we DENYLIST the
   # operator's sensitive paths — the shell rc/dotfiles, credential stores, the
-  # private user dirs, pi's own auth.json (the operator API keys) — plus the GUI/
-  # system command binaries (a worker can't exec a binary it can't read). We
-  # deny-read these specific trees rather than the WHOLE home, because the worker's
+  # private user dirs, pi's own auth.json (the operator API keys). We deny-read
+  # these specific trees rather than the WHOLE home, because the worker's
   # toolchain (node/pi + the @sextant/pi-bus extension's deps) and its own bus
   # creds/session live under paths that a blanket home-deny starves. allowWrite =
   # the scope + the session dir (sibling of the store) + the scoped pi config dir.
   # Extra sensitive paths can be appended via SX_PI_SRT_DENY_READ (space-separated).
+  #
+  # GUI / DESTRUCTIVE containment is NOT done by denying the command binaries —
+  # denyRead of /usr/bin/osascript does NOT block EXEC (it still runs). The real
+  # containment is the capabilities: allowAppleEvents=false denies app control
+  # (osascript/open -a cannot drive or launch apps) and srt's same-sandbox signal
+  # restriction means a worker cannot kill HOST processes (killall/pkill of the
+  # operator's apps fails). The binary denyRead entries below are harmless
+  # defense-in-depth (they remove the tools from sight), not the load-bearing wall.
   SX_SRT_CREDS_FILE="$SEXTANT_CREDS" SX_SRT_CREDS_DIR="$(dirname "$SEXTANT_CREDS")" \
   SX_SRT_BUSJSON_FILE="$SEXTANT_BUS_JSON" SX_SRT_STORE="$SEXTANT_STORE" \
   SX_SRT_EXTRA_DENY="${SX_PI_SRT_DENY_READ:-}" \
@@ -237,11 +244,22 @@ else
         home + "/.ssh", home + "/.aws", home + "/.gnupg", home + "/.kube", home + "/.docker",
         home + "/.config", home + "/.gitconfig", home + "/.git-credentials",
         home + "/.netrc", home + "/.npmrc", home + "/.pypirc",
+        // High-value credential stores (qa-306): SSH certs to PROD infra, agent +
+        // cloud + registry creds. A denylist is inherently incomplete, but these
+        // KNOWN stores must never ship readable to a dispatched worker.
+        home + "/.tsh", // Teleport SSH certs (production infrastructure)
+        home + "/.codex", // OpenAI codex creds (auth.json under it)
+        home + "/.claude", home + "/.claude.json", home + "/.claude.json.backup", // Claude Code config / MCP secrets
+        home + "/.cloudflared", // Cloudflare tunnel creds
+        home + "/.cargo/credentials", home + "/.cargo/credentials.toml", home + "/.gem", home + "/.cursor",
         home + "/.pi/agent/auth.json", // the operator OpenAI/Anthropic keys — never exposed
         home + "/Documents", home + "/Desktop", home + "/Downloads", home + "/Movies",
         home + "/Pictures", home + "/Library/Keychains", home + "/Library/Application Support",
         home + "/Library/Cookies", home + "/Library/Safari", home + "/Library/Messages",
         home + "/Library/Containers", home + "/Library/Group Containers",
+        // Defense-in-depth only (does NOT block exec — see header): hide the GUI/
+        // system command binaries. Real containment = allowAppleEvents:false +
+        // same-sandbox signal restriction.
         "/usr/bin/osascript", "/usr/bin/killall", "/usr/bin/pkill", "/usr/bin/open",
         "/sbin/shutdown", "/sbin/reboot", "/usr/bin/sudo", "/bin/launchctl", "/usr/bin/automator",
       ];
