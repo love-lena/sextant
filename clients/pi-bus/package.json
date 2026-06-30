@@ -28,6 +28,7 @@
     "test": "npm run build && node --test dist/test/backpressure.test.js dist/test/gate.test.js dist/test/activity.test.js dist/test/goal_command.test.js dist/test/handoff.test.js dist/test/run_report.test.js dist/test/worktree_diff.test.js dist/test/tools.test.js",
     "driven": "npm run build:deps && npm run build && node dist/test/driven.js",
     "driven:handoff": "npm run build:deps && npm run build && node dist/test/driven_handoff.js",
+    "driven:stepdone": "npm run build:deps && npm run build && node dist/test/driven_stepdone.js",
     "live-demo": "npm run build:deps && npm run build && node dist/test/livedemo.js"
   },
   "license": "MIT",

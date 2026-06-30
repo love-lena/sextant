@@ -84,6 +84,17 @@ SESSION_ID="${SX_PI_RESUME_SESSION:-pi-${CHILD_ID}}"
 SESSION_DIR="${SX_PI_SESSION_DIR:-$(dirname "$SEXTANT_STORE")/pi-sessions/${CHILD_ID}}"
 mkdir -p "$SESSION_DIR"
 
+# DURABLE pi-bus TRACE (diagnosability). The extension traces every lifecycle event
+# (session_start/connected/agent_end/auto_drain_idle/run_step_done/…) to stderr, but a
+# worker launched under launchd + the srt sandbox can have its grandchild stderr
+# dropped — so the managed dispatcher's log shows the worker's pi RPC stdout but NONE
+# of the [pi-bus] lifecycle trace, leaving a hung run undiagnosable (the work-engine
+# step-done investigation: 1594 stdout lines, 0 trace lines). Default SEXTANT_PI_LOG to
+# a per-child file in the SESSION_DIR (which both sandbox modes allow-read/write and
+# which outlives the process), so the lifecycle trace is ALWAYS durably captured
+# regardless of stderr plumbing. Overridable; absent only if explicitly cleared.
+export SEXTANT_PI_LOG="${SEXTANT_PI_LOG:-${SESSION_DIR}/pi-bus.log}"
+
 # Resume by explicit FILE PATH when a session for this child already exists, so a
 # revive is INDEPENDENT OF THE LAUNCH CWD. pi scopes --session-id by project (the
 # launch directory); a path is unambiguous, so the dispatcher resumes the right JSONL
@@ -242,6 +253,7 @@ else
   SX_SRT_BUSJSON_FILE="$SEXTANT_BUS_JSON" SX_SRT_STORE="$SEXTANT_STORE" \
   SX_SRT_EXTRA_DENY="${SX_PI_SRT_DENY_READ:-}" \
   SX_SRT_WORKDIR="$WORKDIR" SX_SRT_SESSIONDIR="$SESSION_DIR" SX_SRT_PICFG="$PI_WORKER_AGENT_DIR" \
+  SX_SRT_EXTENSION="$SEXTANT_PI_EXTENSION" \
   SX_SRT_HOME="$HOME" SX_SRT_DOMAIN="$SX_PI_MODEL_DOMAIN" \
     node -e '
       const j = (o) => JSON.stringify(o);
@@ -286,11 +298,23 @@ else
       denyRead.push(process.env.SX_SRT_STORE);     // the bus store (other agent state)
       // The worker OWN readable paths (allowRead overrides the denies above):
       // its scope, its per-child session dir, its scoped pi config, its OWN creds
-      // FILE, and the bus.json FILE (bus discovery). Files, not parent dirs.
+      // FILE, the bus.json FILE (bus discovery), and the pi-bus EXTENSION bundle.
+      // Files, not parent dirs.
+      //
+      // The extension bundle (SEXTANT_PI_EXTENSION = the materialized
+      // pi-bus.bundle.mjs) lives under the Application Support dir, which is in the
+      // broad denyRead above, so without an explicit allow the sandboxed pi CANNOT
+      // READ ITS OWN EXTENSION and the extension silently never loads (the live worker
+      // then has zero sextant_* tools / no step-done; TASK-42 root cause #2).
+      // Allow-reading this ONE file is benign: the worker already EXECUTES that code
+      // (pi loads it via -e), it carries no sibling or principal data, and the
+      // exact-file allow does not widen the deny tree around it.
+      // (NOTE: no apostrophes in this node -e block; they would close its single quote.)
       const allowRead = [];
       for (const p of [
         process.env.SX_SRT_WORKDIR, process.env.SX_SRT_SESSIONDIR, process.env.SX_SRT_PICFG,
         process.env.SX_SRT_CREDS_FILE, process.env.SX_SRT_BUSJSON_FILE,
+        process.env.SX_SRT_EXTENSION,
       ]) {
         if (p && !allowRead.includes(p)) allowRead.push(p);
       }

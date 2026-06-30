@@ -47,6 +47,17 @@ func TestEmbeddedPiBusBundle(t *testing.T) {
 	if !strings.Contains(string(data), "sextantPiBus as default") {
 		t.Fatalf("pi-bus bundle missing the `sextantPiBus as default` export pi loads as the extension entry")
 	}
+	// The createRequire banner MUST be present (TASK-42): the ESM bundle pulls in a
+	// dependency (tweetnacl, via @sextant/sdk) that does a runtime require("crypto") at
+	// module init; without a real `require` in scope esbuild's __require shim throws at
+	// IMPORT, so the whole extension silently fails to load and the live worker boots
+	// with no sextant_* tools and no step-done. The banner (createRequire(import.meta.url))
+	// provides the real require. build-pi-bus.sh also node-imports the bundle as a smoke
+	// test; this is the in-binary guard that the EMBEDDED artifact carries the banner even
+	// if it is ever regenerated outside the script.
+	if !strings.Contains(string(data), "createRequire") {
+		t.Fatalf("pi-bus bundle missing the createRequire banner — an ESM bundle without it throws `Dynamic require of \"crypto\"` at import, so the extension silently fails to load and the worker has no sextant_* tools (TASK-42). Rebuild via scripts/build-pi-bus.sh.")
+	}
 }
 
 // TestSelect covers name resolution, --all, the both-error, the require-one
