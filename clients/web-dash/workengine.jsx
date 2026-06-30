@@ -108,13 +108,14 @@
   const SEED_TEMPLATES = [
     {
       name: "Plan → build → review → PR", seed: true,
-      description: "Draft a plan, pause for the operator to approve it, build the change, run a self-review, then open a PR with the stopping brief.",
+      description: "Draft a plan, pause for the operator to approve it, build the change, run a self-review, open a PR (trusted host-side step — the sandboxed worker cannot push), then write the stopping brief.",
       steps: [
         { id: "s1", label: "Draft an implementation plan", kind: "work" },
         { id: "s2", label: "Operator approves the plan", kind: "checkpoint" },
         { id: "s3", label: "Build the change", kind: "work" },
         { id: "s4", label: "Self-review against acceptance criteria", kind: "work" },
-        { id: "s5", label: "Write the stopping brief", kind: "brief" },
+        { id: "s5", label: "Open a pull request", kind: "pr-open" },
+        { id: "s6", label: "Write the stopping brief", kind: "brief" },
       ],
       triggers: [{ label: "Manual", manual: true }, { label: "On ticket labelled ready-for-agent", on: "ticket.ready" }],
       stop_conditions: ["plan-review: pause after the plan and post it for operator feedback"],
@@ -130,7 +131,8 @@
         { id: "s2", label: "Operator approves the plan", kind: "checkpoint", status: "waiting" },
         { id: "s3", label: "Build the change", kind: "work", status: "upcoming" },
         { id: "s4", label: "Self-review against acceptance criteria", kind: "work", status: "upcoming" },
-        { id: "s5", label: "Write the stopping brief", kind: "brief", status: "upcoming" },
+        { id: "s5", label: "Open a pull request", kind: "pr-open", status: "upcoming" },
+        { id: "s6", label: "Write the stopping brief", kind: "brief", status: "upcoming" },
       ],
       relates: [],
       activity: [
@@ -221,6 +223,7 @@
   function StepKindTag({ kind }) {
     if (kind === "checkpoint") return <span className="we-tag we-tag-ask">ask operator</span>;
     if (kind === "brief") return <span className="we-tag we-tag-brief">stopping brief</span>;
+    if (kind === "pr-open") return <span className="we-tag we-tag-pr">open PR</span>;
     return null;
   }
   function stepLine(steps) {

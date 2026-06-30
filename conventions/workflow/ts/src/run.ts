@@ -58,6 +58,15 @@ export const KindBrief = "brief";
 // artifact) if DoD is not met — placed before a brief so a run cannot reach done over a
 // failed verification. Additive — existing kinds unchanged.
 export const KindVerify = "verify";
+// KindPROpen is the trusted-path PR-open step (TASK-260). NOT a dispatched worker: the
+// sandboxed pi worker's egress is walled to the model API (github.com denied, TASK-118)
+// and it is never given git/gh credentials, so it cannot push or open a PR. The
+// coordinator — a host-side Go service with the operator's ambient git/gh auth — runs
+// this step itself against the run's isolated worktree (Run.repo + branch sxrun/<runID>):
+// it commits the pending changes, pushes the branch to origin (scoped to sxrun/<runID>,
+// never a force-push to a shared branch), opens a PR against the run's base, and records
+// the PR URL as the step's produced artifact. Placed after verify/brief. Additive.
+export const KindPROpen = "pr-open";
 
 export interface RunStep {
   id: string;

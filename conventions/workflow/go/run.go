@@ -91,6 +91,20 @@ const (
 	// what failed. Placed BEFORE a brief so a run cannot reach done over a failed
 	// verification. Additive — existing kinds are unchanged.
 	KindVerify = "verify"
+
+	// KindPROpen is the trusted-path PR-open step (TASK-260). It is NOT a dispatched
+	// worker: the sandboxed pi worker's egress is walled to the model API (github.com is
+	// denied per TASK-118) and it is never handed git/gh credentials, so it CANNOT push or
+	// open a PR. Instead the coordinator — a managed host-side Go service running with the
+	// operator's ambient git/gh auth — runs this step itself against the run's isolated
+	// worktree (Run.Repo + branch sxrun/<runID>, provisioned by TASK-256): it commits the
+	// worktree's pending changes on that run-namespaced branch, pushes the branch to origin
+	// (scoped to sxrun/<runID>, NEVER a force-push to a shared branch), opens a PR against
+	// the run's base ref, and records the resulting PR URL as the step's produced artifact.
+	// Placed AFTER verify/brief so a run only opens a PR for a verified deliverable. The
+	// trust posture (what the host-side entity can do, why the worker stays jailed) is in
+	// clients/coordinator/pr.go and the ticket's Implementation Notes.
+	KindPROpen = "pr-open"
 )
 
 // (Control verbs CtlApprove/CtlResume/CtlPause/CtlCancel and StatusOK/StatusError

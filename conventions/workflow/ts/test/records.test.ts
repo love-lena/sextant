@@ -42,6 +42,7 @@ import {
   KindWork,
   KindBrief,
   KindVerify,
+  KindPROpen,
   type Run,
 } from "../src/index.js";
 
@@ -79,6 +80,29 @@ test("the run state envelope round-trips, stamping the versioned $type", () => {
   // none leaves it undefined (the coordinator falls back to its default).
   assert.equal(got!.steps[0]!.timeout_secs, 1800);
   assert.equal(got!.steps[1]!.timeout_secs, undefined);
+});
+
+// TASK-260 AC#3: a run carrying a pr-open step round-trips with the kind preserved, and the
+// wire value matches the Go mirror ("pr-open"). The standard dev-workflow template declares
+// this trusted-path step rather than leaving the PR a manual operator action.
+test("a run with a pr-open step round-trips, kind preserved (co-equal with Go)", () => {
+  assert.equal(KindPROpen, "pr-open");
+  const run: Run = {
+    id: "01HPR",
+    template: null,
+    status: RunRunning,
+    steps: [
+      { id: "s1", label: "build", kind: KindWork, status: StepRunning },
+      { id: "pr", label: "open a pull request", kind: KindPROpen, status: StepUpcoming },
+      { id: "brief", label: "stopping brief", kind: KindBrief, status: StepUpcoming },
+    ],
+    relates: [],
+    activity: [],
+    artifacts: [],
+  };
+  const got = parseRun(marshalRun(run));
+  assert.ok(got, "parseRun returned null for a run with a pr-open step");
+  assert.equal(got!.steps[1]!.kind, KindPROpen);
 });
 
 test("parseRun rejects the OLD sextant.workflow/v1 type and non-objects", () => {

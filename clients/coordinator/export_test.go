@@ -24,6 +24,22 @@ func SetTerminalGraceHook(d time.Duration) func() {
 	return func() { newCoordinatorHook = prev }
 }
 
+// SetOpenPRHook installs a hook that replaces every coordinator's openPR seam (TASK-260)
+// — the trusted-path PR-open's git/gh path — with fn. The PR-open proof uses it to drive a
+// run's pr-open step against a LOCAL bare repo (a real branch commit + push) while stubbing
+// only the gh `pr create` call (the LIVE half), so the run's PR-open path is exercised
+// end-to-end without a real GitHub. Returns a restore func; composes with any prior hook.
+func SetOpenPRHook(fn openPRFunc) func() {
+	prev := newCoordinatorHook
+	newCoordinatorHook = func(co *coordinator) {
+		if prev != nil {
+			prev(co)
+		}
+		co.openPR = fn
+	}
+	return func() { newCoordinatorHook = prev }
+}
+
 // Test-only access to the coordinator internals (export_test.go pattern: an external
 // test package gets a controlled keyhole, not a build tag). Used by the AC#3
 // content-opacity proof to observe exactly which artifacts a coordinator opens.
