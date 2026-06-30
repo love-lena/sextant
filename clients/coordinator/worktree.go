@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -82,7 +83,96 @@ func provisionWorktree(ctx context.Context, repo, ref, store, runID string) (str
 	if out, err := git(ctx, args...); err != nil {
 		return "", fmt.Errorf("provisionWorktree: git worktree add %s (branch %s) from %s: %w (%s)", path, branch, repo, err, strings.TrimSpace(out))
 	}
+
+	// Ignore the sandbox runtime's CWD scratch (D15). The pi worker runs with its
+	// CWD set to this worktree, and the srt sandbox + pi runtime write scratch files
+	// into it (the recipe's clients/dispatcher/recipes/pi.sh writes
+	// `${WORKDIR}/.sx-srt-settings.json` and creates `${WORKDIR}/.pi-agent/`, into
+	// which pi drops an `auth.json`). Without ignoring them, D7's worktree-diff
+	// capture sees them as untracked changes and pr.go's `git add -A` sweeps them
+	// into the run's commit — every work-engine PR then carried these stray env
+	// artifacts alongside the real deliverable (PR #322). We exclude them LOCALLY and
+	// PER-WORKTREE (never a committed .gitignore — these are environment artifacts,
+	// not a repo concern; and never the operator's primary checkout), so
+	// `git status`/`diff`/`add` in THIS worktree skip them while every other worktree
+	// is unaffected. Best-effort, like teardown: a failed exclude write is logged
+	// (never fatal) and provisioning still succeeds (a hygiene improvement, not a
+	// precondition).
+	if err := writeWorktreeExcludes(ctx, path); err != nil {
+		logf("warn: write per-worktree sandbox-scratch excludes for %s: %v", path, err)
+	}
 	return path, nil
+}
+
+// sandboxScratchExcludes are the CWD-rooted scratch paths the srt sandbox + pi
+// runtime write into the worker's worktree (see clients/dispatcher/recipes/pi.sh:
+// the `.sx-srt-settings.json` srt profile and the `.pi-agent/` scoped pi config dir
+// it creates, into which pi writes an `auth.json`). They are environment artifacts,
+// never part of the run's deliverable, so we git-ignore them per-worktree (D15). The
+// session JSONL and per-child creds live OUTSIDE the workdir (siblings of the store),
+// so they never reach the worktree and need no exclude.
+var sandboxScratchExcludes = []string{
+	".pi-agent/",
+	".sx-srt-settings.json",
+}
+
+// writeWorktreeExcludes points THIS worktree (and only this worktree) at a local
+// exclude file listing the sandbox scratch patterns, so they are neither captured by
+// D7's worktree-diff nor committed by pr.go's `git add -A`, while every other worktree
+// — the operator's primary checkout above all — is untouched.
+//
+// We use git's per-worktree config, which is the only mechanism that gives a TRUE
+// per-worktree ignore (the obvious-looking `.git/worktrees/<name>/info/exclude` is
+// NOT honoured by git, and `rev-parse --git-path info/exclude` resolves to the SHARED
+// common-dir `info/exclude`, which would leak the ignore into the operator's primary
+// checkout — verified, not assumed):
+//   - turn on `extensions.worktreeConfig` (idempotent, repo-wide flag — inert for
+//     existing worktrees, which keep reading the shared config);
+//   - write the patterns to a file inside this worktree's OWN gitdir
+//     (`<gitdir>/info/sx-exclude`, gitdir = `--git-dir`, the per-worktree
+//     `.git/worktrees/<id>` dir);
+//   - set `core.excludesFile` to that file in the WORKTREE config scope
+//     (`git config --worktree`), so only this worktree reads it.
+//
+// BEST-EFFORT and panic-free (mirrors teardownWorktree's style): on any failure it
+// returns the error for the caller to log, never raises — provisioning must still
+// succeed even if the ignore write fails (the diff would merely carry the scratch
+// again, the pre-D15 behaviour, not break the run).
+func writeWorktreeExcludes(ctx context.Context, worktree string) error {
+	// This worktree's OWN gitdir (the linked worktree's .git/worktrees/<id> dir), where
+	// the worktree-local exclude file lives. `--git-dir` is per-worktree (unlike
+	// `--git-path info/exclude`, which resolves to the SHARED common-dir exclude).
+	out, err := git(ctx, "-C", worktree, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return fmt.Errorf("writeWorktreeExcludes: resolve git dir for %s: %w (%s)", worktree, err, strings.TrimSpace(out))
+	}
+	gitDir := strings.TrimSpace(out)
+	if gitDir == "" {
+		return fmt.Errorf("writeWorktreeExcludes: empty git dir for %s", worktree)
+	}
+
+	// Enable per-worktree config (idempotent; harmless to existing worktrees, which
+	// keep reading the shared config). Required before `git config --worktree` will
+	// scope a key to one worktree rather than the whole repo.
+	if out, err := git(ctx, "-C", worktree, "config", "extensions.worktreeConfig", "true"); err != nil {
+		return fmt.Errorf("writeWorktreeExcludes: enable worktreeConfig for %s: %w (%s)", worktree, err, strings.TrimSpace(out))
+	}
+
+	// Write the patterns to a worktree-local exclude file inside this worktree's gitdir.
+	excludePath := filepath.Join(gitDir, "info", "sx-exclude")
+	if err := os.MkdirAll(filepath.Dir(excludePath), 0o755); err != nil {
+		return fmt.Errorf("writeWorktreeExcludes: mkdir %s: %w", filepath.Dir(excludePath), err)
+	}
+	body := strings.Join(sandboxScratchExcludes, "\n") + "\n"
+	if err := os.WriteFile(excludePath, []byte(body), 0o644); err != nil {
+		return fmt.Errorf("writeWorktreeExcludes: write %s: %w", excludePath, err)
+	}
+
+	// Point ONLY this worktree at that exclude file (worktree config scope).
+	if out, err := git(ctx, "-C", worktree, "config", "--worktree", "core.excludesFile", excludePath); err != nil {
+		return fmt.Errorf("writeWorktreeExcludes: set worktree core.excludesFile for %s: %w (%s)", worktree, err, strings.TrimSpace(out))
+	}
+	return nil
 }
 
 // teardownWorktree removes the run's worktree and prunes the repo's worktree list,

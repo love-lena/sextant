@@ -238,3 +238,139 @@ func TestTeardownWorktree_RepoLessNoop(t *testing.T) {
 		t.Fatalf("repo-less teardown must be a no-op; got %v", err)
 	}
 }
+
+// TestProvisionWorktree_IgnoresSandboxScratch (TASK-266 / D15): the per-run worktree
+// IGNORES the srt+pi sandbox-runtime scratch (.sx-srt-settings.json, .pi-agent/), so
+// D7's worktree-diff capture and pr.go's `git add -A` carry ONLY the worker's real
+// deliverable — never the stray environment artifacts that polluted PR #322.
+//
+// We simulate the live failure exactly: after provisioning, we drop into the worktree
+// the SAME files the recipe + pi runtime write into the worker's CWD —
+// `.sx-srt-settings.json` (the srt profile) and `.pi-agent/auth.json` (the scoped pi
+// config) — PLUS a real deliverable, then assert `git status --porcelain` (the same
+// signal D7's capture and pr-open's empty-diff guard read) lists ONLY the deliverable.
+//
+// FAKE-PASS GUARD: a test that doesn't actually create the sandbox scratch in the
+// worktree never exercises the exclude — so we (a) create both scratch paths, and
+// (b) assert positively that the real deliverable IS still seen (the exclude isn't
+// blanket-ignoring everything) before asserting the scratch is NOT.
+func TestProvisionWorktree_IgnoresSandboxScratch(t *testing.T) {
+	ctx := context.Background()
+	repo := newRepo(t)
+	store := filepath.Join(t.TempDir(), "store")
+	runID := "01RUNEEEEEEEEEEEEEEEEEEEEE"
+
+	path, err := provisionWorktree(ctx, repo, "", store, runID)
+	if err != nil {
+		t.Fatalf("provisionWorktree: %v", err)
+	}
+
+	// The sandbox runtime's CWD scratch, written verbatim as the recipe + pi do:
+	//   clients/dispatcher/recipes/pi.sh writes ${WORKDIR}/.sx-srt-settings.json and
+	//   creates ${WORKDIR}/.pi-agent/, into which pi drops an auth.json ("{}").
+	if err := os.WriteFile(filepath.Join(path, ".sx-srt-settings.json"), []byte(`{"filesystem":{}}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(path, ".pi-agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, ".pi-agent", "auth.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The worker's REAL deliverable — the only thing the run's PR should carry.
+	if err := os.WriteFile(filepath.Join(path, "deliverable.md"), []byte("the real change\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The exact signal D7 (worktree_diff.ts) and pr.go's empty-diff guard read.
+	status := mustGit(t, path, "status", "--porcelain")
+
+	// PROPERTY (the exclude isn't blanket): the real deliverable IS still seen. Without
+	// this positive assertion an over-broad exclude that hides everything would fake-pass.
+	if !strings.Contains(status, "deliverable.md") {
+		t.Fatalf("real deliverable missing from `git status --porcelain` — the exclude is too broad:\n%s", status)
+	}
+	// PROPERTY (the fix): the sandbox scratch is NOT seen — the per-worktree exclude is
+	// in effect, so neither D7's capture nor pr-open's commit will sweep them in.
+	if strings.Contains(status, ".sx-srt-settings.json") {
+		t.Fatalf("sandbox scratch .sx-srt-settings.json appears in `git status --porcelain` — the exclude is NOT in effect (D15 regression):\n%s", status)
+	}
+	if strings.Contains(status, ".pi-agent") {
+		t.Fatalf("sandbox scratch .pi-agent/ appears in `git status --porcelain` — the exclude is NOT in effect (D15 regression):\n%s", status)
+	}
+
+	// And the ignore is scoped to THIS worktree's config (not the shared repo config),
+	// proving we used per-worktree config — its excludesFile lives inside this
+	// worktree's OWN gitdir, and the file carries every scratch pattern.
+	excludePath := mustGit(t, path, "config", "--worktree", "core.excludesFile")
+	gitDir := mustGit(t, path, "rev-parse", "--absolute-git-dir")
+	if !strings.HasPrefix(excludePath, gitDir) {
+		t.Fatalf("worktree excludesFile %q is not inside the worktree's own gitdir %q — not per-worktree", excludePath, gitDir)
+	}
+	if !strings.Contains(gitDir, filepath.Join("worktrees", runID)) {
+		t.Fatalf("gitdir %q is not the per-worktree linked gitdir (expected under .git/worktrees/%s)", gitDir, runID)
+	}
+	body, err := os.ReadFile(excludePath)
+	if err != nil {
+		t.Fatalf("read worktree excludesFile %q: %v", excludePath, err)
+	}
+	for _, pat := range sandboxScratchExcludes {
+		if !strings.Contains(string(body), pat) {
+			t.Fatalf("worktree excludesFile %q missing pattern %q; body:\n%s", excludePath, pat, body)
+		}
+	}
+}
+
+// TestProvisionWorktree_ExcludeIsolatedToWorktree (TASK-266 / D15 safety): the ignore
+// is scoped to the run's worktree ALONE — it must NOT leak into the operator's primary
+// checkout. The earlier "obvious" approach (writing the shared common-dir info/exclude)
+// would silently hide these paths in EVERY worktree, including the operator's. We prove
+// the isolation by provisioning a SECOND worktree of the same repo and asserting it
+// still SEES the scratch (its config carries no sx exclude), so the fix touched only the
+// one worktree's config.
+func TestProvisionWorktree_ExcludeIsolatedToWorktree(t *testing.T) {
+	ctx := context.Background()
+	repo := newRepo(t)
+	store := filepath.Join(t.TempDir(), "store")
+	runA := "01RUNFFFFFFFFFFFFFFFFFFFFF"
+
+	pathA, err := provisionWorktree(ctx, repo, "", store, runA)
+	if err != nil {
+		t.Fatalf("provisionWorktree A: %v", err)
+	}
+	// A second worktree of the SAME repo (stands in for the operator's other checkout).
+	// It is provisioned WITHOUT going through writeWorktreeExcludes' effect leaking in —
+	// to prove the per-worktree config is isolated, B must still see the scratch. We
+	// create B's worktree directly (not via provisionWorktree) so its config is pristine.
+	pathB := filepath.Join(t.TempDir(), "other-checkout")
+	mustGit(t, repo, "worktree", "add", "-b", "other-branch", pathB)
+
+	// Drop the sandbox scratch into the SECOND worktree.
+	if err := os.WriteFile(filepath.Join(pathB, ".sx-srt-settings.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(pathB, ".pi-agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pathB, ".pi-agent", "auth.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// PROPERTY (isolation): the SECOND worktree STILL sees the scratch — run A's exclude
+	// did not leak into it. If the fix had written the shared common-dir exclude, B would
+	// hide them too and this assertion would fail (the fake-pass guard for "isolated").
+	statusB := mustGit(t, pathB, "status", "--porcelain")
+	if !strings.Contains(statusB, ".sx-srt-settings.json") || !strings.Contains(statusB, ".pi-agent") {
+		t.Fatalf("second worktree should still SEE the sandbox scratch (run A's exclude must not leak); status:\n%s", statusB)
+	}
+
+	// And run A's own worktree DOES hide it (so the negative above isn't vacuous —
+	// the mechanism works where it should).
+	if err := os.WriteFile(filepath.Join(pathA, ".sx-srt-settings.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	statusA := mustGit(t, pathA, "status", "--porcelain")
+	if strings.Contains(statusA, ".sx-srt-settings.json") {
+		t.Fatalf("run A's worktree should hide the scratch but does not; status:\n%s", statusA)
+	}
+}
