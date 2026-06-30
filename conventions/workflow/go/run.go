@@ -319,6 +319,11 @@ type RunStartAck struct {
 
 // Template is the sextant.workflow.template/v1 reusable workflow (matches the dash's
 // buildRecord at workengine.jsx). Carries no goal/criterion (a template is generic).
+//
+// The hybrid model (TASK-245): a template carries the per-step defaults a run inherits
+// — each step's Kind and (optional) Model — plus a default target Repo/RepoRef. The
+// spawn flow shows those defaults and lets the operator override Model and Repo per run
+// (see SpawnWork at workengine.jsx); the materialized Run binds the effective values.
 type Template struct {
 	Type           string         `json:"$type"`
 	Name           string         `json:"name"`
@@ -326,12 +331,27 @@ type Template struct {
 	Steps          []TemplateStep `json:"steps"`
 	Triggers       []any          `json:"triggers,omitempty"`
 	StopConditions []string       `json:"stop_conditions,omitempty"`
+	// Repo is the template's DEFAULT target repository — an absolute path the spawn flow
+	// prefills the per-run repo override from (workengine.jsx SpawnWork). The materialized
+	// Run carries the resolved value in Run.Repo; this is only the template-level default,
+	// never the engine's input. Omitted = no default (the operator supplies one at spawn).
+	Repo string `json:"repo,omitempty"`
+	// RepoRef is the template's default base ref (branch/tag/commit) the per-run worktree
+	// branches from, mirrored onto Run.RepoRef at spawn. Omitted = the repo's current HEAD;
+	// ignored when Repo is empty.
+	RepoRef string `json:"repo_ref,omitempty"`
 }
 
 type TemplateStep struct {
 	ID    string `json:"id"`
 	Label string `json:"label,omitempty"`
 	Kind  string `json:"kind"`
+	// Model is the step's DEFAULT per-step model (TASK-245). At spawn each step's
+	// effective model is the run-wide override (if the operator picked one) else this
+	// template default; the resolved value lands on RunStep.Model. Omitted = inherit
+	// (the dispatcher's default applies). Only meaningful for dispatched kinds
+	// (work/verify/brief).
+	Model string `json:"model,omitempty"`
 }
 
 func (r Run) Marshal() json.RawMessage {

@@ -44,7 +44,9 @@ import {
   KindBrief,
   KindVerify,
   KindPROpen,
+  KindTemplate,
   type Run,
+  type Template,
 } from "../src/index.js";
 
 function obj(v: JSONValue): { [k: string]: JSONValue } {
@@ -104,6 +106,34 @@ test("a run with a pr-open step round-trips, kind preserved (co-equal with Go)",
   const got = parseRun(marshalRun(run));
   assert.ok(got, "parseRun returned null for a run with a pr-open step");
   assert.equal(got!.steps[1]!.kind, KindPROpen);
+});
+
+// TASK-245 hybrid model (peer of Go's TestTemplateHybridFieldsRoundTrip): a template
+// carries a per-step default model and a template-level default repo/repo_ref, all
+// optional, and an unset value serializes as an OMITTED key (not an empty string).
+test("a template carries per-step model + default repo/repo_ref (co-equal with Go)", () => {
+  const tpl: Template = {
+    $type: KindTemplate,
+    name: "Plan → build → PR",
+    steps: [
+      { id: "s1", label: "build", kind: KindWork, model: "claude-opus-4-8" },
+      { id: "s2", label: "verify", kind: KindVerify }, // no model → inherit
+    ],
+    repo: "/Users/you/dev/project",
+    repo_ref: "main",
+  };
+  const wire = JSON.parse(JSON.stringify(tpl)) as Template;
+  assert.equal(wire.steps[0]!.model, "claude-opus-4-8");
+  assert.equal(wire.steps[1]!.model, undefined, "inherit step must omit model");
+  assert.equal(wire.repo, "/Users/you/dev/project");
+  assert.equal(wire.repo_ref, "main");
+
+  // omitempty: a bare template emits no repo / repo_ref / step.model keys.
+  const bare: Template = { name: "bare", steps: [{ id: "s1", kind: KindWork }] };
+  const bareWire = JSON.stringify(bare);
+  assert.equal(bareWire.includes('"repo"'), false, "bare template must omit repo");
+  assert.equal(bareWire.includes('"repo_ref"'), false, "bare template must omit repo_ref");
+  assert.equal(bareWire.includes('"model"'), false, "bare step must omit model");
 });
 
 test("parseRun rejects the OLD sextant.workflow/v1 type and non-objects", () => {

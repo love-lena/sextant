@@ -1388,7 +1388,17 @@ body{font-family:'Hanken Grotesk','Space Grotesk',sans-serif;background:#0d0e11;
 .we-step-edit{display:flex;align-items:center;gap:9px;background:var(--sbg2);border:1px solid var(--shair);border-radius:9px;padding:7px 10px;}
 .we-step-edit[draggable=true]{cursor:grab;}
 .we-step-checkpoint{border-left:3px solid var(--wait);}
+.we-step-verify{border-left:3px solid var(--ok,#3ba55d);}
+.we-step-pr-open{border-left:3px solid var(--brand);}
 .we-step-brief{border-left:3px solid var(--brand);background:var(--brand-soft);}
+/* per-step kind + model selectors (TASK-245). Compact, sit inline in the step row. */
+.we-step-sel{flex:0 0 auto;font-family:var(--font-ui);font-size:12px;color:var(--stx);background:var(--sbg2);border:1px solid var(--shair);border-radius:7px;padding:4px 6px;cursor:pointer;}
+.we-step-sel:focus{outline:none;border-color:var(--brand);}
+.we-step-model{max-width:190px;}
+/* a labelled field row (default repo / base ref / run-option overrides). */
+.we-field-row{display:flex;flex-direction:column;gap:4px;}
+.we-field-lbl{font-size:11px;font-weight:600;color:var(--smut);}
+.we-hint-warn{color:var(--wait);font-size:12px;margin-top:8px;}
 .we-step-grip{color:var(--smut);font-size:13px;flex:0 0 auto;}
 .we-step-input{flex:1;min-width:0;font-family:var(--font-ui);font-size:13px;color:var(--stx);background:none;border:none;}
 .we-step-input:focus{outline:none;}
