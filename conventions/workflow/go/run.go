@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // The run contract (ADR-0048) — the run-record half of the workflow convention.
@@ -149,6 +150,25 @@ type RunStep struct {
 	// field flows RunStep → SpawnRequest.Model → dispatcher env SX_AGENT_MODEL so
 	// the pi recipe picks it up. Omitted = coordinator/dispatcher default applies.
 	Model string `json:"model,omitempty"`
+	// TimeoutSecs is the optional per-step timeout, in whole seconds (TASK-257). When
+	// > 0 the coordinator bounds this step's dispatch (spawn.ack + the agent's
+	// step-done) by it instead of the run-wide --step-timeout default. A coding step
+	// (plan, implement, review) routinely runs minutes, far past the 90s default, so a
+	// run carries the right budget IN ITS DEFINITION rather than relying on a hand-run
+	// coordinator flag. Omitted/0 = the coordinator's flag/default applies. Seconds (an
+	// int), not a Go time.Duration string, so the Go run and its TS peer serialize the
+	// SAME wire bytes (the field is co-equal across languages).
+	TimeoutSecs int `json:"timeout_secs,omitempty"`
+}
+
+// Timeout returns the step's declared per-step timeout (TASK-257), or 0 when unset.
+// The coordinator falls back to its run-wide default when this is 0. Centralised here
+// so the seconds→Duration conversion lives with the field, not at each call site.
+func (s RunStep) Timeout() time.Duration {
+	if s.TimeoutSecs <= 0 {
+		return 0
+	}
+	return time.Duration(s.TimeoutSecs) * time.Second
 }
 
 // RelatesLink binds a run to a goal/criterion (ADR-0035 relates, ADR-0048 toward).

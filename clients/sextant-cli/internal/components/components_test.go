@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/love-lena/sextant/protocol/wireapi"
 )
@@ -150,6 +151,36 @@ func TestDashRegistryEntry(t *testing.T) {
 	}
 	if slices.Contains(args, "--port") {
 		t.Errorf("dash Args must NOT pass --port (the stable 8765 default, AC#4); got %v", args)
+	}
+}
+
+// TestWorkflowComponentCarriesSaneStepTimeout is the AC#3 proof (the part verifiable
+// without the live managed stack): the MANAGED workflow component's launch args carry a
+// --step-timeout well above the coordinator binary's 90s default — so `sextant workflow
+// start` drives a real coding step (minutes) to completion with NO operator flag. The
+// fake-pass guard is explicit: a value <= 90s would mean the managed binary still gets the
+// too-short default and the live scaffold's hand-run --step-timeout 30m is still required,
+// which is exactly the bug TASK-257 fixes. (AC#1/#3's full live proof is a managed run
+// completing a >90s step, gated on the assembled managed-path e2e — this asserts the
+// component is CONFIGURED to make that pass.)
+func TestWorkflowComponentCarriesSaneStepTimeout(t *testing.T) {
+	c, ok := Find("workflow")
+	if !ok {
+		t.Fatal("workflow is not registered as a managed component")
+	}
+	args := c.Args("/c/workflow.creds", "/s/store", "")
+	i := slices.Index(args, "--step-timeout")
+	if i < 0 || i+1 >= len(args) {
+		t.Fatalf("managed workflow Args must pass --step-timeout so the coordinator does not run at its 90s default (AC#3 no-manual-flags); got %v", args)
+	}
+	got, err := time.ParseDuration(args[i+1])
+	if err != nil {
+		t.Fatalf("--step-timeout %q is not a valid duration: %v", args[i+1], err)
+	}
+	// The coordinator binary's own default is 90s (clients/coordinator/main.go) — far too
+	// short for a coding step. The managed value MUST exceed it, or the bug stands.
+	if got <= 90*time.Second {
+		t.Fatalf("managed workflow --step-timeout = %s; must exceed the coordinator's 90s default (a coding step runs minutes) — a value <= 90s is the TASK-257 bug, not the fix", got)
 	}
 }
 

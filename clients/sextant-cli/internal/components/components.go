@@ -32,10 +32,21 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/love-lena/sextant/protocol/wireapi"
 	"github.com/love-lena/sextant/shared/go/clictx"
 )
+
+// managedStepTimeout is the default per-step budget the MANAGED workflow coordinator runs
+// with (TASK-257). The coordinator binary's own --step-timeout default is 90s — fine for a
+// trivial step but far too short for a real coding step (plan/implement/review run minutes),
+// which forced the live scaffold to hand-run a coordinator with --step-timeout 30m and
+// bypass the managed path entirely. The managed component carries this sane default so
+// `sextant workflow start` drives a coding step to completion with NO operator flag (AC#3).
+// A run/template may still declare a tighter or looser per-step timeout (RunStep.TimeoutSecs),
+// which overrides this (AC#2); this is only the fallback for a step that declares none.
+const managedStepTimeout = 30 * time.Minute
 
 // shQuote single-quotes s for safe embedding in a `sh -c` command line, so a path
 // with spaces stays ONE token. The dispatcher runs --harness via `sh -c`, and the
@@ -119,7 +130,16 @@ var Registry = []Component{
 		Args: func(creds, store, recipe string) []string {
 			// Listen mode (no --id): subscribe to run.start and adopt one run per
 			// request (the dash's "start a run" path; ADR-0048, TASK-236).
-			return []string{"--creds", creds, "--store", store}
+			//
+			// --step-timeout: a sane DEFAULT budget so the managed coordinator handles a
+			// real coding step (plan, implement, review — minutes, not seconds) WITHOUT the
+			// operator passing any flag (TASK-257 AC#3). The coordinator's own flag default
+			// (90s) is far too short and forced the live scaffold to hand-run a coordinator
+			// with --step-timeout 30m, bypassing the managed path; carrying the right value
+			// HERE is what makes `sextant workflow start` work with no manual flags. A
+			// per-step timeout declared in the run/template (RunStep.TimeoutSecs) overrides
+			// this per step (AC#2); this is the fallback when a step declares none.
+			return []string{"--creds", creds, "--store", store, "--step-timeout", managedStepTimeout.String()}
 		},
 	},
 	{
