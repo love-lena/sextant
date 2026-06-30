@@ -19,9 +19,23 @@ after; it polls the envelope to render progress.
 
 The wake is a hand-off, not a takeover. The dash, having written the run artifact,
 publishes a `run.start{id}` on `msg.topic.run.start`; the coordinator **adopts** the
-run by id, (re)owns it, and walks its steps. A run.start published while the
-coordinator is briefly down is intentionally missed and re-issued — new-only
-delivery, not a replayed durable queue (the TASK-192 anti-crash-loop discipline).
+run by id, (re)owns it under a single-writer CAS on the envelope, and walks its steps.
+A run.start published while no coordinator is listening is **durably replayed** on
+(re)subscribe (TASK-259, `DeliverAll`) and adopted, not lost; an **idempotent guard**
+keyed on the durable run envelope keeps replay from re-running finished work — the
+TASK-192 anti-crash-loop discipline now lives in that guard, not in dropping history.
+
+**Resume (TASK-267).** A `blocked` run is *resumable*, distinct from `done`/`cancelled`
+which are terminal-final. A step failure blocks the run — and a failure can be transient
+(a network interruption drains a worker mid-step, which reports a hollow done-event and
+trips the proof gate). So re-issuing a blocked run (the operator re-publishes `run.start`
+for its id) **re-adopts** it: the coordinator re-claims ownership (the same CAS — two
+coordinators racing a resume can't double-dispatch), resets the run to `running`, and
+re-dispatches **fresh** from the first non-`done` step (prior `done` steps are skipped,
+their artifacts already attached and piped in). A re-issued `done` run still skips (a
+completed run is never re-run); a `cancelled` run was deliberately stopped. A
+re-dispatch correlates the step-done event with *this* attempt (it drops any prior
+attempt's retained event), so a replayed hollow outcome can't complete the fresh step.
 
 Steps run by **kind**: a `work` step dispatches an agent (compose the dispatcher —
 publish `spawn.request`, await `spawn.ack`, await the agent's `run.event` step-done on

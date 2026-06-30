@@ -50,6 +50,7 @@ export {
   KindPROpen,
   RunStartSubject,
   isTerminalRun,
+  isResumableRun,
   nextPendingRun,
   marshalRun,
   parseRun,

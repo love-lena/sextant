@@ -161,6 +161,24 @@ func pollRun(t *testing.T, ctx context.Context, c *sextant.Client, runID string,
 	return r
 }
 
+// putArtifact creates-or-updates an artifact by name, modelling the real worker's
+// idempotent artifact_put: a worker RE-DISPATCHED for a step (an agent-mode redo or a
+// TASK-267 resume) re-produces its deliverable, reusing the name. CreateArtifact fails on
+// an existing name, so a test worker that re-runs must upsert, or its second attempt would
+// report no artifact and spuriously block the run. Returns true on success.
+func putArtifact(ctx context.Context, d *sextant.Client, name string, record json.RawMessage) bool {
+	if _, err := d.CreateArtifact(ctx, name, record); err == nil {
+		return true
+	}
+	// Already exists (a re-dispatch): update it in place at its current revision.
+	art, err := d.GetArtifact(ctx, name)
+	if err != nil {
+		return false
+	}
+	_, err = d.UpdateArtifact(ctx, name, record, art.Revision)
+	return err == nil
+}
+
 func startListenConsumer(t *testing.T, ctx context.Context, consumer *sextant.Client, spawnSubj string, stepTimeout time.Duration) {
 	t.Helper()
 	// These tests are repo-less (no Run.Repo): an empty store provisions no worktree,

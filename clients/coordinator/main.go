@@ -270,9 +270,12 @@ func (co *coordinator) claimOwnership(ctx context.Context, runID string) error {
 		}
 		co.run, co.rev = r, art.Revision
 
-		// A terminal run is a no-op for adoption: record ownership in memory (so logs/state
-		// read coherently) but write nothing — there is nothing to drive.
-		if workflow.IsTerminalRun(co.run.Status) {
+		// A terminal-FINAL run (done/cancelled) is a no-op for adoption: record ownership in
+		// memory (so logs/state read coherently) but write nothing — there is nothing to
+		// drive. A `blocked` run is NOT final: it is RESUMABLE (TASK-267), so it falls
+		// through to the CAS claim below and is re-owned + re-driven like any non-terminal
+		// run. (A done/cancelled run is never resumed — the idempotent-replay guard.)
+		if workflow.IsTerminalRun(co.run.Status) && !workflow.IsResumableRun(co.run.Status) {
 			co.run.Owner = co.c.ID()
 			return nil
 		}
@@ -338,8 +341,25 @@ func (co *coordinator) adopt(ctx context.Context, runID string) error {
 	if err := co.claimOwnership(ctx, runID); err != nil {
 		return err
 	}
-	if workflow.IsTerminalRun(co.run.Status) {
+	// A terminal-FINAL run (done/cancelled) is a no-op — there is nothing to drive (the
+	// idempotent-replay / deliberate-cancel guards). A `blocked` run is RESUMABLE: it is
+	// re-adopted and reset to running below (TASK-267), so it does NOT short-circuit here.
+	if workflow.IsTerminalRun(co.run.Status) && !workflow.IsResumableRun(co.run.Status) {
 		return nil
+	}
+	// Resume a blocked run (TASK-267). The blocked status is the only thing that made it
+	// terminal; reset the first non-`done` step (the one that failed — left waiting/blocked
+	// by walk) back to upcoming so runStep re-dispatches it FRESH from the prior steps'
+	// already-attached artifacts (the inputs are piped in, so a fresh worker can redo it).
+	// Steps already `done` are skipped (NextPending), so a resume re-runs only the
+	// incomplete step, not completed work. The run status reset to running happens below
+	// (same path a fresh adoption takes); both writes go through this single-writer CAS.
+	if workflow.IsResumableRun(co.run.Status) {
+		if idx := co.run.NextPending(); idx >= 0 {
+			co.run.Steps[idx].Status = workflow.StepUpcoming
+			co.run.Steps[idx].Produced = nil // clear the failed attempt's refs; the re-run records fresh output
+		}
+		co.appendActivity("↻", fmt.Sprintf("resuming blocked run — re-dispatching from step %q", resumeStepID(co.run)))
 	}
 	if len(co.run.Stop) == 0 {
 		co.run.Stop = []string{"done — brief w/ proof of success", "blocked — brief documenting why"}
@@ -518,6 +538,16 @@ func stepDoneText(s *workflow.RunStep) string {
 	return "step " + s.ID + " done"
 }
 
+// resumeStepID names the step a resumed blocked run re-dispatches from (the first
+// non-`done` step) for the resume activity entry; "(none)" if every step is already
+// done (an unexpected blocked-but-complete run — defensive).
+func resumeStepID(r workflow.Run) string {
+	if idx := r.NextPending(); idx >= 0 {
+		return r.Steps[idx].ID
+	}
+	return "(none)"
+}
+
 // runStep runs one step by kind. A non-empty terminal return means the run should
 // finish with that status (the brief step's outcome).
 func (co *coordinator) runStep(idx int) (string, error) {
@@ -550,6 +580,13 @@ func (co *coordinator) runStep(idx int) (string, error) {
 // the run's event stream. Each wait is bounded (fail-loud). It attaches any artifacts
 // the agent reported in its done event.
 func (co *coordinator) runDispatch(step *workflow.RunStep, prompt string) error {
+	// Correlate the step-done event with THIS dispatch: drop any retained done-event for
+	// this step id before publishing the spawn.request, so awaitStepDone honours only an
+	// event that arrives AFTER this (re)dispatch. Without this, a RE-dispatch — a resumed
+	// blocked run (TASK-267) or an agent-mode redo — would match the PRIOR attempt's stale
+	// step-done (the events subject is DeliverAll, so a resumed coordinator replays it) and
+	// complete the step against the old (e.g. hollow) outcome instead of the fresh worker's.
+	co.clearStepDone(step.ID)
 	req := workflow.SpawnRequest{Prompt: prompt, Nickname: step.Label, Job: co.run.ID, Model: step.Model, Workdir: co.workdir}
 	out, err := co.c.PublishMsg(co.ctx, co.spawnSubject, req.Marshal())
 	if err != nil {
@@ -778,6 +815,16 @@ func (co *coordinator) setActiveAgent(id string) {
 	co.mu.Unlock()
 }
 
+// clearStepDone drops any retained step-done event for stepID, so the next awaitStepDone
+// for that step matches only an event arriving AFTER it — the correlation a re-dispatch
+// (resume or agent-mode redo) needs, since a replayed event subject would otherwise serve
+// a prior attempt's stale outcome.
+func (co *coordinator) clearStepDone(stepID string) {
+	co.mu.Lock()
+	delete(co.doneEvents, stepID)
+	co.mu.Unlock()
+}
+
 // applySteers drains the operator steers that arrived since the last call and applies
 // each to the LIVE run (TASK-246). Run only on the main goroutine (it mutates co.run
 // via appendActivity, preserving single-writer). For each steer it:
@@ -876,6 +923,7 @@ func (co *coordinator) runCheckpoint(step *workflow.RunStep) error {
 // artifact attached (ADR-0048 "never halt without posting the brief"). The agent's
 // reported outcome (done|blocked) becomes the terminal run status. (AC #4)
 func (co *coordinator) runBrief(step *workflow.RunStep) (string, error) {
+	co.clearStepDone(step.ID) // correlate with THIS dispatch (resume/redo); see runDispatch
 	req := workflow.SpawnRequest{Prompt: co.briefPrompt(step), Nickname: step.Label, Job: co.run.ID, Model: step.Model, Workdir: co.workdir}
 	out, err := co.c.PublishMsg(co.ctx, co.spawnSubject, req.Marshal())
 	if err != nil {
@@ -1385,7 +1433,13 @@ func (sc *startConsumer) shouldAdopt(runID, reqID, author string) bool {
 		logf("run.start %s: run %s artifact is not a %s record — skipping", short(reqID), short(runID), workflow.KindRun)
 		return false
 	}
-	if workflow.IsTerminalRun(r.Status) {
+	// A `blocked` run is RESUMABLE (TASK-267): a step failed — possibly from a transient
+	// network interruption that drained its worker mid-step — and re-issuing the run.start
+	// must RE-ADOPT it and re-dispatch from the first non-`done` step, not permanently skip
+	// it. So a blocked run falls through to adoption. `done`/`cancelled` stay a no-op (the
+	// idempotent-replay guard: a completed run is never re-run; a cancelled run was
+	// deliberately stopped). The CAS in claimOwnership still arbitrates a resume race.
+	if workflow.IsTerminalRun(r.Status) && !workflow.IsResumableRun(r.Status) {
 		logf("run.start %s: run %s already %s — skipping (idempotent replay)", short(reqID), short(runID), r.Status)
 		return false
 	}

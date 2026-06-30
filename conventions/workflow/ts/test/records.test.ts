@@ -26,6 +26,7 @@ import {
   DecisionStop,
   nextPendingRun,
   isTerminalRun,
+  isResumableRun,
   runStartRecord,
   runStateName,
   runEventsSubject,
@@ -137,6 +138,13 @@ test("nextPendingRun returns the first not-done step", () => {
 test("isTerminalRun pins the resume guard", () => {
   for (const s of [RunDone, RunBlocked, RunCancelled]) assert.equal(isTerminalRun(s), true, s);
   for (const s of [RunRunning, RunWaiting]) assert.equal(isTerminalRun(s), false, s);
+});
+
+test("isResumableRun is blocked-only (TASK-267): resumable, distinct from done/cancelled", () => {
+  // Only a blocked run resumes on re-issue; done/cancelled are terminal-final, never re-run.
+  assert.equal(isResumableRun(RunBlocked), true, RunBlocked);
+  for (const s of [RunDone, RunCancelled, RunRunning, RunWaiting])
+    assert.equal(isResumableRun(s), false, s);
 });
 
 test("parseRunEvent accepts an event and rejects other records", () => {
