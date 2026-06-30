@@ -77,7 +77,7 @@ func main() {
 	// Listen mode: no --id — subscribe to run.start and adopt one run per request
 	// (the dash's "spawn a run" path).
 	if *id == "" {
-		_, sub, err := newStartConsumer(ctx, c, *spawnSubject, *stepTimeout)
+		_, sub, err := newStartConsumer(ctx, c, *spawnSubject, *stepTimeout, *store)
 		if err != nil {
 			fatal("%v", err)
 		}
@@ -92,7 +92,7 @@ func main() {
 		return
 	}
 
-	co := newCoordinator(ctx, c, *spawnSubject, *stepTimeout)
+	co := newCoordinator(ctx, c, *spawnSubject, *stepTimeout, *store)
 	if err := co.adopt(ctx, *id); err != nil {
 		fatal("%v", err)
 	}
@@ -142,6 +142,17 @@ type coordinator struct {
 	c            *sextant.Client
 	spawnSubject string
 	stepTimeout  time.Duration
+	// store is the bus store dir. Its parent is the scratch neighbourhood under which
+	// per-run worktrees are provisioned (TASK-256), a SIBLING of the store — never the
+	// target repo's own tree or an existing checkout.
+	store string
+
+	// workdir is the run's provisioned per-run git worktree (TASK-256), set once at
+	// adopt when the run declares a Repo, threaded to every step's worker via
+	// SpawnRequest.Workdir → SEXTANT_PI_WORKDIR, and torn down on terminal. Empty for a
+	// repo-less run (the worker falls back to the recipe's scratch default). Read only
+	// on the main goroutine (set in adopt, read in the dispatch path, cleared in finish).
+	workdir string
 	// terminalGrace is how long the run-topic subscription stays alive AFTER the run goes
 	// terminal, so a steer arriving just-too-late is reported not-applied rather than
 	// silently dropped by a coordinator already tearing down (TASK-246 no-silent-drop).
@@ -200,9 +211,9 @@ type steer struct {
 	from string
 }
 
-func newCoordinator(ctx context.Context, c *sextant.Client, spawnSubject string, stepTimeout time.Duration) *coordinator {
+func newCoordinator(ctx context.Context, c *sextant.Client, spawnSubject string, stepTimeout time.Duration, store string) *coordinator {
 	co := &coordinator{
-		ctx: ctx, c: c, spawnSubject: spawnSubject, stepTimeout: stepTimeout,
+		ctx: ctx, c: c, spawnSubject: spawnSubject, stepTimeout: stepTimeout, store: store,
 		terminalGrace: 30 * time.Second,
 		acks:          map[string]workflow.SpawnAck{}, doneEvents: map[string]workflow.RunEvent{},
 		decisions: map[string]workflow.RunDecision{}, stepFeedback: map[string]string{},
@@ -243,6 +254,21 @@ func (co *coordinator) adopt(ctx context.Context, runID string) error {
 	}
 	if len(co.run.Stop) == 0 {
 		co.run.Stop = []string{"done — brief w/ proof of success", "blocked — brief documenting why"}
+	}
+	// Per-run isolated worktree (TASK-256): if the run declares a target repo, provision
+	// ONE git worktree for the whole run before any step dispatches, and run every step
+	// inside it (threaded via SpawnRequest.Workdir). A repo-less run provisions nothing —
+	// co.workdir stays empty and the worker falls back to the recipe's scratch default
+	// (today's behaviour). Idempotent on resume (provisionWorktree reuses an existing
+	// registered worktree). Failure to provision blocks the run before any work — fail
+	// loud, never silently run a step in the wrong (or operator's) checkout.
+	if co.run.Repo != "" {
+		path, err := provisionWorktree(ctx, co.run.Repo, co.run.RepoRef, co.store, co.run.ID)
+		if err != nil {
+			return fmt.Errorf("adopt %s: provision worktree: %w", runID, err)
+		}
+		co.workdir = path
+		co.appendActivity("⎇", fmt.Sprintf("provisioned worktree %s on branch %s", path, runBranch(co.run.ID)))
 	}
 	co.run.Status = workflow.RunRunning
 	return co.checkpoint()
@@ -430,7 +456,7 @@ func (co *coordinator) runStep(idx int) (string, error) {
 // the run's event stream. Each wait is bounded (fail-loud). It attaches any artifacts
 // the agent reported in its done event.
 func (co *coordinator) runDispatch(step *workflow.RunStep, prompt string) error {
-	req := workflow.SpawnRequest{Prompt: prompt, Nickname: step.Label, Job: co.run.ID, Model: step.Model}
+	req := workflow.SpawnRequest{Prompt: prompt, Nickname: step.Label, Job: co.run.ID, Model: step.Model, Workdir: co.workdir}
 	out, err := co.c.PublishMsg(co.ctx, co.spawnSubject, req.Marshal())
 	if err != nil {
 		return fmt.Errorf("publish spawn.request: %w", err)
@@ -756,7 +782,7 @@ func (co *coordinator) runCheckpoint(step *workflow.RunStep) error {
 // artifact attached (ADR-0048 "never halt without posting the brief"). The agent's
 // reported outcome (done|blocked) becomes the terminal run status. (AC #4)
 func (co *coordinator) runBrief(step *workflow.RunStep) (string, error) {
-	req := workflow.SpawnRequest{Prompt: co.briefPrompt(step), Nickname: step.Label, Job: co.run.ID, Model: step.Model}
+	req := workflow.SpawnRequest{Prompt: co.briefPrompt(step), Nickname: step.Label, Job: co.run.ID, Model: step.Model, Workdir: co.workdir}
 	out, err := co.c.PublishMsg(co.ctx, co.spawnSubject, req.Marshal())
 	if err != nil {
 		return "", fmt.Errorf("publish brief spawn.request: %w", err)
@@ -874,6 +900,20 @@ func (co *coordinator) finish(status, note string) error {
 		text += ": " + note
 	}
 	co.appendActivity(terminalGlyph(status), text)
+	// Tear down the per-run worktree on EVERY terminal status (done/blocked/cancelled),
+	// leaving no stray entry in the repo's worktree list (TASK-256 AC#3). BEST-EFFORT: a
+	// teardown failure is logged + noted on the activity trail, never raised — a run that
+	// finished must report its terminal status even if cleanup couldn't run. Repo-less
+	// runs have an empty workdir and tear down nothing.
+	if co.workdir != "" {
+		if err := teardownWorktree(co.ctx, co.run.Repo, co.workdir); err != nil {
+			logf("warn: teardown worktree %s: %v", co.workdir, err)
+			co.appendActivity("⚠", fmt.Sprintf("worktree teardown failed (left for manual prune): %v", err))
+		} else {
+			co.appendActivity("⎇", fmt.Sprintf("tore down worktree %s", co.workdir))
+		}
+		co.workdir = ""
+	}
 	logf("run %s: %s", co.run.ID, status)
 	return nil
 }
@@ -1111,15 +1151,16 @@ type startConsumer struct {
 	c            *sextant.Client
 	spawnSubject string
 	stepTimeout  time.Duration
+	store        string // passed to each adopted run's coordinator for worktree scratch (TASK-256)
 
 	mu   sync.Mutex
 	seen map[string]bool // request frame ids already handled (dedup a redelivery on reconnect)
 }
 
 // newStartConsumer builds and subscribes a startConsumer on workflow.RunStartSubject.
-func newStartConsumer(ctx context.Context, c *sextant.Client, spawnSubject string, stepTimeout time.Duration) (*startConsumer, sextant.Subscription, error) {
+func newStartConsumer(ctx context.Context, c *sextant.Client, spawnSubject string, stepTimeout time.Duration, store string) (*startConsumer, sextant.Subscription, error) {
 	sc := &startConsumer{
-		ctx: ctx, c: c, spawnSubject: spawnSubject, stepTimeout: stepTimeout,
+		ctx: ctx, c: c, spawnSubject: spawnSubject, stepTimeout: stepTimeout, store: store,
 		seen: map[string]bool{},
 	}
 	// New-only delivery (NOT DeliverAll): a run.start is a LIVE command, not a durable
@@ -1203,7 +1244,7 @@ func (co *coordinator) holdForLateSteers() {
 // events + control), and adopts the run the dash wrote. It returns the coordinator
 // (ready to run), a stopSubs closure, and any error. On failure: (nil, noop, err).
 func (sc *startConsumer) prepareRun(runID string) (*coordinator, func(), error) {
-	co := newCoordinator(sc.ctx, sc.c, sc.spawnSubject, sc.stepTimeout)
+	co := newCoordinator(sc.ctx, sc.c, sc.spawnSubject, sc.stepTimeout, sc.store)
 
 	var subs []sextant.Subscription
 	for _, s := range []struct {

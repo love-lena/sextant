@@ -247,6 +247,7 @@ type managedAgent struct {
 	credsPath  string
 	job        string
 	model      string // resolved model for this agent (TASK-245); set at spawn time
+	workdir    string // scoped working dir from the spawn.request (TASK-256); exported as SEXTANT_PI_WORKDIR when set
 	running    bool
 	subscribed bool // wake subjects subscribed once, on first manage()
 }
@@ -334,7 +335,7 @@ func (d *dispatcher) spawn(req spawn.SpawnRequest, nick, model string) (string, 
 		return issued.ID, fmt.Errorf("write child creds: %w", err)
 	}
 
-	ag := &managedAgent{id: issued.ID, nick: nick, credsPath: credsPath, job: req.Job, model: model}
+	ag := &managedAgent{id: issued.ID, nick: nick, credsPath: credsPath, job: req.Job, model: model, workdir: req.Workdir}
 	d.mu.Lock()
 	d.agents[ag.id] = ag
 	ag.running = true // claim before launch so a racing wake can't double-spawn
@@ -428,6 +429,14 @@ func (d *dispatcher) launchHarness(ag *managedAgent, prompt string) error {
 		"SX_CHILD_NICK=" + ag.nick,
 		"SX_JOB=" + ag.job,
 		"SX_AGENT_MODEL=" + model,
+	}
+	// SEXTANT_PI_WORKDIR scopes the worker's CWD to the per-run git worktree the
+	// coordinator provisioned (TASK-256), threaded here from the spawn.request's Workdir.
+	// Set ONLY when non-empty: an empty workdir leaves it unset so the pi recipe falls
+	// back to its per-child scratch default (preserving today's behaviour for repo-less
+	// runs and for spawns that declare no workdir).
+	if ag.workdir != "" {
+		env = append(env, "SEXTANT_PI_WORKDIR="+ag.workdir)
 	}
 	return d.launch("harness["+ag.nick+"]", d.harness, env, func() {
 		d.mu.Lock()

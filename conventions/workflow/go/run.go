@@ -119,6 +119,19 @@ type Run struct {
 	Created   int64              `json:"created,omitempty"`
 	Owner     string             `json:"owner,omitempty"` // coordinator client id (set on adopt)
 
+	// Repo is the absolute path to the git repository this run's work happens in
+	// (TASK-256). When set, the coordinator provisions one isolated git worktree per
+	// run (a fresh branch sxrun/<id> off RepoRef, or HEAD when RepoRef is empty),
+	// runs every step inside it (threaded to the worker via SpawnRequest.Workdir →
+	// SEXTANT_PI_WORKDIR), and tears it down when the run goes terminal. It comes from
+	// the RUN/TEMPLATE definition, never an operator-set env var — so a request can't
+	// point a worker at an arbitrary checkout. Omitted = no provisioning (the worker
+	// falls back to the recipe's scratch default; today's behaviour for repo-less runs).
+	Repo string `json:"repo,omitempty"`
+	// RepoRef is the optional base ref the per-run worktree branches from (a branch,
+	// tag, or commit). Omitted = the repo's current HEAD. Ignored when Repo is empty.
+	RepoRef string `json:"repo_ref,omitempty"`
+
 	// AgentMode opts this run into the long-lived coordinator-AGENT review loop (TASK-242):
 	// at each completed step the programmatic shell consults a resident reviewer agent and
 	// applies its run.decision. ADDITIVE and opt-in — absent/false is the existing

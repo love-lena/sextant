@@ -163,7 +163,10 @@ func pollRun(t *testing.T, ctx context.Context, c *sextant.Client, runID string,
 
 func startListenConsumer(t *testing.T, ctx context.Context, consumer *sextant.Client, spawnSubj string, stepTimeout time.Duration) {
 	t.Helper()
-	_, sub, err := newStartConsumer(ctx, consumer, spawnSubj, stepTimeout)
+	// These tests are repo-less (no Run.Repo): an empty store provisions no worktree,
+	// preserving the scratch-default path. A worktree-specific test (worktree_test.go)
+	// calls newStartConsumer directly with a real store.
+	_, sub, err := newStartConsumer(ctx, consumer, spawnSubj, stepTimeout, "")
 	if err != nil {
 		t.Fatalf("newStartConsumer: %v", err)
 	}
