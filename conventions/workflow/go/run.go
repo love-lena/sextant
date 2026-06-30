@@ -23,7 +23,44 @@ const (
 	TypeRunControl  = "run.control"
 	TypeRunStart    = "run.start"
 	TypeRunStartAck = "run.start.ack"
+
+	// Agent-mode review lexicon (TASK-242, ADR-0048-additive). In agent mode the
+	// programmatic shell asks a long-lived coordinator AGENT to review each completed
+	// step (run.review) and applies the agent's reply (run.decision). The shell stays the
+	// SOLE single-writer of the run envelope: the agent NEVER writes the envelope, it only
+	// emits a run.decision record the shell reads and applies. Both ride msg.* subjects.
+	TypeRunReview   = "run.review"
+	TypeRunDecision = "run.decision"
 )
+
+// Agent-mode decision verbs — the FLAT-STEP-MODEL v1 vocabulary (TASK-242). EXACTLY
+// these four: no graph reshaping (branch/insert/skip) in v1. The shell rejects any
+// verb outside this set (treated as advance-is-not-granted → it does not advance).
+//
+//   - DecisionAdvance: the step's output is good; proceed to the next step.
+//   - DecisionRedo: the output is fundamentally wrong; re-dispatch the SAME step with
+//     the agent's Feedback threaded into the worker's next prompt.
+//   - DecisionEdit: the agent applied a fix-up edit to the deliverable itself (unbounded
+//     per Lena 2026-06-29); then advance. The edit is the agent's own act on the
+//     deliverable artifact — NOT a run-envelope write (single-writer holds).
+//   - DecisionStop: stop the run now (terminal).
+const (
+	DecisionAdvance = "advance"
+	DecisionRedo    = "redo-with-feedback"
+	DecisionEdit    = "edit-then-advance"
+	DecisionStop    = "stop"
+)
+
+// IsDecisionVerb reports whether v is one of the four FLAT-STEP-MODEL v1 verbs. The
+// shell uses it to REJECT any graph-reshaping verb (branch/insert/skip) a confused agent
+// might emit: an unknown verb is not "advance", so the run never silently advances on it.
+func IsDecisionVerb(v string) bool {
+	switch v {
+	case DecisionAdvance, DecisionRedo, DecisionEdit, DecisionStop:
+		return true
+	}
+	return false
+}
 
 // Run statuses (the dash's RUN_STATUS set; no "failed" — a failed step → blocked).
 const (
@@ -70,6 +107,12 @@ type Run struct {
 	Stop      []string           `json:"stop,omitempty"`
 	Created   int64              `json:"created,omitempty"`
 	Owner     string             `json:"owner,omitempty"` // coordinator client id (set on adopt)
+
+	// AgentMode opts this run into the long-lived coordinator-AGENT review loop (TASK-242):
+	// at each completed step the programmatic shell consults a resident reviewer agent and
+	// applies its run.decision. ADDITIVE and opt-in — absent/false is the existing
+	// programmatic path, byte-unchanged (the shell never stands up or consults an agent).
+	AgentMode bool `json:"agent_mode,omitempty"`
 }
 
 // RunStep is one unit of work. Kind work → dispatch an agent; checkpoint → pause for
@@ -142,6 +185,35 @@ type RunEvent struct {
 type RunControl struct {
 	Type string `json:"$type"`
 	Verb string `json:"verb"`
+}
+
+// RunReview is the agent-mode review REQUEST the programmatic shell publishes on
+// RunReviewSubject(id) when a step completes and the run is in agent mode (TASK-242). It
+// hands the long-lived coordinator agent everything it needs to judge the step's output:
+// the step id, the objective, and the typed refs the step's worker produced (so the agent
+// can artifact_get each and READ its content — the one sanctioned content read). The shell
+// then awaits the agent's RunDecision on RunDecisionSubject(id). The shell decides nothing
+// from content here; it only relays metadata and the produced refs.
+type RunReview struct {
+	Type      string             `json:"$type"`
+	Step      string             `json:"step"`
+	Objective string             `json:"objective,omitempty"`
+	Label     string             `json:"label,omitempty"`
+	Produced  []ProducedArtifact `json:"produced,omitempty"`
+}
+
+// RunDecision is the agent's reply the shell applies (TASK-242). Verb is one of the four
+// FLAT-STEP-MODEL v1 verbs (IsDecisionVerb); Feedback is threaded into the re-dispatch
+// prompt on redo-with-feedback; Reason is recorded on the run's activity trail (so the
+// decision is observable — AC#6 "no silent edit bypassing the decision/activity trail").
+// The agent emits this as a plain msg.* record — it has NO write path to the run envelope
+// (single-writer = the shell), so applying it never makes the agent a second writer.
+type RunDecision struct {
+	Type     string `json:"$type"`
+	Step     string `json:"step"`
+	Verb     string `json:"verb"`
+	Feedback string `json:"feedback,omitempty"`
+	Reason   string `json:"reason,omitempty"`
 }
 
 // RunStartRequest wakes the coordinator: the dash has written the run artifact and
@@ -233,6 +305,34 @@ func ParseRunControl(record json.RawMessage) (RunControl, bool) {
 	return c, true
 }
 
+func (r RunReview) Marshal() json.RawMessage {
+	r.Type = TypeRunReview
+	b, _ := json.Marshal(r)
+	return b
+}
+
+func ParseRunReview(record json.RawMessage) (RunReview, bool) {
+	var r RunReview
+	if err := json.Unmarshal(record, &r); err != nil || r.Type != TypeRunReview {
+		return RunReview{}, false
+	}
+	return r, true
+}
+
+func (d RunDecision) Marshal() json.RawMessage {
+	d.Type = TypeRunDecision
+	b, _ := json.Marshal(d)
+	return b
+}
+
+func ParseRunDecision(record json.RawMessage) (RunDecision, bool) {
+	var d RunDecision
+	if err := json.Unmarshal(record, &d); err != nil || d.Type != TypeRunDecision {
+		return RunDecision{}, false
+	}
+	return d, true
+}
+
 func ParseRunStartRequest(record json.RawMessage) (RunStartRequest, bool) {
 	var r RunStartRequest
 	if err := json.Unmarshal(record, &r); err != nil {
@@ -254,6 +354,13 @@ func (a RunStartAck) Marshal() json.RawMessage {
 func RunStateName(id string) string      { return "workflow.run." + id }
 func RunEventsSubject(id string) string  { return "msg.workflow.run." + id + ".events" }
 func RunControlSubject(id string) string { return "msg.workflow.run." + id + ".control" }
+
+// Agent-mode review subjects (TASK-242). The shell publishes a run.review on .review and
+// awaits the agent's run.decision on .decision. Distinct machine channels, parallel to
+// .events (worker→shell step-done) and .control (operator approve/cancel): the shell is
+// the SOLE writer of the run envelope on all of them — the agent only emits a decision.
+func RunReviewSubject(id string) string   { return "msg.workflow.run." + id + ".review" }
+func RunDecisionSubject(id string) string { return "msg.workflow.run." + id + ".decision" }
 
 // RunTopicSubject is the run's OPERATOR thread: msg.topic.run.<id>. This is the
 // human-facing channel the dash run view posts to — distinct from the machine

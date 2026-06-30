@@ -51,6 +51,7 @@ func main() {
 	id := fs.String("id", "", "run id to adopt directly (the dash already wrote the run artifact); empty = listen mode")
 	spawnSubject := fs.String("spawn-subject", "msg.topic.spawn", "subject the M5.2 dispatcher watches for spawn.request")
 	stepTimeout := fs.Duration("step-timeout", 90*time.Second, "max time for one step (spawn.ack + the agent's step-done) before it fails loud")
+	agentMode := fs.Bool("agent-mode", false, "opt this run into the long-lived coordinator-AGENT review loop (TASK-242); default false = programmatic. The run envelope's agent_mode field also opts in.")
 	_ = fs.Parse(os.Args[1:])
 
 	if *creds == "" {
@@ -95,7 +96,17 @@ func main() {
 	if err := co.adopt(ctx, *id); err != nil {
 		fatal("%v", err)
 	}
-	logf("coordinator up as %s; run %s (%d steps), status %s", short(c.ID()), co.run.ID, len(co.run.Steps), co.run.Status)
+	// --agent-mode opts a directly-adopted run into the coordinator-agent review loop
+	// (TASK-242), persisting the opt-in on the envelope so a resumed coordinator keeps it.
+	// It only turns agent mode ON (never off) — a run the dash already marked agent_mode
+	// stays in agent mode regardless of the flag.
+	if *agentMode && !co.run.AgentMode && !workflow.IsTerminalRun(co.run.Status) {
+		co.run.AgentMode = true
+		if err := co.checkpoint(); err != nil {
+			fatal("persist --agent-mode: %v", err)
+		}
+	}
+	logf("coordinator up as %s; run %s (%d steps), status %s, agent-mode=%t", short(c.ID()), co.run.ID, len(co.run.Steps), co.run.Status, co.run.AgentMode)
 
 	// Subscriptions: spawn.acks (to correlate dispatch steps), the run's event
 	// stream (agents' step-done signals), and cooperative control. DeliverAll closes
@@ -108,6 +119,7 @@ func main() {
 		{workflow.RunEventsSubject(co.run.ID), co.onEvent},
 		{workflow.RunControlSubject(co.run.ID), co.onControl},
 		{workflow.RunTopicSubject(co.run.ID), co.onSteer},
+		{workflow.RunDecisionSubject(co.run.ID), co.onDecision}, // agent mode (no-op when off)
 	} {
 		sub, err := c.Subscribe(ctx, s.subj, s.h, sextant.DeliverAll())
 		if err != nil {
@@ -156,9 +168,17 @@ type coordinator struct {
 	// apart from an existence probe — probing existence is metadata, not a content read.
 	existsArtifact func(ctx context.Context, name string) error
 
+	// reviewerAgent is the long-lived coordinator-AGENT's id in agent mode (TASK-242),
+	// empty in the default programmatic path. Stood up once on adopt; each completed step
+	// is reviewed by DMing it and awaiting its run.decision. Guarded (set on the main
+	// goroutine, read by onDecision/reviewStep).
+	reviewerAgent string
+
 	mu            sync.Mutex
-	acks          map[string]workflow.SpawnAck // spawn.request frame id -> ack
-	doneEvents    map[string]workflow.RunEvent // step id -> a non-self step-done event
+	acks          map[string]workflow.SpawnAck    // spawn.request frame id -> ack
+	doneEvents    map[string]workflow.RunEvent    // step id -> a non-self step-done event
+	decisions     map[string]workflow.RunDecision // step id -> the agent's run.decision (agent mode)
+	stepFeedback  map[string]string               // step id -> agent redo feedback, threaded into the re-dispatch prompt
 	approved      bool
 	cancelled     bool
 	pendingSteers []steer       // operator steers to apply, drained on the main goroutine
@@ -169,6 +189,7 @@ type coordinator struct {
 	evCh          chan struct{} // wakes waiters: new event
 	ctlCh         chan struct{} // wakes waiters: control changed
 	steerCh       chan struct{} // wakes waiters: an operator steer arrived on the run topic
+	decCh         chan struct{} // wakes waiters: an agent run.decision arrived (agent mode)
 }
 
 // steer is one operator steering message off the run topic (msg.topic.run.<id>): the
@@ -184,8 +205,9 @@ func newCoordinator(ctx context.Context, c *sextant.Client, spawnSubject string,
 		ctx: ctx, c: c, spawnSubject: spawnSubject, stepTimeout: stepTimeout,
 		terminalGrace: 30 * time.Second,
 		acks:          map[string]workflow.SpawnAck{}, doneEvents: map[string]workflow.RunEvent{},
+		decisions: map[string]workflow.RunDecision{}, stepFeedback: map[string]string{},
 		ackCh: make(chan struct{}, 1), evCh: make(chan struct{}, 1), ctlCh: make(chan struct{}, 1),
-		steerCh: make(chan struct{}, 1),
+		steerCh: make(chan struct{}, 1), decCh: make(chan struct{}, 1),
 	}
 	co.getArtifact = c.GetArtifact
 	co.existsArtifact = func(ctx context.Context, name string) error {
@@ -249,6 +271,12 @@ func (co *coordinator) walk() error {
 		logf("run %s already %s; nothing to do", co.run.ID, co.run.Status)
 		return nil
 	}
+	// Agent mode (TASK-242): stand up the long-lived coordinator reviewer ONCE before the
+	// first step. Idempotent on resume; a no-op (and zero traffic) in the default path.
+	if err := co.standUpCoordinatorAgent(); err != nil {
+		co.appendActivity("✗", fmt.Sprintf("agent mode: %v", err))
+		return co.finish(workflow.RunBlocked, "coordinator agent stand-up failed")
+	}
 	for {
 		if co.isCancelled() {
 			return co.finish(workflow.RunCancelled, "cancelled by operator")
@@ -275,6 +303,32 @@ func (co *coordinator) walk() error {
 			co.appendActivity("✗", fmt.Sprintf("step %q failed: %v", step.ID, err))
 			return co.finish(workflow.RunBlocked, "step "+step.ID+" failed")
 		}
+		// Agent-mode review (TASK-242). The deterministic gates have ALREADY run inside
+		// runStep (existence-checked refs), so the agent decision below sits ON the proof
+		// floor and can never advance the run over an absent/fabricated deliverable (AC#7).
+		// Reviewable kinds are work + brief (a checkpoint is itself an operator gate). The
+		// review can override the brief's term (e.g. redo) or confirm it (advance).
+		if co.agentEnabled() && reviewable(step.Kind) {
+			act, rterm, err := co.reviewAndApply(idx, term)
+			if co.isCancelled() {
+				return co.finish(workflow.RunCancelled, "cancelled by operator")
+			}
+			if err != nil {
+				step.Status = workflow.StepWaiting
+				co.appendActivity("✗", fmt.Sprintf("agent review of step %q failed: %v", step.ID, err))
+				return co.finish(workflow.RunBlocked, "agent review of step "+step.ID+" failed")
+			}
+			switch act {
+			case actRedo:
+				// redo-with-feedback: do NOT advance; loop re-runs the SAME step (its status
+				// is reset to upcoming in reviewAndApply) with the feedback threaded in.
+				continue
+			case actStop:
+				return co.finish(rterm, "agent stop")
+			case actAdvance:
+				term = rterm // honour any override (e.g. an advance over a brief's reported term)
+			}
+		}
 		if term != "" {
 			return co.finish(term, "stopping brief: "+term)
 		}
@@ -283,6 +337,62 @@ func (co *coordinator) walk() error {
 			return err
 		}
 		co.appendActivity("✓", stepDoneText(step))
+	}
+}
+
+// reviewable reports whether a step kind produces reviewable output in agent mode. Work and
+// brief steps yield a deliverable the coordinator agent judges; a checkpoint is itself an
+// operator gate, not something the agent re-reviews.
+func reviewable(kind string) bool {
+	return kind == workflow.KindWork || kind == workflow.KindBrief
+}
+
+// reviewAction is the outcome the shell applies after an agent decision.
+type reviewAction int
+
+const (
+	actAdvance reviewAction = iota // proceed (advance or edit-then-advance)
+	actRedo                        // re-dispatch the same step (status reset; feedback stored)
+	actStop                        // stop the run now (terminal)
+)
+
+// reviewAndApply asks the resident coordinator agent to review the just-completed step and
+// translates the FLAT-STEP-MODEL v1 decision into an action the walk loop applies. It is the
+// SOLE writer of the run envelope on this path (single-writer, AC#3): the agent only emits a
+// run.decision; the shell records the decision on the activity trail and any feedback, and
+// resets the step on a redo. inTerm is the step's own terminal status (set by a brief step;
+// "" for work). Returns (action, terminal-status-for-stop-or-advance, error).
+func (co *coordinator) reviewAndApply(idx int, inTerm string) (reviewAction, string, error) {
+	step := &co.run.Steps[idx]
+	dec, err := co.reviewStep(step)
+	if err != nil {
+		return actAdvance, "", err
+	}
+	switch dec.Verb {
+	case workflow.DecisionAdvance, workflow.DecisionEdit:
+		// edit-then-advance: the agent already edited the DELIVERABLE artifact itself (its
+		// own act, unbounded — AC#6); the shell just advances. Both verbs proceed; the brief
+		// step's reported term (inTerm) is honoured.
+		return actAdvance, inTerm, nil
+	case workflow.DecisionRedo:
+		// Re-dispatch the SAME step with the agent's feedback threaded into the next prompt
+		// (AC#2). Reset the step to upcoming and clear its prior produced refs so the re-run
+		// records fresh output; store the feedback keyed by step id.
+		co.setStepFeedback(step.ID, dec.Feedback)
+		step.Status = workflow.StepUpcoming
+		step.Produced = nil
+		if err := co.checkpoint(); err != nil {
+			return actAdvance, "", err
+		}
+		co.appendActivity("↻", fmt.Sprintf("redo step %q with agent feedback", step.ID))
+		return actRedo, "", nil
+	case workflow.DecisionStop:
+		// The agent halts the run now. The current step's gates already passed, so this is a
+		// deliberate quality stop, not a failure → terminal done.
+		return actStop, workflow.RunDone, nil
+	default:
+		// Unreachable: reviewStep already rejected any non-v1 verb. Defensive.
+		return actAdvance, "", fmt.Errorf("unsupported decision verb %q", dec.Verb)
 	}
 }
 
@@ -391,6 +501,12 @@ func (co *coordinator) workPrompt(step *workflow.RunStep) string {
 		for _, s := range steers {
 			prompt += "\n- " + s
 		}
+	}
+	// Agent mode (TASK-242): if the coordinator agent returned redo-with-feedback for this
+	// step, thread its feedback into the re-dispatch so the SAME step re-runs WITH the
+	// guidance (AC#2). Present only on a redo loop; absent on a first dispatch.
+	if fb := co.stepFeedbackFor(step.ID); fb != "" {
+		prompt += "\n\nCOORDINATOR FEEDBACK (your prior attempt was sent back for rework — address this):\n- " + fb
 	}
 	prompt += fmt.Sprintf("\nRUN_EVENTS=%s RUN_STEP=%s",
 		workflow.RunEventsSubject(co.run.ID), step.ID)
@@ -644,12 +760,18 @@ func (co *coordinator) verifyReportedArtifactsExist(arts []workflow.ProducedArti
 // briefPrompt hands the agent the run's stop conditions so it writes a brief that
 // justifies the stop, plus the reporting directive.
 func (co *coordinator) briefPrompt(step *workflow.RunStep) string {
-	return fmt.Sprintf(
+	prompt := fmt.Sprintf(
 		"Write the stopping brief for this run as an artifact of kind \"brief\".\nObjective: %s\nStop when ANY of these is met (pick the one that holds and justify it):\n- %s\n\nReport done with the brief artifact in `artifacts` and `outcome` = done or blocked.\n"+
 			"PROOF MUST BE REAL: any deliverable you cite as proof of completion MUST be a durable artifact you actually CREATED (via sextant_artifact_put) — not text that lives only inside this brief. The run is GATED on the artifacts you report producing: each one is existence-checked on the bus, and any that does not exist will BLOCK the run. Never report producing an artifact you did not create.\nRUN_EVENTS=%s RUN_STEP=%s",
 		co.run.Objective, joinStops(co.run.Stop),
 		workflow.RunEventsSubject(co.run.ID), step.ID,
 	)
+	// Agent-mode redo feedback threads into the brief re-dispatch too (AC#2): the same brief
+	// step re-runs with the coordinator agent's guidance.
+	if fb := co.stepFeedbackFor(step.ID); fb != "" {
+		prompt += "\n\nCOORDINATOR FEEDBACK (your prior brief was sent back for rework — address this):\n- " + fb
+	}
+	return prompt
 }
 
 func joinStops(stops []string) string {
@@ -1005,6 +1127,7 @@ func (sc *startConsumer) prepareRun(runID string) (*coordinator, func(), error) 
 		{workflow.RunEventsSubject(runID), co.onEvent},
 		{workflow.RunControlSubject(runID), co.onControl},
 		{workflow.RunTopicSubject(runID), co.onSteer},
+		{workflow.RunDecisionSubject(runID), co.onDecision}, // agent mode (no-op when off)
 	} {
 		sub, err := sc.c.Subscribe(sc.ctx, s.subj, s.h, sextant.DeliverAll())
 		if err != nil {

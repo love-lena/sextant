@@ -17,6 +17,28 @@ export const TypeRunControl = "run.control";
 export const TypeRunStart = "run.start";
 export const TypeRunStartAck = "run.start.ack";
 
+// Agent-mode review lexicon (TASK-242). In agent mode the programmatic shell asks a
+// long-lived coordinator AGENT to review each completed step (run.review) and applies the
+// agent's reply (run.decision). The shell stays the SOLE single-writer of the run
+// envelope; the agent only emits a run.decision, never writing the envelope.
+export const TypeRunReview = "run.review";
+export const TypeRunDecision = "run.decision";
+
+// Agent-mode decision verbs — the FLAT-STEP-MODEL v1 vocabulary (TASK-242). EXACTLY these
+// four: no graph reshaping (branch/insert/skip) in v1.
+export const DecisionAdvance = "advance";
+export const DecisionRedo = "redo-with-feedback";
+export const DecisionEdit = "edit-then-advance";
+export const DecisionStop = "stop";
+
+// isDecisionVerb reports whether v is one of the four FLAT-STEP-MODEL v1 verbs (the peer
+// of Go's IsDecisionVerb). The shell rejects any graph-reshaping verb.
+export function isDecisionVerb(v: string): boolean {
+  return (
+    v === DecisionAdvance || v === DecisionRedo || v === DecisionEdit || v === DecisionStop
+  );
+}
+
 // Run statuses (the dash's RUN_STATUS set; no "failed" — a failed step → blocked).
 export const RunRunning = "running";
 export const RunWaiting = "waiting";
@@ -76,6 +98,9 @@ export interface Run {
   stop?: string[];
   created?: number;
   owner?: string;
+  // agent_mode opts the run into the long-lived coordinator-AGENT review loop (TASK-242).
+  // Additive and opt-in; absent/false is the existing programmatic path.
+  agent_mode?: boolean;
 }
 
 export interface RunEvent {
@@ -91,6 +116,28 @@ export interface RunEvent {
 export interface RunControl {
   $type?: string;
   verb: string;
+}
+
+// RunReview is the agent-mode review REQUEST the shell publishes when a step completes
+// (TASK-242). produced carries the typed refs the step's worker produced, so the agent can
+// dereference and READ each (the one sanctioned content read). Peer of Go's RunReview.
+export interface RunReview {
+  $type?: string;
+  step: string;
+  objective?: string;
+  label?: string;
+  produced?: ProducedArtifact[];
+}
+
+// RunDecision is the agent's reply the shell applies (TASK-242). verb is one of the four
+// FLAT-STEP-MODEL v1 verbs; feedback is threaded into a redo-with-feedback re-dispatch;
+// reason is recorded on the activity trail. Peer of Go's RunDecision.
+export interface RunDecision {
+  $type?: string;
+  step: string;
+  verb: string;
+  feedback?: string;
+  reason?: string;
 }
 
 export interface RunStartRequest {
@@ -157,6 +204,26 @@ export function parseRunControl(record: JSONValue): RunControl | null {
   return record as unknown as RunControl;
 }
 
+export function marshalRunReview(r: RunReview): JSONValue {
+  return { ...r, $type: TypeRunReview } as unknown as JSONValue;
+}
+
+export function parseRunReview(record: JSONValue): RunReview | null {
+  if (record === null || typeof record !== "object" || Array.isArray(record)) return null;
+  if ((record as { [k: string]: JSONValue })["$type"] !== TypeRunReview) return null;
+  return record as unknown as RunReview;
+}
+
+export function marshalRunDecision(d: RunDecision): JSONValue {
+  return { ...d, $type: TypeRunDecision } as unknown as JSONValue;
+}
+
+export function parseRunDecision(record: JSONValue): RunDecision | null {
+  if (record === null || typeof record !== "object" || Array.isArray(record)) return null;
+  if ((record as { [k: string]: JSONValue })["$type"] !== TypeRunDecision) return null;
+  return record as unknown as RunDecision;
+}
+
 // Convention subjects + state-artifact name for the run contract.
 export function runStateName(id: string): string {
   return "workflow.run." + id;
@@ -166,6 +233,15 @@ export function runEventsSubject(id: string): string {
 }
 export function runControlSubject(id: string): string {
   return "msg.workflow.run." + id + ".control";
+}
+// Agent-mode review subjects (TASK-242). The shell publishes a run.review on .review and
+// awaits the agent's run.decision on .decision. Peers of Go's RunReviewSubject/
+// RunDecisionSubject — both emit identical subjects.
+export function runReviewSubject(id: string): string {
+  return "msg.workflow.run." + id + ".review";
+}
+export function runDecisionSubject(id: string): string {
+  return "msg.workflow.run." + id + ".decision";
 }
 // runTopicSubject is the run's OPERATOR thread: msg.topic.run.<id>. The dash run view
 // posts an operator steer here; the coordinator subscribes it and routes the steer to
