@@ -192,11 +192,20 @@ The client that drives a **run**'s steps and records its progress — the **run
 executor** (ADR-0051). It is the SINGLE WRITER of the run envelope: the dash writes
 the run once at spawn and is read-only after (it polls); the coordinator adopts the
 run on a **`run.start`** wake and walks its steps by kind (`work` → dispatch an
-agent; `checkpoint` → park at `waiting` for an operator **`run.control`** approve;
-`brief` → the terminal stopping brief, gated on a brief artifact). A dispatched agent
-reports a step done with a **`run.event`** on `msg.workflow.run.<id>.events` (the
-low-volume step signal — never the **activity feed**'s channel). A failed step → the
-run is `blocked` (there is no `failed` run status).
+agent; `verify` → dispatch a SEPARATE agent to independently build + test +
+adversarially check each criterion, reporting `outcome=done` only when green else
+`blocked`, placed before a brief so a run can't reach `done` over a failed check
+(ADR-0053); `checkpoint` → park at `waiting` for an operator **`run.control`**
+approve; `brief` → the terminal stopping brief, gated on a brief artifact;
+`pr-open` → the coordinator itself, host-side with the operator's git/gh auth, ships
+the run's worktree: commit on `sxrun/<id>`, push that scoped branch, open a PR, record
+the PR URL — the sandboxed worker is credential-free and cannot push (ADR-0053)). A
+dispatched agent reports a step done with a **`run.event`** on
+`msg.workflow.run.<id>.events` (the low-volume step signal — never the **activity
+feed**'s channel). A failed step → the run is `blocked` (there is no `failed` run
+status). When a run carries **`Run.Repo`** the coordinator runs every step in one
+isolated per-run git worktree (a fresh `sxrun/<id>` branch off `Run.RepoRef`/HEAD),
+torn down when the run goes terminal (ADR-0053).
 _Avoid_: orchestrator, manager, controller
 
 **Dispatcher**:

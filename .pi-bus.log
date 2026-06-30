@@ -1,0 +1,39 @@
+{"t":1782863148363,"event":"session_start","reason":"startup","mode":"rpc","hasUI":true,"priorMessages":0,"resumed":false}
+{"t":1782863148385,"event":"connected","id":"01KWDESBTG61KKM8MEYVGGPHNT","displayName":"Draft the plan","reason":"startup"}
+{"t":1782863148411,"event":"tiers","principal":"01KTXBYMJN8X4FZ8HJPF5XJJ0A","peers":128}
+{"t":1782863148412,"event":"subscribed","subject":"msg.client.01KWDESBTG61KKM8MEYVGGPHNT","label":"inbox"}
+{"t":1782863227486,"event":"worktree_diff_artifact","name":"work.diff.n1782849883812","version":5225}
+{"t":1782863227486,"event":"run_step_diff_captured","name":"work.diff.n1782849883812","version":5225}
+{"t":1782863227486,"event":"run_step_done","subject":"msg.workflow.run.01KWDESB1DP91KBFBECR7WQ36D.events","step":"n1782849883812","reason":"auto_drain_idle","outcome":"done","artifacts":2}
+{"t":1782863227487,"event":"auto_drain_idle","reason":"agent run complete; draining for revive-on-message"}
+{"t":1782863227487,"event":"handoff_drain_accepted","reason":"idle: task complete (drain-and-revive)"}
+{"t":1782863227738,"event":"handoff_idle","waitedMs":250}
+{"t":1782863227740,"event":"handoff_relinquish","session":"pi-01KWDESBTG61KKM8MEYVGGPHNT"}
+{"t":1782863227742,"event":"run_step_done_skip","reason":"handoff_drain","detail":"already reported"}
+{"t":1782863227743,"event":"close","reason":"handoff"}
+{"t":1782863227757,"event":"closed"}
+{"t":1782863227757,"event":"handoff_closed"}
+{"t":1782863364500,"event":"session_start","reason":"startup","mode":"rpc","hasUI":true,"priorMessages":0,"resumed":false}
+{"t":1782863364525,"event":"connected","id":"01KWDEZZBTDRSNP6GKGMCZMTP2","displayName":"Build the change","reason":"startup"}
+{"t":1782863364550,"event":"tiers","principal":"01KTXBYMJN8X4FZ8HJPF5XJJ0A","peers":129}
+{"t":1782863364551,"event":"subscribed","subject":"msg.client.01KWDEZZBTDRSNP6GKGMCZMTP2","label":"inbox"}
+{"t":1782863436440,"event":"worktree_diff_artifact","name":"work.diff.n1782849884254","version":5238}
+{"t":1782863436441,"event":"run_step_diff_captured","name":"work.diff.n1782849884254","version":5238}
+{"t":1782863436441,"event":"run_step_done","subject":"msg.workflow.run.01KWDESB1DP91KBFBECR7WQ36D.events","step":"n1782849884254","reason":"auto_drain_idle","outcome":"done","artifacts":2}
+{"t":1782863436442,"event":"auto_drain_idle","reason":"agent run complete; draining for revive-on-message"}
+{"t":1782863436442,"event":"handoff_drain_accepted","reason":"idle: task complete (drain-and-revive)"}
+{"t":1782863436694,"event":"handoff_idle","waitedMs":250}
+{"t":1782863436694,"event":"handoff_relinquish","session":"pi-01KWDEZZBTDRSNP6GKGMCZMTP2"}
+{"t":1782863436695,"event":"run_step_done_skip","reason":"handoff_drain","detail":"already reported"}
+{"t":1782863436695,"event":"close","reason":"handoff"}
+{"t":1782863436698,"event":"closed"}
+{"t":1782863436698,"event":"handoff_closed"}
+{"t":1782863437484,"event":"session_start","reason":"startup","mode":"rpc","hasUI":true,"priorMessages":0,"resumed":false}
+{"t":1782863437505,"event":"connected","id":"01KWDF26NF61N7RKEEZQ4S4DJY","displayName":"Independently verify all ACs (build, tests, adversarial)","reason":"startup"}
+{"t":1782863437532,"event":"tiers","principal":"01KTXBYMJN8X4FZ8HJPF5XJJ0A","peers":130}
+{"t":1782863437533,"event":"subscribed","subject":"msg.client.01KWDF26NF61N7RKEEZQ4S4DJY","label":"inbox"}
+{"t":1782863560650,"event":"worktree_diff_artifact","name":"work.diff.n1782849884492","version":5244}
+{"t":1782863560651,"event":"run_step_diff_captured","name":"work.diff.n1782849884492","version":5244}
+{"t":1782863560651,"event":"run_step_done","subject":"msg.workflow.run.01KWDESB1DP91KBFBECR7WQ36D.events","step":"n1782849884492","reason":"auto_drain_idle","outcome":"done","artifacts":2}
+{"t":1782863560651,"event":"auto_drain_idle","reason":"agent run complete; draining for revive-on-message"}
+{"t":1782863560651,"event":"handoff_drain_accepted","reason":"idle: task complete (drain-and-revive)"}
