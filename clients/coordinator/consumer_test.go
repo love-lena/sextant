@@ -15,7 +15,7 @@ package main
 //   - TestRun_CheckpointWaitsForApprove: a checkpoint parks at waiting → approve → done.
 //   - TestRun_CancelHalts: a run.control cancel drives the run to cancelled.
 //   - TestStartConsumer_FreshStartAcks: run.start → ok ack echoing id + nonce.
-//   - TestStartConsumer_IgnoresHistoricalStart: TASK-192 — new-only delivery, no replay.
+//   - Durable adoption (TASK-259) lives in adoption_test.go.
 
 import (
 	"context"
@@ -816,50 +816,12 @@ func TestStartConsumer_FreshStartAcks(t *testing.T) {
 	}
 }
 
-// TestStartConsumer_IgnoresHistoricalStart is the TASK-192 regression: new-only
-// delivery means a run.start published before the consumer subscribes is ignored.
-func TestStartConsumer_IgnoresHistoricalStart(t *testing.T) {
-	b, err := bus.Start(t.Context(), bus.Config{StoreDir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("bus.Start: %v", err)
-	}
-	t.Cleanup(b.Shutdown)
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
-	requester := dialBusClient(t, b, "requester")
-	consumer := dialBusClient(t, b, "consumer")
-
-	// A HISTORICAL run.start, published before any consumer exists (its run artifact
-	// need not exist — a replayed start would still produce an ack if wrongly seen).
-	if _, err := requester.PublishMsg(ctx, workflow.RunStartSubject,
-		workflow.RunStartRecord(workflow.RunStartRequest{ID: "01HIST"})); err != nil {
-		t.Fatalf("publish historical start: %v", err)
-	}
-
-	var (
-		ackMu sync.Mutex
-		acks  []workflow.RunStartAck
-	)
-	if _, err := requester.Subscribe(ctx, workflow.RunStartSubject, func(m sextant.Message) {
-		var a workflow.RunStartAck
-		if err := json.Unmarshal(m.Frame.Record, &a); err != nil || a.Type != workflow.TypeRunStartAck {
-			return
-		}
-		ackMu.Lock()
-		acks = append(acks, a)
-		ackMu.Unlock()
-	}); err != nil {
-		t.Fatalf("subscribe acks: %v", err)
-	}
-
-	startListenConsumer(t, ctx, consumer, "msg.topic.spawn", 2*time.Second)
-
-	time.Sleep(1500 * time.Millisecond)
-	ackMu.Lock()
-	nHist := len(acks)
-	ackMu.Unlock()
-	if nHist != 0 {
-		t.Fatalf("consumer replayed a historical run.start (%d ack(s), want 0) — DeliverAll regression (TASK-192)", nHist)
-	}
-}
+// NOTE (TASK-259): the former TestStartConsumer_IgnoresHistoricalStart asserted New-only
+// delivery — a historical run.start before the consumer subscribed was IGNORED. That was
+// the live bug: a start published while the coordinator was down stalled the run forever at
+// owner=none. The start subject is now a DURABLE consumer (DeliverAll) with an idempotent
+// adoption guard, so a historical start IS replayed and adopted. The two properties that
+// matter — a stale start with no envelope is skipped quietly, and a finished run is not
+// re-run on replay — now live in adoption_test.go (TestAdopt_StaleStartNoEnvelopeSkipped,
+// TestAdopt_IdempotentReplayDoesNotRerun), alongside the new durability properties
+// (publish-before-subscribe adoption and re-adoption after an owner crash).

@@ -28,11 +28,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -235,20 +237,100 @@ func newCoordinator(ctx context.Context, c *sextant.Client, spawnSubject string,
 // built coordinator — the seam a test uses to observe its artifact reads. nil in prod.
 var newCoordinatorHook func(*coordinator)
 
-// adopt reads the run artifact the dash wrote (single-writer handoff: the dash
-// created it at spawn; the coordinator owns it from here), (re)owns it, and resets a
-// non-terminal run to running. Idempotent on resume: a terminal run is a no-op.
-func (co *coordinator) adopt(ctx context.Context, runID string) error {
-	art, err := co.getArtifact(ctx, workflow.RunStateName(runID))
+// errOwnedByLive is the sentinel adopt/claimOwnership returns when the run is already
+// owned by a different, still-online coordinator: this coordinator must not adopt it. The
+// start consumer treats this as a benign skip (not a fail-loud error ack), since another
+// live owner is correctly driving the run.
+var errOwnedByLive = errors.New("run is already owned by a live coordinator")
+
+// claimOwnership reads the run envelope and CAS-claims the owner field for this
+// coordinator (TASK-259). It is the single-writer arbiter for adoption: the bus's
+// compare-and-set on the envelope revision lets exactly one of two coordinators racing the
+// same replayed run.start set the owner; the loser sees the CAS conflict, re-reads, and —
+// if the new owner is still online — aborts with errOwnedByLive rather than clobbering it.
+// If the prior owner is offline (a crash), or there is no owner yet, it (re)claims. A few
+// bounded retries cover a transient conflict; exhausting them is fail-loud, never a silent
+// hang or a silent double-adopt. On success co.run/co.rev hold the freshly-claimed state.
+func (co *coordinator) claimOwnership(ctx context.Context, runID string) error {
+	for attempt := 0; attempt < 5; attempt++ {
+		art, err := co.getArtifact(ctx, workflow.RunStateName(runID))
+		if err != nil {
+			return fmt.Errorf("adopt %s: %w", runID, err)
+		}
+		r, ok := workflow.ParseRun(art.Record)
+		if !ok {
+			return fmt.Errorf("adopt %s: not a %s record", runID, workflow.KindRun)
+		}
+		co.run, co.rev = r, art.Revision
+
+		// A terminal run is a no-op for adoption: record ownership in memory (so logs/state
+		// read coherently) but write nothing — there is nothing to drive.
+		if workflow.IsTerminalRun(co.run.Status) {
+			co.run.Owner = co.c.ID()
+			return nil
+		}
+		// Someone else already owns it and is still live: abort, do not clobber. (A crashed
+		// owner — offline — is re-claimable, so it falls through to the claim below.)
+		if co.run.Owner != "" && co.run.Owner != co.c.ID() && co.ownerLive(ctx, co.run.Owner) {
+			return fmt.Errorf("adopt %s: %w (owner %s)", runID, errOwnedByLive, short(co.run.Owner))
+		}
+		// Claim it: CAS the owner onto the revision we just read. A conflict means another
+		// coordinator moved the envelope between our read and write — loop to re-read and
+		// re-decide (it may now be live-owned → abort, or still free → retry).
+		co.run.Owner = co.c.ID()
+		rev, err := co.c.UpdateArtifact(ctx, workflow.RunStateName(runID), co.run.Marshal(), co.rev)
+		if err == nil {
+			co.rev = rev
+			return nil
+		}
+		logf("adopt %s: ownership CAS conflict (attempt %d), re-reading", short(runID), attempt+1)
+	}
+	return fmt.Errorf("adopt %s: exhausted ownership-claim retries", runID)
+}
+
+// ownerLive reports whether ownerID is currently connected (a live coordinator), the
+// coordinator-side liveness discriminator used by claimOwnership to tell a still-running
+// owner from a crashed one.
+func (co *coordinator) ownerLive(ctx context.Context, ownerID string) bool {
+	return clientOnline(ctx, co.c, ownerID)
+}
+
+// clientOnline reports whether id is a currently-connected client per the bus directory.
+// It is the liveness discriminator the adoption guards use to tell a live owner (skip /
+// don't steal) from a crashed one (re-adopt). On a directory-read error it returns true
+// (assume online): the conservative choice that errs toward NOT stealing a possibly-live
+// owner's run — the envelope CAS remains the final arbiter, and a genuinely dead owner is
+// re-tried on the next start replay or reconnect, so this never strands a run permanently.
+// An id absent from the directory is not online.
+func clientOnline(ctx context.Context, c *sextant.Client, id string) bool {
+	clients, err := c.ListClients(ctx)
 	if err != nil {
-		return fmt.Errorf("adopt %s: %w", runID, err)
+		logf("liveness check for %s failed (%v) — assuming online", short(id), err)
+		return true
 	}
-	r, ok := workflow.ParseRun(art.Record)
-	if !ok {
-		return fmt.Errorf("adopt %s: not a %s record", runID, workflow.KindRun)
+	for _, ci := range clients {
+		if ci.ID == id {
+			return ci.Online
+		}
 	}
-	co.run, co.rev = r, art.Revision
-	co.run.Owner = co.c.ID()
+	return false
+}
+
+// adopt reads the run artifact the dash wrote (single-writer handoff: the dash
+// created it at spawn; the coordinator owns it from here), CLAIMS ownership with a
+// single-writer CAS, and resets a non-terminal run to running. Idempotent on resume: a
+// terminal run is a no-op.
+//
+// The ownership claim (claimOwnership) is the race guard (TASK-259): when DeliverAll
+// replays one run.start to two competing coordinators that both pass the shouldAdopt
+// guard, the envelope CAS lets exactly one win the owner field — the loser aborts here
+// rather than clobbering the winner — so two coordinators never both drive the same run.
+// It is also the re-adopt path after a crash: a run orphaned at an offline owner is
+// re-claimed by the next coordinator, so it never stalls permanently at a dead owner.
+func (co *coordinator) adopt(ctx context.Context, runID string) error {
+	if err := co.claimOwnership(ctx, runID); err != nil {
+		return err
+	}
 	if workflow.IsTerminalRun(co.run.Status) {
 		return nil
 	}
@@ -1143,9 +1225,21 @@ func wake(ch chan struct{}) {
 
 // --- run.start consumer ---
 
-// startConsumer subscribes to msg.topic.run.start, dedups by frame ID (in-memory),
-// and adopts exactly one run per fresh request. It acks every handled frame — success
-// or failure — so requesters are never left waiting on silence (fail-loud).
+// startConsumer subscribes to msg.topic.run.start and adopts each run-start it has not
+// already adopted. It acks every handled frame — success or failure — so requesters are
+// never left waiting on silence (fail-loud).
+//
+// Durable adoption (TASK-259). The subscription is DeliverAll, not New-only: a run.start
+// published while no coordinator is subscribed (the coordinator down, restarting, or not
+// yet subscribed) is REPLAYED on (re)subscribe, so it is never lost — the live failure
+// where a dash-spawned run stalled forever at owner=none. Durability without re-running
+// finished work (the TASK-192 crash-loop the old New-only choice was avoiding) comes from
+// an IDEMPOTENT guard keyed on the durable run envelope, not on this process's memory:
+// shouldAdopt reads the run's state before adopting and SKIPS a run that is already
+// finished or already owned by a LIVE coordinator. Replay of a start for such a run is a
+// no-op; a start for an unadopted (or crash-orphaned) run is picked up on (re)subscribe.
+// Adoption itself is a single-writer CAS on the run envelope (adopt → checkpoint), so two
+// coordinators replaying the same start cannot both own it.
 type startConsumer struct {
 	ctx          context.Context
 	c            *sextant.Client
@@ -1154,7 +1248,7 @@ type startConsumer struct {
 	store        string // passed to each adopted run's coordinator for worktree scratch (TASK-256)
 
 	mu   sync.Mutex
-	seen map[string]bool // request frame ids already handled (dedup a redelivery on reconnect)
+	seen map[string]bool // request frame ids already handled this process (a cheap same-process fence; correctness rests on the envelope guard, which survives a restart the seen map does not)
 }
 
 // newStartConsumer builds and subscribes a startConsumer on workflow.RunStartSubject.
@@ -1163,13 +1257,12 @@ func newStartConsumer(ctx context.Context, c *sextant.Client, spawnSubject strin
 		ctx: ctx, c: c, spawnSubject: spawnSubject, stepTimeout: stepTimeout, store: store,
 		seen: map[string]bool{},
 	}
-	// New-only delivery (NOT DeliverAll): a run.start is a LIVE command, not a durable
-	// queue to replay. DeliverAll re-delivered every historical start on each (re)start
-	// — including stale ones whose step can never complete — so a restarted listen-mode
-	// coordinator re-ran them, timed out, and crash-looped (TASK-192). A start published
-	// while the coordinator is briefly down is intentionally missed (the requester
-	// re-issues); the seen fence still dedups a redelivery on reconnect.
-	sub, err := c.Subscribe(ctx, workflow.RunStartSubject, sc.handle)
+	// DeliverAll (TASK-259): replay the retained run.start backlog on (re)subscribe so a
+	// start published while no coordinator was listening is adopted, not lost. The
+	// idempotent envelope guard in handle (shouldAdopt) makes replay safe — a start for an
+	// already-finished or live-owned run is skipped — so this does NOT reintroduce the
+	// TASK-192 crash-loop where DeliverAll re-ran every historical start unconditionally.
+	sub, err := c.Subscribe(ctx, workflow.RunStartSubject, sc.handle, sextant.DeliverAll())
 	if err != nil {
 		return nil, nil, fmt.Errorf("subscribe %s: %w", workflow.RunStartSubject, err)
 	}
@@ -1177,9 +1270,11 @@ func newStartConsumer(ctx context.Context, c *sextant.Client, spawnSubject strin
 }
 
 // handle processes one frame on RunStartSubject. It acts only on run.start records
-// (ignoring its own echoed run.start.acks and anything else), dedups by request frame
-// id, adopts the run the dash wrote, ACKS (ok + id/nonce), then runs the coordinator
-// in a goroutine so the handler does not block the delivery loop.
+// (ignoring its own echoed run.start.acks and anything else), skips a start already
+// handled this process or whose run is already finished / owned by a live coordinator
+// (the idempotent replay guard, TASK-259), adopts the run the dash wrote, ACKS (ok +
+// id/nonce), then runs the coordinator in a goroutine so the handler does not block the
+// delivery loop.
 func (sc *startConsumer) handle(m sextant.Message) {
 	req, ok := workflow.ParseRunStartRequest(m.Frame.Record)
 	if !ok {
@@ -1195,9 +1290,28 @@ func (sc *startConsumer) handle(m sextant.Message) {
 	sc.seen[reqID] = true
 	sc.mu.Unlock()
 
+	// Idempotent replay guard (TASK-259): DeliverAll replays every retained run.start on
+	// (re)subscribe, so a start whose run is already finished — or still owned by a LIVE
+	// coordinator — must be a no-op, never a second adoption or a re-run. Decide from the
+	// DURABLE run envelope, not the in-memory seen fence (which a restart loses): only an
+	// unadopted or crash-orphaned run is adopted here. A start whose run artifact is absent
+	// is a stale/foreign start (its run was never written, or was deleted) — skip it
+	// quietly rather than crash-loop on it (the TASK-192 failure mode).
+	if !sc.shouldAdopt(req.ID, reqID, m.Frame.Author) {
+		return
+	}
+
 	logf("run.start %s from %s: run=%s", short(reqID), short(m.Frame.Author), short(req.ID))
 
 	co, stopSubs, err := sc.prepareRun(req.ID)
+	// Losing the ownership-claim race to a still-live coordinator (errOwnedByLive) is a
+	// benign skip, not a failure: the other coordinator is correctly driving the run, so
+	// emit no error ack (which would otherwise tell the requester this start failed). This
+	// only fires when two coordinators both passed shouldAdopt and raced the envelope CAS.
+	if errors.Is(err, errOwnedByLive) {
+		logf("run.start %s: %v — skipping (no ack)", short(reqID), err)
+		return
+	}
 	ack := workflow.RunStartAck{ID: req.ID, Nonce: req.Nonce, RequestID: reqID}
 	if err != nil {
 		ack.Status = workflow.StatusError
@@ -1222,6 +1336,60 @@ func (sc *startConsumer) handle(m sextant.Message) {
 		// dropped by a coordinator already tearing down (TASK-246). Cut short on shutdown.
 		co.holdForLateSteers()
 	}()
+}
+
+// shouldAdopt is the idempotent replay guard (TASK-259): it decides, from the DURABLE run
+// envelope, whether this start should be adopted now. It returns false (skip) for a start
+// that DeliverAll replayed but that must not be re-run:
+//
+//   - the run artifact is absent — a stale or foreign start whose run was never written or
+//     was deleted (the TASK-192 crash-loop class: don't keep re-running a start that can
+//     never complete). Skip quietly, no ack.
+//   - the run is already terminal (done/blocked/cancelled) — finished work; a redelivered
+//     start for it is a no-op.
+//   - the run is owned by a DIFFERENT coordinator that is still ONLINE — a live owner is
+//     driving it; a second adoption would race the single-writer envelope. (A start for a
+//     run whose owner has gone offline — crashed — is NOT skipped: that is the re-adopt
+//     path that keeps a crash from stranding a run at a dead owner, AC#3.)
+//
+// Otherwise (no owner yet, the prior owner is offline, or this process already owns it) it
+// returns true and handle proceeds to adopt. Adoption itself is a single-writer CAS on the
+// envelope (adopt → checkpoint), the final guard against two coordinators that both pass
+// this check racing the same start. A read error (other than not-found) is conservatively
+// treated as adoptable: it is better to attempt adoption (the CAS still arbitrates) than to
+// silently drop a real run on a transient read failure (fail toward adoption, never stall).
+func (sc *startConsumer) shouldAdopt(runID, reqID, author string) bool {
+	art, err := sc.c.GetArtifact(sc.ctx, workflow.RunStateName(runID))
+	if err != nil {
+		if isNotFound(err) {
+			logf("run.start %s from %s: run %s has no envelope (stale/foreign start) — skipping", short(reqID), short(author), short(runID))
+			return false
+		}
+		logf("run.start %s: reading run %s envelope failed (%v) — attempting adoption anyway (CAS arbitrates)", short(reqID), short(runID), err)
+		return true
+	}
+	r, ok := workflow.ParseRun(art.Record)
+	if !ok {
+		logf("run.start %s: run %s artifact is not a %s record — skipping", short(reqID), short(runID), workflow.KindRun)
+		return false
+	}
+	if workflow.IsTerminalRun(r.Status) {
+		logf("run.start %s: run %s already %s — skipping (idempotent replay)", short(reqID), short(runID), r.Status)
+		return false
+	}
+	if r.Owner != "" && r.Owner != sc.c.ID() && clientOnline(sc.ctx, sc.c, r.Owner) {
+		logf("run.start %s: run %s already owned by live coordinator %s — skipping", short(reqID), short(runID), short(r.Owner))
+		return false
+	}
+	return true
+}
+
+// isNotFound reports whether err is the bus's "artifact does not exist" reply (the run
+// envelope was never written or was deleted). The SDK surfaces a bus-side failure as a
+// string-wrapped busError, so the guard matches on the bus's stable message text rather
+// than a typed sentinel (the SDK exports none for this case).
+func isNotFound(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "does not exist")
 }
 
 // holdForLateSteers keeps the coordinator's subscriptions (incl. the run topic) alive for
