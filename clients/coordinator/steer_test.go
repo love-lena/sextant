@@ -7,12 +7,16 @@ package main
 // operator chat.message, records the steer on the run AND routes it to the active step's
 // worker (a DM to its inbox), so the worker incorporates it WITHIN the active run.
 //
-// Two adversarial proofs, each RED on the pre-fix coordinator:
+// Three adversarial proofs, each RED on the pre-fix coordinator (or its leg):
 //   - TestRun_OperatorSteerInfluencesActiveRun: an operator posts a steer DURING an
 //     active work step; a worker that acts ONLY on the coordinator-routed steer produces
 //     the steered artifact, and the run's activity REFERENCES the operator's message.
 //     Both the artifact and the activity reference are impossible on the pre-fix code
 //     (no run-topic subscription, no routing) — the steer reached nothing.
+//   - TestRun_SteerThreadsIntoNextStepPrompt: a steer that lands BETWEEN steps (during
+//     step N, before step N+1 is dispatched) appears in step N+1's worker prompt — the
+//     step-boundary leg the LIVE case relies on (a real worker often isn't mid-step when
+//     the steer arrives). RED if the steerHistory→workPrompt threading is removed.
 //   - TestRun_SteerAfterTerminalReportedNotApplied: a steer posted AFTER the run is
 //     terminal is reported not-applied on the run topic, NEVER silently dropped.
 //
@@ -292,6 +296,170 @@ func TestRun_SteerAfterTerminalReportedNotApplied(t *testing.T) {
 		case <-deadline:
 			t.Fatalf("a steer after the run went terminal was NOT reported not-applied on the run topic (silent drop — the bug this guards)")
 		}
+	}
+}
+
+// TestRun_SteerThreadsIntoNextStepPrompt proves the step-BOUNDARY leg: a steer that
+// lands between steps (here, during step 1, gated so it is recorded before step 1
+// returns) is threaded into the NEXT work step's prompt (steerHistory → workPrompt).
+// This is the path the LIVE case leans on — a real worker often isn't mid-turn when the
+// steer arrives, so same-step inbox delivery may miss and the steer must shape step N+1.
+//
+// The fake is built to ISOLATE the threading leg from the same-step inbox leg:
+//   - step 1's worker waits for the coordinator-routed steer (so steerHistory is
+//     populated before step 1 reports done, i.e. before step 2's workPrompt is built)
+//     but does NOT incorporate it into step 1's output — it just gates done on receipt;
+//   - step 2's worker reports the PROMPT it received back over promptCh.
+//
+// The test asserts step 2's prompt carries the steer text. RED if the steerHistory
+// threading in workPrompt is removed (step 2's prompt would never carry the steer).
+func TestRun_SteerThreadsIntoNextStepPrompt(t *testing.T) {
+	b, err := bus.Start(t.Context(), bus.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("bus.Start: %v", err)
+	}
+	t.Cleanup(b.Shutdown)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	consumer := dialBusClient(t, b, "consumer")
+	requester := dialBusClient(t, b, "requester")
+	operator := dialBusClient(t, b, "operator")
+	dispatcher := dialBusClient(t, b, "dispatcher")
+	spawnSubj := "msg.topic.spawn"
+
+	step1Running := make(chan struct{}, 1) // signals step 1's worker is dispatched + waiting
+	step2Prompt := make(chan string, 1)    // step 2's worker reports the prompt it received
+
+	_, err = dispatcher.Subscribe(ctx, spawnSubj, func(m sextant.Message) {
+		var req struct {
+			Type   string `json:"$type"`
+			Job    string `json:"job,omitempty"`
+			Prompt string `json:"prompt,omitempty"`
+		}
+		if err := json.Unmarshal(m.Frame.Record, &req); err != nil || req.Type != workflow.TypeSpawnRequest {
+			return
+		}
+		agentID := "agent-" + m.Frame.ID[:8]
+		ack := workflow.SpawnAck{Type: workflow.TypeSpawnAck, ID: agentID, RequestID: m.Frame.ID, Status: workflow.StatusOK}
+		ackBytes, _ := json.Marshal(ack)
+		if err := dispatcher.Publish(ctx, spawnSubj, json.RawMessage(ackBytes)); err != nil {
+			return
+		}
+		stepID := parseDirective(req.Prompt, "RUN_STEP")
+		ev := workflow.RunEvent{Step: stepID, Status: workflow.StepDone}
+
+		switch {
+		case strings.Contains(req.Prompt, "stopping brief"):
+			ev.Outcome = workflow.RunDone
+			name := "brief.stopping." + req.Job
+			if _, err := dispatcher.CreateArtifact(ctx, name, json.RawMessage(`{"$type":"brief","outcome":"done"}`)); err != nil {
+				return
+			}
+			ev.Artifacts = []workflow.ProducedArtifact{{Name: name, Kind: "stopping", Version: 1}}
+			_ = dispatcher.Publish(ctx, workflow.RunEventsSubject(req.Job), ev.Marshal())
+
+		case stepID == "step1":
+			// Gate step 1's done on the coordinator-routed steer landing on its inbox, so
+			// the steer is in steerHistory BEFORE step 2's workPrompt is built. Step 1's
+			// OUTPUT is unaffected (this isolates the threading leg from the same-step leg).
+			go func() {
+				inbox := sx.ClientSubject(agentID)
+				got := make(chan struct{}, 1)
+				sub, err := dispatcher.Subscribe(ctx, inbox, func(im sextant.Message) {
+					if im.Frame.Author == dispatcher.ID() {
+						return
+					}
+					if _, ok := workflow.ParseChatSteer(im.Frame.Record); ok {
+						select {
+						case got <- struct{}{}:
+						default:
+						}
+					}
+				})
+				if err != nil {
+					return
+				}
+				defer sub.Stop()
+				select {
+				case step1Running <- struct{}{}:
+				default:
+				}
+				select {
+				case <-got:
+				case <-time.After(10 * time.Second):
+				case <-ctx.Done():
+					return
+				}
+				name := "deliverable." + req.Job + ".step1"
+				if _, err := dispatcher.CreateArtifact(ctx, name, json.RawMessage(`{"$type":"work","step":"step1"}`)); err != nil {
+					return
+				}
+				ev.Artifacts = []workflow.ProducedArtifact{{Name: name, Kind: "work", Version: 1}}
+				_ = dispatcher.Publish(ctx, workflow.RunEventsSubject(req.Job), ev.Marshal())
+			}()
+
+		default: // step2 — report the prompt it received, then complete.
+			select {
+			case step2Prompt <- req.Prompt:
+			default:
+			}
+			name := "deliverable." + req.Job + ".step2"
+			if _, err := dispatcher.CreateArtifact(ctx, name, json.RawMessage(`{"$type":"work","step":"step2"}`)); err != nil {
+				return
+			}
+			ev.Artifacts = []workflow.ProducedArtifact{{Name: name, Kind: "work", Version: 1}}
+			_ = dispatcher.Publish(ctx, workflow.RunEventsSubject(req.Job), ev.Marshal())
+		}
+	}, sextant.DeliverAll())
+	if err != nil {
+		t.Fatalf("subscribe threading dispatcher: %v", err)
+	}
+	startListenConsumer(t, ctx, consumer, spawnSubj, 20*time.Second)
+
+	runID := "01STEERTHREAD000000000000A"
+	run := workflow.Run{
+		ID: runID, Status: workflow.RunRunning, Objective: "two steps; steer between them",
+		Steps: []workflow.RunStep{
+			{ID: "step1", Label: "first", Kind: workflow.KindWork, Status: workflow.StepRunning},
+			{ID: "step2", Label: "second", Kind: workflow.KindWork, Status: workflow.StepUpcoming},
+			{ID: "brief", Label: "stopping brief", Kind: workflow.KindBrief, Status: workflow.StepUpcoming},
+		},
+	}
+	writeRunAndStart(t, ctx, requester, run, "")
+
+	// Wait until step 1's worker is dispatched + waiting, then post the steer. It is
+	// routed to step 1's worker (which then completes), so by the time step 2 is
+	// dispatched the steer is in steerHistory and must appear in step 2's prompt.
+	select {
+	case <-step1Running:
+	case <-time.After(15 * time.Second):
+		t.Fatalf("step 1 worker never dispatched")
+	}
+	const steerText = "constrain the output to five lines"
+	if err := operator.Publish(ctx, workflow.RunTopicSubject(runID), chatMessage(steerText)); err != nil {
+		t.Fatalf("operator publish steer: %v", err)
+	}
+
+	select {
+	case prompt := <-step2Prompt:
+		if !strings.Contains(prompt, steerText) {
+			t.Fatalf("step 2's prompt does NOT carry the between-steps steer (steerHistory threading missing).\n  want substring: %q\n  got prompt:\n%s", steerText, prompt)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatalf("step 2 was never dispatched — the run did not advance past the steered step 1")
+	}
+
+	// And the run completes (the steer didn't wedge it).
+	got := pollRun(t, ctx, requester, runID, 20*time.Second, func(r workflow.Run) bool {
+		return workflow.IsTerminalRun(r.Status)
+	})
+	if got.Status != workflow.RunDone {
+		t.Fatalf("final status = %q, want done; steps=%+v", got.Status, got.Steps)
+	}
+	// The steer was recorded on the run (never silently dropped), too.
+	if !activityReferences(got, steerText) {
+		t.Fatalf("run activity does not reference the steer %q; activity=%+v", steerText, got.Activity)
 	}
 }
 
