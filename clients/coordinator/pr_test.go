@@ -43,7 +43,11 @@ func newRepoWithBareOrigin(t *testing.T) (repo, bare string) {
 	bare = filepath.Join(parent, "origin.git")
 	mustGit(t, parent, "init", "--bare", "-q", bare)
 	repo = filepath.Join(parent, "work")
-	mustGit(t, parent, "init", "-q", repo)
+	// Pin the initial branch to main explicitly (-b, git ≥2.28): the host's
+	// init.defaultBranch may be master (CI's default), so a bare `git init` would leave
+	// no `main` to push and the seed push below would fail with "src refspec main does
+	// not match any". Deterministic regardless of the host's git config.
+	mustGit(t, parent, "init", "-q", "-b", "main", repo)
 	mustGit(t, repo, "config", "user.email", "test@example.com")
 	mustGit(t, repo, "config", "user.name", "Test")
 	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("seed\n"), 0o644); err != nil {
