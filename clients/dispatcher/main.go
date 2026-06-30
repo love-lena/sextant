@@ -53,6 +53,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -454,7 +455,14 @@ func (d *dispatcher) launch(name, command string, extraEnv []string, onExit func
 	// The signal context (set in main) governs the lifetime: on shutdown these
 	// processes are killed, so a stopped dispatcher leaves no orphans.
 	cmd := exec.CommandContext(d.ctx, "sh", "-c", command)
-	cmd.Env = append(os.Environ(), extraEnv...)
+	// Credential scrub (TASK-260 trust posture): a spawned worker is sandboxed and must
+	// never carry git/gh push credentials — opening a PR is the coordinator's host-side
+	// job, never the jailed worker's. Strip GH_TOKEN / GITHUB_TOKEN / SSH_AUTH_SOCK and
+	// the git credential env vars from the inherited environment BEFORE launching, so the
+	// worker's env is credential-free even if the dispatcher's own environment carries
+	// them. This is belt-and-suspenders alongside the sandbox's egress wall (github.com is
+	// denied regardless): defense in depth at the credential boundary.
+	cmd.Env = append(scrubGitCreds(os.Environ()), extraEnv...)
 	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
 	cmd.Stdin = nil
 	if err := cmd.Start(); err != nil {
@@ -472,6 +480,45 @@ func (d *dispatcher) launch(name, command string, extraEnv []string, onExit func
 		}
 	}()
 	return nil
+}
+
+// gitCredEnvVars are the environment variables that carry git/gh PUSH credentials. A
+// sandboxed worker (TASK-260 trust posture) must carry NONE of them: it cannot push or
+// open a PR by design — that is the coordinator's trusted host-side step. scrubGitCreds
+// drops any env entry whose name is one of these, plus the GIT_* credential helpers a git
+// invocation reads. The list is deliberately conservative (well-known credential carriers
+// only) so a worker keeps its model + bus env; the sandbox egress wall is the primary
+// control, this scrub the credential-boundary belt-and-suspenders.
+var gitCredEnvVars = map[string]bool{
+	"GH_TOKEN":              true, // gh CLI auth token
+	"GITHUB_TOKEN":          true, // gh CLI / Actions auth token
+	"GH_ENTERPRISE_TOKEN":   true, // gh CLI enterprise token
+	"SSH_AUTH_SOCK":         true, // ssh-agent socket (git over ssh)
+	"GIT_ASKPASS":           true, // git credential prompt helper
+	"GIT_SSH":               true, // git ssh transport override
+	"GIT_SSH_COMMAND":       true, // git ssh transport override
+	"GIT_TOKEN":             true, // common git token convention
+	"GITHUB_PAT":            true, // common PAT convention
+	"GIT_CREDENTIAL_HELPER": true, // git credential helper override
+}
+
+// scrubGitCreds returns env with every git/gh push-credential variable removed (TASK-260):
+// a sandboxed worker is launched credential-free so it cannot push or open a PR. Each
+// entry is "NAME=value"; we split on the first '=' and drop the entry when NAME is a known
+// credential carrier.
+func scrubGitCreds(env []string) []string {
+	out := env[:0:0] // fresh backing array — never mutate the caller's slice
+	for _, kv := range env {
+		name := kv
+		if i := strings.IndexByte(kv, '='); i >= 0 {
+			name = kv[:i]
+		}
+		if gitCredEnvVars[name] {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // wakePrompt builds the brief for a revived worker from the message that woke it:

@@ -158,3 +158,14 @@ func git(ctx context.Context, args ...string) (string, error) {
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
+
+// gh runs a gh subcommand from dir and returns its combined output — the thin host-side
+// seam the trusted PR-open step (pr.go) uses to open a PR. It runs with the coordinator's
+// host environment (the operator's gh auth), never inside the sandbox. cwd is set to the
+// run's worktree so gh resolves the repo from its origin remote.
+func gh(ctx context.Context, dir string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}

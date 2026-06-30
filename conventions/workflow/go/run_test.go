@@ -40,6 +40,50 @@ func TestParseRunRejectsWrongType(t *testing.T) {
 	}
 }
 
+// TestPROpenStepRoundTrips (TASK-260 AC#3): a dev-workflow definition carrying a pr-open
+// step round-trips through both the Run and Template envelopes with the kind preserved, so
+// the standard TASK-98 template can declare the trusted-path PR-open step (not a manual
+// operator step). The kind string is co-equal with the TS mirror (conventions/workflow/ts).
+func TestPROpenStepRoundTrips(t *testing.T) {
+	if KindPROpen != "pr-open" {
+		t.Fatalf("KindPROpen = %q; the wire value must be %q (co-equal with the TS mirror)", KindPROpen, "pr-open")
+	}
+	// The standard dev-workflow shape: build → review → open PR → stopping brief.
+	r := Run{
+		ID: "01HPR", Status: RunRunning,
+		Steps: []RunStep{
+			{ID: "s1", Label: "build", Kind: KindWork, Status: StepRunning},
+			{ID: "s2", Label: "review", Kind: KindWork, Status: StepUpcoming},
+			{ID: "pr", Label: "open a pull request", Kind: KindPROpen, Status: StepUpcoming},
+			{ID: "brief", Label: "stopping brief", Kind: KindBrief, Status: StepUpcoming},
+		},
+	}
+	got, ok := ParseRun(r.Marshal())
+	if !ok {
+		t.Fatal("ParseRun rejected a run with a pr-open step")
+	}
+	if got.Steps[2].Kind != KindPROpen {
+		t.Fatalf("pr-open step kind not preserved: %+v", got.Steps[2])
+	}
+
+	tpl := Template{
+		Name: "Plan → build → review → PR",
+		Steps: []TemplateStep{
+			{ID: "s1", Label: "build", Kind: KindWork},
+			{ID: "pr", Label: "open a pull request", Kind: KindPROpen},
+			{ID: "brief", Label: "stopping brief", Kind: KindBrief},
+		},
+	}
+	b, _ := json.Marshal(tpl)
+	var back Template
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatalf("template with a pr-open step did not round-trip: %v", err)
+	}
+	if back.Steps[1].Kind != KindPROpen {
+		t.Fatalf("template pr-open step kind not preserved: %+v", back.Steps[1])
+	}
+}
+
 // A null template marshals as explicit null (ad-hoc run) and round-trips as nil.
 func TestRunTemplateNullable(t *testing.T) {
 	r := Run{ID: "01H", Status: RunRunning}

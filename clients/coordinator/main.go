@@ -181,6 +181,12 @@ type coordinator struct {
 	// apart from an existence probe — probing existence is metadata, not a content read.
 	existsArtifact func(ctx context.Context, name string) error
 
+	// openPR is the trusted-path PR-open seam (TASK-260): it commits + pushes the run's
+	// worktree branch and opens a PR, returning the PR URL. Defaults to hostOpenPR (real
+	// git/gh on the host). Injectable so runPROpen is tested against a LOCAL bare repo
+	// (the real branch push asserted, only the gh `pr create` call stubbed — see pr.go).
+	openPR openPRFunc
+
 	// reviewerAgent is the long-lived coordinator-AGENT's id in agent mode (TASK-242),
 	// empty in the default programmatic path. Stood up once on adopt; each completed step
 	// is reviewed by DMing it and awaiting its run.decision. Guarded (set on the main
@@ -227,6 +233,7 @@ func newCoordinator(ctx context.Context, c *sextant.Client, spawnSubject string,
 		_, err := c.GetArtifact(ctx, name) // existence probe: keep only the error, discard the body
 		return err
 	}
+	co.openPR = hostOpenPR // trusted-path PR-open (TASK-260); a test swaps the gh half
 	if newCoordinatorHook != nil {
 		newCoordinatorHook(co)
 	}
@@ -524,6 +531,11 @@ func (co *coordinator) runStep(idx int) (string, error) {
 		return "", co.runDispatch(step, co.workPrompt(step))
 	case workflow.KindVerify:
 		return co.runVerify(step)
+	case workflow.KindPROpen:
+		// Trusted-path PR-open (TASK-260): runs HOST-SIDE in-process (the operator's
+		// git/gh auth), NOT a spawn.request to the sandboxed dispatcher — the jailed
+		// worker has no github.com egress and no git creds, so it cannot open a PR.
+		return co.runPROpen(step)
 	case workflow.KindCheckpoint:
 		return "", co.runCheckpoint(step)
 	case workflow.KindBrief:
