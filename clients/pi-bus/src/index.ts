@@ -33,6 +33,8 @@ import { registerTools } from "./tools.js";
 import { registerGoalCommand } from "./goal_command.js";
 import { registerGate } from "./gate.js";
 import { Handoff, isHandoffDrain, type HandoffRecord } from "./handoff.js";
+import { RunReporter, type ProducedArtifact } from "./run_report.js";
+import { makeCaptureWorktreeDiff } from "./worktree_diff.js";
 
 export default function sextantPiBus(pi: ExtensionAPI): void {
   const cfg = resolveConfig(process.env);
@@ -60,11 +62,45 @@ export default function sextantPiBus(pi: ExtensionAPI): void {
   // The bus connection (adjustment 1 + 4a). onWake is the single entry every
   // inbound frame flows through, so the back-pressure policy sees them all.
   let ctxRef: ExtensionContext | undefined; // latest context, for idle checks in the wake path
-  let runReported = false; // run.event step-done emitted once (ADR-0048), if this worker is a run step
-  // produced collects artifacts the agent created/updated this session, reported on the
-  // run.event step-done so the coordinator can attach them + gate the brief step (ADR-0048).
-  const produced: { name: string; kind: string; version: number }[] = [];
+  // produced collects artifacts the agent created/updated across this PROCESS (every run),
+  // reported on the run.event step-done so the coordinator can attach them + gate the step
+  // (ADR-0048). Read at the worker's TRUE terminal point (the drain), not at the first
+  // agent_end — see RunReporter for the D7 root cause.
+  const produced: ProducedArtifact[] = [];
   const bus = new BusConnection(cfg, log, (m) => onInbound(m));
+
+  // The workflow-run step-done reporter (ADR-0048 + the D7 fix). It emits the step-done
+  // run.event ONCE, at the worker's genuine completion (the drain-and-revive wind-down,
+  // and defensively at session_shutdown) — NOT at the first agent_end, which can fire
+  // mid-task (a retryable stop / a follow-up turn) and so reported produced=0 before the
+  // artifact-creating turns ran. It carries the COMPLETE produced set (read at report
+  // time) plus, for a code step, the worker's captured worktree diff (so a step that
+  // changed files passes the proof gate with its real diff even if the model created no
+  // bus artifact). The diff capture is the WORKER reading its OWN worktree — the
+  // coordinator still gates on typed metadata only (single-writer + content-opacity hold).
+  const runReporter = new RunReporter({
+    runEventsSubject: cfg.runEventsSubject,
+    runStep: cfg.runStep,
+    selfId: () => bus.getClient()?.id() ?? "",
+    publish: async (subject, record) => {
+      const client = bus.getClient();
+      if (!client) throw new Error("no live bus client");
+      await client.publish(subject, record);
+    },
+    producedSnapshot: () => [...produced],
+    captureDiff: makeCaptureWorktreeDiff({
+      workdir: cfg.workdir,
+      runStep: cfg.runStep,
+      selfId: () => bus.getClient()?.id() ?? "",
+      createArtifact: async (name, record) => {
+        const client = bus.getClient();
+        if (!client) throw new Error("no live bus client");
+        return client.createArtifact(name, record);
+      },
+      log,
+    }),
+    log,
+  });
 
   // The activity bridge (adjustment 3). Resolves the live client at publish time
   // (it reopens across transitions) and the current activity subject.
@@ -90,7 +126,14 @@ export default function sextantPiBus(pi: ExtensionAPI): void {
       if (!client) return; // no live client — the close/exit still releases the session
       await client.publish(bus.handoffSubject(), rec as unknown as JSONValue);
     },
-    closeBus: () => bus.close("handoff"),
+    // Report the workflow step-done before the bus closes, so a MANUAL drain (a
+    // pi.handoff{drain} DM, not the auto-drain path) of a run-step worker still emits its
+    // step-done while the client is live. Idempotent — the auto-drain path already
+    // reported before calling onDrain, so this is a no-op there.
+    closeBus: async () => {
+      await runReporter.report("handoff_drain");
+      await bus.close("handoff");
+    },
     // exit terminates the worker process so the session is RELEASED. ctx.shutdown()
     // is pi's graceful stop (it runs session_shutdown + flushes the JSONL), but in
     // RPC mode it does NOT actually exit while stdin is held open (the dispatcher
@@ -219,6 +262,11 @@ export default function sextantPiBus(pi: ExtensionAPI): void {
 
   pi.on("session_shutdown", async (event) => {
     log("session_shutdown", { reason: event.reason });
+    // Defensively report the workflow step-done before the bus closes, for a worker that
+    // reaches shutdown WITHOUT the auto-drain path (a resident worker, or an externally
+    // driven stop). Idempotent — a no-op if the drain already reported. Awaited so the
+    // frame lands before the client is torn down.
+    await runReporter.report("session_shutdown");
     // Drop anything buffered; the durable record stays on the bus.
     while (!queue.isEmpty()) queue.takeNext();
     await bus.close(event.reason);
@@ -237,39 +285,19 @@ export default function sextantPiBus(pi: ExtensionAPI): void {
     flushOne(ctx);
   });
 
-  // Drain-and-revive (ADR-0045). agent_end fires when the whole agentic run finishes
-  // — the right "task complete" signal (unlike turn_end, where ctx.isIdle() is still
-  // false because the turn is mid-settle). For a drain-when-idle worker: if a wake was
-  // buffered while it was busy, run that next (so no follow-up is lost); otherwise wind
-  // down and exit via the managed-handoff path (relinquish → close → process.exit). The
-  // session JSONL is persisted, so the dispatcher re-spawns this worker — resuming it —
-  // on the next message addressed to it. Without the flag the worker stays resident.
+  // Drain-and-revive (ADR-0045). agent_end fires when ONE agent run finishes — but it is
+  // NOT reliably "the whole task is done" (a retryable stop or a follow-up turn fires it
+  // mid-task). For a drain-when-idle worker: if a wake was buffered while it was busy, run
+  // that next (so no follow-up is lost); otherwise the worker is GENUINELY done with the
+  // step — report the workflow step-done (ADR-0048, carrying the complete produced set +
+  // any code-step diff) and then wind down + exit via the managed-handoff path
+  // (relinquish → close → process.exit). Reporting HERE — at the true terminal point,
+  // not at the first agent_end — is the D7 fix: the produced set is complete and the
+  // worker is actually finished. The session JSONL is persisted, so the dispatcher
+  // re-spawns this worker — resuming it — on the next message. Without drainWhenIdle the
+  // worker stays resident and the run-step report goes out at session_shutdown instead.
   pi.on("agent_end", async (_event, ctx) => {
     ctxRef = ctx;
-    // Workflow run step (ADR-0048): the run finished, so report the step done on the
-    // coordinator's run-events subject — the signal it waits on — once, and
-    // deterministically (not relying on the model to have published it), carrying any
-    // artifacts the agent produced this session (so the coordinator attaches them and the
-    // brief step's gate passes). Awaited so the frame lands before a drain closes the bus.
-    if (cfg.runEventsSubject && !runReported) {
-      runReported = true;
-      const client = bus.getClient();
-      if (client) {
-        log("run_step_done", { subject: cfg.runEventsSubject, step: cfg.runStep, artifacts: produced.length });
-        try {
-          await client.publish(cfg.runEventsSubject, {
-            $type: "run.event",
-            step: cfg.runStep,
-            status: "done",
-            by: client.id(),
-            outcome: "done",
-            artifacts: produced.map((a) => ({ name: a.name, kind: a.kind, version: a.version })),
-          } as unknown as JSONValue);
-        } catch (e) {
-          log("run_event_error", { detail: (e as Error).message });
-        }
-      }
-    }
     if (!cfg.drainWhenIdle || handoff.isPending()) return;
     const next = queue.takeNext();
     if (next) {
@@ -277,6 +305,9 @@ export default function sextantPiBus(pi: ExtensionAPI): void {
       next.p.deliver(next.coalescedCount);
       return;
     }
+    // The worker is done (idle + empty queue). Report the run step-done BEFORE the drain
+    // closes the bus, so the frame lands on a live client. Awaited.
+    await runReporter.report("auto_drain_idle");
     log("auto_drain_idle", { reason: "agent run complete; draining for revive-on-message" });
     void handoff.onDrain("idle: task complete (drain-and-revive)");
   });

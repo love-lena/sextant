@@ -80,6 +80,13 @@ export interface Config {
   // a plain mobilize or a revive.
   runEventsSubject: string;
   runStep: string;
+  // workdir is the worker's scoped working dir (its CWD), from SEXTANT_PI_WORKDIR (the
+  // dispatcher recipe sets it). On a run step, if it is a git repo with uncommitted
+  // changes when the worker finishes, the extension captures the diff as a bus artifact
+  // and reports it on step-done — so a CODE step (whose deliverable is a git diff, not a
+  // bus artifact) passes the coordinator's proof gate with its real diff (the D7 fix).
+  // Empty ⇒ no diff capture (a non-coding worker, or an unscoped session).
+  workdir: string;
 }
 
 // resolveConfig reads the environment into a Config, applying the defaults above.
@@ -101,6 +108,7 @@ export function resolveConfig(env: NodeJS.ProcessEnv): Config {
     drainWhenIdle: isOn(env["SEXTANT_PI_DRAIN_WHEN_IDLE"]),
     runEventsSubject: env["SEXTANT_PI_RUN_EVENTS"] ?? "",
     runStep: env["SEXTANT_PI_RUN_STEP"] ?? "",
+    workdir: env["SEXTANT_PI_WORKDIR"] ?? "",
   };
 }
 
