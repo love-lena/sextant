@@ -41,6 +41,7 @@ import {
   StepRunning,
   KindWork,
   KindBrief,
+  KindVerify,
   type Run,
 } from "../src/index.js";
 
@@ -57,6 +58,7 @@ test("the run state envelope round-trips, stamping the versioned $type", () => {
     status: RunRunning,
     steps: [
       { id: "s1", label: "investigate", kind: KindWork, status: StepRunning },
+      { id: "verify", label: "verify the deliverable", kind: KindVerify, status: StepUpcoming },
       { id: "brief", label: "stopping brief", kind: KindBrief, status: StepUpcoming },
     ],
     relates: [{ goal: "g1", crit: "c1", kind: "toward" }],
@@ -67,8 +69,9 @@ test("the run state envelope round-trips, stamping the versioned $type", () => {
   assert.ok(got, "parseRun returned null for a valid record");
   assert.equal(obj(marshalRun(run))["$type"], KindRun);
   assert.equal(got!.id, "01HRUN");
-  assert.equal(got!.steps.length, 2);
-  assert.equal(got!.steps[1]!.kind, KindBrief);
+  assert.equal(got!.steps.length, 3);
+  assert.equal(got!.steps[1]!.kind, KindVerify);
+  assert.equal(got!.steps[2]!.kind, KindBrief);
 });
 
 test("parseRun rejects the OLD sextant.workflow/v1 type and non-objects", () => {

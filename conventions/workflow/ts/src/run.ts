@@ -52,6 +52,12 @@ export const StepWaiting = "waiting";
 export const KindWork = "work";
 export const KindCheckpoint = "checkpoint";
 export const KindBrief = "brief";
+// KindVerify is an independent verification step (D8): a SEPARATE worker (a producer
+// cannot verify itself) fetches the run's real deliverable, builds + runs the relevant
+// tests, checks each AC adversarially, and reports outcome=blocked (with a verdict
+// artifact) if DoD is not met — placed before a brief so a run cannot reach done over a
+// failed verification. Additive — existing kinds unchanged.
+export const KindVerify = "verify";
 
 export interface RunStep {
   id: string;
