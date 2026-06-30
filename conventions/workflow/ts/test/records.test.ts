@@ -13,6 +13,17 @@ import {
   marshalRunEvent,
   parseRunEvent,
   parseRunControl,
+  marshalRunReview,
+  parseRunReview,
+  marshalRunDecision,
+  parseRunDecision,
+  runReviewSubject,
+  runDecisionSubject,
+  isDecisionVerb,
+  DecisionAdvance,
+  DecisionRedo,
+  DecisionEdit,
+  DecisionStop,
   nextPendingRun,
   isTerminalRun,
   runStartRecord,
@@ -117,4 +128,38 @@ test("runStartRecord stamps the run.start $type and the subjects are well-formed
   assert.equal(runStateName("01H"), "workflow.run.01H");
   assert.equal(runEventsSubject("01H"), "msg.workflow.run.01H.events");
   assert.equal(runControlSubject("01H"), "msg.workflow.run.01H.control");
+});
+
+// Agent-mode lexicon (TASK-242): the run.review request + run.decision reply round-trip
+// stamping their $types, the parsers reject foreign records, the four decision verbs are
+// recognised + a graph-reshaping verb is rejected, and the review subjects are well-formed.
+test("the agent-mode review/decision records round-trip and reject foreign records", () => {
+  const review = parseRunReview(
+    marshalRunReview({ step: "s1", objective: "obj", produced: [{ name: "a", kind: "work" }] }),
+  );
+  assert.ok(review);
+  assert.equal(obj(marshalRunReview({ step: "s1" }))["$type"], "run.review");
+  assert.equal(review!.step, "s1");
+  assert.equal(review!.produced![0]!.name, "a");
+  assert.equal(parseRunReview({ $type: "run.event", status: "done" }), null);
+
+  const dec = parseRunDecision(
+    marshalRunDecision({ step: "s1", verb: DecisionRedo, feedback: "fix it" }),
+  );
+  assert.ok(dec);
+  assert.equal(obj(marshalRunDecision({ step: "s1", verb: DecisionAdvance }))["$type"], "run.decision");
+  assert.equal(dec!.verb, DecisionRedo);
+  assert.equal(dec!.feedback, "fix it");
+  assert.equal(parseRunDecision({ $type: "run.review", step: "s1" }), null);
+});
+
+test("isDecisionVerb recognises EXACTLY the four v1 verbs and rejects graph reshaping", () => {
+  for (const v of [DecisionAdvance, DecisionRedo, DecisionEdit, DecisionStop]) {
+    assert.equal(isDecisionVerb(v), true, `${v} should be a valid v1 verb`);
+  }
+  for (const v of ["branch", "insert", "skip", "", "ADVANCE"]) {
+    assert.equal(isDecisionVerb(v), false, `${v} must be rejected (no graph reshaping in v1)`);
+  }
+  assert.equal(runReviewSubject("01H"), "msg.workflow.run.01H.review");
+  assert.equal(runDecisionSubject("01H"), "msg.workflow.run.01H.decision");
 });

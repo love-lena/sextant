@@ -125,6 +125,67 @@ func TestRunSubjects(t *testing.T) {
 	if got := RunControlSubject("01H"); got != "msg.workflow.run.01H.control" {
 		t.Errorf("RunControlSubject = %q", got)
 	}
+	if got := RunReviewSubject("01H"); got != "msg.workflow.run.01H.review" {
+		t.Errorf("RunReviewSubject = %q", got)
+	}
+	if got := RunDecisionSubject("01H"); got != "msg.workflow.run.01H.decision" {
+		t.Errorf("RunDecisionSubject = %q", got)
+	}
+}
+
+// TestAgentModeRecords pins the agent-mode lexicon (TASK-242): the run.review request and
+// run.decision reply round-trip stamping their $types and reject foreign records; the run
+// envelope carries agent_mode; and IsDecisionVerb recognises EXACTLY the four v1 verbs and
+// rejects graph reshaping (branch/insert/skip) — the guard that keeps the shell from
+// advancing on an out-of-vocabulary verb.
+func TestAgentModeRecords(t *testing.T) {
+	review := RunReview{Step: "s1", Objective: "obj", Produced: []ProducedArtifact{{Name: "a", Kind: "work"}}}
+	got, ok := ParseRunReview(review.Marshal())
+	if !ok || got.Type != TypeRunReview || got.Step != "s1" || len(got.Produced) != 1 || got.Produced[0].Name != "a" {
+		t.Fatalf("RunReview round-trip mismatch: %+v ok=%v", got, ok)
+	}
+	if _, ok := ParseRunReview(json.RawMessage(`{"$type":"run.event","status":"done"}`)); ok {
+		t.Fatal("ParseRunReview accepted a non-review record")
+	}
+
+	dec := RunDecision{Step: "s1", Verb: DecisionRedo, Feedback: "fix it", Reason: "wrong"}
+	gd, ok := ParseRunDecision(dec.Marshal())
+	if !ok || gd.Type != TypeRunDecision || gd.Verb != DecisionRedo || gd.Feedback != "fix it" {
+		t.Fatalf("RunDecision round-trip mismatch: %+v ok=%v", gd, ok)
+	}
+	if _, ok := ParseRunDecision(json.RawMessage(`{"$type":"run.review","step":"s1"}`)); ok {
+		t.Fatal("ParseRunDecision accepted a non-decision record")
+	}
+
+	for _, v := range []string{DecisionAdvance, DecisionRedo, DecisionEdit, DecisionStop} {
+		if !IsDecisionVerb(v) {
+			t.Errorf("IsDecisionVerb(%q) = false, want true", v)
+		}
+	}
+	for _, v := range []string{"branch", "insert", "skip", "", "ADVANCE"} {
+		if IsDecisionVerb(v) {
+			t.Errorf("IsDecisionVerb(%q) = true, want false (no graph reshaping in v1)", v)
+		}
+	}
+
+	r := Run{ID: "01H", AgentMode: true, Status: RunRunning}
+	rr, ok := ParseRun(r.Marshal())
+	if !ok || !rr.AgentMode {
+		t.Fatalf("Run.AgentMode did not round-trip: %+v ok=%v", rr, ok)
+	}
+	// agent_mode is omitempty: a default run marshals WITHOUT the field (byte-compat).
+	if b := (Run{ID: "01H", Status: RunRunning}).Marshal(); contains(string(b), "agent_mode") {
+		t.Errorf("default run marshalled agent_mode (should be omitempty): %s", b)
+	}
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }
 
 func TestIsTerminalRun(t *testing.T) {
