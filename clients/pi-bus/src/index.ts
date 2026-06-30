@@ -39,21 +39,54 @@ import { makeCaptureWorktreeDiff } from "./worktree_diff.js";
 export default function sextantPiBus(pi: ExtensionAPI): void {
   const cfg = resolveConfig(process.env);
 
-  // trace: one structured JSONL line per event. Always to stderr (RPC stdout
-  // must stay clean JSONL); also to SEXTANT_PI_LOG when set (the driven harness
-  // reads it for assertions). Best-effort — a trace failure never affects the
-  // agent.
-  const logPath = process.env["SEXTANT_PI_LOG"];
+  // ctxRef is the latest pi ExtensionContext, kept fresh on every lifecycle event so
+  // the wake path's idle checks AND the trace logger (below) can resolve live state.
+  // Declared before log() so the logger can lazily read the session dir from it.
+  let ctxRef: ExtensionContext | undefined;
+
+  // trace: one structured JSONL line per event. Always to stderr (RPC stdout must stay
+  // clean JSONL); also to FILE sinks so the lifecycle trace survives even when stderr is
+  // dropped — which it IS on the live managed path: a worker launched under launchd + the
+  // srt sandbox has its grandchild stderr swallowed, so the dispatcher log shows pi's RPC
+  // stdout but ZERO [pi-bus] lines, leaving a hung run undiagnosable.
+  //
+  // We write to EVERY distinct writable sink we can name, de-duped, because under
+  // launchd+srt it is not certain which allow-write tree a Node appendFileSync actually
+  // lands in (the live symptom: pi's own *.jsonl transcript writes to the session dir but
+  // the extension's pi-bus.log did not appear there). Belt-and-suspenders maximises the
+  // chance the trace is capturable for at least one location:
+  //   - SEXTANT_PI_LOG, when the recipe sets it (points at the per-child session dir);
+  //   - the SESSION DIR resolved from pi itself (ctx.sessionManager.getSessionDir()) — does
+  //     not depend on the recipe (a materialized pi.sh can lag a deploy) and is PERSISTENT
+  //     (survives the per-run worktree teardown);
+  //   - the WORKDIR (SEXTANT_PI_WORKDIR) — a DIFFERENT allow-write tree (pi-auto writes its
+  //     own scratch there), readable during the live repro window before teardown.
+  // All best-effort; a trace write must never throw into a lifecycle handler.
+  const fileSink = (path: string, line: string) => {
+    try {
+      appendFileSync(path, line + "\n");
+    } catch {
+      /* best-effort — never fatal */
+    }
+  };
   const log: Logger = (event, fields = {}) => {
     const line = JSON.stringify({ t: Date.now(), event, ...fields });
-    process.stderr.write(`[pi-bus] ${line}\n`);
-    if (logPath) {
-      try {
-        appendFileSync(logPath, line + "\n");
-      } catch {
-        /* best-effort */
-      }
+    try {
+      process.stderr.write(`[pi-bus] ${line}\n`);
+    } catch {
+      /* stderr unavailable under the sandbox — never fatal */
     }
+    const sinks = new Set<string>();
+    const envLog = process.env["SEXTANT_PI_LOG"];
+    if (envLog) sinks.add(envLog);
+    try {
+      const sessionDir = ctxRef?.sessionManager.getSessionDir();
+      if (sessionDir) sinks.add(`${sessionDir}/pi-bus.log`);
+    } catch {
+      /* session manager not ready — skip */
+    }
+    if (cfg.workdir) sinks.add(`${cfg.workdir}/.pi-bus.log`);
+    for (const path of sinks) fileSink(path, line);
   };
 
   // The wake/back-pressure queue (adjustment 2). One per extension instance.
@@ -61,7 +94,7 @@ export default function sextantPiBus(pi: ExtensionAPI): void {
 
   // The bus connection (adjustment 1 + 4a). onWake is the single entry every
   // inbound frame flows through, so the back-pressure policy sees them all.
-  let ctxRef: ExtensionContext | undefined; // latest context, for idle checks in the wake path
+  // (ctxRef is declared above so the trace logger can resolve the session dir.)
   // produced collects artifacts the agent created/updated across this PROCESS (every run),
   // reported on the run.event step-done so the coordinator can attach them + gate the step
   // (ADR-0048). Read at the worker's TRUE terminal point (the drain), not at the first
