@@ -140,6 +140,17 @@ if ! mkdir -p "$WORKDIR" 2>/dev/null; then
 fi
 export SEXTANT_PI_WORKDIR="$WORKDIR"
 
+# The sandbox deny-reads ~/.gitconfig (and other dotfiles, below), so any `git`
+# the worker runs — its own `git status`/`diff`/`add` in Bash, just like the
+# in-process worktree-diff capture — would exit 128 trying to read the global
+# config. `git` needs neither the global nor the system config for what a worker
+# does, so point both at /dev/null for the whole worker environment. This is a
+# convenience for the agent's own git calls; it does NOT grant read access and
+# does NOT weaken the sandbox (the load-bearing capture fix lives in the pi-bus
+# worktree_diff.ts, which forces the same vars itself). TASK-265 (D14).
+export GIT_CONFIG_GLOBAL="/dev/null"
+export GIT_CONFIG_SYSTEM="/dev/null"
+
 # HOME must resolve (to the operator's home, inherited from the launchd-managed
 # dispatcher): the worker's model creds live under it, and in automode pi-auto
 # reads the operator's ~/.pi/agent/extensions/pi-auto.json + borrows the OpenAI
