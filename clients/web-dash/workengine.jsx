@@ -75,6 +75,14 @@
   // Always present, always required, never removable (TASK-213 S8.3).
   const BRIEF_STEP = () => ({ id: "brief", label: "Write the stopping brief", kind: "brief" });
 
+  // A stable, reliably-UNIQUE id for a builder step. A bare Date.now() collides when two
+  // steps are created within the same millisecond (a fast add, or a generate() batch),
+  // and a duplicate id makes the by-id setLabel/setKind/setModel mutate every colliding
+  // step at once (and duplicates the React key). A module-monotonic counter guarantees
+  // uniqueness regardless of timing; the time prefix keeps ids sortable-ish for debugging.
+  let stepSeq = 0;
+  const stepId = (prefix) => prefix + Date.now() + "-" + (++stepSeq);
+
   // ---- ULID (Crockford base32, 48-bit ms time + 80-bit randomness) ----
   const ULID_ALPHA = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
   function ulid() {
@@ -619,7 +627,7 @@
         .map((s) => s.trim()).filter((s) => s.length > 2);
       const drafted = parts.map((p, i) => {
         const ask = /\b(ask|review|approv|confirm|check with|operator|sign[- ]?off|feedback|pause)\b/i.test(p);
-        return { id: "g" + Date.now() + i, label: p.charAt(0).toUpperCase() + p.slice(1), kind: ask ? "checkpoint" : "work", model: "" };
+        return { id: stepId("g"), label: p.charAt(0).toUpperCase() + p.slice(1), kind: ask ? "checkpoint" : "work", model: "" };
       });
       setSteps([...drafted, BRIEF_STEP()]);
     }
@@ -628,7 +636,7 @@
       setSteps((prev) => {
         const tail = prev[prev.length - 1]; // the brief
         const body = prev.slice(0, -1);
-        return [...body, { id: "n" + Date.now(), label: kind === "checkpoint" ? "Operator checkpoint" : "New step", kind, model: "" }, tail];
+        return [...body, { id: stepId("n"), label: kind === "checkpoint" ? "Operator checkpoint" : "New step", kind, model: "" }, tail];
       });
     }
     function setLabel(id, label) { setSteps((prev) => prev.map((s) => s.id === id ? { ...s, label } : s)); }
