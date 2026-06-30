@@ -57,7 +57,10 @@ test("the run state envelope round-trips, stamping the versioned $type", () => {
     objective: "do the whole thing",
     status: RunRunning,
     steps: [
-      { id: "s1", label: "investigate", kind: KindWork, status: StepRunning },
+      // timeout_secs is the optional per-step timeout (TASK-257), the peer of Go's
+      // RunStep.TimeoutSecs — both serialize the same wire bytes. Set here so the
+      // round-trip exercises it.
+      { id: "s1", label: "investigate", kind: KindWork, status: StepRunning, timeout_secs: 1800 },
       { id: "verify", label: "verify the deliverable", kind: KindVerify, status: StepUpcoming },
       { id: "brief", label: "stopping brief", kind: KindBrief, status: StepUpcoming },
     ],
@@ -72,6 +75,10 @@ test("the run state envelope round-trips, stamping the versioned $type", () => {
   assert.equal(got!.steps.length, 3);
   assert.equal(got!.steps[1]!.kind, KindVerify);
   assert.equal(got!.steps[2]!.kind, KindBrief);
+  // The per-step timeout survives the round-trip (TASK-257) and a step that declares
+  // none leaves it undefined (the coordinator falls back to its default).
+  assert.equal(got!.steps[0]!.timeout_secs, 1800);
+  assert.equal(got!.steps[1]!.timeout_secs, undefined);
 });
 
 test("parseRun rejects the OLD sextant.workflow/v1 type and non-objects", () => {

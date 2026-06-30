@@ -68,6 +68,13 @@ export interface RunStep {
   // model is the optional per-step model declaration (TASK-245). When set, the
   // dispatcher runs this step's worker on this model. Omitted = default applies.
   model?: string;
+  // timeout_secs is the optional per-step timeout in whole seconds (TASK-257). When
+  // > 0 the coordinator bounds this step's dispatch by it instead of the run-wide
+  // --step-timeout default — a coding step runs minutes, past the 90s default, so the
+  // budget rides the run definition. Omitted/0 = the coordinator default applies.
+  // Seconds (an integer), the peer of Go's RunStep.TimeoutSecs — both serialize the
+  // SAME wire bytes.
+  timeout_secs?: number;
 }
 
 export interface RelatesLink {

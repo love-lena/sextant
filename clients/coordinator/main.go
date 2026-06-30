@@ -435,9 +435,10 @@ func (co *coordinator) runDispatch(step *workflow.RunStep, prompt string) error 
 	if err != nil {
 		return fmt.Errorf("publish spawn.request: %w", err)
 	}
-	ack, ok := co.awaitAck(out.ID, co.stepTimeout)
+	timeout := co.stepTimeoutFor(step)
+	ack, ok := co.awaitAck(out.ID, timeout)
 	if !ok {
-		return fmt.Errorf("no spawn.ack within %s", co.stepTimeout)
+		return fmt.Errorf("no spawn.ack within %s", timeout)
 	}
 	if ack.Status != workflow.StatusOK {
 		return fmt.Errorf("dispatch rejected: %s", ack.Error)
@@ -449,9 +450,9 @@ func (co *coordinator) runDispatch(step *workflow.RunStep, prompt string) error 
 	// its inbox lands as a follow-up turn (drained at agent_end before it winds down).
 	co.setActiveAgent(ack.ID)
 	defer co.setActiveAgent("")
-	ev, ok := co.awaitStepDone(step.ID, co.stepTimeout)
+	ev, ok := co.awaitStepDone(step.ID, timeout)
 	if !ok {
-		return fmt.Errorf("agent %s never reported step %q done within %s", short(ack.ID), step.ID, co.stepTimeout)
+		return fmt.Errorf("agent %s never reported step %q done within %s", short(ack.ID), step.ID, timeout)
 	}
 	// AC#2 — a work step's deliverable must be a durable artifact. A step that reports
 	// done but attaches no artifact is the 01KW8J2N hollow case (its output lived only
@@ -760,17 +761,18 @@ func (co *coordinator) runBrief(step *workflow.RunStep) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("publish brief spawn.request: %w", err)
 	}
-	ack, ok := co.awaitAck(out.ID, co.stepTimeout)
+	timeout := co.stepTimeoutFor(step)
+	ack, ok := co.awaitAck(out.ID, timeout)
 	if !ok {
-		return "", fmt.Errorf("no spawn.ack for brief within %s", co.stepTimeout)
+		return "", fmt.Errorf("no spawn.ack for brief within %s", timeout)
 	}
 	if ack.Status != workflow.StatusOK {
 		return "", fmt.Errorf("brief dispatch rejected: %s", ack.Error)
 	}
 	step.Agent = ack.ID
-	ev, ok := co.awaitStepDone(step.ID, co.stepTimeout)
+	ev, ok := co.awaitStepDone(step.ID, timeout)
 	if !ok {
-		return "", fmt.Errorf("brief agent never reported done within %s", co.stepTimeout)
+		return "", fmt.Errorf("brief agent never reported done within %s", timeout)
 	}
 	co.attachArtifacts(ev.Artifacts)
 	// Stop gate, two parts:
@@ -1000,6 +1002,21 @@ func (co *coordinator) onControl(m sextant.Message) {
 	co.mu.Unlock()
 	logf("control: %s", ctl.Verb)
 	wake(co.ctlCh)
+}
+
+// stepTimeoutFor is the effective dispatch timeout for one step (TASK-257): the step's
+// own declared TimeoutSecs when set (a coding step carries minutes in its definition),
+// else the run-wide --step-timeout the coordinator was started with (the 90s default
+// being far too short for a real coding step, which is why the managed component now
+// passes a sane default and a template can override per step). Bounding the dispatch by
+// the step's declared budget — not a single hardcoded constant — is the real fix (AC#2):
+// the timeout lives in the run/template definition, configurable per step, with the flag
+// as the fallback.
+func (co *coordinator) stepTimeoutFor(step *workflow.RunStep) time.Duration {
+	if d := step.Timeout(); d > 0 {
+		return d
+	}
+	return co.stepTimeout
 }
 
 // --- bounded waits ---
