@@ -3,10 +3,10 @@ id: TASK-242
 title: >-
   Work-engine: optional agent-mode run coordinator (long-lived per-run
   supervisor)
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-27 01:12'
-updated_date: '2026-06-30 00:20'
+updated_date: '2026-06-30 00:35'
 labels:
   - feature
   - workflow
@@ -38,8 +38,6 @@ The base run executor (TASK-236) is a programmatic, trusting state machine: it a
 - [ ] #7 Agent-mode decisions sit ON the TASK-243 deterministic proof-gate floor and can NEVER bypass it: an advance/stop-to-done decision over a step whose reported artifacts do not exist still FAILS the programmatic existence gate (verifyReportedArtifactsExist) — the agent cannot certify done over an absent or fabricated deliverable. Fake-pass guard: an agent that returns advance/done while the worker attached no artifact (or a name that doesn't resolve) must NOT reach run done; the deterministic gate rejects it. Flipper: mechanical test (RED->GREEN).
 <!-- AC:END -->
 
-
-
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
@@ -55,3 +53,9 @@ Design decision 2026-06-29 (operator): edit-then-advance is UNBOUNDED — the co
 
 Residual from TASK-243 option A (2026-06-29): the deterministic gate decides only from typed produced-artifact metadata, so a brief that claims a deliverable ONLY in prose (no typed ref) cannot be caught deterministically. That content-truthfulness check is the agent reviewer's job — added as an AC above.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Agent mode shipped as an additive, opt-in layer on the programmatic run executor (PR into rc/work-engine). A run.agent_mode flag opts in; absent/false is the existing path, byte-unchanged (proven by a negative test: no coordinator agent spawned, no run.review emitted). In agent mode one long-lived reviewer agent (ULID+function identity) is stood up per run via the dispatcher; after each completed work/brief step — AFTER the deterministic gates run — the shell DMs a run.review and applies the agent's run.decision from the FLAT-STEP-MODEL v1 vocabulary (advance | redo-with-feedback | edit-then-advance | stop; graph reshaping rejected). The shell stays the SOLE single-writer of the run envelope (checkpoint CAS); the agent only emits run.decision messages and edits deliverable artifacts directly (unbounded). AC#7 floor holds: agent decisions route through verifyReportedArtifactsExist (gate runs before the agent is consulted) — an advance/done over an absent/fabricated deliverable always blocks; the adversarial test flips RED with a one-line bypass and GREEN with the gate (recipe in agentmode_proofgate_test.go). Contract added to conventions/workflow go + ts peer. Tests run on a real bus under -race, gofumpt + go vet clean. Note: ACs left UNCHECKED for the DoD stickler's independent adversarial QA — implementer does not self-certify.
+<!-- SECTION:FINAL_SUMMARY:END -->
