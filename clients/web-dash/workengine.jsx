@@ -897,10 +897,16 @@
             </section>
           </div>
 
-          {/* Run topic composer (no takeover — steer by posting) */}
+          {/* Run topic composer (no takeover — steer by posting). A post is a live STEER:
+              the coordinator routes it to the active step's worker (or applies it at the
+              next step), and records it on the run timeline. Not a passive chat log. After
+              the run ends, the coordinator answers a post with a "not applied" notice in
+              the thread — never a silent drop (TASK-246). */}
           <div className="we-run-topic">
-            <div className="we-rail-h">Run topic</div>
-            <div className="we-topic-note">Steer this run by posting — watching isn't being needed. Posts append to the thread, attributed to you.</div>
+            <div className="we-rail-h">Steer the run</div>
+            <div className="we-topic-note">{isActive(run.status)
+              ? "Post to steer this run — the coordinator routes it to the working agent and records it on the timeline. No takeover needed."
+              : "This run has ended. A post here is reported back as not-applied (it can no longer change the run)."}</div>
             <div className="we-thread">
               {thread.map((m) => (
                 <div key={m.id} className={"we-post" + (m.author === selfRef.current.id ? " is-self" : "")}>
@@ -911,7 +917,7 @@
               {thread.length === 0 && <div className="we-muted" style={{ padding: "8px 0" }}>No posts yet — say something to the run.</div>}
             </div>
             <div className="we-topic-composer">
-              <textarea className="we-input" rows={2} placeholder="Post to the run…" value={draft}
+              <textarea className="we-input" rows={2} placeholder={isActive(run.status) ? "Steer the run… e.g. 'write it to its own artifact'" : "Post to the run…"} value={draft}
                 onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); post(); } }} />
               <button className="we-mini" disabled={!draft.trim()} onClick={post}>Post ↵</button>
             </div>

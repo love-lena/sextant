@@ -27,6 +27,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -38,6 +39,7 @@ import (
 
 	"github.com/love-lena/sextant/conventions/workflow/go"
 	"github.com/love-lena/sextant/protocol/conninfo"
+	"github.com/love-lena/sextant/protocol/sx"
 	"github.com/love-lena/sextant/sdk/go"
 )
 
@@ -105,6 +107,7 @@ func main() {
 		{*spawnSubject, co.onSpawn},
 		{workflow.RunEventsSubject(co.run.ID), co.onEvent},
 		{workflow.RunControlSubject(co.run.ID), co.onControl},
+		{workflow.RunTopicSubject(co.run.ID), co.onSteer},
 	} {
 		sub, err := c.Subscribe(ctx, s.subj, s.h, sextant.DeliverAll())
 		if err != nil {
@@ -127,6 +130,12 @@ type coordinator struct {
 	c            *sextant.Client
 	spawnSubject string
 	stepTimeout  time.Duration
+	// terminalGrace is how long the run-topic subscription stays alive AFTER the run goes
+	// terminal, so a steer arriving just-too-late is reported not-applied rather than
+	// silently dropped by a coordinator already tearing down (TASK-246 no-silent-drop).
+	// Past it the coordinator has released the run; a still-later post reaches no live
+	// owner (that is "no coordinator", not a silent drop by a live one).
+	terminalGrace time.Duration
 
 	run workflow.Run
 	rev uint64 // current revision of the state artifact (for CAS)
@@ -147,21 +156,36 @@ type coordinator struct {
 	// apart from an existence probe — probing existence is metadata, not a content read.
 	existsArtifact func(ctx context.Context, name string) error
 
-	mu         sync.Mutex
-	acks       map[string]workflow.SpawnAck // spawn.request frame id -> ack
-	doneEvents map[string]workflow.RunEvent // step id -> a non-self step-done event
-	approved   bool
-	cancelled  bool
-	ackCh      chan struct{} // wakes waiters: new ack
-	evCh       chan struct{} // wakes waiters: new event
-	ctlCh      chan struct{} // wakes waiters: control changed
+	mu            sync.Mutex
+	acks          map[string]workflow.SpawnAck // spawn.request frame id -> ack
+	doneEvents    map[string]workflow.RunEvent // step id -> a non-self step-done event
+	approved      bool
+	cancelled     bool
+	pendingSteers []steer       // operator steers to apply, drained on the main goroutine
+	steerHistory  []string      // every applied steer's text, threaded into the next work step's prompt
+	activeAgent   string        // the worker id of the step currently dispatched (for routing a steer)
+	terminal      bool          // set in finish(): a steer arriving after this is reported not-applied
+	ackCh         chan struct{} // wakes waiters: new ack
+	evCh          chan struct{} // wakes waiters: new event
+	ctlCh         chan struct{} // wakes waiters: control changed
+	steerCh       chan struct{} // wakes waiters: an operator steer arrived on the run topic
+}
+
+// steer is one operator steering message off the run topic (msg.topic.run.<id>): the
+// chat.message text and its bus-stamped author. The coordinator records it on the run
+// and routes it to the active step's worker so it influences the run (TASK-246).
+type steer struct {
+	text string
+	from string
 }
 
 func newCoordinator(ctx context.Context, c *sextant.Client, spawnSubject string, stepTimeout time.Duration) *coordinator {
 	co := &coordinator{
 		ctx: ctx, c: c, spawnSubject: spawnSubject, stepTimeout: stepTimeout,
-		acks: map[string]workflow.SpawnAck{}, doneEvents: map[string]workflow.RunEvent{},
+		terminalGrace: 30 * time.Second,
+		acks:          map[string]workflow.SpawnAck{}, doneEvents: map[string]workflow.RunEvent{},
 		ackCh: make(chan struct{}, 1), evCh: make(chan struct{}, 1), ctlCh: make(chan struct{}, 1),
+		steerCh: make(chan struct{}, 1),
 	}
 	co.getArtifact = c.GetArtifact
 	co.existsArtifact = func(ctx context.Context, name string) error {
@@ -307,6 +331,12 @@ func (co *coordinator) runDispatch(step *workflow.RunStep, prompt string) error 
 		return fmt.Errorf("dispatch rejected: %s", ack.Error)
 	}
 	step.Agent = ack.ID
+	// This worker is now the live target for an operator steer: an operator post on the
+	// run topic is routed to its inbox so it can incorporate it mid-step (TASK-246). The
+	// worker is resident for the duration of its step (a pi RPC session), so a frame to
+	// its inbox lands as a follow-up turn (drained at agent_end before it winds down).
+	co.setActiveAgent(ack.ID)
+	defer co.setActiveAgent("")
 	ev, ok := co.awaitStepDone(step.ID, co.stepTimeout)
 	if !ok {
 		return fmt.Errorf("agent %s never reported step %q done within %s", short(ack.ID), step.ID, co.stepTimeout)
@@ -351,6 +381,15 @@ func (co *coordinator) workPrompt(step *workflow.RunStep) string {
 		prompt += "\n\nINPUT ARTIFACTS (produced by prior steps of this run — fetch each with sextant_artifact_get and build on its content; do NOT start from scratch):"
 		for _, a := range inputs {
 			prompt += "\n- " + artifactRef(a)
+		}
+	}
+	// Thread any operator steers applied so far into the step's brief, so a steer that
+	// landed between steps (no worker resident to DM at the time) still shapes the NEXT
+	// step's work — the step-boundary half of live steering (TASK-246).
+	if steers := co.steerHistorySnapshot(); len(steers) > 0 {
+		prompt += "\n\nOPERATOR STEERING (incorporate these directions from the operator into this run):"
+		for _, s := range steers {
+			prompt += "\n- " + s
 		}
 	}
 	prompt += fmt.Sprintf("\nRUN_EVENTS=%s RUN_STEP=%s",
@@ -423,6 +462,63 @@ func (co *coordinator) attachArtifacts(arts []workflow.ProducedArtifact) {
 	}
 }
 
+// setActiveAgent records (or clears) the worker id of the step currently dispatched,
+// the target an operator steer is routed to. Guarded because onSteer reads it on a
+// delivery goroutine while runDispatch sets it on the main goroutine.
+func (co *coordinator) setActiveAgent(id string) {
+	co.mu.Lock()
+	co.activeAgent = id
+	co.mu.Unlock()
+}
+
+// applySteers drains the operator steers that arrived since the last call and applies
+// each to the LIVE run (TASK-246). Run only on the main goroutine (it mutates co.run
+// via appendActivity, preserving single-writer). For each steer it:
+//   - records an activity entry that REFERENCES the operator's message (so the run's
+//     embedded stream — what the dash shows — proves the steer reached the run, not a
+//     dead text box), and
+//   - routes the steer to the active step's worker by publishing a chat.message to the
+//     worker's inbox (msg.client.<agent>). The worker is resident for its step, so this
+//     lands as a follow-up turn it incorporates mid-step; if no step is in flight right
+//     now, the steer still rides steerHistory into the NEXT work step's prompt (applied
+//     at the step boundary). Either way it influences the active run.
+//
+// A steer is never silently dropped: a steer arriving after the run is terminal is
+// handled in onSteer (a not-applied notice), so it never reaches this queue.
+func (co *coordinator) applySteers() {
+	co.mu.Lock()
+	pending := co.pendingSteers
+	co.pendingSteers = nil
+	agent := co.activeAgent
+	co.mu.Unlock()
+	for _, s := range pending {
+		co.mu.Lock()
+		co.steerHistory = append(co.steerHistory, s.text)
+		co.mu.Unlock()
+		co.appendActivity("✎", fmt.Sprintf("operator steer from %s: %q", short(s.from), s.text))
+		if agent == "" {
+			logf("steer queued for the next step (no step in flight): %q", s.text)
+			continue
+		}
+		notice := chatMessage(fmt.Sprintf("OPERATOR STEER for this run (incorporate it into your current task): %s", s.text))
+		if err := co.c.Publish(co.ctx, sx.ClientSubject(agent), notice); err != nil {
+			logf("route steer to worker %s: %v", short(agent), err)
+			continue
+		}
+		logf("routed steer to active worker %s: %q", short(agent), s.text)
+	}
+}
+
+// steerHistorySnapshot returns a copy of the steers applied so far (for threading into
+// a work step's prompt). Guarded: onSteer/applySteers touch the slice off other paths.
+func (co *coordinator) steerHistorySnapshot() []string {
+	co.mu.Lock()
+	defer co.mu.Unlock()
+	out := make([]string, len(co.steerHistory))
+	copy(out, co.steerHistory)
+	return out
+}
+
 // runCheckpoint sets the run to waiting and blocks until the operator approves
 // (run.control approve/resume) or cancels. Cooperative: the coordinator only acts on
 // the verb the operator sends (ADR-0048). (TASK-225)
@@ -437,6 +533,10 @@ func (co *coordinator) runCheckpoint(step *workflow.RunStep) error {
 	// replayed by DeliverAll and must still take. We consume it (reset to false) only
 	// when we act on it, so the NEXT checkpoint still waits for its own approve.
 	for {
+		// An operator can steer while the run is paused for review; record it now and
+		// thread it into the next step (no worker is in flight at a checkpoint, so it
+		// applies at the next work step's boundary — never silently dropped). (TASK-246)
+		co.applySteers()
 		co.mu.Lock()
 		approved, cancelled := co.approved, co.cancelled
 		if approved {
@@ -457,6 +557,7 @@ func (co *coordinator) runCheckpoint(step *workflow.RunStep) error {
 		}
 		select {
 		case <-co.ctlCh:
+		case <-co.steerCh: // an operator steer arrived during the checkpoint
 		case <-co.ctx.Done():
 			return nil // resumable: re-adopt re-enters the still-waiting checkpoint
 		}
@@ -565,6 +666,12 @@ func joinStops(stops []string) string {
 // finish records a terminal run status, checkpoints, and appends the closing activity.
 func (co *coordinator) finish(status, note string) error {
 	co.run.Status = status
+	// Mark terminal under the lock BEFORE checkpointing, so a steer racing in on the
+	// delivery goroutine sees the run is closed and is reported not-applied rather than
+	// enqueued for a walk that has already returned (TASK-246 no-silent-drop guard).
+	co.mu.Lock()
+	co.terminal = true
+	co.mu.Unlock()
 	if err := co.checkpoint(); err != nil {
 		return err
 	}
@@ -633,6 +740,56 @@ func (co *coordinator) onEvent(m sextant.Message) {
 	wake(co.evCh)
 }
 
+// onSteer handles an operator steer on the run topic (msg.topic.run.<id>) — the
+// human-facing channel the dash run view posts to (TASK-246). It acts only on a real
+// chat.message steer from someone OTHER than this coordinator (never its own echoed
+// not-applied notice). A steer that arrives while the run is live is enqueued and the
+// main goroutine drains it (records it on the run + routes it to the active worker);
+// a steer that arrives once the run is TERMINAL cannot influence it, so instead of
+// silently dropping it (the 01KW8J2N bug this fixes) the coordinator publishes a
+// not-applied notice back on the same topic so the operator's thread shows the outcome.
+//
+// It runs on a delivery goroutine, so it only touches mutex-guarded state and publishes
+// (thread-safe via the SDK client); it never mutates co.run directly — that is the main
+// goroutine's job, preserving the single-writer discipline on the run envelope.
+func (co *coordinator) onSteer(m sextant.Message) {
+	if m.Frame.Author == co.c.ID() {
+		return
+	}
+	text, ok := workflow.ParseChatSteer(m.Frame.Record)
+	if !ok {
+		return
+	}
+	co.mu.Lock()
+	terminal := co.terminal
+	if !terminal {
+		co.pendingSteers = append(co.pendingSteers, steer{text: text, from: m.Frame.Author})
+	}
+	co.mu.Unlock()
+	if terminal {
+		// Never a silent drop: tell the operator the steer landed too late to apply.
+		notice := chatMessage(fmt.Sprintf("steer not applied — run %s is already %s: %q", short(co.run.ID), co.run.Status, text))
+		if err := co.c.Publish(context.Background(), workflow.RunTopicSubject(co.run.ID), notice); err != nil {
+			logf("publish steer-not-applied notice: %v", err)
+		}
+		logf("steer from %s arrived after run %s went %s: not applied", short(m.Frame.Author), short(co.run.ID), co.run.Status)
+		return
+	}
+	logf("steer from %s on run %s: %q", short(m.Frame.Author), short(co.run.ID), text)
+	wake(co.steerCh)
+}
+
+// chatMessage renders a plain {$type:chat.message,text} record — the opaque chat
+// convention the run topic carries (the coordinator's not-applied notice rides it so
+// the dash thread renders it like any other post).
+func chatMessage(text string) json.RawMessage {
+	b, _ := json.Marshal(struct {
+		Type string `json:"$type"`
+		Text string `json:"text"`
+	}{Type: workflow.TypeChatMessage, Text: text})
+	return b
+}
+
 func (co *coordinator) onControl(m sextant.Message) {
 	ctl, ok := workflow.ParseRunControl(m.Frame.Record)
 	if !ok {
@@ -689,6 +846,10 @@ func (co *coordinator) awaitStepDone(stepID string, timeout time.Duration) (work
 		if co.isCancelled() {
 			return workflow.RunEvent{}, false // cancelled mid-step → abort; walk() finishes cancelled
 		}
+		// Apply any operator steer that arrived while this step is in flight, BEFORE
+		// checking for done: a steer mid-step is routed to the live worker so it can
+		// act on it within this same step (TASK-246).
+		co.applySteers()
 		co.mu.Lock()
 		ev, ok := co.doneEvents[stepID]
 		co.mu.Unlock()
@@ -697,6 +858,7 @@ func (co *coordinator) awaitStepDone(stepID string, timeout time.Duration) (work
 		}
 		select {
 		case <-co.evCh:
+		case <-co.steerCh: // an operator steer arrived — route it to the live worker
 		case <-co.ctlCh: // a cancel must abort a step wait promptly, not after step-timeout
 		case <-t.C:
 			return workflow.RunEvent{}, false
@@ -805,7 +967,27 @@ func (sc *startConsumer) handle(m sextant.Message) {
 		if err := co.walk(); err != nil {
 			logf("run %s error: %v", short(req.ID), err)
 		}
+		// Keep the run-topic subscription alive for a grace window past terminal so a
+		// steer arriving just-too-late is reported not-applied (onSteer), never silently
+		// dropped by a coordinator already tearing down (TASK-246). Cut short on shutdown.
+		co.holdForLateSteers()
 	}()
+}
+
+// holdForLateSteers keeps the coordinator's subscriptions (incl. the run topic) alive for
+// terminalGrace after the run goes terminal, so onSteer can answer a late steer with a
+// not-applied notice instead of the silent drop that teardown would cause. Returns at once
+// if the grace is zero or the context is already done.
+func (co *coordinator) holdForLateSteers() {
+	if co.terminalGrace <= 0 {
+		return
+	}
+	t := time.NewTimer(co.terminalGrace)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-co.ctx.Done():
+	}
 }
 
 // prepareRun builds the coordinator, subscribes its helper subjects (spawn, the run's
@@ -822,6 +1004,7 @@ func (sc *startConsumer) prepareRun(runID string) (*coordinator, func(), error) 
 		{sc.spawnSubject, co.onSpawn},
 		{workflow.RunEventsSubject(runID), co.onEvent},
 		{workflow.RunControlSubject(runID), co.onControl},
+		{workflow.RunTopicSubject(runID), co.onSteer},
 	} {
 		sub, err := sc.c.Subscribe(sc.ctx, s.subj, s.h, sextant.DeliverAll())
 		if err != nil {

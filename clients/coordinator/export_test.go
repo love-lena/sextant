@@ -3,9 +3,26 @@ package main
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/love-lena/sextant/sdk/go"
 )
+
+// SetTerminalGraceHook installs a hook that pins every coordinator's terminalGrace — the
+// window the run-topic subscription stays alive past a terminal run so a late steer is
+// reported not-applied (TASK-246). The proof test sets a SHORT grace so it can assert the
+// not-applied notice fires without waiting the production default. Returns a restore func
+// that clears the hook. Composes with any hook already set (e.g. ArtifactReadRecorder).
+func SetTerminalGraceHook(d time.Duration) func() {
+	prev := newCoordinatorHook
+	newCoordinatorHook = func(co *coordinator) {
+		if prev != nil {
+			prev(co)
+		}
+		co.terminalGrace = d
+	}
+	return func() { newCoordinatorHook = prev }
+}
 
 // Test-only access to the coordinator internals (export_test.go pattern: an external
 // test package gets a controlled keyhole, not a build tag). Used by the AC#3
