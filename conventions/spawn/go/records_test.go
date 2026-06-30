@@ -99,3 +99,50 @@ func TestSpawnLexiconsParse(t *testing.T) {
 		}
 	}
 }
+
+// TestSpawnRequestModelField pins TASK-245 at the spawn-convention level: the
+// Model field carried by a spawn.request is preserved through marshal/unmarshal,
+// and a request with no Model omits the key entirely (omitempty).
+func TestSpawnRequestModelField(t *testing.T) {
+	// With a declared model: the key must survive the round-trip.
+	req := SpawnRequest{
+		Type:   TypeSpawnRequest,
+		Prompt: "write a draft",
+		Model:  "claude-opus-4-5",
+	}
+	b := SpawnRequestRecord(req)
+	got, ok := ParseSpawnRequest(b)
+	if !ok {
+		t.Fatal("ParseSpawnRequest rejected a request with Model set")
+	}
+	if got.Model != "claude-opus-4-5" {
+		t.Errorf("Model not preserved: got %q, want %q", got.Model, "claude-opus-4-5")
+	}
+	// Wire shape: the key must be "model" (matches the dispatcher's JSON tag).
+	raw := string(b)
+	if !func() bool {
+		for i := 0; i+len(`"model"`) <= len(raw); i++ {
+			if raw[i:i+len(`"model"`)] == `"model"` {
+				return true
+			}
+		}
+		return false
+	}() {
+		t.Errorf("SpawnRequest with Model does not emit \"model\" key: %s", raw)
+	}
+
+	// Without a declared model: the key must be absent (omitempty).
+	noModel := SpawnRequest{Type: TypeSpawnRequest, Prompt: "write a draft"}
+	nb := SpawnRequestRecord(noModel)
+	noRaw := string(nb)
+	if func() bool {
+		for i := 0; i+len(`"model"`) <= len(noRaw); i++ {
+			if noRaw[i:i+len(`"model"`)] == `"model"` {
+				return true
+			}
+		}
+		return false
+	}() {
+		t.Errorf("SpawnRequest with no Model emitted \"model\" key (must be omitted): %s", nb)
+	}
+}

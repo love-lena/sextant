@@ -428,7 +428,7 @@ func (co *coordinator) runStep(idx int) (string, error) {
 // the run's event stream. Each wait is bounded (fail-loud). It attaches any artifacts
 // the agent reported in its done event.
 func (co *coordinator) runDispatch(step *workflow.RunStep, prompt string) error {
-	req := workflow.SpawnRequest{Prompt: prompt, Nickname: step.Label, Job: co.run.ID}
+	req := workflow.SpawnRequest{Prompt: prompt, Nickname: step.Label, Job: co.run.ID, Model: step.Model}
 	out, err := co.c.PublishMsg(co.ctx, co.spawnSubject, req.Marshal())
 	if err != nil {
 		return fmt.Errorf("publish spawn.request: %w", err)
@@ -685,7 +685,7 @@ func (co *coordinator) runCheckpoint(step *workflow.RunStep) error {
 // artifact attached (ADR-0048 "never halt without posting the brief"). The agent's
 // reported outcome (done|blocked) becomes the terminal run status. (AC #4)
 func (co *coordinator) runBrief(step *workflow.RunStep) (string, error) {
-	req := workflow.SpawnRequest{Prompt: co.briefPrompt(step), Nickname: step.Label, Job: co.run.ID}
+	req := workflow.SpawnRequest{Prompt: co.briefPrompt(step), Nickname: step.Label, Job: co.run.ID, Model: step.Model}
 	out, err := co.c.PublishMsg(co.ctx, co.spawnSubject, req.Marshal())
 	if err != nil {
 		return "", fmt.Errorf("publish brief spawn.request: %w", err)

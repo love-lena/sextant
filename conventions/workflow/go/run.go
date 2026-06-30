@@ -132,6 +132,11 @@ type RunStep struct {
 	Status   string             `json:"status"`
 	Agent    string             `json:"agent,omitempty"`
 	Produced []ProducedArtifact `json:"produced,omitempty"`
+	// Model is the optional per-step model declaration (TASK-245). When set, the
+	// dispatcher runs this step's worker on this model instead of its default. The
+	// field flows RunStep → SpawnRequest.Model → dispatcher env SX_AGENT_MODEL so
+	// the pi recipe picks it up. Omitted = coordinator/dispatcher default applies.
+	Model string `json:"model,omitempty"`
 }
 
 // RelatesLink binds a run to a goal/criterion (ADR-0035 relates, ADR-0048 toward).
