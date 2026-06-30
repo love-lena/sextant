@@ -14,6 +14,7 @@ func TestRunRoundTrip(t *testing.T) {
 		Status:    RunRunning,
 		Steps: []RunStep{
 			{ID: "s1", Label: "investigate", Kind: KindWork, Status: StepRunning},
+			{ID: "verify", Label: "verify the deliverable", Kind: KindVerify, Status: StepUpcoming},
 			{ID: "brief", Label: "stopping brief", Kind: KindBrief, Status: StepUpcoming},
 		},
 		Relates:  []RelatesLink{{Goal: "g1", Crit: "c1", Kind: "toward"}},
@@ -25,7 +26,7 @@ func TestRunRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("ParseRun rejected a valid run")
 	}
-	if got.Status != RunRunning || len(got.Steps) != 2 || got.Steps[1].Kind != KindBrief {
+	if got.Status != RunRunning || len(got.Steps) != 3 || got.Steps[1].Kind != KindVerify || got.Steps[2].Kind != KindBrief {
 		t.Fatalf("round-trip mismatch: %+v", got)
 	}
 	if string(r.Marshal()[:len(`{"$type":"sextant.workflow.run/v1"`)]) != `{"$type":"sextant.workflow.run/v1"` {

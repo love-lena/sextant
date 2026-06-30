@@ -338,6 +338,9 @@ export default function sextantPiBus(pi: ExtensionAPI): void {
     onWake: (m) => onInbound(m),
     subscriptions: bus.runtimeSubscriptions(),
     onArtifactProduced: (a) => produced.push(a),
+    // runReporter is threaded so the run-step-only sextant_run_block tool can latch a
+    // BLOCKED outcome (D8). registerTools registers that tool ONLY when runReporter.isRunStep().
+    runReporter,
   });
 
   registerGoalCommand(pi, {

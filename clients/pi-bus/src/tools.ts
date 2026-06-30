@@ -19,6 +19,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { Client, JSONValue, Message, Subscription } from "@sextant/sdk";
 import { topicSubject, dmSubject } from "@sextant/sdk";
+import type { RunReporter } from "./run_report.js";
 
 // ToolDeps is what the tools need from the extension: the live client, the wake
 // handler to attach to a runtime subscription, and a place to track those
@@ -35,6 +36,13 @@ export interface ToolDeps {
   // the extension can report produced artifacts on a workflow-run step-done (the run.event
   // the coordinator gates the brief step on, ADR-0048). Optional — absent off a run.
   onArtifactProduced?: (a: { name: string; kind: string; version: number }) => void;
+  // runReporter, when this worker is a RUN STEP, lets the worker latch a BLOCKED outcome
+  // (D8): the sextant_run_block tool calls markBlocked, so the step-done run.event the
+  // reporter emits at the drain (the D7 terminal point) carries outcome:"blocked" and the
+  // coordinator blocks the run instead of advancing over a broken deliverable. The tool is
+  // registered ONLY when this is a run step (runReporter.isRunStep()) — a non-run worker
+  // has no run to block. Optional.
+  runReporter?: RunReporter;
 }
 
 // recordKind derives a produced artifact's kind from its opaque record — the `kind`
@@ -258,4 +266,28 @@ export function registerTools(pi: ExtensionAPI, deps: ToolDeps): void {
       }
     },
   });
+
+  // sextant_run_block — a VERIFY step's worker calls this to STOP the run when the
+  // Definition of Done is not met (D8). It latches a blocked outcome on the RunReporter,
+  // so the step-done run.event the reporter emits at the drain carries outcome:"blocked" +
+  // the reason; the coordinator's verify gate reads that and BLOCKS the run rather than
+  // advancing to a brief/done over a broken deliverable. Registered ONLY on a run step
+  // (runReporter.isRunStep()): a non-run worker has no run to block and never sees this
+  // tool. Calling it is HOW the verdict reaches the engine — without it the run proceeds.
+  if (deps.runReporter?.isRunStep()) {
+    const runReporter = deps.runReporter;
+    pi.registerTool({
+      name: "sextant_run_block",
+      label: "Block the run",
+      description:
+        "Signal that this workflow run must BLOCK because the Definition of Done is NOT met (a failed build/test or an unmet acceptance criterion). Call this when, as the independent verifier, you find the deliverable broken — it is HOW you stop the run; without it the run proceeds to done over the broken work. Still create your verdict artifact. `reason` is a one-line summary of what failed (e.g. \"go build ./... failed: undefined symbol Foo\").",
+      parameters: Type.Object({
+        reason: Type.String({ description: "One-line reason the run is blocked (what failed)." }),
+      }),
+      async execute(_id, params) {
+        runReporter.markBlocked(params.reason);
+        return ok(`run marked BLOCKED: ${params.reason}. The step-done event will report outcome=blocked; the run will not advance past verification.`);
+      },
+    });
+  }
 }

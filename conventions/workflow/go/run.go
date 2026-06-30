@@ -80,6 +80,16 @@ const (
 	KindWork       = "work"
 	KindCheckpoint = "checkpoint"
 	KindBrief      = "brief"
+
+	// KindVerify is an independent verification step (D8). It dispatches a SEPARATE
+	// worker (a producer cannot verify itself) charged with rigorously verifying the
+	// run's deliverable: fetch the prior steps' real artifacts, BUILD the change and
+	// RUN the relevant tests, check EACH acceptance criterion as a property with an
+	// adversarial/negative case, and report HONESTLY — done only if every AC is met AND
+	// the build/tests are green, else outcome=blocked with a verdict artifact enumerating
+	// what failed. Placed BEFORE a brief so a run cannot reach done over a failed
+	// verification. Additive — existing kinds are unchanged.
+	KindVerify = "verify"
 )
 
 // (Control verbs CtlApprove/CtlResume/CtlPause/CtlCancel and StatusOK/StatusError
@@ -115,9 +125,11 @@ type Run struct {
 	AgentMode bool `json:"agent_mode,omitempty"`
 }
 
-// RunStep is one unit of work. Kind work → dispatch an agent; checkpoint → pause for
-// the operator; brief → write the terminal stopping brief. Agent is filled from the
-// spawn.ack for work/brief steps.
+// RunStep is one unit of work. Kind work → dispatch an agent; verify → dispatch a
+// SEPARATE agent to independently verify the run's deliverable (build + run tests +
+// adversarial AC checks), which blocks the run on a failed verification; checkpoint →
+// pause for the operator; brief → write the terminal stopping brief. Agent is filled
+// from the spawn.ack for work/verify/brief steps.
 //
 // Produced holds the artifact REFS (name/kind/version — never content) the step's
 // worker reported in its run.event. It is the per-step deliverable record: AC#2 (each
@@ -183,6 +195,7 @@ type RunEvent struct {
 	By        string             `json:"by,omitempty"`
 	Note      string             `json:"note,omitempty"`
 	Outcome   string             `json:"outcome,omitempty"` // brief step: "done" | "blocked"
+	Reason    string             `json:"reason,omitempty"`  // when outcome=blocked: a one-line why (verify step, D8)
 	Artifacts []ProducedArtifact `json:"artifacts,omitempty"`
 }
 

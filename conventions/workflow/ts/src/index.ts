@@ -46,6 +46,7 @@ export {
   KindWork,
   KindCheckpoint,
   KindBrief,
+  KindVerify,
   RunStartSubject,
   isTerminalRun,
   nextPendingRun,

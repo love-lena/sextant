@@ -414,6 +414,8 @@ func (co *coordinator) runStep(idx int) (string, error) {
 	switch step.Kind {
 	case workflow.KindWork:
 		return "", co.runDispatch(step, co.workPrompt(step))
+	case workflow.KindVerify:
+		return co.runVerify(step)
 	case workflow.KindCheckpoint:
 		return "", co.runCheckpoint(step)
 	case workflow.KindBrief:
@@ -473,6 +475,74 @@ func (co *coordinator) runDispatch(step *workflow.RunStep, prompt string) error 
 	step.Produced = append(step.Produced, ev.Artifacts...)
 	co.attachArtifacts(ev.Artifacts)
 	return nil
+}
+
+// verificationCharter is the embedded prompt fragment a VERIFY step (D8) injects into
+// its worker's brief, distilled from the verifying-acceptance-criteria + dod-stickler
+// skills. It exists because the workflow's old "self-review" step was a shallow prose
+// step that claimed "ACs met" without building or testing, so the engine certified
+// non-building, non-DoD-meeting deliverables as done (D8). This charter makes the verify
+// worker ACTUALLY verify — and report blocked, never rubber-stamp, when DoD is not met.
+//
+// It is a CHARTER for the worker (the AI verifier reads content + builds — allowed; it is
+// the worker, not the coordinator). The COORDINATOR stays content-opaque: it threads this
+// fixed text + the prior steps' artifact NAMES, and decides terminal status SOLELY from the
+// worker's typed run.event outcome + the existence gate (it never reads the verdict's body).
+const verificationCharter = `
+VERIFICATION CHARTER — you are an INDEPENDENT verifier, not the builder. A producer cannot verify itself; your independence is the only thing that makes your verdict worth anything. Your success is FINDING WHAT FAILS, not reasons to pass — a clean pass with nothing found is suspicious, so look harder.
+
+Do this, in order:
+1. FETCH THE REAL DELIVERABLE. For each INPUT ARTIFACT above, sextant_artifact_get it and inspect its actual content (the diff/code/output). Verify against the real work product — NEVER a prior step's self-report, status, "done", or "tests pass" claim. A proof that is the system-under-test reporting on itself does not count.
+2. BUILD AND TEST. Actually build the change and run the relevant tests/build commands for what was changed (e.g. for Go: gofumpt -l, go vet, go build ./..., go test the touched packages -race). Run them yourself; record the exact commands and their real output. If it does not build or a relevant test fails, DoD is NOT met.
+3. CHECK EACH ACCEPTANCE CRITERION AS A PROPERTY. For every AC, verify the invariant it asserts with an ADVERSARIAL / NEGATIVE check — a case the broken system would fail — not one happy instance. "It worked once" does not satisfy "it always works". An AC whose only evidence is a self-report is UNMET.
+4. REPORT HONESTLY. Produce a verdict artifact (kind "verdict") enumerating each AC as met/unmet with the external evidence you fetched and ran, plus the build/test commands and their output, and any defect found. Report this artifact in your run.event ` + "`artifacts`" + ` (create it with sextant_artifact_put — the run is gated on it existing).
+   - If every acceptance criterion is met AND the build and relevant tests are green — each backed by external, substance-checked proof you obtained yourself — finish normally (the run advances). Create the verdict artifact and do nothing else.
+   - OTHERWISE you MUST call the sextant_run_block tool with a one-line reason stating exactly which AC/build/test failed (e.g. "go build ./... failed: undefined Foo"). Calling sextant_run_block is HOW you signal the run to STOP — it is the only thing that blocks the run. If you find the deliverable broken but do NOT call it, the run proceeds to done over the broken work (the failure mode you exist to prevent). Still create the verdict artifact stating exactly what failed and why. A discovered defect invalidates every AC it contradicts.
+NEVER certify done over an unbuilt, untested, or unmet deliverable. When in doubt, call sextant_run_block.`
+
+// verifyPrompt builds the prompt for a VERIFY step (D8): the run objective + the step
+// label, the prior steps' produced artifact REFS to verify (the real deliverable — names
+// only, content-opaque to the coordinator), any operator steering, the VERIFICATION
+// CHARTER, and the run.event reporting directive. It reuses workPrompt's input-artifact +
+// steering threading and appends the charter, so a verify worker is dispatched exactly
+// like a work worker but charged to build/test/check rather than to produce.
+func (co *coordinator) verifyPrompt(step *workflow.RunStep) string {
+	return co.workPrompt(step) + "\n" + verificationCharter
+}
+
+// runVerify dispatches an INDEPENDENT verification step (D8). It reuses runDispatch — so
+// the verify worker is a SEPARATE dispatch (a producer cannot verify itself), is piped the
+// prior steps' real deliverables, and is held to the SAME deterministic gates as a work
+// step (the count + existence gates: the verdict artifact it attaches must exist). The
+// difference is the prompt (the VERIFICATION CHARTER) and that a verify step's outcome
+// gates the RUN: if the verifier reports outcome=blocked (DoD not met), the run BLOCKS —
+// it does NOT advance to a later brief/done over a failed verification (D8). A clean
+// verification (outcome=done or unset) returns "" and the run proceeds.
+//
+// The coordinator stays the single-writer + content-opaque decider: it reads the worker's
+// TYPED run.event outcome (metadata) and the existence gate, never the verdict's body.
+// Auto-redo on a failed verification is agent-mode's job (D1), out of scope here.
+func (co *coordinator) runVerify(step *workflow.RunStep) (string, error) {
+	if err := co.runDispatch(step, co.verifyPrompt(step)); err != nil {
+		return "", err
+	}
+	// runDispatch recorded the worker's done event under the step id; read its outcome.
+	co.mu.Lock()
+	ev := co.doneEvents[step.ID]
+	co.mu.Unlock()
+	if ev.Outcome == workflow.RunBlocked {
+		// The independent verifier found DoD unmet (a failed build/test or an unmet AC) and
+		// called sextant_run_block, so its run.event reported outcome=blocked. Surface its
+		// reason on the activity trail and BLOCK the run — never advance past a failed
+		// verification (D8). The verdict artifact (existence-gated above) carries the detail.
+		msg := fmt.Sprintf("verification failed: step %q reported blocked", step.ID)
+		if ev.Reason != "" {
+			msg += ": " + ev.Reason
+		}
+		co.appendActivity("✗", msg)
+		return workflow.RunBlocked, nil
+	}
+	return "", nil
 }
 
 // workPrompt augments a work step's task with (a) REFERENCES to the artifacts prior
