@@ -59,6 +59,9 @@ export interface RunStep {
   kind: string;
   status: string;
   agent?: string;
+  // model is the optional per-step model declaration (TASK-245). When set, the
+  // dispatcher runs this step's worker on this model. Omitted = default applies.
+  model?: string;
 }
 
 export interface RelatesLink {

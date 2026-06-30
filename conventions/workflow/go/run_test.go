@@ -207,3 +207,84 @@ func TestIsTerminalRun(t *testing.T) {
 // run.event (existence-checked by the coordinator). The gate's behaviour is proven
 // adversarially against a real bus in clients/coordinator (TestRun_BlocksOnFabricatedProof,
 // TestRun_DoneWithDeliverableUnderNovelBriefKey).
+
+// TestRunStepModelRoundTrip pins TASK-245: the Model field on RunStep marshals
+// and round-trips correctly, carrying the per-step model declaration from a run
+// template through to the dispatcher.
+//
+// This is the CONTRACT layer of the AC#1 flow proof: RunStep.Model → (coordinator
+// reads it) → SpawnRequest.Model → (dispatcher receives it) → SX_AGENT_MODEL.
+// The env-var relay end is proven in clients/dispatcher/model_test.go.
+func TestRunStepModelRoundTrip(t *testing.T) {
+	r := Run{
+		ID:     "01HMODEL",
+		Status: RunRunning,
+		Steps: []RunStep{
+			{ID: "s1", Label: "write draft", Kind: KindWork, Status: StepUpcoming, Model: "claude-opus-4-5"},
+			{ID: "s2", Label: "review draft", Kind: KindWork, Status: StepUpcoming, Model: "claude-sonnet-4-5"},
+			{ID: "s3", Label: "finalize", Kind: KindWork, Status: StepUpcoming},
+		},
+	}
+	got, ok := ParseRun(r.Marshal())
+	if !ok {
+		t.Fatal("ParseRun rejected a valid run with Model-bearing steps")
+	}
+	if got.Steps[0].Model != "claude-opus-4-5" {
+		t.Errorf("step[0].Model = %q, want %q", got.Steps[0].Model, "claude-opus-4-5")
+	}
+	if got.Steps[1].Model != "claude-sonnet-4-5" {
+		t.Errorf("step[1].Model = %q, want %q", got.Steps[1].Model, "claude-sonnet-4-5")
+	}
+	// A step with no declared model must marshal as omitted (omitempty), not as
+	// an explicit empty string — no default baked into the convention layer.
+	if got.Steps[2].Model != "" {
+		t.Errorf("step[2].Model = %q, want empty (no declared model)", got.Steps[2].Model)
+	}
+	// Adversarial: the model field must be PRESENT in the marshalled JSON for
+	// steps that declared one, and ABSENT for those that did not.
+	b := r.Marshal()
+	raw := string(b)
+	if !contains(raw, `"claude-opus-4-5"`) {
+		t.Errorf("marshalled run does not contain the declared model: %s", raw)
+	}
+	// omitempty guard: a step with no model must not emit the key at all
+	// (prevents a consumer from confusing "" with "no model").
+	for _, s := range got.Steps {
+		if s.Model == "" && contains(raw, `"model":""`) {
+			t.Errorf("step with no model emitted an explicit empty model key — must be omitted: %s", raw)
+		}
+	}
+}
+
+// TestSpawnRequestModelRoundTrip pins TASK-245 at the coordinator→dispatcher
+// boundary: SpawnRequest.Model carries the step's declared model and survives
+// a JSON round-trip. This is the WIRE shape the coordinator publishes and the
+// dispatcher receives.
+func TestSpawnRequestModelRoundTrip(t *testing.T) {
+	req := SpawnRequest{Prompt: "do the work", Nickname: "writer", Job: "01H", Model: "claude-opus-4-5"}
+	b := req.Marshal()
+
+	// Unmarshal as a raw map to verify the wire shape.
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("SpawnRequest.Marshal produced invalid JSON: %v", err)
+	}
+	if m["model"] != "claude-opus-4-5" {
+		t.Fatalf("SpawnRequest wire shape missing model: %v", m)
+	}
+	// Round-trip: parse back as SpawnAck is not relevant, but we can verify
+	// the JSON key name matches what the dispatcher's spawn.ParseSpawnRequest reads.
+	// The dispatcher uses conventions/spawn/go which has its own SpawnRequest;
+	// the workflow.SpawnRequest must produce the same "model" key so the
+	// dispatcher (which uses spawn.ParseSpawnRequest) reads it.
+	if !contains(string(b), `"model":"claude-opus-4-5"`) {
+		t.Errorf("SpawnRequest JSON key must be \"model\", got: %s", b)
+	}
+
+	// A request with no model must not emit the key (omitempty).
+	noModel := SpawnRequest{Prompt: "do the work", Job: "01H"}
+	nb := noModel.Marshal()
+	if contains(string(nb), `"model"`) {
+		t.Errorf("SpawnRequest with no model emitted \"model\" key (must be omitted): %s", nb)
+	}
+}

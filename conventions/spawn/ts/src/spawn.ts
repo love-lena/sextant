@@ -30,11 +30,14 @@ export interface Ops {
 // SpawnRequest is the domain input — the spawn.request record minus its $type
 // discriminant (the builder stamps that). The field names mirror Go's SpawnRequest
 // exactly. prompt is required; nickname/job/parent are optional lineage labels.
+// model is the optional per-step model declaration (TASK-245): when set, the
+// dispatcher runs the worker on this model (sets SX_AGENT_MODEL).
 export interface SpawnRequest {
   prompt: string;
   nickname?: string;
   job?: string;
   parent?: string;
+  model?: string;
 }
 
 // SpawnAck is the dispatcher's acknowledgement of one spawn.request, carrying the
@@ -63,6 +66,7 @@ export function spawnRequestRecord(req: SpawnRequest): JSONValue {
   if (req.nickname) rec["nickname"] = req.nickname;
   if (req.job) rec["job"] = req.job;
   if (req.parent) rec["parent"] = req.parent;
+  if (req.model) rec["model"] = req.model;
   return rec;
 }
 

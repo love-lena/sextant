@@ -27,6 +27,10 @@ type SpawnRequest struct {
 	Nickname string `json:"nickname,omitempty"`
 	Job      string `json:"job,omitempty"`
 	Parent   string `json:"parent,omitempty"`
+	// Model is the requested worker model (TASK-245). When set, the dispatcher sets
+	// SX_AGENT_MODEL for the pi recipe so the worker runs on this model instead of
+	// its default. Omitted = the dispatcher's configured default applies.
+	Model string `json:"model,omitempty"`
 }
 
 // SpawnAck is the spawn.ack record: a dispatcher's acknowledgement of one

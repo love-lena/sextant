@@ -55,6 +55,10 @@ type SpawnRequest struct {
 	Prompt   string `json:"prompt"`
 	Nickname string `json:"nickname,omitempty"`
 	Job      string `json:"job,omitempty"`
+	// Model is the requested worker model (TASK-245). When set, the dispatcher sets
+	// SX_AGENT_MODEL for the pi recipe so the worker runs on this model. Omitted =
+	// the dispatcher's own default applies (currently claude-haiku-4-5).
+	Model string `json:"model,omitempty"`
 }
 
 func (r SpawnRequest) Marshal() json.RawMessage {

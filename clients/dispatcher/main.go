@@ -63,6 +63,38 @@ import (
 	"github.com/love-lena/sextant/sdk/go"
 )
 
+// DefaultModel is the model the dispatcher uses when a spawn.request carries no
+// Model field (TASK-245). A step that declares no model explicitly runs on this.
+const DefaultModel = "claude-haiku-4-5"
+
+// SupportedModels is the EXPLICIT allowed set of models a spawn.request may
+// declare (TASK-245 AC#3). A request declaring a model outside this set FAILS
+// LOUD at dispatch — no silent fallback to the default, no worker spawned on it.
+// Extend the set by adding to this map; a PR here is the intentional gate.
+var SupportedModels = map[string]bool{
+	"claude-haiku-4-5":           true,
+	"claude-sonnet-4-5":          true,
+	"claude-sonnet-4-5-20251001": true,
+	"claude-opus-4-5":            true,
+	"claude-sonnet-4-6":          true,
+	"claude-opus-4-8":            true,
+}
+
+// resolveModel resolves the model for a spawn request: if the request declares
+// a model it is validated and returned; if empty the DefaultModel is returned;
+// if the declared model is not in SupportedModels an error is returned (AC#3:
+// fail loud, no silent fallback, no worker spawned on the default). The error
+// is the dispatcher's pre-spawn gate — the worker is never launched.
+func resolveModel(requested string) (string, error) {
+	if requested == "" {
+		return DefaultModel, nil
+	}
+	if !SupportedModels[requested] {
+		return "", fmt.Errorf("unsupported model %q: not in the dispatcher's supported-model set (see SupportedModels in clients/dispatcher/main.go); declare a supported model or omit for the default (%s)", requested, DefaultModel)
+	}
+	return requested, nil
+}
+
 func main() {
 	fs := flag.NewFlagSet("sextant-dispatch", flag.ExitOnError)
 	creds := fs.String("creds", os.Getenv("SEXTANT_CREDS"), "dispatcher credentials file (its own bus identity; issue with `sextant clients register`)")
@@ -214,6 +246,7 @@ type managedAgent struct {
 	nick       string
 	credsPath  string
 	job        string
+	model      string // resolved model for this agent (TASK-245); set at spawn time
 	running    bool
 	subscribed bool // wake subjects subscribed once, on first manage()
 }
@@ -247,10 +280,19 @@ func (d *dispatcher) handle(m sextant.Message) {
 	if nick == "" {
 		nick = reqID
 	}
-	logf("spawn.request %s from %s: nick=%q job=%q", short(reqID), short(parent), nick, req.Job)
+	model, merr := resolveModel(req.Model)
+	logf("spawn.request %s from %s: nick=%q job=%q model=%q", short(reqID), short(parent), nick, req.Job, model)
 
 	ack := spawn.SpawnAck{RequestID: reqID, Job: req.Job, Parent: parent, Nickname: nick}
-	id, err := d.spawn(req, nick)
+	var id string
+	var err error
+	if merr != nil {
+		// Model is unsupported — fail loud at dispatch, before any mint or launch
+		// (TASK-245 AC#3). The ack carries the error so the coordinator surfaces it.
+		err = merr
+	} else {
+		id, err = d.spawn(req, nick, model)
+	}
 	if err != nil {
 		ack.Status = spawn.StatusError
 		ack.Error = err.Error()
@@ -282,7 +324,7 @@ func (d *dispatcher) handle(m sextant.Message) {
 // returns the minted id. The worker is a resumable one-shot (ADR-0045): it does its
 // task, reports, and exits; a later message addressed to it re-spawns it (resuming
 // its session) via the wake subscription.
-func (d *dispatcher) spawn(req spawn.SpawnRequest, nick string) (string, error) {
+func (d *dispatcher) spawn(req spawn.SpawnRequest, nick, model string) (string, error) {
 	issued, err := d.mint(context.Background(), nick, d.kind)
 	if err != nil {
 		return "", fmt.Errorf("mint child: %w", err)
@@ -292,7 +334,7 @@ func (d *dispatcher) spawn(req spawn.SpawnRequest, nick string) (string, error) 
 		return issued.ID, fmt.Errorf("write child creds: %w", err)
 	}
 
-	ag := &managedAgent{id: issued.ID, nick: nick, credsPath: credsPath, job: req.Job}
+	ag := &managedAgent{id: issued.ID, nick: nick, credsPath: credsPath, job: req.Job, model: model}
 	d.mu.Lock()
 	d.agents[ag.id] = ag
 	ag.running = true // claim before launch so a racing wake can't double-spawn
@@ -370,6 +412,14 @@ func (d *dispatcher) onAgentWake(ag *managedAgent, m sextant.Message) {
 // under the child's own creds, and marks the agent dormant when the process exits.
 // The caller must have claimed ag.running first (so a racing wake spawns once).
 func (d *dispatcher) launchHarness(ag *managedAgent, prompt string) error {
+	// SX_AGENT_MODEL relays the per-step model declared in the spawn.request to the
+	// pi recipe (TASK-245). The recipe already reads SX_AGENT_MODEL and passes it to
+	// pi --model; ag.model was resolved and validated at handle() time, so this is the
+	// confirmed declared model (or the default if none was declared).
+	model := ag.model
+	if model == "" {
+		model = DefaultModel
+	}
 	env := []string{
 		"SEXTANT_CREDS=" + ag.credsPath,
 		"SEXTANT_STORE=" + d.store,
@@ -377,6 +427,7 @@ func (d *dispatcher) launchHarness(ag *managedAgent, prompt string) error {
 		"SX_CHILD_ID=" + ag.id,
 		"SX_CHILD_NICK=" + ag.nick,
 		"SX_JOB=" + ag.job,
+		"SX_AGENT_MODEL=" + model,
 	}
 	return d.launch("harness["+ag.nick+"]", d.harness, env, func() {
 		d.mu.Lock()
