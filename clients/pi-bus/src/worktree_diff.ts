@@ -22,6 +22,25 @@ import type { ProducedArtifact } from "./run_report.js";
 
 const exec = promisify(execFile);
 
+// gitEnv forces git to skip the global (`~/.gitconfig`) and system git config
+// files for every invocation here. The worker runs under the TASK-118 pi-auto
+// sandbox, which deny-reads `~/.gitconfig`; without this, even a read-only
+// `git status` exits 128 ("unable to access '/Users/.../.gitconfig'") and the
+// diff capture silently returns undefined → a real code step reports 0
+// artifacts → the proof gate (correctly) blocks it. `git status`/`diff`/
+// `rev-parse` need neither config, so pointing both at /dev/null is safe and
+// leaves what we capture for a normal repo unchanged. Computed per call (not a
+// module-level snapshot) and merged over the live process.env so PATH and the
+// rest still resolve — and so it overrides any GIT_CONFIG_GLOBAL the surrounding
+// environment may already carry.
+function gitEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+  };
+}
+
 // CreateArtifactFn creates a bus artifact from an opaque record, returning its
 // initial revision (the SDK client's createArtifact, resolved live).
 export type CreateArtifactFn = (name: string, record: JSONValue) => Promise<number>;
@@ -41,13 +60,13 @@ const DIFF_KIND = "work.diff";
 async function gitChanges(workdir: string): Promise<{ status: string; diff: string } | undefined> {
   try {
     // --is-inside-work-tree throws (non-zero) when workdir is not a git repo.
-    await exec("git", ["-C", workdir, "rev-parse", "--is-inside-work-tree"]);
+    await exec("git", ["-C", workdir, "rev-parse", "--is-inside-work-tree"], { env: gitEnv() });
   } catch {
     return undefined; // not a git repo — nothing to capture
   }
   let status = "";
   try {
-    const r = await exec("git", ["-C", workdir, "status", "--porcelain"], { maxBuffer: 8 * 1024 * 1024 });
+    const r = await exec("git", ["-C", workdir, "status", "--porcelain"], { maxBuffer: 8 * 1024 * 1024, env: gitEnv() });
     status = r.stdout;
   } catch {
     return undefined;
@@ -59,13 +78,13 @@ async function gitChanges(workdir: string): Promise<{ status: string; diff: stri
     // commit. Untracked NEW files are not in a diff against HEAD, but they appear
     // in the porcelain status (as "??"), so the artifact records both: the status
     // is the authoritative change list; the diff is the human-legible proof.
-    const r = await exec("git", ["-C", workdir, "diff", "HEAD"], { maxBuffer: 16 * 1024 * 1024 });
+    const r = await exec("git", ["-C", workdir, "diff", "HEAD"], { maxBuffer: 16 * 1024 * 1024, env: gitEnv() });
     diff = r.stdout;
   } catch {
     // A repo with no commits yet (no HEAD) can't diff against HEAD; fall back to a
     // plain `git diff` of the index. The status still proves the change set.
     try {
-      const r = await exec("git", ["-C", workdir, "diff"], { maxBuffer: 16 * 1024 * 1024 });
+      const r = await exec("git", ["-C", workdir, "diff"], { maxBuffer: 16 * 1024 * 1024, env: gitEnv() });
       diff = r.stdout;
     } catch {
       diff = "";
