@@ -37,6 +37,23 @@ import (
 	"github.com/love-lena/sextant/sdk/go"
 )
 
+// steerWaitCeiling bounds how long the fake worker waits for the coordinator-routed steer
+// before giving up and reporting empty (the pre-fix silent-ignore RED path). It is a
+// GENEROUS ceiling, not a tight per-run budget: the steer is posted only after the test
+// observes the step running, and under CI load the poll + steer-routing can take many
+// seconds — a tight window made TestRun_OperatorSteerInfluencesActiveRun flaky (worker
+// gave up before the steer arrived). Overridable by a red-path test that wants a short wait.
+var steerWaitCeiling = 60 * time.Second
+
+// steerTestWait is the generous ceiling the steer tests poll/await up to before failing.
+// These are event-driven waits (pollRun returns as soon as the predicate holds; the
+// channel select returns as soon as the worker acts), so a large ceiling costs nothing on
+// a healthy run — it only prevents a CI-load-induced timeout from failing a correct run.
+// The earlier 10-20s deadlines were tight enough that bus startup + adoption + step
+// dispatch under CI load blew them ("never reported step done within 10s / context
+// canceled"), which is the flake this closes.
+const steerTestWait = 60 * time.Second
+
 // steerableDispatcher is a fake dispatcher+worker that models a worker which is RESIDENT
 // for its work step and incorporates an operator steer the COORDINATOR routes to its
 // inbox (msg.client.<agentID>) — exactly the live mid-step path (TASK-246). For the work
@@ -103,6 +120,14 @@ func steerableDispatcher(t *testing.T, ctx context.Context, d *sextant.Client, s
 			}
 			defer sub.Stop()
 
+			// Wait for the steer with a GENEROUS ceiling, not a tight deadline: the steer is
+			// posted only after the test observes the step running (pollRun), and under CI
+			// load the poll + the coordinator's steer-routing can take many seconds. A tight
+			// window made this flaky — the worker gave up and reported empty before the steer
+			// arrived, so the whole run finished with no steered artifact and the assertions
+			// failed RED for a timing reason, not the behaviour under test. The ceiling only
+			// bounds a genuine never-arrives hang (the pre-fix silent-ignore); ctx.Done handles
+			// teardown. steerWaitCeiling is overridable so a targeted red-path test can shorten it.
 			select {
 			case text := <-steerText:
 				// The steer ARRIVED. Act on it: write a distinct steered artifact whose body
@@ -121,9 +146,10 @@ func steerableDispatcher(t *testing.T, ctx context.Context, d *sextant.Client, s
 					}
 				}
 				_ = d.Publish(ctx, workflow.RunEventsSubject(req.Job), ev.Marshal())
-			case <-time.After(8 * time.Second):
-				// No steer arrived (the pre-fix silent-ignore). Report done with NO steered
-				// artifact — the run cannot show behavioral influence, so the proof fails RED.
+			case <-time.After(steerWaitCeiling):
+				// The steer genuinely never arrived (the pre-fix silent-ignore). Report done
+				// with NO steered artifact — the run cannot show behavioral influence, so the
+				// proof fails RED, which is the correct RED for that defect.
 				ev.Artifacts = []workflow.ProducedArtifact{}
 				_ = d.Publish(ctx, workflow.RunEventsSubject(req.Job), ev.Marshal())
 			case <-ctx.Done():
@@ -173,7 +199,7 @@ func TestRun_OperatorSteerInfluencesActiveRun(t *testing.T) {
 	// The operator posts a steer on the run topic WHILE the work step is active. The work
 	// step is in flight as soon as the run starts (the worker waits for the steer), so the
 	// run is live; poll until the work step is recorded running, then post.
-	pollRun(t, ctx, requester, runID, 10*time.Second, func(r workflow.Run) bool {
+	pollRun(t, ctx, requester, runID, steerTestWait, func(r workflow.Run) bool {
 		return len(r.Steps) > 0 && r.Steps[0].Status == workflow.StepRunning && r.Status == workflow.RunRunning
 	})
 	const steerText = "write the poem to its own artifact"
@@ -183,15 +209,16 @@ func TestRun_OperatorSteerInfluencesActiveRun(t *testing.T) {
 	}
 
 	// The worker must have ACTED on the operator's message (it produced the steered
-	// artifact) — the behavioral influence the AC demands, not mere dash display.
+	// artifact) — the behavioral influence the AC demands, not mere dash display. Event-
+	// driven: returns as soon as the worker signals, so the generous ceiling is free.
 	var steeredName string
 	select {
 	case steeredName = <-steeredCh:
-	case <-time.After(15 * time.Second):
+	case <-time.After(steerTestWait):
 		t.Fatalf("worker never acted on the operator steer — the steer reached no worker (the silent-ignore the fix must close)")
 	}
 
-	got := pollRun(t, ctx, requester, runID, 20*time.Second, func(r workflow.Run) bool {
+	got := pollRun(t, ctx, requester, runID, steerTestWait, func(r workflow.Run) bool {
 		return workflow.IsTerminalRun(r.Status)
 	})
 	if got.Status != workflow.RunDone {
