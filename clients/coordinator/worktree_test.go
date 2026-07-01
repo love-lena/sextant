@@ -277,6 +277,13 @@ func TestProvisionWorktree_IgnoresSandboxScratch(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(path, ".pi-agent", "auth.json"), []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// A `.pi-bus.log` in the worktree — the runtime lifecycle trace that PR #328 wrongly
+	// carried when the pi-bus extension still wrote a workdir trace sink. The extension no
+	// longer writes here (it uses the session dir, outside the repo), but the exclude
+	// guards against any in-worktree trace being swept into a run's pr-open commit.
+	if err := os.WriteFile(filepath.Join(path, ".pi-bus.log"), []byte(`{"event":"session_start"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	// The worker's REAL deliverable — the only thing the run's PR should carry.
 	if err := os.WriteFile(filepath.Join(path, "deliverable.md"), []byte("the real change\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -297,6 +304,9 @@ func TestProvisionWorktree_IgnoresSandboxScratch(t *testing.T) {
 	}
 	if strings.Contains(status, ".pi-agent") {
 		t.Fatalf("sandbox scratch .pi-agent/ appears in `git status --porcelain` — the exclude is NOT in effect (D15 regression):\n%s", status)
+	}
+	if strings.Contains(status, ".pi-bus.log") {
+		t.Fatalf("runtime trace .pi-bus.log appears in `git status --porcelain` — it would be committed into the run's PR (the PR #328 defect):\n%s", status)
 	}
 
 	// And the ignore is scoped to THIS worktree's config (not the shared repo config),

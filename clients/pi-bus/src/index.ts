@@ -50,18 +50,19 @@ export default function sextantPiBus(pi: ExtensionAPI): void {
   // srt sandbox has its grandchild stderr swallowed, so the dispatcher log shows pi's RPC
   // stdout but ZERO [pi-bus] lines, leaving a hung run undiagnosable.
   //
-  // We write to EVERY distinct writable sink we can name, de-duped, because under
-  // launchd+srt it is not certain which allow-write tree a Node appendFileSync actually
-  // lands in (the live symptom: pi's own *.jsonl transcript writes to the session dir but
-  // the extension's pi-bus.log did not appear there). Belt-and-suspenders maximises the
-  // chance the trace is capturable for at least one location:
+  // We write to the distinct writable sinks we can name, de-duped. Both are OUTSIDE
+  // the worker's CWD/worktree, on purpose:
   //   - SEXTANT_PI_LOG, when the recipe sets it (points at the per-child session dir);
   //   - the SESSION DIR resolved from pi itself (ctx.sessionManager.getSessionDir()) — does
   //     not depend on the recipe (a materialized pi.sh can lag a deploy) and is PERSISTENT
-  //     (survives the per-run worktree teardown);
-  //   - the WORKDIR (SEXTANT_PI_WORKDIR) — a DIFFERENT allow-write tree (pi-auto writes its
-  //     own scratch there), readable during the live repro window before teardown.
-  // All best-effort; a trace write must never throw into a lifecycle handler.
+  //     (survives the per-run worktree teardown). This is the sink that actually landed on
+  //     the live path for both the haiku acceptance run and the canon run.
+  //
+  // We deliberately do NOT write a sink inside SEXTANT_PI_WORKDIR: for a REPO run the
+  // workdir IS the run's git worktree, so a `.pi-bus.log` there gets swept into the
+  // pr-open commit (a runtime trace committed to the canon PR — the defect this removes).
+  // The session-dir sink already covers the launchd+srt case, so the workdir sink was
+  // redundant as well as polluting. A trace write must never throw into a lifecycle handler.
   const fileSink = (path: string, line: string) => {
     try {
       appendFileSync(path, line + "\n");
@@ -85,7 +86,6 @@ export default function sextantPiBus(pi: ExtensionAPI): void {
     } catch {
       /* session manager not ready — skip */
     }
-    if (cfg.workdir) sinks.add(`${cfg.workdir}/.pi-bus.log`);
     for (const path of sinks) fileSink(path, line);
   };
 

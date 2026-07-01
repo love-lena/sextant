@@ -111,9 +111,17 @@ func provisionWorktree(ctx context.Context, repo, ref, store, runID string) (str
 // never part of the run's deliverable, so we git-ignore them per-worktree (D15). The
 // session JSONL and per-child creds live OUTSIDE the workdir (siblings of the store),
 // so they never reach the worktree and need no exclude.
+//
+// `.pi-bus.log` is a defense-in-depth entry: the pi-bus extension no longer writes a
+// trace sink inside the workdir (it writes to the session dir, outside the repo — see
+// clients/pi-bus/src/index.ts), but an in-worktree `.pi-bus.log` from that removed sink
+// (or any future in-CWD trace) is a runtime log, never a deliverable. Excluding it here
+// guarantees a trace file can never be swept into a run's pr-open commit, even if some
+// component writes one into the worktree again.
 var sandboxScratchExcludes = []string{
 	".pi-agent/",
 	".sx-srt-settings.json",
+	".pi-bus.log",
 }
 
 // writeWorktreeExcludes points THIS worktree (and only this worktree) at a local
