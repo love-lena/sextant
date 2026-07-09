@@ -13,17 +13,16 @@ Sextant is **single-context**: one `CONTEXT.md` + `docs/adr/` at the repo root.
 - **`CONTEXT.md`** at the repo root — the shared language (a glossary).
 - **`docs/adr/`** — read ADRs that touch the area you're about to work in.
 
-Both exist as of this setup. If a file you expect is missing, proceed silently;
-the producer skill (`grill-with-docs`) creates ADRs and glossary terms lazily as
-real decisions and terms get resolved.
+`CONTEXT.md` exists as of this setup; `docs/adr/` is currently empty (retired
+in full 2026-07-09 — ADRs continue, but rare). If a file you expect is
+missing, proceed silently; the producer skill (`grill-with-docs`) creates ADRs
+and glossary terms lazily as real decisions and terms get resolved.
 
 ## File structure
 
     /
     ├── CONTEXT.md          ← domain glossary
-    ├── docs/adr/           ← architectural decisions
-    │   ├── 0001-vision.md
-    │   └── 0002-documentation-and-process-layout.md
+    ├── docs/adr/           ← architectural decisions (numbered NNNN-title.md)
     └── ...
 
 (If Sextant ever splits into independent contexts, switch to a `CONTEXT-MAP.md`
