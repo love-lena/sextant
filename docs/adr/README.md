@@ -1,92 +1,16 @@
 # Architecture Decision Records
 
 Decisions are recorded as ADRs: short, numbered, append-only. We supersede
-rather than edit. `status: accepted` (with a name in `signed_off_by`) means a
-human has signed off — see
-[ADR-0002](0002-documentation-and-process-layout.md) for the process.
+rather than edit. `status: accepted` (with a name in `signed_off_by`) means
+Lena has signed off directly.
 
-| #    | Title                                   | Status   |
-|------|-----------------------------------------|----------|
-| [0001](0001-vision.md) | Vision — what Sextant is  | accepted |
-| [0002](0002-documentation-and-process-layout.md) | Documentation & process layout | accepted |
-| [0003](0003-high-level-architecture.md) | High-level architecture (the component map) | accepted (sharpened by 0041) |
-| [0004](0004-conventions-are-optional.md) | Conventions are optional, not core | accepted |
-| [0005](0005-two-primitives.md) | The two primitives | accepted |
-| [0006](0006-wire-atom.md) | The wire atom | accepted (refined by 0019) |
-| [0007](0007-bus-is-nats-no-daemon.md) | The bus is NATS, and there is no daemon | accepted (refined by 0018) |
-| [0008](0008-clients-are-processes.md) | Clients are processes | accepted (refined by 0020) |
-| [0009](0009-spawn.md) | Spawn | accepted |
-| [0010](0010-lifecycle-and-versioning.md) | Lifecycle & versioning | accepted (refined by 0019, 0020) |
-| [0011](0011-workflows.md) | Workflows | accepted |
-| [0012](0012-reserved-namespace-and-authn.md) | The reserved `sx` namespace, and authn | accepted (refined by 0015, 0020) |
-| [0013](0013-multi-backend.md) | Multi-backend posture | accepted |
-| [0014](0014-the-tui-is-a-client.md) | The TUI is a client | accepted (sharpened by 0023) |
-| [0015](0015-operator-only-account.md) | Operator-only state lives in its own account | accepted |
-| [0016](0016-artifacts-are-lexicon-records.md) | Artifacts are Lexicon records | accepted |
-| [0017](0017-the-verb-surface-is-the-protocol.md) | The verb surface is the protocol | accepted |
-| [0018](0018-the-bus-implements-the-protocol.md) | The bus implements the protocol over a pluggable stream backend | accepted |
-| [0019](0019-implementing-the-bus.md) | Implementing the bus: call transport, frame stamping, and identity | accepted |
-| [0020](0020-clients-are-bus-issued-identities.md) | Clients are bus-issued identities | accepted |
-| [0021](0021-saved-client-contexts.md) | Saved client contexts | accepted |
-| [0022](0022-modules-over-a-locked-core.md) | A locked core lets modules build in parallel | accepted |
-| [0023](0023-the-dash-is-a-composable-pane-cockpit.md) | The dash is a composable pane cockpit | accepted (refined by 0024) |
-| [0024](0024-the-dash-is-three-master-detail-browsers.md) | The dash is three master-detail browsers | proposed |
-| [0025](0025-the-bus-keeps-its-address-across-restarts.md) | The bus keeps its address across restarts of the same store | proposed |
-| [0026](0026-one-focused-pane-panes-hold-their-place.md) | One focused pane; panes hold their place | proposed |
-| [0027](0027-subscriptions-survive-a-bus-restart.md) | Subscriptions survive a bus restart | proposed |
-| [0028](0028-byo-harnesses-join-through-a-plugin-adapter.md) | BYO harnesses join through a plugin adapter | proposed |
-| [0029](0029-a-harness-speaks-as-itself.md) | A harness speaks as itself, with a per-session identity | proposed (revises 0028's identity resolution) |
-| [0030](0030-clients-act-on-a-principals-messages-as-operator-input.md) | A client acts on its principal's messages as operator-equivalent input | proposed |
-| [0031](0031-claiming-the-principal-is-frictionless-re-pointing-is-deliberate.md) | Claiming the principal is frictionless; re-pointing it is deliberate | proposed (extends 0030) |
-| [0032](0032-the-web-dash-is-a-face-on-a-local-api.md) | The web dash is a face on a local API | accepted (revised by 0044) |
-| [0033](0033-a-dispatcher-mints-its-own-workers.md) | A dispatcher mints its own workers (mint-on-behalf) | proposed |
-| [0034](0034-the-web-cockpit-rests-on-conventions-not-new-protocol.md) | The web cockpit rests on conventions, not new protocol | accepted (revised by 0044) |
-| [0035](0035-the-goal-bus-primitive.md) | The goal bus primitive | accepted |
-| [0036](0036-presence-and-liveness-derive-from-a-client-heartbeat.md) | Presence and liveness derive from a client heartbeat | accepted |
-| [0037](0037-subscriptions-and-context-survive-a-session-resume.md) | Subscriptions and the active context survive a session resume | accepted |
-| [0038](0038-a-remote-box-joins-through-a-leaf-node.md) | A remote box joins the bus through a leaf node | accepted |
-| [0039](0039-the-assistant-is-a-convention-not-a-primitive.md) | The assistant is a convention, not a primitive | proposed |
-| [0040](0040-agent-runtimes-run-as-os-managed-components.md) | Agent runtimes run as OS-managed components | accepted |
-| [0041](0041-clients-are-co-equal-across-languages.md) | Clients are co-equal implementations of a language-neutral protocol | accepted |
-| [0042](0042-the-curated-go-static-checks-gate.md) | A curated Go static-checks gate, paired with the house-style skill | proposed |
-| [0043](0043-the-pi-harness-is-a-first-class-bus-client.md) | The pi harness is a first-class bus client | proposed |
-| [0044](0044-the-browser-dash-is-a-direct-ws-client.md) | The browser dash is a direct NATS-WebSocket co-equal TS client | proposed |
-| [0045](0045-a-mobilized-agent-is-a-resumable-one-shot-function.md) | A mobilized agent is a resumable one-shot function the bus wakes | proposed |
-| [0046](0046-the-web-dash-and-the-terminal-ui-are-two-binaries.md) | The web dash and the terminal UI are two binaries | accepted |
-| [0047](0047-the-managed-dash-mints-operator-sessions-under-loopback-delegation.md) | The managed dash mints operator sessions under loopback-scoped delegation | accepted |
-| [0048](0048-a-run-is-one-live-instance.md) | A run is one live instance of work | accepted |
-| [0049](0049-clients-conventions-and-tools.md) | Clients, conventions, and tools are three kinds of module | accepted |
-| [0050](0050-html-artifacts-render-safely-in-the-dash.md) | HTML artifacts render safely (sanitized) in the dash | proposed |
+**2026-07-09 — full bankruptcy.** ADR-0001 through ADR-0050 were retired in
+full, no migration: the practice had drifted (agents authoring ADRs ad hoc,
+one nearly every day, out of sync with the code they described) faster than
+it was adding value. ADRs continue, but rare — reserved for genuine
+architecture decisions Lena signs off on directly, never a routine
+per-ticket or agent-default artifact. Numbering restarts at 0001.
 
-## Review batches
-- **Batch 1 — substrate:** 0004–0007 — *accepted*
-- **Batch 2 — clients & lifecycle:** 0008–0010 — *accepted*
-- **Batch 3 — conventions & cross-cutting:** 0011–0013 — *accepted*
-- **0014 — the TUI is a client** — *accepted* (grilled + signed off in-session, 2026-06-02)
-- **0015 — operator-only state in its own account** — *accepted* (refines 0012; from the #71 review)
-- **0016 — artifacts are Lexicon records** — *accepted* (the #70 JSON-vs-CBOR decision; signed off in-session 2026-06-03)
-- **0023 — the dash is a composable pane cockpit** — *accepted* (sharpens 0014; grilled in-session prototype-grounded, signed off 2026-06-05)
-- **0024 — the dash is three master-detail browsers** — *proposed* (refines 0023's composition after M4 dogfooding; grilled in-session 2026-06-08)
-- **0025 — the bus keeps its address across restarts** — *proposed* (stable-address guarantee for enrolled contexts; TASK-35)
-- **0026 — one focused pane; panes hold their place** — *proposed* (tmux-style focus replacing 0023's step-in/out; decided in-session 2026-06-09)
-- **0029 — a harness speaks as itself** — *proposed* (revises 0028's identity resolution: the MCP adapter mints its own per-session identity, never the operator's active context; PR #107)
-- **0030 — a client acts on its principal's messages as operator input** — *proposed* (the principal trust model; grilled in-session 2026-06-11)
-- **0031 — claiming the principal is frictionless; re-pointing it is deliberate** — *proposed* (extends 0030: the first human seat claims the principal on `register --self`; re-pointing an established one is operator-only + `--force`; TASK-64)
-- **0032 — the web dash is a face on a local API** — *proposed* (`sextant dash --serve` exposes the dash's one bus identity as a token-gated local HTTP API + SSE on 127.0.0.1, with a zero-design web debug surface; the browser never touches the bus; D1 of TASK-68)
-- **0033 — a dispatcher mints its own workers** — *proposed* (mint-on-behalf: any registered client may call `clients.register` with its own authority EXCEPT a spawned worker — the fence is inverted from an allowlist and rests on a bus-stamped `SpawnedBy` marker, not the weakly-enforced kind, so a worker cannot recursively dispatch; the lone locked-core change of M5.2/TASK-25)
-- **0034 — the web cockpit rests on conventions, not new protocol** — *proposed* (the designed web dash, D2 of TASK-71; review-state, per-artifact discussion topics, DM-as-2-party-topic, and subject discovery are conventions over the core protocol, served by `sextant dash --serve`)
-- **0035 — the goal bus primitive** — *accepted* (TASK-84; a goal = a north-star + acceptance criteria with a **derived** status, the latest-value artifact `goal.<id>` + the `goal.update` stream on `msg.topic.goals`; evidence is declared artifact-side via a generic `relates`, met-criteria need ≥1 proof; signal-not-manage. Supersedes the parked coarse-state goal model. Shipped v0.5.0)
-- **0036 — presence and liveness derive from a client heartbeat** — *accepted* (TASK-126; presence via a periodic client heartbeat (`agent.status` ping); hub derives online/idle/offline from cadence; unblocks accurate presence across leaf links. Shipped v0.5.0)
-- **0037 — subscriptions and the active context survive a session resume** — *accepted* (TASK-124; the MCP adapter persists a session's manual subscriptions + each one's last-delivered seq + the `context_use` choice, keyed on the session id beside the attest cursor, and restores them on every connect — re-pin the context before auto-mint, re-subscribe + catch up by seq — so a resume/compaction/restart self-heals instead of silently dropping delivery. An adapter convention over `message_read` + `message_subscribe`; epoch unchanged; retires the interim keepalive. A seq-gap liveness watchdog composes with the 0036 heartbeat as a following slice. Shipped v0.5.0)
-- **0038 — a remote box joins through a leaf node** — *accepted* (TASK-125; a remote box runs a local bus in leaf mode that federates the per-client wire-API subjects to the hub over one SEXTANT account, JetStream stays at the hub; the leaf installs the hub's PUBLIC account JWTs only — no seed → can't mint, enforces per-client perms locally → the hub's subject-derived author stamp stays trustworthy; presence via the ADR-0036 heartbeat, no new machinery; link rides a secure transport, native leaf TLS is a follow-up; additive + default-off. Shipped v0.5.0)
-- **0039 — the assistant is a convention, not a primitive** — *proposed* (TASK-138/144/120; **violet**, the operator's assistant, unified as one client with two duties — *answer* read-only when messaged + *defend* the operator's attention by curating Home/inbox; named by the swappable latest-value `assistant` artifact `{client_id, name, accent}`; a convention over clients/artifacts/messages, zero new operations, signal-not-manage. Convention + dash entry points ship v0.5.0; violet **runtime ships v0.5.1**)
-- **0040 — agent runtimes run as OS-managed components** — *accepted* (v0.5.3; the dispatch/violet/workflow runtimes ship in the Homebrew formula and are managed via `sextant components` over per-component launchd agents; the bus stays the single brew service — signal-not-manage)
-- **0041 — clients are co-equal implementations of a language-neutral protocol** — *proposed* (the protocol — lexicon + conformance suite — is the product; the bus is implemented once in Go; the client surface (SDK, conventions, clients) is co-equal across languages, conventions are lexicon-defined libraries verified by conformance, and the tree is organised by what things are rather than Go visibility buckets (no top-level `pkg/`); forced now with a TS SDK + pi harness extension as the first non-Go client; sharpens 0022)
-- **0042 — a curated Go static-checks gate, paired with the house-style skill** — *proposed* (TASK-181, realises TASK-17; the gate (`make lint` + CI) is curated — high-value, low-friction, **zero `//nolint` debt** — enabling govet/errcheck/errorlint/ineffassign/staticcheck + the `importcheck` bright lines, with `_test.go` errcheck-relaxed; a check that can't run clean against a legitimate idiom becomes a **skill convention** instead (the 5 calibration calls: containedctx, mutable globals, deep-modules/no-new-pkg, error-wrapping policy, test exclusions); whole post-172 tree passes clean, fixes not suppressions; signed off at the m6→main merge)
-- **0043 — the pi harness is a first-class bus client** — *proposed* (TASK-176/177; a pi coding-agent session joins a bus through one in-process extension `@sextant/pi-bus` (`clients/ts/pi`) over the co-equal TS SDK — its own scoped identity, woken by an inbound frame, bus tools + a `/set-goal` command over the goals convention, a per-agent activity stream the dash renders live (the `agent.activity` feed on `msg.agent.<id>.activity`, promoted from `pi.activity` per TASK-235), a bundled sextant skill; extends 0028 (BYO-harness adapter) + 0039 (role-as-convention) to pi and adds no bus operation; records the layered trust/security model — bus content is an untrusted prompt-injection surface, defended by own scoped creds + a headless block-by-default destructive-tool gate + container/VM isolation + author trust-tiering; signed off at the m6→main merge)
-- **0044 — the browser dash is a direct NATS-WebSocket co-equal TS client** — *proposed* (TASK-179 ADOPT / TASK-180; the browser dash connects to the bus directly over `ws`/`wss` with `@sextant/sdk`'s browser entry + the goals/review convention libraries, authenticated by a short-lived, dash-minted, scoped credential; the Go dash shrinks to static-SPA host + the credential-mint endpoint, deleting the `/api/*` relay, the SSE bridge, and the Go re-implementation of the goals projection + review read-merge-CAS; reverses 0032's *browser never touches the bus* now that mint-on-behalf (0033) + a JWT TTL give a browser-scoped credential, carries 0034's conventions-not-protocol thesis onto the TS conventions, and realises 0041 for the browser; the bus gains a default-off, loopback-only WebSocket listener on the leaf precedent (0038) and the one new/changed exported surface is a credential TTL threaded through the mint path; native `wss` TLS + expired-record GC are named follow-ups; signed off at the m6→main merge)
-- **0046 — the web dash and the terminal UI are two binaries** — *accepted* (TASK-186; the web dash becomes a standalone `sextant-dash` binary that serves the SPA + mints the browser credential and connects to the bus only per-mint — stateless at rest, no standing client — so it joins the component Registry as a keep-alive runtime, reversing 0040's dash exclusion and pinning 0044's connection lifetime; the former cockpit is renamed `sextant-tui`, kept as a first-class CLI/TUI feature with `--serve` stripped; dev is side-by-side on a separate port, not a swap; clears the sx.hb violation TASK-185; signed off in PR #247)
-- **0047 — the managed dash mints operator sessions under loopback-scoped delegation** — *accepted* (TASK-188; resolves the identity collision 0046 surfaces — a headless dash running under its own `dash.creds` would mint the browser a *dash* session, not the operator's, re-breaking 0044's DM/review routing; grants the dash component one narrow, loopback-scoped capability to mint the **operator's** browser session — same issuance-denied, TTL-bounded `browserSessionPermissions` as 0044, just under the operator's id — making the dash a trusted local credential broker, not an impersonator; the no-impersonation bright line stays intact for remote/leaf/multi-tenant hosts because the capability is fenced to the loopback dash on the operator's own machine and denied across leaf federation; `dash.creds` carries this one capability and nothing more — no operator/issuer authority, no `sx.hb` sub; signed off in PR #247)
-- **0048 — a run is one live instance of work** — *accepted* (the run-record contract under the dash redesign's work-engine; sharpens 0011 by splitting the `sextant.workflow/v1` envelope into `sextant.workflow.run/v1` (one live instance, ULID; ad-hoc = `template:null`) + `sextant.workflow.template/v1` (the generic, reusable spec), both under `sextant.workflow.*`; a run reuses ADR-0035's `relates` with a new `toward` kind to bind the criteria it works toward **at spawn**, never on the template; a run declares **additive, disjunctive stop conditions** as plain prompt strings — baseline done/blocked + optional plan-review — with no type/terminal flag, the outcome carried in `status`; runs are discoverable as typed artifacts (run-index deferred); no old records to migrate; convention over Messages + Artifacts, no engine in core; signed off in-session 2026-06-23)
-- **0049 — clients, conventions, and tools are three kinds of module** — *accepted* (sorts every unit into exactly one of **client** (a process with a bus identity), **convention** (records + verbs, no identity), or **tool** (reads/emits, never connects), decided by "what is this *for*"; where a directory is two — `apps/workflow`, `apps/dispatch` each bundle a contract with the process that drives it — it splits, the contract up to the conventions tier (`workflow`+`coordinator`, `spawn`+`dispatcher`), `docgen` down to a tool under the SDK; clients become flat vertical peers grouped by role not language, with **harness plugin** (Claude Code, pi-bus) a client role, generalising 0043/0044; conventions rise to a promoted, offered tier above clients — optional, forkable, NOT core — claiming blessed lexicon namespaces while a fork writes its own; the SDK stays thin (Go-host helpers stay in `shared/go`, never widening the Go SDK past TS) and co-equality binds behaviour + interface shape, not convention coverage — contained, declared drift is fine; the move is large but mechanical, landing one relocation per ticket behind the conformance suite; signed off in-session 2026-06-24)
-- **0050 — HTML artifacts render safely (sanitized) in the dash** — *proposed* (TASK-222; artifact/brief records MAY carry an optional `format` property: `"markdown"` (default; meaning when absent) or `"html"` — a property of the opaque record, not the frame/wire envelope, so content stays opaque to the substrate and the marker + render path are client concerns; the dash selects the render path by `format`, sanitizing `"html"` bodies with the already-vendored **DOMPurify** (v3.1.6, defaults) — strips `<script>`, `on*` handlers, `javascript:` URLs, `<iframe>`/`<object>`/`<embed>`, so rendered HTML executes no JS and cannot reach the bus client, token, or credentials; inline `style`/`class` survive, so mockups render close to intent; **no sandboxed iframe**; interactive/JS-bearing HTML deferred to TASK-133 (`feat-native-html-artifacts-inline-interaction`); known tradeoff: sanitized HTML may still fetch external sub-resources (e.g. `<img src>`), acceptable for static operator documents; no change to locked core, wire API, or SDK)
+| #    | Title | Status |
+|------|-------|--------|
+| _(none yet)_ | | |
