@@ -100,8 +100,8 @@ has the per-step detail.
 - **How to work here** — [`AGENTS.md`](AGENTS.md) (`CLAUDE.md` symlinks to it).
 - **Human reference + API** — an mdbook under `docs/book/`, *forthcoming* (the
   protocol source of truth lives in [`protocol/`](protocol/) until then).
-- **What's next** — no tracker currently. Backlog.md was retired 2026-07-09
-  with no migration; Linear is the planned replacement, not yet connected.
+- **What's next** — tickets in **Linear** (team `Sextant`, key `SX`).
+  Backlog.md was retired 2026-07-09 with no migration.
 
 ## Agent skills
 

@@ -45,22 +45,22 @@ They keep Sextant from regrowing what it deliberately is not:
 - Decisions → `docs/adr/` ([index](docs/adr/README.md)).
 - Shared language → [CONTEXT.md](CONTEXT.md).
 - Human reference + API → `docs/book/` (mdbook) — *forthcoming*.
-- What's next → **no tracker right now.** Backlog.md was retired in the
-  2026-07-09 bankruptcy (its ~250 tickets didn't survive triage and weren't
-  migrated); Linear is the planned replacement but isn't connected yet. Until
-  it is, "what's next" lives in conversation with Lena, not a tracked file.
+- What's next → tickets in **Linear** (team `Sextant`, key `SX`). Backlog.md
+  was retired 2026-07-09 with no migration — this is a clean start.
 
 ## Agent skills
 Per-repo config for the [mattpocock/skills](https://github.com/mattpocock/skills)
 engineering skills (`to-issues`, `to-prd`, `triage`, `diagnose`, `tdd`, …).
 
 ### Issue tracker
-**Retired 2026-07-09.** Backlog.md (`backlog/`) is gone, deleted with no
-migration — GitHub Issues remains PR-only, not the tracker. Linear is the
-intended replacement; not yet connected. `docs/agents/issue-tracker.md` and
-`docs/agents/triage-labels.md` were Backlog.md-specific and were deleted
-alongside it — rewrite fresh once Linear is wired up, don't resurrect the old
-ones.
+Tickets live in **Linear** (team `Sextant`, key `SX`), not GitHub Issues,
+via the `linear` MCP plugin. Backlog.md was retired 2026-07-09 with no
+migration. See [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md).
+
+### Triage labels
+Five canonical roles under their default names (`needs-triage`, `needs-info`,
+`ready-for-agent`, `ready-for-human`, `wontfix`). See
+[`docs/agents/triage-labels.md`](docs/agents/triage-labels.md).
 
 ### Domain docs
 Single-context: one `CONTEXT.md` + `docs/adr/` at the root. See
