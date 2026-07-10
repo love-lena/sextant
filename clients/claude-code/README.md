@@ -121,3 +121,4 @@ long-lived processes, because none of them reload in place.
 - `skills/sextant/SKILL.md` — conventions, topics/DMs/inboxes, verb selection, record shapes, identity setup
 - `skills/startup/SKILL.md` — unattended-worker startup: connect, subscribe to the principal DM, handle inbound by trust level
 - `skills/live-verify-v053/` — `/live-verify-v053`: prove the v0.5.3 runtimes are operational on the live setup (SKILL.md + `verify.sh`)
+- `skills/sx-plan/SKILL.md` — `/sx-plan`: plan-mode workflow whose approval routes through a Sextant artifact + companion-topic Monitor instead of the terminal prompt
